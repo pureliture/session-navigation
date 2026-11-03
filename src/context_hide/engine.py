@@ -43,16 +43,16 @@ class ContextHideEngine:
             min_chars=self.config.min_chars,
         )
 
-    async def hide(
+    async def _apply(
         self,
         scope: Scope,
         record: ToolResultRecord,
         summarizer: Summarizer | None = None,
         *,
         options_omitted: bool = False,
+        allow_fallback: bool = True,
     ) -> MutationResult:
-        """Hide tool result content into store with optional summarizer and rule fallback.
-
+        """Hide/summarize a tool result. Fail-open on any failure.
         Guarantees: Fail-Open on any failure. Never crashes host loop.
         """
         # 1. Policy & input validation
@@ -99,7 +99,12 @@ class ContextHideEngine:
         #    line numbers stripped); identity, hashing, and the payload replacement
         #    keep using the raw string so stored SHA-256 and offsets are unchanged.
         rule_source = selectable_text(record.content)
-        baseline = RuleSpanSelector().select(rule_source)
+        baseline = RuleSpanSelector(
+            head_excerpts=self.config.head_excerpts,
+            tail_excerpts=self.config.tail_excerpts,
+            max_evidence=self.config.max_evidence_excerpts,
+            max_line_length=self.config.max_excerpt_line_length,
+        ).select(rule_source)
         if baseline is None:
             return MutationResult(ok=False, error="verification_failed")
 
@@ -113,7 +118,8 @@ class ContextHideEngine:
             rule_required = required_evidence_lines(rule_source)
             choice: SpanChoice | None = None
 
-            # 6. Summarization attempt with rule fallback
+            # 6. Summarization attempt
+            model_error: str | None = None
             if summarizer is not None:
                 try:
                     summary_dict = await summarizer.summarize(
@@ -121,8 +127,14 @@ class ContextHideEngine:
                         required,
                         invocation=record.invocation,
                     )
-                    choice = SpanChoice(required, "lfm", summary_dict)
-                except Exception:
+                    choice = SpanChoice(required, "llm", summary_dict)
+                except Exception as exc:
+                    model_error = getattr(exc, "reason", None)
+                    if not isinstance(model_error, str) or not model_error:
+                        model_error = "summarization_failed"
+                    if not allow_fallback:
+                        self.store.release(scope, item_id, token)
+                        return MutationResult(ok=False, error=model_error)
                     choice = None
 
             # Cancellation check
@@ -130,47 +142,23 @@ class ContextHideEngine:
             if task is not None and task.cancelling():
                 raise asyncio.CancelledError
 
-            # 7. Rule Verification & Choice Resolution
-            if choice is not None and choice.source == "lfm":
-                summary = validate_summary_text(
-                    record.content, choice.summary_text, required, invocation=record.invocation,
-                )
-                if (choice.summary_text is None
-                        or not set(required).issubset(choice.lines)
-                        or not excerpts_are_exact(record.content, choice.lines)
-                        or summary is None):
-                    choice = baseline
-                else:
-                    choice = SpanChoice(required, "lfm", summary)
-            else:
-                choice = baseline
-
-            # 8. Compaction rendering & compression bounds
-            rendered = render_compaction(
-                item_id,
-                choice.lines,
-                summary_text=choice.summary_text,
-                facts=verified_facts(record.content),
+            # 7-8. Shared compaction decision (validation, rendering, bounds, final check)
+            from context_hide.compaction import evaluate_compaction
+            choice, rendered, err = evaluate_compaction(
+                original=record.content,
+                item_id=item_id,
+                rule_source=rule_source,
+                baseline=baseline,
+                choice=choice,
+                invocation=record.invocation,
                 options_omitted=options_omitted,
+                allow_fallback=allow_fallback,
             )
-            if choice.source == "lfm" and len(rendered.encode("utf-8")) > len(record.content.encode("utf-8")) * 0.8:
-                choice = baseline
-                rendered = render_compaction(item_id, choice.lines)
-            if len(rendered) >= len(record.content) and choice is not baseline:
-                choice = baseline
-                rendered = render_compaction(item_id, choice.lines)
-
-            # Final Fail-Open check
-            #   A rule-path choice was selected from the decoded view, so it is
-            #   verified against that same text; an LFM choice still verifies
-            #   against the raw content it was summarized from.
-            if choice.source == "lfm":
-                check_source, check_required = record.content, required
-            else:
-                check_source, check_required = rule_source, rule_required
-            if (not excerpts_are_exact(check_source, choice.lines)
-                    or any(line not in choice.lines for line in check_required)
-                    or len(rendered) >= len(record.content)):
+            if err is not None:
+                self.store.release(scope, item_id, token)
+                return MutationResult(ok=False, error=err)
+            if rendered is None:
+                self.store.release(scope, item_id, token)
                 return MutationResult(ok=False, error="verification_failed")
 
             # 9. Item construction & Store commit
@@ -186,10 +174,10 @@ class ContextHideEngine:
                 expires_at=self.store.now() + self.store.ttl_seconds,
                 tool_name=record.invocation.get("tool_name"),
                 compaction_source=choice.source,
-                invocation_snapshot=copy.deepcopy(record.invocation) if choice.source == "lfm" else None,
-                invocation_digest=record.invocation_digest if choice.source == "lfm" else None,
+                invocation_snapshot=copy.deepcopy(record.invocation) if choice.source == "llm" else None,
+                invocation_digest=record.invocation_digest if choice.source == "llm" else None,
                 context_hint=None,
-                invocation_options_omitted=options_omitted if choice.source == "lfm" else False,
+                invocation_options_omitted=options_omitted if choice.source == "llm" else False,
             )
             put_res = self.store.put(scope, item, reservation=token)
             if not put_res.ok:
@@ -206,6 +194,26 @@ class ContextHideEngine:
 
         finally:
             self.store.release(scope, item_id, token)
+    async def hide(
+        self,
+        scope: Scope,
+        record: ToolResultRecord,
+        *,
+        options_omitted: bool = False,
+    ) -> MutationResult:
+        """Deterministic hide (rule-based). No LLM call."""
+        return await self._apply(scope, record, summarizer=None, options_omitted=options_omitted, allow_fallback=True)
+
+    async def summarize(
+        self,
+        scope: Scope,
+        record: ToolResultRecord,
+        summarizer: Summarizer,
+        *,
+        options_omitted: bool = False,
+    ) -> MutationResult:
+        """LLM-based summarize. No silent fallback to rule on failure."""
+        return await self._apply(scope, record, summarizer=summarizer, options_omitted=options_omitted, allow_fallback=False)
 
     def hide_sync(
         self,
@@ -215,7 +223,7 @@ class ContextHideEngine:
         options_omitted: bool = False,
     ) -> MutationResult:
         """Synchronous hide method using conservative RuleSpanSelector."""
-        return asyncio.run(self.hide(scope, record, summarizer=None, options_omitted=options_omitted))
+        return asyncio.run(self.hide(scope, record, options_omitted=options_omitted))
 
     def list_items(self, scope: Scope, query: str = "") -> list[ItemMetadata]:
         """List metadata of context items belonging to scope."""

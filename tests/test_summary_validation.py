@@ -11,13 +11,13 @@ import pytest
 from context_hide.model import SpanChoice
 from context_hide.store import MemoryContextStore
 from context_hide.summary import (
-    LFMSummarizer,
+    ModelSummarizer,
     SummarizerConfig,
     _PLAIN_RESULT_PROMPT,
     _SYSTEM_PROMPT,
     validate_summary_text,
 )
-from context_hide.transport import LFMUnavailable
+from context_hide.transport import SummarizerUnavailable
 
 INVOCATION = {"tool_name": "terminal", "arguments": {"command": "pytest"}}
 SUMMARY = {"summary": "sample-addon component registry: 12 checks passed; exit code 0."}
@@ -59,7 +59,7 @@ def test_summary_prompt_payload_untrusted_isolation():
             "finish_reason": "stop",
         }
 
-    summarizer = LFMSummarizer(generate=generate, config=SummarizerConfig())
+    summarizer = ModelSummarizer(generate=generate, config=SummarizerConfig())
     count: list[int] = []
 
     # 1. Unstructured text route (plain string source)
@@ -156,8 +156,8 @@ def test_summary_input_byte_limit_rejected_before_call():
         return {}
 
     count: list[int] = []
-    summarizer = LFMSummarizer(generate=generate, config=config)
-    with pytest.raises(LFMUnavailable, match="input_too_large"):
+    summarizer = ModelSummarizer(generate=generate, config=config)
+    with pytest.raises(SummarizerUnavailable, match="input_too_large"):
         asyncio.run(
             summarizer.summarize(
                 _source(),
@@ -174,7 +174,7 @@ def test_summary_rejects_invalid_json_hallucinated_evidence_injection_and_trunca
     async def generated(text: str, finish_reason: str = "stop"):
         async def generate(**_kwargs: Any) -> dict[str, Any]:
             return {"text": text, "finish_reason": finish_reason, "usage": {}}
-        return LFMSummarizer(generate=generate, config=SummarizerConfig())
+        return ModelSummarizer(generate=generate, config=SummarizerConfig())
 
     cases = [
         ("not json", "stop"),
@@ -187,7 +187,7 @@ def test_summary_rejects_invalid_json_hallucinated_evidence_injection_and_trunca
     ]
     for text, reason in cases:
         summarizer = asyncio.run(generated(text, reason))
-        with pytest.raises(LFMUnavailable):
+        with pytest.raises(SummarizerUnavailable):
             asyncio.run(
                 summarizer.summarize(
                     _source(),
@@ -210,8 +210,8 @@ def test_summary_rejects_observed_generic_non_summary(text: str):
     async def generate(**kwargs: Any) -> dict[str, Any]:
         return {"text": json.dumps({"summary": text})}
 
-    summarizer = LFMSummarizer(generate=generate, config=SummarizerConfig())
-    with pytest.raises(LFMUnavailable, match="verification_failed"):
+    summarizer = ModelSummarizer(generate=generate, config=SummarizerConfig())
+    with pytest.raises(SummarizerUnavailable, match="verification_failed"):
         asyncio.run(
             summarizer.summarize(
                 _source(),
@@ -276,7 +276,7 @@ def test_summary_explicit_missing_details_quote_remains_valid_evidence():
 def test_summary_compaction_keeps_only_required_evidence_and_unhide_restores_exact_source():
     source = _source()
     store = MemoryContextStore(min_chars=100)
-    choice = SpanChoice(_evidence(), "lfm", SUMMARY)
+    choice = SpanChoice(_evidence(), "llm", SUMMARY)
     saved = store.compact(
         affinity="synthetic-conversation",
         tool_call_id="tool-1",
@@ -286,7 +286,7 @@ def test_summary_compaction_keeps_only_required_evidence_and_unhide_restores_exa
         invocation=INVOCATION,
     )
     assert saved.ok and saved.item is not None
-    assert saved.item.compaction_source == "lfm"
+    assert saved.item.compaction_source == "llm"
     assert len(saved.item.compacted.encode("utf-8")) < len(source.encode("utf-8")) * 0.8
     assert "Synthetic catalog row 000" not in saved.item.compacted
     assert "sample-addon" in saved.item.compacted

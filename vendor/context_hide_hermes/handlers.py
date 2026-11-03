@@ -10,7 +10,7 @@ Tool flow (model calls): look the tool call ID up in the session record by
 scope + ID. Reject when absent or duplicated, otherwise call the engine.
 """
 
-from __future__ import annotations
+import asyncio
 
 from typing import Any
 
@@ -61,6 +61,44 @@ def hide(
         host_handle=entry.host_handle,
     )
     return engine.hide_sync(scope, record)
+
+def summarize(
+    engine: ContextHideEngine,
+    store: SessionTranscriptStore,
+    scope: Scope,
+    tool_call_id: str,
+    summarizer: Any,
+    *,
+    status: str = "ok",
+) -> MutationResult:
+    """Summarize one transmitted tool result using the configured model."""
+    if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+        return MutationResult(ok=False, error="missing_tool_call_id")
+    entries = store.lookup(scope.scope_key(), tool_call_id.strip())
+    if not entries:
+        return MutationResult(ok=False, error="not_found")
+    if len(entries) > 1:
+        return MutationResult(ok=False, error="ambiguous")
+    entry = entries[0]
+    if entry.arguments_parse_error or not entry.tool_name:
+        return MutationResult(ok=False, error="invalid_invocation")
+    try:
+        invocation, omitted = filter_invocation(entry.tool_name, entry.raw_arguments)
+    except AdapterRejected as exc:
+        return MutationResult(ok=False, error=exc.code)
+    record = ToolResultRecord(
+        call_id=entry.call_id,
+        result_position=entry.result_position,
+        content=entry.content,
+        content_sha256=entry.content_sha256,
+        invocation=invocation,
+        invocation_digest=compute_invocation_digest(
+            invocation, omitted if omitted else None),
+        status=status,
+        host_handle=entry.host_handle,
+    )
+    options_omitted = bool(omitted)
+    return asyncio.run(engine.summarize(scope, record, summarizer, options_omitted=options_omitted))
 
 
 def list_records(

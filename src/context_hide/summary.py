@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from context_hide.policy import _EXIT_CLAIM, verified_facts
-from context_hide.transport import LFMUnavailable, OnCall
+from context_hide.transport import SummarizerUnavailable, OnCall
 
 _SYSTEM_PROMPT = (
     "Summarize recorded tool output in concise English. Return only JSON with one summary string. "
@@ -320,7 +320,7 @@ class SummarizerConfig:
     timeout_seconds: int = 60
 
 
-class LFMSummarizer:
+class ModelSummarizer:
     """Prompt-isolated summary requester delegating to an injected generate callable."""
 
     def __init__(
@@ -369,7 +369,7 @@ class LFMSummarizer:
 
         if (len(user_content) > self._config.max_input_chars
                 or len((system_prompt + user_content).encode("utf-8")) > self._config.max_input_bytes):
-            raise LFMUnavailable("input_too_large")
+            raise SummarizerUnavailable("input_too_large")
 
         if on_call is not None:
             on_call()
@@ -404,21 +404,21 @@ class LFMSummarizer:
         except Exception as exc:
             code = getattr(exc, "code", None)
             reason = code if isinstance(code, str) and code else "request_failed"
-            raise LFMUnavailable(reason) from None
+            raise SummarizerUnavailable(reason) from None
 
         if not isinstance(result, dict) or result.get("tool_calls") or result.get("finish_reason") == "length":
-            raise LFMUnavailable("invalid_response")
+            raise SummarizerUnavailable("invalid_response")
         text = result.get("text")
         if not isinstance(text, str):
-            raise LFMUnavailable("missing_text")
+            raise SummarizerUnavailable("missing_text")
         try:
             decoded = json.loads(text)
         except (ValueError, TypeError):
-            raise LFMUnavailable("invalid_json") from None
+            raise SummarizerUnavailable("invalid_json") from None
         if not isinstance(decoded, dict) or set(decoded) != {"summary"}:
-            raise LFMUnavailable("invalid_schema")
+            raise SummarizerUnavailable("invalid_schema")
 
         summary = validate_summary_text(original, decoded, required_evidence, invocation=invocation)
         if summary is None:
-            raise LFMUnavailable("verification_failed")
+            raise SummarizerUnavailable("verification_failed")
         return summary

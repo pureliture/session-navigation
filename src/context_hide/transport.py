@@ -15,8 +15,8 @@ class SummarizerError(Exception):
         self.reason = reason
 
 
-class LFMUnavailable(SummarizerError):
-    """Compatibility alias for summarizer unavailability or validation rejection."""
+class SummarizerUnavailable(SummarizerError):
+    """Raised when summarization is unavailable or its result is rejected."""
     pass
 
 

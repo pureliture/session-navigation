@@ -57,13 +57,16 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .handlers import hide as _engine_hide
-from .handlers import list_records as _engine_list
 from .handlers import middleware_step as _engine_step
+from .handlers import list_records as _engine_list
 from .handlers import unhide as _engine_unhide
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
-from context_hide.engine import ContextHideEngine
 from context_hide.model import Scope
+from context_hide.engine import ContextHideEngine
+from context_hide.openai_compatible import OpenAICompatibleTransport
+from context_hide.summary import ModelSummarizer, SummarizerConfig
+from context_hide.transport import Summarizer, SummarizerError
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +83,13 @@ BRANCH_SCOPE = "unknown"
 #: names appears in the request tool list, the bridge disables its own
 #: compaction (`tool_name_collision`) so exactly one hide owner remains.
 BRIDGE_COLLISION_TOOLS = frozenset(
-    {"hide_context", "list_context_items", "unhide_context"}
+    {"hide_context", "summarize_context", "list_context_items", "unhide_context"}
 )
 
 HIDE_TOOL = "hide_context"
 LIST_TOOL = "list_context_items"
 UNHIDE_TOOL = "unhide_context"
-
+SUMMARIZE_TOOL = "summarize_context"
 #: Static system-prompt guidance for the human supervision protocol. It is
 #: fixed text (never per-session state) rendered once per new session; when
 #: the host lacks the section API or the plugin loads disabled, only the
@@ -183,6 +186,26 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    SUMMARIZE_TOOL: {
+        "name": SUMMARIZE_TOOL,
+        "description": (
+            "Hide one already-transmitted tool result using a configured local "
+            "model summary: later model requests carry its summary instead of "
+            "the full body. Falls back to an error (no silent rule fallback) if "
+            "the model or validation fails. Pass the tool_call_id shown by the model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tool_call_id": {
+                    "type": "string",
+                    "description": "The tool call ID whose result body should be summarized.",
+                }
+            },
+            "required": ["tool_call_id"],
+            "additionalProperties": False,
+        },
+    },
 }
 
 
@@ -237,6 +260,7 @@ class PluginState:
     """Live per-registration plugin state (one per Hermes process load)."""
 
     engine: ContextHideEngine = field(default_factory=ContextHideEngine)
+    summarizer: Summarizer | None = None
     store: SessionTranscriptStore = field(default_factory=SessionTranscriptStore)
     presentations: PresentationRegistry = field(default_factory=PresentationRegistry)
     profile: str = "default"
@@ -244,6 +268,54 @@ class PluginState:
     count_middlewares: Callable[[], int] = field(
         default=_default_count_llm_middlewares)
 
+
+def _make_configured_summarizer(ctx: Any) -> Summarizer | None:
+    """Create only an explicitly configured local model summarizer."""
+    get_config = getattr(ctx, "get_config", None)
+    if not callable(get_config):
+        return None
+
+    def setting(name: str, default: Any) -> Any:
+        try:
+            return get_config(name, default)
+        except Exception:
+            return default
+
+    mode = setting("summary_mode", "rules")
+    if mode == "rules":
+        return None
+    if mode != "llm":
+        logger.warning("context-hide summarizer disabled error_code=invalid_mode")
+        return None
+
+    base_url = setting("base_url", "")
+    model = setting("model", "")
+    timeout_seconds = setting("timeout_seconds", 60)
+    max_input_bytes = setting("max_input_bytes", 12_288)
+    max_output_tokens = setting("max_output_tokens", 384)
+    if not isinstance(base_url, str) or not base_url.strip() or not isinstance(model, str) or not model.strip():
+        logger.warning("context-hide summarizer disabled error_code=invalid_configuration")
+        return None
+    for value in (timeout_seconds, max_input_bytes, max_output_tokens):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            logger.warning("context-hide summarizer disabled error_code=invalid_configuration")
+            return None
+
+    try:
+        transport = OpenAICompatibleTransport(base_url)
+    except SummarizerError as exc:
+        logger.warning(
+            "context-hide summarizer disabled error_code=%s", exc.reason)
+        return None
+    return ModelSummarizer(
+        generate=transport.generate,
+        config=SummarizerConfig(
+            model=model,
+            timeout_seconds=timeout_seconds,
+            max_input_bytes=max_input_bytes,
+            max_output_tokens=max_output_tokens,
+        ),
+    )
 
 def scope_for(state: PluginState, session_id: Any) -> Scope | None:
     """Derive the engine scope from host identifiers, None when absent.
@@ -293,6 +365,38 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
         })
 
     return hide_context
+
+def make_summarize_handler(state: PluginState) -> Callable[..., str]:
+    """Build the `summarize_context` tool handler bound to this registration."""
+
+    def summarize_context(args: Any, session_id: str = "", **_extra: Any) -> str:
+        if not state.is_enabled():
+            return _dump({"ok": False, "error": "disabled"})
+        if state.summarizer is None:
+            return _dump({"ok": False, "error": "summarizer_unavailable"})
+        target = args.get("tool_call_id") if isinstance(args, dict) else None
+        if not isinstance(target, str) or not target.strip():
+            return _dump({"ok": False, "error": "missing_tool_call_id"})
+        scope = scope_for(state, session_id)
+        if scope is None:
+            return _dump({"ok": False, "error": "not_found"})
+        result = _engine_summarize(
+            state.engine, state.store, scope, target.strip(), state.summarizer)
+        if not result.ok or result.plan is None:
+            return _dump({"ok": False, "error": result.error or "not_found"})
+        original_bytes = 0
+        if result.item is not None:
+            original_bytes = len(result.item.original.encode("utf-8"))
+        state.presentations.record_hidden(
+            scope.scope_key(), result.plan.item_id, original_bytes)
+        return _dump({
+            "ok": True,
+            "item_id": result.plan.item_id,
+            "visibility_version": result.plan.visibility_version,
+            "compaction_source": "llm",
+        })
+
+    return summarize_context
 
 
 def make_list_handler(state: PluginState) -> Callable[..., str]:
@@ -415,8 +519,6 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             # Fail open: Hermes logs and continues with the original request.
             logger.warning(
                 "context-hide middleware fail-open: %s", type(exc).__name__)
-            return None
-
     return on_llm_request
 
 
@@ -441,7 +543,11 @@ def register(ctx: Any) -> PluginState:
         except Exception:
             return False
 
-    state = PluginState(profile=profile, is_enabled=_is_enabled)
+    state = PluginState(
+        profile=profile,
+        is_enabled=_is_enabled,
+        summarizer=_make_configured_summarizer(ctx),
+    )
     ctx.register_tool(
         name=HIDE_TOOL,
         toolset=TOOLSET,
@@ -449,6 +555,14 @@ def register(ctx: Any) -> PluginState:
         handler=make_hide_handler(state),
         description=TOOL_SCHEMAS[HIDE_TOOL]["description"],
     )
+    if state.summarizer is not None:
+        ctx.register_tool(
+            name=SUMMARIZE_TOOL,
+            toolset=TOOLSET,
+            schema=TOOL_SCHEMAS[SUMMARIZE_TOOL],
+            handler=make_summarize_handler(state),
+            description=TOOL_SCHEMAS[SUMMARIZE_TOOL]["description"],
+        )
     ctx.register_tool(
         name=LIST_TOOL,
         toolset=TOOLSET,

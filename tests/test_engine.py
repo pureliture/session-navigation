@@ -70,12 +70,12 @@ def test_engine_hide_with_summarizer():
         async def summarize(self, original: str, required_evidence: tuple[str, ...], on_call=None, *, invocation=None, context=None):
             return {"summary": "Generated summary with id: 01234567-89ab-cdef-0123-456789abcdef and results/output.json."}
 
-    result = asyncio.run(engine.hide(scope, record, MockSummarizer()))
+    result = asyncio.run(engine.summarize(scope, record, MockSummarizer()))
     assert result.ok is True
     assert result.plan is not None
     assert "생성 요약" in result.plan.replacement_text
     assert result.item is not None
-    assert result.item.compaction_source == "lfm"
+    assert result.item.compaction_source == "llm"
 
 
 def test_engine_hide_preserves_host_handle():
@@ -102,7 +102,7 @@ def test_engine_hide_fails_open_on_protected_error():
     assert engine.list_items(scope) == []
 
 
-def test_engine_hide_fails_open_on_lfm_failure_fallback_to_rule():
+def test_engine_summarize_fails_on_model_failure_no_fallback():
     engine = ContextHideEngine()
     scope = Scope("bridge", "test", "sess_5")
     record = _make_record(_long_content())
@@ -111,12 +111,10 @@ def test_engine_hide_fails_open_on_lfm_failure_fallback_to_rule():
         async def summarize(self, original: str, required_evidence: tuple[str, ...], on_call=None, *, invocation=None, context=None):
             raise SummarizerError("simulated timeout")
 
-    result = asyncio.run(engine.hide(scope, record, FailingSummarizer()))
-    assert result.ok is True
-    assert result.plan is not None
-    assert result.item is not None
-    assert result.item.compaction_source == "rule"
-
+    result = asyncio.run(engine.summarize(scope, record, FailingSummarizer()))
+    assert result.ok is False
+    assert result.plan is None
+    assert engine.list_items(scope) == []
 
 def test_engine_unhide_restores_visibility_without_reexecution():
     engine = ContextHideEngine()
@@ -209,7 +207,7 @@ def test_engine_budget_one_summary_call_per_turn():
             call_count[0] += 1
             return {"summary": "summary with id: 01234567-89ab-cdef-0123-456789abcdef and results/output.json"}
 
-    res = asyncio.run(engine.hide(scope, record, CountSummarizer()))
+    res = asyncio.run(engine.summarize(scope, record, CountSummarizer()))
     assert res.ok
     assert call_count[0] == 1
 

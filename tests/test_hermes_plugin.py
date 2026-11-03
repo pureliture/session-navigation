@@ -247,7 +247,7 @@ def test_middleware_fail_open_on_bad_shapes():
 
 def test_bridge_collision_set_matches_bridge_contract():
     assert plugin.BRIDGE_COLLISION_TOOLS == {
-        "hide_context", "list_context_items", "unhide_context"}
+        "hide_context", "summarize_context", "list_context_items", "unhide_context"}
     assert plugin.bridge_should_yield(["read_file", "hide_context"]) is True
     assert plugin.bridge_should_yield(["terminal", "read_file"]) is False
     assert plugin.bridge_should_yield([]) is False

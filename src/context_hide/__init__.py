@@ -28,7 +28,7 @@ from context_hide.policy import (
 )
 from context_hide.store import MemoryContextStore
 from context_hide.summary import (
-    LFMSummarizer,
+    ModelSummarizer,
     SummarizerConfig,
     is_lossless_encoded,
     prepare_result_source,
@@ -38,7 +38,7 @@ from context_hide.summary import (
     verify_exit_claims,
 )
 from context_hide.transport import (
-    LFMUnavailable,
+    SummarizerUnavailable,
     OnCall,
     Summarizer,
     SummarizerError,
@@ -51,8 +51,8 @@ __all__ = [
     "ContextItem",
     "EngineConfig",
     "ItemMetadata",
-    "LFMUnavailable",
-    "LFMSummarizer",
+    "ModelSummarizer",
+    "SummarizerUnavailable",
     "MemoryContextStore",
     "MutationResult",
     "OnCall",

@@ -32,7 +32,8 @@ from context_hide.policy import (
     required_evidence_indexes,
     verified_facts,
 )
-from context_hide.summary import validate_summary_text
+from context_hide.compaction import evaluate_compaction
+from context_hide.summary import selectable_text
 
 DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024  # 64 MB
@@ -249,6 +250,7 @@ class MemoryContextStore:
                     self._items[key] = existing
                 return MutationResult(ok=True, item=existing)
 
+
             refusal = check_refusal_reason(original, self.min_chars)
             if refusal is not None:
                 return MutationResult(ok=False, error=refusal)
@@ -256,47 +258,24 @@ class MemoryContextStore:
             if len(original.encode("utf-8")) > self._items.maxsize - self._items.currsize:
                 return MutationResult(ok=False, error="store_full")
 
-            baseline = RuleSpanSelector().select(original)
+            rule_source = selectable_text(original)
+            baseline = RuleSpanSelector().select(rule_source)
             if baseline is None:
                 return MutationResult(ok=False, error="verification_failed")
 
-            if choice is not None and choice.source == "lfm":
-                original_lines = original.splitlines()
-                required = tuple(original_lines[index] for index in required_evidence_indexes(original_lines))
-                summary = validate_summary_text(original, choice.summary_text, required, invocation=invocation)
-                if (invocation is None or choice.summary_text is None or not set(required).issubset(choice.lines)
-                        or not excerpts_are_exact(original, choice.lines) or summary is None):
-                    choice = baseline
-                else:
-                    choice = SpanChoice(required, "lfm", summary)
-            elif (choice is None or not set(baseline.lines).issubset(choice.lines)
-                    or not excerpts_are_exact(original, choice.lines)):
-                choice = baseline
-
-            rendered = render_compaction(
-                item_id,
-                choice.lines,
-                summary_text=choice.summary_text,
-                context=context,
-                facts=verified_facts(original),
+            final_choice, rendered, err = evaluate_compaction(
+                original=original,
+                item_id=item_id,
+                rule_source=rule_source,
+                baseline=baseline,
+                choice=choice,
+                invocation=invocation,
                 options_omitted=options_omitted,
+                allow_fallback=True,
             )
-
-            if (choice.source == "lfm"
-                    and len(rendered.encode("utf-8")) > len(original.encode("utf-8")) * 0.8):
-                choice = baseline
-                rendered = render_compaction(item_id, choice.lines)
-
-            if len(rendered) >= len(original) and choice is not baseline:
-                choice = baseline
-                rendered = render_compaction(item_id, choice.lines)
-
-            original_lines = original.splitlines()
-            required_idx = required_evidence_indexes(original_lines)
-            if (not excerpts_are_exact(original, choice.lines)
-                    or any(original_lines[index] not in choice.lines for index in required_idx)
-                    or len(rendered) >= len(original)):
-                return MutationResult(ok=False, error="verification_failed")
+            if err is not None or final_choice is None or rendered is None:
+                return MutationResult(ok=False, error=err or "verification_failed")
+            choice = final_choice
 
             item = ContextItem(
                 item_id=item_id,
@@ -310,10 +289,10 @@ class MemoryContextStore:
                 expires_at=moment + self.ttl_seconds,
                 tool_name=tool_name,
                 compaction_source=choice.source,
-                invocation_snapshot=copy.deepcopy(invocation) if choice.source == "lfm" else None,
-                invocation_digest=digest if choice.source == "lfm" else None,
+                invocation_snapshot=copy.deepcopy(invocation) if choice.source == "llm" else None,
+                invocation_digest=digest if choice.source == "llm" else None,
                 context_hint=None,
-                invocation_options_omitted=options_omitted if choice.source == "lfm" else False,
+                invocation_options_omitted=options_omitted if choice.source == "llm" else False,
             )
 
             if self._item_size(item) > self._items.maxsize - self._items.currsize:

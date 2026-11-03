@@ -39,6 +39,7 @@ def hermes_adapter() -> types.ModuleType:
     for child in ("payload", "allowlist", "session", "handlers", "presentation", "plugin"):
         try:
             importlib.import_module(f"{_PACKAGE_NAME}.{child}")
-        except ImportError:
-            pass
+        except ImportError as exc:
+            import logging
+            logging.getLogger(__name__).debug("adapter child import failed: %s", exc)
     return module
