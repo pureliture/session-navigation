@@ -123,6 +123,17 @@ def strip_consecutive_numbering(text: str) -> str:
     return "\n".join(match[2] for match in numbered if match)
 
 
+def _decode_envelope(content: str) -> dict[str, Any] | None:
+    """Return the decoded JSON object if content is a dict envelope, else None."""
+    try:
+        obj = json.loads(content)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return obj
+
+
 def selectable_text(content: str) -> str:
     """The text a reader sees for a tool-result envelope; ``content`` otherwise.
 
@@ -133,11 +144,8 @@ def selectable_text(content: str) -> str:
     while identity, hashing, and the payload replacement keep using the raw
     string. Unrecognized shapes return the content unchanged (fail-open).
     """
-    try:
-        obj = json.loads(content)
-    except ValueError:
-        return content
-    if not isinstance(obj, dict):
+    obj = _decode_envelope(content)
+    if obj is None:
         return content
     for key in ("content", "output"):
         value = obj.get(key)
@@ -145,14 +153,15 @@ def selectable_text(content: str) -> str:
             return strip_consecutive_numbering(value)
     return content
 
-
 def prepare_result_source(original: str) -> str | dict[str, Any]:
     """Decode result envelopes without consulting invocation or selecting facts."""
-    try:
-        obj = json.loads(original)
-    except ValueError:
-        return _lossless_repeated_source(original)
-    if not isinstance(obj, dict):
+    obj = _decode_envelope(original)
+    if obj is None:
+        # Distinguish JSON parse failure (lossless path) from non-dict.
+        try:
+            json.loads(original)
+        except ValueError:
+            return _lossless_repeated_source(original)
         return original
     if isinstance(obj.get("content"), str):
         content = obj["content"]
