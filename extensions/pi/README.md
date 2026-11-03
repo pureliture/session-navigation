@@ -13,3 +13,16 @@
 - Restarting pi clears compaction state (process memory); session file keeps originals.
 PY
 echo done
+## Summarizer config (env vars)
+
+Set these before launching omp (or in your shell profile):
+
+```bash
+export CONTEXT_HIDE_BASE_URL=http://127.0.0.1:12347
+export CONTEXT_HIDE_MODEL=mlx-community/LFM3-1.7B-OptiQ-4bit
+export CONTEXT_HIDE_TIMEOUT=60          # optional
+export CONTEXT_HIDE_MAX_INPUT_BYTES=12288  # optional
+export CONTEXT_HIDE_MAX_OUTPUT_TOKENS=384  # optional
+```
+
+Without these, `summarize_context` returns `summarizer_unavailable`; `hide_context` (deterministic) still works.
