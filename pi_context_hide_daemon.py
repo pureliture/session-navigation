@@ -35,8 +35,38 @@ class Daemon:
         self.engines: dict[str, ContextHideEngine] = {}
         self.stores: dict[str, SessionTranscriptStore] = {}
         self.summarizers: dict[str, Any] = {}
-        # global summarizer from env/config (optional)
-        self._default_summarizer = None
+        self._default_summarizer = self._build_summarizer_from_env()
+
+    @staticmethod
+    def _build_summarizer_from_env():
+        import os
+        base_url = os.environ.get("CONTEXT_HIDE_BASE_URL", "").strip()
+        model = os.environ.get("CONTEXT_HIDE_MODEL", "").strip()
+        if not base_url or not model:
+            return None
+        try:
+            timeout = int(os.environ.get("CONTEXT_HIDE_TIMEOUT", "60"))
+            max_input = int(os.environ.get("CONTEXT_HIDE_MAX_INPUT_BYTES", "12288"))
+            max_output = int(os.environ.get("CONTEXT_HIDE_MAX_OUTPUT_TOKENS", "384"))
+        except ValueError:
+            return None
+        try:
+            from adapters.hermes.plugin import _make_configured_summarizer
+            # reuse factory by faking ctx
+            class _Ctx:
+                def get_config(self, key, default=None):
+                    mapping = {
+                        "summary_mode": "llm",
+                        "base_url": base_url,
+                        "model": model,
+                        "timeout_seconds": timeout,
+                        "max_input_bytes": max_input,
+                        "max_output_tokens": max_output,
+                    }
+                    return mapping.get(key, default)
+            return _make_configured_summarizer(_Ctx())
+        except Exception:
+            return None
 
     def _state(self, scope_key: str):
         if scope_key not in self.engines:
