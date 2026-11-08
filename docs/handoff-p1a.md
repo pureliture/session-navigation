@@ -1,5 +1,16 @@
 # P1a Handoff — 신규 세션 착수용 (2026-11-08)
 
+## 전체 Goal (locked)
+
+> Tool-result hide/unhide/rehide/manage가 SQLite 영속화로 재시작·fork 후에도
+> 유지되고, OMP bash 포함 자동관리 + Paseo/OMP/Hermes 3개 UI에서 동일 조작이 되며,
+> E2E(재시작·fork·DB오류·비대화형·3UI동시·대용량) + 전체 회귀 green을 통과한다.
+> 메시지 row·remove·배포·런북은 범위 밖.
+
+세부: 목록 <1s/1000건, 요약 timeout 25s 유지, DB 상한 없음. 기저 결함
+(ruamel·test_omp_daemon·bun 2fail) 수정 포함. 산출물: spec + handoff + Hermes 규약
+갱신 + 사용법 3종(Paseo/OMP/Hermes).
+
 ## 배경 (3줄)
 
 session-navigation 도구 개명 완료·검증済 (`hide/summarize/unhide/list/manage_context`).
