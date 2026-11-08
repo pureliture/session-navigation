@@ -8,6 +8,7 @@ from session_navigation.policy import (
     RuleSpanSelector,
     check_refusal_reason,
     is_business_state_critical,
+    is_destructive_command,
     is_protected_error,
 )
 from session_navigation.store import MemoryContextStore
@@ -35,12 +36,12 @@ def output_with(*evidence: str) -> str:
         "중복 청구가 발생했습니다. 확인되지 않은 청구입니다.",
     ],
 )
-def test_unresolved_errors_keep_entire_original(error: str):
+def test_unresolved_errors_keep_entire_original(error: str, tmp_path):
     original = output_with(error)
     assert is_protected_error(original) is True
     assert check_refusal_reason(original) == "protected_error"
 
-    store = MemoryContextStore()
+    store = MemoryContextStore(tmp_path / "state.sqlite3")
     result = store.compact(
         affinity="synthetic",
         tool_call_id="call",
@@ -67,9 +68,9 @@ def test_unresolved_errors_keep_entire_original(error: str):
         ("Created record receipt-123",),
     ],
 )
-def test_required_evidence_is_never_silently_dropped(evidence: tuple[str, ...]):
+def test_required_evidence_is_never_silently_dropped(evidence: tuple[str, ...], tmp_path):
     original = output_with(*evidence)
-    store = MemoryContextStore()
+    store = MemoryContextStore(tmp_path / "state.sqlite3")
     result = store.compact(
         affinity="synthetic",
         tool_call_id="call",
@@ -98,10 +99,10 @@ def test_required_evidence_is_never_silently_dropped(evidence: tuple[str, ...]):
     "Payment dispute resolved after manual review.",
     "점검 완료 여부 불명확; 확인 전 재개하지 마세요.",
 ])
-def test_business_state_and_reason_are_not_compacted_or_sent_to_selector(critical: str):
+def test_business_state_and_reason_are_not_compacted_or_sent_to_selector(critical: str, tmp_path):
     original = output_with(critical)
     assert is_business_state_critical(original) is True
-    store = MemoryContextStore()
+    store = MemoryContextStore(tmp_path / "state.sqlite3")
     result = store.compact(
         affinity="synthetic",
         tool_call_id="call",
@@ -113,14 +114,14 @@ def test_business_state_and_reason_are_not_compacted_or_sent_to_selector(critica
     assert store.visible_content("synthetic", "call", original) == original
 
 
-def test_store_rejects_selector_that_omits_required_path(monkeypatch: pytest.MonkeyPatch):
+def test_store_rejects_selector_that_omits_required_path(monkeypatch: pytest.MonkeyPatch, tmp_path):
     original = output_with("results/required.json")
     monkeypatch.setattr(
         RuleSpanSelector,
         "select",
         lambda self, text: SpanChoice(tuple(text.splitlines()[:5]), "rule"),
     )
-    store = MemoryContextStore()
+    store = MemoryContextStore(tmp_path / "state.sqlite3")
     result = store.compact(
         affinity="synthetic",
         tool_call_id="call",
@@ -133,10 +134,10 @@ def test_store_rejects_selector_that_omits_required_path(monkeypatch: pytest.Mon
     assert store.visible_content("synthetic", "call", original) == original
 
 
-def test_risky_line_too_long_for_excerpt_stays_original():
+def test_risky_line_too_long_for_excerpt_stays_original(tmp_path):
     critical = "배송 지연 사유: " + "도로 통제 " * 60
     original = output_with(critical)
-    store = MemoryContextStore()
+    store = MemoryContextStore(tmp_path / "state.sqlite3")
     result = store.compact(
         affinity="synthetic",
         tool_call_id="call",
@@ -145,3 +146,39 @@ def test_risky_line_too_long_for_excerpt_stays_original():
     )
     assert not result.ok
     assert store.visible_content("synthetic", "call", original) == original
+
+@pytest.mark.parametrize("command", [
+    "rm -rf /tmp/x",
+    "sudo rm -rf /tmp/x && echo ok",
+    "sudo -u nobody rm -rf /tmp/x",
+    "sudo --user=nobody /bin/rm file",
+    "git reset --hard HEAD",
+    "git -C /repo reset --hard HEAD",
+    "git --git-dir=/r/.git reset --hard",
+    "git clean -fdx",
+    "env -u FOO git clean -f",
+    "echo hi; rm file",
+    "bash -c 'rm -rf /tmp/x'",
+    "sh -lc \"git -C /r reset --hard\"",
+])
+def test_destructive_commands_detected(command: str):
+    assert is_destructive_command("bash", {"command": command}) is True
+    assert is_destructive_command("terminal", {"command": command}) is True
+
+
+@pytest.mark.parametrize("command", [
+    "ls -la",
+    "git reset --soft HEAD",
+    "git status",
+    "git clean -ndx",
+    "echo rm -rf",
+    "bash -c \"echo hi\"",
+    "bash --version",
+])
+def test_benign_commands_not_flagged(command: str):
+    assert is_destructive_command("bash", {"command": command}) is False
+
+
+def test_denylist_ignores_non_shell_tools():
+    assert is_destructive_command("read", {"path": "x"}) is False
+    assert is_destructive_command("read_file", {"path": "x"}) is False

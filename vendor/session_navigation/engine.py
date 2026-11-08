@@ -14,6 +14,7 @@ from session_navigation.model import (
     Scope,
     SpanChoice,
     ToolResultRecord,
+    _item_id,
 )
 from session_navigation.policy import (
     RuleSpanSelector,
@@ -23,9 +24,15 @@ from session_navigation.policy import (
     required_evidence_lines,
     verified_facts,
 )
-from session_navigation.store import MemoryContextStore, _item_id
+from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.summary import selectable_text, validate_summary_text
 from session_navigation.transport import Summarizer
+
+
+def _scope_key(scope):
+    if hasattr(scope, 'scope_key') and callable(scope.scope_key):
+        return str(scope.scope_key())
+    return str(scope)
 
 
 class SessionNavigationEngine:
@@ -33,15 +40,11 @@ class SessionNavigationEngine:
 
     def __init__(
         self,
-        store: MemoryContextStore | None = None,
+        store: SQLiteContextStore | None = None,
         config: EngineConfig | None = None,
     ) -> None:
         self.config = config or EngineConfig()
-        self.store = store or MemoryContextStore(
-            ttl_seconds=self.config.ttl_seconds,
-            max_bytes=self.config.max_bytes,
-            min_chars=self.config.min_chars,
-        )
+        self.store = store or SQLiteContextStore()
 
     async def _apply(
         self,
@@ -60,17 +63,23 @@ class SessionNavigationEngine:
         if refusal is not None:
             return MutationResult(ok=False, error=refusal)
 
-        item_id = _item_id(scope.scope_key(), record.call_id, record.content_sha256)
+        item_id = _item_id(
+            _scope_key(scope),
+            record.call_id,
+            record.content_sha256,
+            record.invocation_digest,
+            record.result_position,
+        )
 
         # 2. Re-compaction / Cache check (Re-summary exclusion)
         existing = self.store.get(scope, item_id)
         if existing is not None:
             if existing.invocation_digest is not None and existing.invocation_digest != record.invocation_digest:
                 return MutationResult(ok=False, error="invocation_conflict")
-            if existing.visibility != "compacted":
+            if existing.visibility != "hidden":
                 from dataclasses import replace
-                updated = replace(existing, visibility="compacted", version=existing.version + 1)
-                put_res = self.store.put(scope, updated)
+                updated = replace(existing, visibility="hidden", version=existing.version + 1)
+                put_res = self.store.put(scope, updated, expected_version=existing.version)
                 if not put_res.ok:
                     return put_res
                 plan = ReplacementPlan(
@@ -78,6 +87,7 @@ class SessionNavigationEngine:
                     expected_content_sha256=record.content_sha256,
                     replacement_text=updated.compacted,
                     visibility_version=updated.version,
+                    tool_call_id=record.call_id,
                     host_handle=record.host_handle,
                 )
                 return MutationResult(ok=True, plan=plan, item=updated)
@@ -86,18 +96,12 @@ class SessionNavigationEngine:
                 expected_content_sha256=record.content_sha256,
                 replacement_text=existing.compacted,
                 visibility_version=existing.version,
+                tool_call_id=record.call_id,
                 host_handle=record.host_handle,
             )
             return MutationResult(ok=True, plan=plan, item=existing)
 
-        # 3. Storage budget check
-        if len(record.content.encode("utf-8")) > self.store.remaining_bytes:
-            return MutationResult(ok=False, error="store_full")
-
-        # 4. Baseline Rule Excerpt check
-        #    Selection reads the decoded view (result envelopes decoded, read_file
-        #    line numbers stripped); identity, hashing, and the payload replacement
-        #    keep using the raw string so stored SHA-256 and offsets are unchanged.
+        # 3. Baseline Rule Excerpt check
         rule_source = selectable_text(record.content)
         baseline = RuleSpanSelector(
             head_excerpts=self.config.head_excerpts,
@@ -108,7 +112,7 @@ class SessionNavigationEngine:
         if baseline is None:
             return MutationResult(ok=False, error="verification_failed")
 
-        # 5. Pending reservation
+        # 4. Pending reservation
         token, reserve_err = self.store.reserve(scope, item_id, record.invocation_digest)
         if reserve_err is not None:
             return MutationResult(ok=False, error=reserve_err)
@@ -118,7 +122,7 @@ class SessionNavigationEngine:
             rule_required = required_evidence_lines(rule_source)
             choice: SpanChoice | None = None
 
-            # 6. Summarization attempt
+            # 5. Summarization attempt
             model_error: str | None = None
             if summarizer is not None:
                 try:
@@ -142,7 +146,7 @@ class SessionNavigationEngine:
             if task is not None and task.cancelling():
                 raise asyncio.CancelledError
 
-            # 7-8. Shared compaction decision (validation, rendering, bounds, final check)
+            # 6. Shared compaction decision (validation, rendering, bounds, final check)
             from session_navigation.compaction import evaluate_compaction
             choice, rendered, err = evaluate_compaction(
                 original=record.content,
@@ -161,7 +165,7 @@ class SessionNavigationEngine:
                 self.store.release(scope, item_id, token)
                 return MutationResult(ok=False, error="verification_failed")
 
-            # 9. Item construction & Store commit
+            # 7. Item construction & Store commit
             item = ContextItem(
                 item_id=item_id,
                 tool_call_id=record.call_id,
@@ -169,15 +173,16 @@ class SessionNavigationEngine:
                 original=record.content,
                 compacted=rendered,
                 excerpt_lines=choice.lines,
-                visibility="compacted",
+                visibility="hidden",
                 version=1,
-                expires_at=self.store.now() + self.store.ttl_seconds,
+                expires_at=0.0,
                 tool_name=record.invocation.get("tool_name"),
                 compaction_source=choice.source,
                 invocation_snapshot=copy.deepcopy(record.invocation) if choice.source == "llm" else None,
-                invocation_digest=record.invocation_digest if choice.source == "llm" else None,
+                invocation_digest=record.invocation_digest,
                 context_hint=None,
                 invocation_options_omitted=options_omitted if choice.source == "llm" else False,
+                result_position=record.result_position,
             )
             put_res = self.store.put(scope, item, reservation=token)
             if not put_res.ok:
@@ -188,12 +193,14 @@ class SessionNavigationEngine:
                 expected_content_sha256=record.content_sha256,
                 replacement_text=rendered,
                 visibility_version=item.version,
+                tool_call_id=record.call_id,
                 host_handle=record.host_handle,
             )
             return MutationResult(ok=True, plan=plan, item=item)
 
         finally:
             self.store.release(scope, item_id, token)
+
     async def compact(
         self,
         scope: Scope,
@@ -249,31 +256,38 @@ class SessionNavigationEngine:
                     tool_name=item.tool_name,
                     excerpt_lines=item.excerpt_lines,
                     summary=item.compacted,
+                    invocation_digest=item.invocation_digest,
+                    result_position=item.result_position,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
                 )
             )
         return results
 
-    def restore(self, scope: Scope, item_id: str) -> MutationResult:
-        """Restore item, marking visibility as original without re-running tools."""
-        return self.store.restore(scope, item_id)
+    def restore(self, scope: Scope, item_id: str, expected_version: int | None = None) -> MutationResult:
+        """Restore item, marking visibility as visible without re-running tools."""
+        return self.store.restore(scope, item_id, expected_version=expected_version)
 
     def project(self, scope: Scope, records: list[ToolResultRecord]) -> list[ReplacementPlan]:
-        """Generate replacement plans for host transcript mutation.
-
-        Restored items (visibility == 'original') or absent items yield no replacement plan,
-        leaving host transcript content untouched.
-        """
+        """Generate replacement plans for host transcript mutation."""
         plans: list[ReplacementPlan] = []
         for record in records:
-            item_id = _item_id(scope.scope_key(), record.call_id, record.content_sha256)
+            item_id = _item_id(
+                _scope_key(scope),
+                record.call_id,
+                record.content_sha256,
+                record.invocation_digest,
+                record.result_position,
+            )
             item = self.store.get(scope, item_id)
-            if item is not None and item.visibility == "compacted":
+            if item is not None and item.visibility == "hidden":
                 plans.append(
                     ReplacementPlan(
                         item_id=item.item_id,
                         expected_content_sha256=record.content_sha256,
                         replacement_text=item.compacted,
                         visibility_version=item.version,
+                        tool_call_id=record.call_id,
                         host_handle=record.host_handle,
                     )
                 )

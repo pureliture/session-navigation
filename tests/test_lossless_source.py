@@ -1,14 +1,11 @@
 """Lossless source preparation; synthetic fixtures only."""
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
 
 from session_navigation.summary import (
-    ModelSummarizer,
-    SummarizerConfig,
     prepare_result_source,
     restore_lossless_source,
     validate_summary_text,
@@ -79,28 +76,3 @@ def test_encoding_integers_cannot_become_source_facts():
     )
 
 
-def test_encoded_source_never_sends_invocation_or_context():
-    source = (
-        "The cobalt-engine catalog uses exact-name matching.\n"
-        + "Ordinary annotation.\n" * 55
-    )
-    calls: list[dict[str, Any]] = []
-
-    async def generate(**kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {"text": '{"summary":"cobalt-engine uses exact-name matching."}'}
-
-    summarizer = ModelSummarizer(generate=generate, config=SummarizerConfig())
-    asyncio.run(
-        summarizer.summarize(
-            source,
-            (),
-            lambda: None,
-            invocation={"command": "PRIVATE_INVOCATION"},
-            context={"purpose": "PRIVATE_CONTEXT"},
-        )
-    )
-    wire = json.dumps(calls)
-    assert "PRIVATE_INVOCATION" not in wire and "PRIVATE_CONTEXT" not in wire
-    packet = json.loads(calls[0]["messages"][1]["content"].split("\n\n", 1)[1])
-    assert restore_lossless_source(packet["result"]["source"]) == source

@@ -1,7 +1,7 @@
 name: session-navigation
 version: 0.1.0
 manifest_version: 1
-description: Request-side tool-result summarization for Hermes sessions. Replaces large already-transmitted tool results with short summaries on the outgoing request copy only; the model restores originals through restore_context.
+description: Request-side tool-result summarization for Hermes sessions. Replaces large already-transmitted tool results with short summaries on the outgoing request copy only; the model restores originals through unhide_context.
 author: Session Navigation Contributors
 license: MIT
 homepage: https://github.com/pureliture/session-navigation
@@ -13,37 +13,14 @@ kind: standalone
 # That also keeps two profiles from declaring the same distribution name.
 python_runtime: external
 provides_tools:
-  - compact_context
-  - list_session_items
-  - restore_context
+  - hide_context
+  - summarize_context
+  - list_context_items
+  - unhide_context
+  - manage_context
 
 config_schema:
   enabled:
     type: bool
     default: false
     description: Enable compacting and request rewriting. Keep false until a verified session turns it on.
-  summary_mode:
-    type: str
-    default: rules
-    choices: [rules, llm]
-    description: Use conservative rules by default, or an explicitly configured local model.
-  base_url:
-    type: str
-    default: ""
-    description: Loopback-only OpenAI-compatible API base URL, usually ending in /v1. No default endpoint is selected.
-  model:
-    type: str
-    default: ""
-    description: Exact model ID sent to the configured local endpoint; required when summary_mode is llm.
-  timeout_seconds:
-    type: int
-    default: 60
-    description: Maximum time allowed for one local summarization request.
-  max_input_bytes:
-    type: int
-    default: 12288
-    description: Maximum UTF-8 bytes sent to the local summarizer.
-  max_output_tokens:
-    type: int
-    default: 384
-    description: Maximum generated tokens requested from the local summarizer.

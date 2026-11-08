@@ -1,5 +1,6 @@
 """A-plan supervision contracts; local requests only, no agent/provider calls."""
 from __future__ import annotations
+import os, tempfile, gc, pytest
 
 import json
 
@@ -33,7 +34,7 @@ def _compact(state, call_id="call_1", body=None, session=SESSION):
         request=_request(original, call_id), session_id=session,
         api_mode="codex_responses",
     )
-    result = json.loads(plugin.make_compact_handler(state)(
+    result = json.loads(plugin.make_hide_handler(state)(
         {"tool_call_id": call_id}, session_id=session,
     ))
     assert result["ok"] is True, result
@@ -47,10 +48,21 @@ def _list(state, query="", session=SESSION):
 
 
 def _restore(state, item_id, session=SESSION):
-    return json.loads(plugin.make_restore_handler(state)(
+    return json.loads(plugin.make_unhide_handler(state)(
         {"item_id": item_id}, session_id=session,
     ))
 
+
+
+@pytest.fixture(autouse=True)
+def _gc_collect():
+    yield
+    gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
 
 def test_list_counts_compacted_separately_from_restored_records():
     state = _state()
@@ -68,7 +80,7 @@ def test_list_counts_compacted_separately_from_restored_records():
     assert _restore(state, compacted["item_id"])["ok"] is True
     restored = _list(state)
     assert restored["count"] == len(restored["items"]) == 1
-    assert restored["items"][0]["visibility"] == "original"
+    assert restored["items"][0]["visibility"] == "visible"
     assert restored["compacted_count"] == 0
     assert restored["message"] == "현재 숨겨진 항목 없음"
 
@@ -122,23 +134,6 @@ def test_query_view_renumbers_and_reports_search_scope():
     assert full["compacted_count"] == 3
     assert [item["display_number"] for item in full["items"]] == [1, 2, 3]
 
-
-def test_expired_items_prune_their_display_metadata():
-    from session_navigation.engine import SessionNavigationEngine
-    from session_navigation.store import MemoryContextStore
-
-    now = [1000.0]
-    state = _state(engine=SessionNavigationEngine(
-        store=MemoryContextStore(ttl_seconds=60, clock=lambda: now[0])))
-    compacted = _compact(state)
-    scope_key = next(iter(state.presentations.snapshot()))
-    assert compacted["item_id"] in state.presentations.snapshot()[scope_key]
-
-    now[0] += 61.0
-    expired = _list(state)
-    assert expired["count"] == 0 and expired["compacted_count"] == 0
-    assert expired["message"] == "현재 숨겨진 항목 없음"
-    assert state.presentations.snapshot().get(scope_key, {}) == {}
 
 
 def test_recompact_after_restore_starts_a_new_compact_transition():
@@ -207,7 +202,7 @@ def test_enabled_plugin_registers_static_supervision_section():
     assert section["max_chars"] == 1200
     text = section["content"]
     assert isinstance(text, str) and len(text) <= 1200
-    for token in ("list_session_items", "restore_context", "숨김"):
+    for token in ("list_context_items", "unhide_context", "숨김"):
         assert token in text, token
 
 
@@ -223,15 +218,15 @@ def test_section_registration_degrades_without_api_or_when_disabled():
 
 def test_tool_descriptions_route_human_list_and_restore_requests():
     sections = plugin.TOOL_SCHEMAS
-    list_desc = sections["list_session_items"]["description"]
-    restore_desc = sections["restore_context"]["description"]
+    list_desc = sections["list_context_items"]["description"]
+    restore_desc = sections["unhide_context"]["description"]
     assert "사용자" in list_desc and "보여" in list_desc
     assert "복원" in restore_desc and "item_id" in restore_desc
     assert "목록" in restore_desc
 
 
 def test_restore_description_routes_number_references_verbatim():
-    desc = plugin.TOOL_SCHEMAS["restore_context"]["description"]
+    desc = plugin.TOOL_SCHEMAS["unhide_context"]["description"]
     assert "번" in desc and "고정" in desc
     assert "복원 직전" in desc and "임의로" in desc
 
@@ -313,4 +308,4 @@ def test_fixed_id_restore_after_recheck_keeps_original_target():
     after = _list(state)
     assert next(
         item["visibility"] for item in after["items"] if item["item_id"] == fixed
-    ) == "original"
+    ) == "visible"

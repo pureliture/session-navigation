@@ -6,6 +6,8 @@ rule-only first-version decision with a direct assertion.
 """
 
 from __future__ import annotations
+import pytest
+import os, tempfile
 
 import copy
 import json
@@ -72,10 +74,15 @@ def _mw(state, body: str, session: str, call_id: str = "call_1") -> dict:
               api_mode="codex_responses")
 
 
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+
 def test_compression_rotation_starts_fresh_scope():
     ctx, state = _enabled_pair()
-    compact = ctx.tools["compact_context"]["handler"]
-    restore = ctx.tools["restore_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
+    restore = ctx.tools["unhide_context"]["handler"]
     body = _long_body()
 
     _mw(state, body, "sess-before")
@@ -106,7 +113,7 @@ def test_compression_rotation_starts_fresh_scope():
 
 def test_subagent_sessions_stay_isolated():
     ctx, state = _enabled_pair()
-    compact = ctx.tools["compact_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
     body = _long_body()
 
     _mw(state, body, "sess-parent")
@@ -155,31 +162,12 @@ def test_session_expiry_forgets_quiet_scopes():
     assert handlers.compact(state.engine, store, scope, "call_1").ok is True
 
 
-def test_engine_store_expiry_stops_replacement():
-    now = [5000.0]
-    engine = SessionNavigationEngine(
-        store=MemoryContextStore(ttl_seconds=60, clock=lambda: now[0]))
-    store = SessionTranscriptStore()
-    scope = Scope(adapter_id="hermes", host_profile="test",
-                  session_id="sess-eng-ttl", branch_scope="unknown")
-    body = _long_body()
-
-    handlers.middleware_step(engine, store, scope, "codex_responses",
-                             _codex_request(body))
-    assert handlers.compact(engine, store, scope, "call_1").ok is True
-
-    now[0] += 61.0
-    later = handlers.middleware_step(engine, store, scope, "codex_responses",
-                                     _codex_request(body))
-    assert later["applied"] == []
-    assert later["request"]["input"][1]["output"] == body
-
 
 def test_disable_returns_to_original_and_reenable_applies():
     ctx = FakeCtx(config={"enabled": True})
     state = plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
-    compact = ctx.tools["compact_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
     body = _long_body()
     kwargs = dict(session_id="sess-toggle", api_mode="codex_responses")
 
@@ -203,8 +191,8 @@ def test_disable_returns_to_original_and_reenable_applies():
 
 def test_first_version_is_rule_only_no_external_call():
     ctx, state = _enabled_pair()
-    compact = ctx.tools["compact_context"]["handler"]
-    list_items = ctx.tools["list_session_items"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
     body = _long_body()
 
     plugin.make_middleware(state)(request=_codex_request(body),

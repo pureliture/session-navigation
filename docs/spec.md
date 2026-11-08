@@ -1,0 +1,118 @@
+# session-navigation Spec (locked 2026-11-08)
+
+User-locked decisions D1–D10. Implementation contracts below are binding.
+
+## Overall goal (locked)
+
+> session-navigation 전체 목표: tool-result의 hide·unhide·rehide·manage가 SQLite
+> 영속화로 프로세스 재시작과 세션 fork 이후에도 유지되고, Hermes terminal·OMP
+> read·bash 포함 자동관리와 Paseo Explorer·OMP TUI·Hermes TUI 3개 UI에서의 동일
+> 조작을 제공하며, E2E(재시작·fork·DB오류·비대화형·3UI 동시조작·대용량)와 전체 회귀
+> green(기저 결함 수정 포함)을 통과한다. 범위 밖: 메시지 row 수동숨김,
+> remove(영구삭제), 설치본 배포, 운영 런북. 성능: 목록 1000건 <1s, 요약 timeout 25s,
+> DB 용량 상한 없음.
+
+## D1. No remove — hide/unhide only
+
+- `hide_context`, `summarize_context`, `unhide_context`, `list_context_items`, `manage_context`.
+- Hide = summary replaces body in **outgoing request copy only**; host history immutable.
+- No permanent delete. Palantir's "remove completely" is out of scope.
+
+## D2. Row tokens — observatory method, no estimation
+
+Three paths kept separate (agent-observatory design):
+
+1. **Session totals**: provider log call ledger, session-ID join, call-unit dedupe
+   (message/response-ID key), then sum. OMP: JSONL `message.usage`. Hermes: `ctx.llm` response usage.
+2. **Row tokens**: distribute the call's measured usage to that turn's rows by
+   character count. Measured distribution, not estimation. Source label: "실측 배분".
+3. **Missing data**: display `—`, never 0. Never sum `lastUsage` snapshots together.
+4. Costs: show `lastUsage.totalCostUsd` only; never self-estimate.
+5. Quota windows (`listUsage`) are a separate UI concern; never used for row tokens.
+
+## D3. System prompt row — not shown
+
+- No system-prompt row in outline (Palantir parity dropped for system).
+
+## D4. manage_context defaults
+
+- `action=auto` (model summary when summarizer configured, else rule hide),
+  `max_items=20`, candidates = all recorded results of the confirmed snapshot.
+- Returns per-item results; partial failure never reports full success.
+
+## D5. Summarizer — session model only
+
+- OMP: extension-side `completeSimple` + `ctx.modelRegistry.resolver` (target text only).
+- Hermes: `ctx.llm` path.
+- REMOVE: daemon `SESSION_NAVIGATION_*` local-model settings, Hermes
+  `summary_mode/base_url/model` config, `_make_configured_summarizer` wiring.
+- `summarize_context` without session model → `summarizer_unavailable`.
+
+## D6. list_context_items shows hidden + unhidden
+
+- Status column distinguishes; unhidden rows are re-hide targets.
+
+## D7. Single SQLite file
+
+- Path: `~/.local/share/session-navigation/state.sqlite3` (XDG data, host-local).
+- Profile isolation via `scope_key`, not separate files. No cross-machine sync.
+- WAL mode only on SQLite ≥ 3.51.3 (or backported 3.44.6/3.50.7); else rollback journal.
+- No TTL expiry, no capacity cap on live hidden items. Disk-full → fail with
+  explicit error, never silent evict.
+
+## D8. Destructive-command denylist
+
+- `rm`, `git reset --hard`, and equivalents: excluded from auto-manage,
+  manual hide only. Implemented in `policy.py` (command-based gate, in addition
+  to existing content-based protection).
+
+## D9. DB error handling — user choice, non-interactive aborts
+
+- Interactive: user picks abort-request or send-original.
+- Non-interactive (pipe/background): abort. Never silently send originals.
+- DB failure is reported as failure, never as hide success. Model request
+  fail-open (original preserved) is separate from persistence failure reporting.
+- Hermes `llm_request` middleware exception (verified 2026-11-08, user decision):
+  the host swallows middleware exceptions and proceeds with the original
+  (`hermes_cli/plugins_dispatch.py` delivery contract); no abort hook exists.
+  Middleware DB failure is therefore loud-report (error log + `db_error_pending`
+  surfaced in list output + trace reason), not request abort. Tool paths
+  still return `db_error` + choices.
+
+## D10. UI order — Paseo → OMP TUI → Hermes TUI
+
+- Paseo Explorer panel first (row-unit verification platform).
+- Hermes TUI = `/nav` text command (verified 2026-11-08, user decision):
+  list/hide/unhide/rehide/summarize/manage via `register_command` +
+  `slash.exec`; no host changes required. The graphic widget bridge
+  (widget↔gateway) needs host changes that cannot land on main and would
+  be overwritten by updates; deferred.
+
+## Outline rows (deferred 2026-11-08, user decision)
+
+In-scope rows = tool-result units only (`item_` / `pair_`). The message-unit
+outline (user / assistant / tool-call `msg_` rows) is deferred.
+`message_unit_id()` / the `msg_` namespace and `units.message_uid` remain
+reserved, unwired; production `units` rows are `pair_` tool-result rows only
+(the schema permits other kinds for forward-compat; tests may seed them).
+Per-message token attribution (D2.2 to message rows) is deferred with the
+outline; tool-result rows show `—` until D2.2 is wired to them. D2.1 session
+totals are unaffected.
+- No turn grouping as identity unit.
+- Tool hide is pair-atomic (call+result together); application is
+  envelope-preserving text replacement, never deletion (deletion vs placeholder
+  provider acceptance unverified).
+
+## Identity contracts (enforced in SQLite phase)
+
+- Item key: `(scope_key, tool_call_id, content_sha256, invocation_digest)` —
+  never content-hash alone (Hermes `_call_id_for_plan` mis-substitution reproduced).
+- OMP identity fence must be durable (restart reproduced patches 1→0 with
+  memory-only identities).
+- `pair_` namespace for tool call+result units (separate from `item_` prefix).
+  `msg_` namespace reserved, deferred per Outline rows above.
+- Concurrent writers: version CAS; stale writer rejected, UI refreshes.
+
+## Migration
+
+- No memory→SQLite import. Fresh start; host histories preserved.

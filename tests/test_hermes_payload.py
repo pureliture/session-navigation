@@ -1,6 +1,8 @@
 """S2 synthetic tests: Hermes payload find/replace. No live Hermes, no network."""
 
 from __future__ import annotations
+import pytest
+import os, tempfile
 
 import hashlib
 import importlib.util
@@ -25,6 +27,11 @@ payload = _load_payload()
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
 
 def test_codex_find_text_output():
     request = {
@@ -114,13 +121,13 @@ def test_apply_replaces_only_target_and_keeps_original():
         "item_id": "item_0123456789abcdef",
         "host_handle": dict(results[0].host_handle),
         "expected_content_sha256": _sha(body),
-        "replacement_text": "[compacted:item_0123456789abcdef] short summary",
+        "replacement_text": "[hidden:item_0123456789abcdef] short summary",
     }
     new_payload, applied, skipped = payload.apply_replacements(
         "codex_responses", request, [plan])
     assert applied == ["item_0123456789abcdef"]
     assert skipped == []
-    assert new_payload["input"][1]["output"] == "[compacted:item_0123456789abcdef] short summary"
+    assert new_payload["input"][1]["output"] == "[hidden:item_0123456789abcdef] short summary"
     assert new_payload["input"][0] == request["input"][0]
     assert request == before
 
@@ -135,7 +142,7 @@ def test_apply_hash_mismatch_keeps_original():
         "item_id": "item_aaaaaaaaaaaaaaaa",
         "host_handle": {"api_mode": "chat_completions", "index": 0, "kind": "tool_message"},
         "expected_content_sha256": _sha("different body"),
-        "replacement_text": "[compacted:item_aaaaaaaaaaaaaaaa] summary",
+        "replacement_text": "[hidden:item_aaaaaaaaaaaaaaaa] summary",
     }
     new_payload, applied, skipped = payload.apply_replacements(
         "chat_completions", request, [plan])

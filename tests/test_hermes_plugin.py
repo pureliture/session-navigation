@@ -6,6 +6,7 @@ synthetic provider-format kwargs shaped like the real contract.
 """
 
 from __future__ import annotations
+import os, tempfile, gc, pytest
 
 import copy
 import json
@@ -81,10 +82,21 @@ def _mw_kwargs(request: dict, session: str, api_mode: str) -> dict:
     }
 
 
+
+@pytest.fixture(autouse=True)
+def _gc_collect():
+    yield
+    gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+
 def test_register_wires_three_tools_and_one_middleware():
     ctx = FakeCtx()
     plugin.register(ctx)
-    assert set(ctx.tools) == {"compact_context", "list_session_items", "restore_context"}
+    assert set(ctx.tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
     assert set(ctx.middlewares) == {"llm_request"}
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():
@@ -93,9 +105,9 @@ def test_register_wires_three_tools_and_one_middleware():
         assert schema["parameters"]["type"] == "object"
         assert entry["toolset"] == "session_navigation"
         assert callable(entry["handler"])
-    compact_params = ctx.tools["compact_context"]["schema"]["parameters"]
+    compact_params = ctx.tools["hide_context"]["schema"]["parameters"]
     assert compact_params["required"] == ["tool_call_id"]
-    restore_params = ctx.tools["restore_context"]["schema"]["parameters"]
+    restore_params = ctx.tools["unhide_context"]["schema"]["parameters"]
     assert restore_params["required"] == ["item_id"]
 
 
@@ -115,9 +127,9 @@ def test_enabled_end_to_end_compact_two_requests_list_restore():
     ctx = _enabled_ctx()
     plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
-    compact = ctx.tools["compact_context"]["handler"]
-    list_items = ctx.tools["list_session_items"]["handler"]
-    restore = ctx.tools["restore_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
+    restore = ctx.tools["unhide_context"]["handler"]
     body = _long_body()
 
     before = _codex_request(body)
@@ -183,7 +195,7 @@ def test_missing_session_fails_open():
     out = mw(**_mw_kwargs(payload, "", "codex_responses"))
     assert out["request"] == payload
     assert out["reason"] == "missing_session"
-    compact = ctx.tools["compact_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
     assert json.loads(compact({"tool_call_id": "call_1"}, session_id="")) == {
         "ok": False, "error": "not_found"}
 
@@ -191,8 +203,8 @@ def test_missing_session_fails_open():
 def test_compact_missing_target_and_unknown_item():
     ctx = _enabled_ctx()
     plugin.register(ctx)
-    compact = ctx.tools["compact_context"]["handler"]
-    restore = ctx.tools["restore_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
+    restore = ctx.tools["unhide_context"]["handler"]
     assert json.loads(compact({}, session_id="sess-x")) == {
         "ok": False, "error": "missing_tool_call_id"}
     assert json.loads(compact({"tool_call_id": "nope"}, session_id="sess-x")) == {
@@ -219,7 +231,7 @@ def test_count_middlewares_counts_others_not_self() -> None:
     # Recorded for the tools, but the outgoing request is NOT rewritten.
     assert out["reason"] == "other_middleware_present"
     assert out["request"]["input"][1]["output"] == body
-    compacted = json.loads(ctx.tools["compact_context"]["handler"](
+    compacted = json.loads(ctx.tools["hide_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-other"))
     assert compacted["ok"] is True, "recording must still feed the tool handlers"
 
@@ -233,7 +245,7 @@ def test_coexistence_records_but_does_not_apply() -> None:
     out = mw(**_mw_kwargs(_codex_request(body), "sess-coex", "codex_responses"))
     assert out["request"]["input"][1]["output"] == body
     assert out["reason"] == "other_middleware_present"
-    compact = ctx.tools["compact_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
     compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-coex"))
     assert compacted["ok"] is True
 
@@ -249,59 +261,40 @@ def test_middleware_fail_open_on_bad_shapes():
 
 def test_bridge_collision_set_matches_bridge_contract():
     assert plugin.BRIDGE_COLLISION_TOOLS == {
-        "compact_context", "summarize_session", "list_session_items", "restore_context"}
-    assert plugin.bridge_should_yield(["read_file", "compact_context"]) is True
+        "hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
+    assert plugin.bridge_should_yield(["read_file", "hide_context"]) is True
     assert plugin.bridge_should_yield(["terminal", "read_file"]) is False
     assert plugin.bridge_should_yield([]) is False
     assert plugin.bridge_should_yield(None) is False
 
 
-def test_llm_settings_build_summarizer_and_pass_it_through_compact_handler(monkeypatch):
-    observed: dict = {"requests": []}
-
-    class FakeTransport:
-        def __init__(self, base_url: str):
-            observed["base_url"] = base_url
-
-        async def generate(self, **request):
-            observed["requests"].append(request)
-            return {
-                "text": json.dumps({
-                    "summary": (
-                        "id: 01234567-89ab-cdef-0123-456789abcdef; "
-                        "results/output.json generated successfully."
-                    )
-                }),
-                "finish_reason": "stop",
-                "usage": {"completion_tokens": 18},
-            }
-
-    monkeypatch.setattr(factories, "OpenAICompatibleTransport", FakeTransport, raising=False)
-    ctx = _enabled_ctx(
-        summary_mode="llm",
-        base_url="http://127.0.0.1/v1",
-        model="mlx-community/LFM3-1.7B-OptiQ-4bit:no-think",
-        timeout_seconds=23,
-        max_input_bytes=4096,
-        max_output_tokens=128,
-    )
+def test_hide_is_rule_based_without_summarizer():
+    ctx = _enabled_ctx()
     state = plugin.register(ctx)
-    assert state.summarizer is not None
+    assert state.summarizer is None
 
     body = _long_body()
     mw = ctx.middlewares["llm_request"][0]
-    mw(**_mw_kwargs(_codex_request(body), "sess-llm", "codex_responses"))
-    compacted = json.loads(ctx.tools["compact_context"]["handler"](
-        {"tool_call_id": "call_1"}, session_id="sess-llm"))
+    mw(**_mw_kwargs(_codex_request(body), "sess-rule", "codex_responses"))
+    hidden = json.loads(ctx.tools["hide_context"]["handler"](
+        {"tool_call_id": "call_1"}, session_id="sess-rule"))
 
-    assert compacted["ok"] is True
-    assert observed["base_url"] == "http://127.0.0.1/v1"
-    assert len(observed["requests"]) == 1
-    assert observed["requests"][0]["model"] == (
-        "mlx-community/LFM3-1.7B-OptiQ-4bit:no-think"
-    )
-    assert observed["requests"][0]["timeout_seconds"] == 23
-    assert observed["requests"][0]["max_tokens"] == 128
+    assert hidden["ok"] is True
+
+
+def test_summarize_with_ctx_llm_none_returns_unavailable():
+    ctx = _enabled_ctx()
+    state = plugin.register(ctx)
+    assert state.summarizer is None
+
+    body = _long_body()
+    mw = ctx.middlewares["llm_request"][0]
+    mw(**_mw_kwargs(_codex_request(body), "sess-none", "codex_responses"))
+    summarized = json.loads(ctx.tools["summarize_context"]["handler"](
+        {"tool_call_id": "call_1"}, session_id="sess-none"))
+
+    assert summarized["ok"] is False
+    assert summarized["error"] == "summarizer_unavailable"
 
 
 def test_rules_mode_default_does_not_create_local_transport(monkeypatch):
@@ -319,15 +312,8 @@ def test_rules_mode_default_does_not_create_local_transport(monkeypatch):
     assert constructions == []
 
 
-def test_manifest_summarizer_settings_are_explicit_and_rules_default():
+def test_manifest_has_no_local_summarizer_settings():
     manifest = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text()
-    expected = (
-        "  summary_mode:\n    type: str\n    default: rules\n    choices: [rules, llm]",
-        '  base_url:\n    type: str\n    default: ""',
-        '  model:\n    type: str\n    default: ""',
-        "  timeout_seconds:\n    type: int\n    default: 60",
-        "  max_input_bytes:\n    type: int\n    default: 12288",
-        "  max_output_tokens:\n    type: int\n    default: 384",
-    )
-    for setting in expected:
-        assert setting in manifest
+    for removed in ("summary_mode", "base_url", "model:", "timeout_seconds", "max_input_bytes", "max_output_tokens"):
+        assert removed not in manifest
+

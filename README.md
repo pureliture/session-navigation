@@ -1,57 +1,29 @@
 # session-navigation
 
-호스트 중립적인 도구 결과 요약/압축(Context Compaction) 공통 엔진.
+호스트 중립적인 도구 결과 숨김/요약/복원(Context Compaction) 공통 엔진.
 
-## 핵심 특징
-- **호스트 중립성**: OpenAI, Foundry, Starlette, FastAPI, 환경변수(`os.environ`)에 일절 의존하지 않는 순수 Python 라이브러리.
-- **엄격한 증거성**: 소스 결과에 없는 환각(종료 코드, 수치, 파일 경로) 엄격 차단 및 권위 있는 메타데이터 검증.
-- **가역적 원문 복원 (Restore)**: 재실행이나 모델 재호출 없이 메모리 저장소에서 원본 100% 즉시 복원.
-- **안전한 정책 보호 (Policy Protection)**: 미해결 오류, 비즈니스 핵심 상태, 보안 민감값 자동 감지 및 fail-open 보호.
-- **최소 의존성**: 오직 `cachetools` 하나에만 의존하며 표준 라이브러리 기반으로 구동.
+## SQLite 상태 저장
+- 기본 경로: `~/.local/share/session-navigation/state.sqlite3`
+- `XDG_DATA_HOME` 설정 시: `$XDG_DATA_HOME/session-navigation/state.sqlite3`
+- 명시적 경로: `SESSION_NAVIGATION_STATE_PATH` 환경 변수 또는 생성자 인자로 override (테스트는 tmp 경로 사용).
+- WAL 모드는 SQLite >= 3.51.3 (또는 3.44.6/3.50.7)에서만 활성화되며, 그 외에는 rollback journal을 사용합니다. `busy_timeout=5000`.
 
-## 설치
-```bash
-uv pip install session-navigation
-```
+## 지원 도구 범위
+- OMP 확장은 `read`와 `bash` 도구 결과를 수집/숨김 대상으로 다룹니다.
+- bash 명령은 D8 denylist(`rm`, `git reset --hard` 등)에 해당하면 자동 관리에서 제외되며 수동 숨김은 허용됩니다.
 
-## 빠른 시작
-```python
-import hashlib
-from session_navigation import SessionNavigationEngine, Scope, ToolResultRecord
+## 세션 모델 요약 (D5)
+- OMP는 확장 측 `completeSimple` + `ctx.modelRegistry.resolver`를 사용해 대상 텍스트만 요약합니다.
+- 데몬에 `SESSION_NAVIGATION_*` 로컬 모델 설정은 없습니다. 세션 모델이 없으면 `summarize_context`는 `summarizer_unavailable`을 반환합니다.
 
-engine = SessionNavigationEngine()
-scope = Scope(adapter_id="bridge", host_profile="default", session_id="session-1")
-
-record = ToolResultRecord(
-    call_id="call-123",
-    result_position=0,
-    content="...대용량 도구 실행 결과...",
-    content_sha256=hashlib.sha256(b"...").hexdigest(),
-    invocation={"tool_name": "terminal", "arguments": {"command": "pytest"}},
-    invocation_digest="digest-abc",
-    host_handle={"message_index": 3},
-)
-
-# 요약/압축 실행
-result = engine.compact_sync(scope, record)
-if result.ok and result.plan:
-    print("치환 텍스트:", result.plan.replacement_text)
-    print("호스트 핸들:", result.plan.host_handle)
-
-# 원문 복원 (Restore)
-engine.restore(scope, result.plan.item_id)
-```
-
-## Hermes에서 숨김 확인·복원
-
-같은 세션에서 “숨김 목록 보여줘”, “1번 복원해”, “전부 되돌려”라고 요청하면
-에이전트가 실제 도구를 호출해 확인·복원한다. 숨김 상태는 프로세스 메모리에만
-있어 재시작하면 사라진다. 자세한 동작 규칙과 배포 후 시험 절차는
-[사람용 확인·복원 규약](docs/hermes-human-supervision.md)을 참고한다.
+## DB 오류 처리 (D9)
+- 대화형: abort-request 또는 send-original 중 선택.
+- 비대화형(pipe/background): abort. 원본을 조용히 전송하지 않습니다.
+- DB 실패는 숨김 성공이 아닌 실패로 보고됩니다.
 
 ## 개발 및 테스트
 ```bash
 uv sync --dev
-uv run pytest
+uv run pytest tests/test_omp_daemon.py tests/test_omp_sqlite_e2e.py
 uv build
 ```

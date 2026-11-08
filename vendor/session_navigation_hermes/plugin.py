@@ -3,7 +3,7 @@
 This is the host-process shim between Hermes and the pure helpers
 (`payload`, `session`, `handlers`). It owns everything host-specific:
 
-- tool registration (`compact_context`, `list_session_items`, `restore_context`)
+- tool registration (`hide_context`, `summarize_context`, `list_context_items`, `unhide_context`, `manage_context`)
 - the `llm_request` middleware (record -> plan -> apply on a copy)
 - scope derivation from host identifiers (never model arguments)
 - enabled-off default, coexistence record-only mode, fail-open errors
@@ -32,12 +32,10 @@ code actually read):
 
 Decisions recorded here (first-version scope):
 
-- Summarization is rule-only by default: the plugin creates the engine
-  without an external summarizer, so no model call, no credentials,
-  and no extra cost happen unless an operator explicitly wires one.
-  When an LFM summarizer is added later it must be a separate local
-  call, never the main-model path (`ctx.llm`), to keep usage, auth,
-  and trust boundaries apart and keep fail-open simple.
+- D5 session-model-only: `hide_context` is rule-only (never calls a model);
+  `summarize_context` uses the session model via `ctx.llm` (25s timeout),
+  and returns `summarizer_unavailable` when no session model exists. No
+  local-model settings exist.
 - `branch_scope` is `"unknown"`: Hermes exposes no exact branch API
   to the plugin, so no full fork isolation is claimed. A compression
   rotation issues a new `session_id`, which naturally starts a fresh
@@ -64,8 +62,6 @@ from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
 from session_navigation.model import Scope
 from session_navigation.engine import SessionNavigationEngine
-from session_navigation.openai_compatible import OpenAICompatibleTransport
-from session_navigation.summary import ModelSummarizer, SummarizerConfig
 from session_navigation.transport import Summarizer, SummarizerError
 
 logger = logging.getLogger(__name__)
@@ -74,33 +70,35 @@ from .factories import (
     PluginState,
     _default_count_llm_middlewares,
     _dump,
-    _make_configured_summarizer,
-    make_compact_handler,
+    make_hide_handler,
     make_list_handler,
+    make_manage_handler,
     make_middleware,
     make_summarize_handler,
-    make_restore_handler,
+    make_unhide_handler,
     scope_for,
 )
+from .llm import CtxLlmSummarizer
 from .schemas import (
     ADAPTER_ID,
     BRANCH_SCOPE,
     BRIDGE_COLLISION_TOOLS,
-    COMPACT_TOOL,
+    HIDE_TOOL,
     LIST_TOOL,
+    MANAGE_TOOL,
     SUMMARIZE_TOOL,
     SUPERVISION_SECTION_ID,
     SUPERVISION_SECTION_MAX_CHARS,
     SUPERVISION_SECTION_TEXT,
     TOOL_SCHEMAS,
     TOOLSET,
-    RESTORE_TOOL,
+    UNHIDE_TOOL,
     bridge_should_yield,
     SOURCE,
 )
 
 def register(ctx: Any) -> PluginState:
-    """Hermes plugin entry point: register 3 tools + 1 middleware.
+    """Hermes plugin entry point: register tools + 1 middleware.
 
     The plugin starts disabled: tools report `disabled` and the
     middleware returns `None` (no recording, no rewriting) until the
@@ -123,23 +121,25 @@ def register(ctx: Any) -> PluginState:
     state = PluginState(
         profile=profile,
         is_enabled=_is_enabled,
-        summarizer=_make_configured_summarizer(ctx),
+        summarizer=None,
+    )
+    llm = getattr(ctx, "llm", None)
+    if llm is not None:
+        state.summarizer = CtxLlmSummarizer(ctx, store=state.store)
+    ctx.register_tool(
+        name=HIDE_TOOL,
+        toolset=TOOLSET,
+        schema=TOOL_SCHEMAS[HIDE_TOOL],
+        handler=make_hide_handler(state),
+        description=TOOL_SCHEMAS[HIDE_TOOL]["description"],
     )
     ctx.register_tool(
-        name=COMPACT_TOOL,
+        name=SUMMARIZE_TOOL,
         toolset=TOOLSET,
-        schema=TOOL_SCHEMAS[COMPACT_TOOL],
-        handler=make_compact_handler(state),
-        description=TOOL_SCHEMAS[COMPACT_TOOL]["description"],
+        schema=TOOL_SCHEMAS[SUMMARIZE_TOOL],
+        handler=make_summarize_handler(state),
+        description=TOOL_SCHEMAS[SUMMARIZE_TOOL]["description"],
     )
-    if state.summarizer is not None:
-        ctx.register_tool(
-            name=SUMMARIZE_TOOL,
-            toolset=TOOLSET,
-            schema=TOOL_SCHEMAS[SUMMARIZE_TOOL],
-            handler=make_summarize_handler(state),
-            description=TOOL_SCHEMAS[SUMMARIZE_TOOL]["description"],
-        )
     ctx.register_tool(
         name=LIST_TOOL,
         toolset=TOOLSET,
@@ -148,11 +148,18 @@ def register(ctx: Any) -> PluginState:
         description=TOOL_SCHEMAS[LIST_TOOL]["description"],
     )
     ctx.register_tool(
-        name=RESTORE_TOOL,
+        name=UNHIDE_TOOL,
         toolset=TOOLSET,
-        schema=TOOL_SCHEMAS[RESTORE_TOOL],
-        handler=make_restore_handler(state),
-        description=TOOL_SCHEMAS[RESTORE_TOOL]["description"],
+        schema=TOOL_SCHEMAS[UNHIDE_TOOL],
+        handler=make_unhide_handler(state),
+        description=TOOL_SCHEMAS[UNHIDE_TOOL]["description"],
+    )
+    ctx.register_tool(
+        name=MANAGE_TOOL,
+        toolset=TOOLSET,
+        schema=TOOL_SCHEMAS[MANAGE_TOOL],
+        handler=make_manage_handler(state),
+        description=TOOL_SCHEMAS[MANAGE_TOOL]["description"],
     )
     ctx.register_middleware("llm_request", make_middleware(state))
 
@@ -170,5 +177,11 @@ def register(ctx: Any) -> PluginState:
             )
         except Exception:
             logger.debug("session-navigation: system prompt section unavailable")
+    try:
+        from . import command as _nav_command
+
+        _nav_command.register(ctx, state)
+    except Exception:
+        logger.debug("session-navigation: /nav command registration unavailable")
     logger.debug("session-navigation plugin registered (profile=%s)", profile)
     return state

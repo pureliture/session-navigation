@@ -89,28 +89,28 @@ def main() -> int:
     ok = (
         entry is not None
         and callable(getattr(getattr(entry, 'module', None), 'register', None))
-        and set(tools) == {"compact_context", "list_session_items", "restore_context"}
+        and set(tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
         and len(middlewares) == 1
         and any(s.id == "session-navigation.human-supervision" for s in sections)
     )
     section = next((s for s in sections if s.id == "session-navigation.human-supervision"), None)
     if section is not None:
-        print(f"section tokens  : {[t for t in ('list_session_items', 'restore_context') if t in section.content]}")
+        print(f"section tokens  : {[t for t in ('list_context_items', 'unhide_context') if t in section.content]}")
         ok = ok and len(section.content) <= 1200
 
     if ok:
         from tools.registry import registry
 
         entries = {name: registry.get_entry(name) for name in (
-            "compact_context", "list_session_items", "restore_context")}
+            "hide_context", "list_context_items", "unhide_context")}
         missing = sorted(name for name, e in entries.items() if e is None)
         if missing:
             print(f"MISSING registry entries: {missing}")
             print("VERDICT         : FAIL")
             return 1
-        compact_entry = registry.get_entry("compact_context")
-        list_entry = registry.get_entry("list_session_items")
-        restore_entry = registry.get_entry("restore_context")
+        compact_entry = registry.get_entry("hide_context")
+        list_entry = registry.get_entry("list_context_items")
+        restore_entry = registry.get_entry("unhide_context")
         assert compact_entry is not None and list_entry is not None and restore_entry is not None
         compact, list_items, restore = (
             compact_entry.handler, list_entry.handler, restore_entry.handler)

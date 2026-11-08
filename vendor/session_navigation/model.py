@@ -28,6 +28,35 @@ def compute_invocation_digest(
     return hashlib.sha256(canonical(identity).encode("utf-8")).hexdigest()
 
 
+def _item_id(
+    scope_key: str,
+    tool_call_id: str,
+    content_sha256: str,
+    invocation_digest: str = "",
+    result_position: int = 0,
+) -> str:
+    """Deterministic item id from the full identity tuple (never content hash alone)."""
+    digest = hashlib.sha256(
+        f"{scope_key}\0{tool_call_id}\0{content_sha256}\0{invocation_digest}\0{result_position}".encode(
+            "utf-8"
+        )
+    ).hexdigest()[:16]
+    return f"item_{digest}"
+
+def message_unit_id(scope_key: str, message_uid: str) -> str:
+    """Deterministic `msg_` id for a message unit (separate from `item_`)."""
+    digest = hashlib.sha256(f"{scope_key}\0msg\0{message_uid}".encode("utf-8")).hexdigest()[:16]
+    return f"msg_{digest}"
+
+
+def pair_unit_id(scope_key: str, tool_call_id: str, content_sha256: str) -> str:
+    """Deterministic `pair_` id for a tool call+result pair unit (separate from `item_`)."""
+    digest = hashlib.sha256(
+        f"{scope_key}\0pair\0{tool_call_id}\0{content_sha256}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"pair_{digest}"
+
+
 @dataclass(frozen=True)
 class Scope:
     """Namespace scope identifying an isolated session partition."""
@@ -65,6 +94,7 @@ class ReplacementPlan:
     expected_content_sha256: str
     replacement_text: str
     visibility_version: int
+    tool_call_id: str = ""
     host_handle: Any = None
 
 
@@ -77,15 +107,18 @@ class ContextItem:
     original: str
     compacted: str
     excerpt_lines: tuple[str, ...]
-    visibility: str  # "compacted" | "original"
+    visibility: str  # "hidden" | "visible"
     version: int
-    expires_at: float
+    expires_at: float = 0.0
     tool_name: str | None = None
     compaction_source: str = "rule"
     invocation_snapshot: dict[str, Any] | None = None
     invocation_digest: str | None = None
     context_hint: dict[str, str] | None = None
     invocation_options_omitted: bool = False
+    result_position: int = 0
+    created_at: float = 0.0
+    updated_at: float = 0.0
 
     @property
     def call_id(self) -> str:
@@ -119,22 +152,30 @@ class ItemMetadata:
     item_id: str
     call_id: str
     content_sha256: str
-    visibility: str  # "compacted" | "original"
+    visibility: str  # "hidden" | "visible"
     version: int
-    expires_at: float
+    expires_at: float = 0.0
     source: str = "rule"  # "rule" | "summarizer" | "llm"
     bytes_size: int = 0
     tool_name: str | None = None
     excerpt_lines: tuple[str, ...] = ()
     summary: str = ""
+    invocation_digest: str | None = None
+    result_position: int = 0
+    created_at: float = 0.0
+    updated_at: float = 0.0
 
     @property
-    def tool_call_id(self) -> str:
+    def tool_call_id_prop(self) -> str:
         return self.call_id
 
     @property
     def compaction_source(self) -> str:
         return self.source
+
+    @property
+    def tool_call_id(self) -> str:
+        return self.call_id
 
     def to_dict(self) -> dict[str, Any]:
         """Convert metadata to dictionary representation."""
@@ -166,8 +207,6 @@ class SpanChoice:
 @dataclass(frozen=True)
 class EngineConfig:
     """Engine operating parameters and safety limits."""
-    ttl_seconds: int = 86400
-    max_bytes: int = 67108864  # 64 MB
     min_chars: int = 800
     max_pending: int = 4
     head_excerpts: int = 3

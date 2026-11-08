@@ -4,6 +4,8 @@ No live Hermes, no network. Synthetic provider-format requests only.
 """
 
 from __future__ import annotations
+import pytest
+import os, tempfile
 
 import json
 
@@ -57,6 +59,11 @@ def _scope(session: str) -> Scope:
     return Scope(adapter_id="hermes", host_profile="test", session_id=session)
 
 
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+
 def test_allowlist_filters_and_rejects():
     invocation, omitted = filter_invocation("read_file", {"path": "a.txt"})
     assert invocation == {"tool_name": "read_file", "arguments": {"path": "a.txt"}}
@@ -68,7 +75,7 @@ def test_allowlist_filters_and_rejects():
     else:
         raise AssertionError("expected unsupported_tool")
     try:
-        filter_invocation("compact_context", {"tool_call_id": "call_1"})
+        filter_invocation("hide_context", {"tool_call_id": "call_1"})
     except AdapterRejected as exc:
         assert exc.code == "internal_target"
     else:

@@ -18,6 +18,7 @@ from session_navigation.policy import (
     check_refusal_reason,
     excerpts_are_exact,
     is_business_state_critical,
+    is_destructive_command,
     is_protected_error,
     refusal_reason,
     render_compaction,
@@ -26,10 +27,9 @@ from session_navigation.policy import (
     validate_evidence_retention,
     verified_facts,
 )
+from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.store import MemoryContextStore
 from session_navigation.summary import (
-    ModelSummarizer,
-    SummarizerConfig,
     is_lossless_encoded,
     prepare_result_source,
     restore_lossless_source,
@@ -52,9 +52,8 @@ __all__ = [
     "EngineConfig",
     "ItemMetadata",
     "LFMUnavailable",
-    "LFMSummarizer",
     "MemoryContextStore",
-    "ModelSummarizer",
+    "SQLiteContextStore",
     "MutationResult",
     "OnCall",
     "ReplacementPlan",
@@ -62,7 +61,6 @@ __all__ = [
     "Scope",
     "SpanChoice",
     "Summarizer",
-    "SummarizerConfig",
     "SummarizerError",
     "SummarizerUnavailable",
     "ToolResultRecord",
@@ -72,6 +70,7 @@ __all__ = [
     "compute_sha256",
     "excerpts_are_exact",
     "is_business_state_critical",
+    "is_destructive_command",
     "is_lossless_encoded",
     "is_protected_error",
     "prepare_result_source",
@@ -91,10 +90,6 @@ __all__ = [
 
 def __getattr__(name: str):
     """Resolve deprecated model-specific names lazily."""
-    if name == "LFMSummarizer":
-        from session_navigation.summary import __getattr__ as summary_getattr
-
-        return summary_getattr(name)
     if name == "LFMUnavailable":
         from session_navigation.transport import __getattr__ as transport_getattr
 

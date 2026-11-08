@@ -24,7 +24,13 @@
         "verification_failed",
         "summarizer_unavailable",
         "input_too_large",
-        "invalid_response"
+        "invalid_response",
+        "db_error",
+        "db_full",
+        "version_conflict",
+        "destructive_command",
+        "destructive_check_failed",
+        "invalid_version"
       ]
     },
     "category": {
