@@ -115,7 +115,7 @@ def strip_consecutive_numbering(text: str) -> str:
     """Drop ``N|`` line prefixes when every line is numbered consecutively.
 
     ``read_file`` prefixes each returned line with its line number; the numbers
-    are transport noise, and the LFM packet already removes them. Rule-based
+    are transport noise, and the model-summary packet removes them. Rule-based
     excerpt selection uses the same rule so both paths read the same text.
     """
     lines = text.splitlines()
