@@ -45,7 +45,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/session_navigation"]
+packages = ["src/session_navigation", "src/session_navigation_omp"]
 
 # The wheel ships ``adapters/hermes`` under the ``session_navigation_hermes`` import
 # name so a bare ``hermes`` package never shadows another provider's package.
