@@ -1,5 +1,6 @@
 """OMP daemon."""
 from __future__ import annotations
+import asyncio
 import json, sys
 from collections import OrderedDict
 from typing import Any
@@ -270,7 +271,7 @@ class Daemon:
                 async def summarize(self, original, required_evidence, on_call=None, *, invocation=None, context=None):
                     return {"summary": summary_text}
 
-            result = self.engine.summarize(scope, record, _SuppliedSummarizer())
+            result = asyncio.run(self.engine.summarize(scope, record, _SuppliedSummarizer()))
         else:
             result = self.engine.compact_sync(scope, record)
 
@@ -348,7 +349,7 @@ class Daemon:
                     async def summarize(self, original, required_evidence, on_call=None, *, invocation=None, context=None):
                         return {"summary": summary_text}
 
-                result = self.engine.summarize(scope, record, _SuppliedSummarizer())
+                result = asyncio.run(self.engine.summarize(scope, record, _SuppliedSummarizer()))
             else:
                 result = self.engine.compact_sync(scope, record)
 
