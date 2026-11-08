@@ -2,14 +2,15 @@
 
 ## 전체 Goal (locked)
 
-> Tool-result hide/unhide/rehide/manage가 SQLite 영속화로 재시작·fork 후에도
-> 유지되고, OMP bash 포함 자동관리 + Paseo/OMP/Hermes 3개 UI에서 동일 조작이 되며,
-> E2E(재시작·fork·DB오류·비대화형·3UI동시·대용량) + 전체 회귀 green을 통과한다.
-> 메시지 row·remove·배포·런북은 범위 밖.
+> session-navigation 전체 목표: tool-result의 hide·unhide·rehide·manage가 SQLite
+> 영속화로 프로세스 재시작과 세션 fork 이후에도 유지되고, Hermes terminal·OMP
+> read·bash 포함 자동관리와 Paseo Explorer·OMP TUI·Hermes TUI 3개 UI에서의 동일
+> 조작을 제공하며, E2E(재시작·fork·DB오류·비대화형·3UI 동시조작·대용량)와 전체 회귀
+> green(기저 결함 수정 포함)을 통과한다. 범위 밖: 메시지 row 수동숨김,
+> remove(영구삭제), 설치본 배포, 운영 런북. 성능: 목록 1000건 <1s, 요약 timeout 25s,
+> DB 용량 상한 없음.
 
-세부: 목록 <1s/1000건, 요약 timeout 25s 유지, DB 상한 없음. 기저 결함
-(ruamel·test_omp_daemon·bun 2fail) 수정 포함. 산출물: spec + handoff + Hermes 규약
-갱신 + 사용법 3종(Paseo/OMP/Hermes).
+산출물: spec + handoff + Hermes 규약 갱신 + 사용법 3종(Paseo/OMP/Hermes).
 
 ## 배경 (3줄)
 
