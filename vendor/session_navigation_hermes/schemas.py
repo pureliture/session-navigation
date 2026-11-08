@@ -32,12 +32,10 @@ code actually read):
 
 Decisions recorded here (first-version scope):
 
-- Summarization is rule-only by default: the plugin creates the engine
-  without an external summarizer, so no model call, no credentials,
-  and no extra cost happen unless an operator explicitly wires one.
-  When an LFM summarizer is added later it must be a separate local
-  call, never the main-model path (`ctx.llm`), to keep usage, auth,
-  and trust boundaries apart and keep fail-open simple.
+- D5 session-model-only: `hide_context` is rule-only (never calls a model);
+  `summarize_context` uses the session model via `ctx.llm` (25s timeout),
+  and returns `summarizer_unavailable` when no session model exists. No
+  local-model settings exist.
 - `branch_scope` is `"unknown"`: Hermes exposes no exact branch API
   to the plugin, so no full fork isolation is claimed. A compression
   rotation issues a new `session_id`, which naturally starts a fresh
@@ -64,8 +62,6 @@ from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
 from session_navigation.model import Scope
 from session_navigation.engine import SessionNavigationEngine
-from session_navigation.openai_compatible import OpenAICompatibleTransport
-from session_navigation.summary import ModelSummarizer, SummarizerConfig
 from session_navigation.transport import Summarizer, SummarizerError
 
 logger = logging.getLogger(__name__)
@@ -105,7 +101,7 @@ SUPERVISION_SECTION_TEXT = (
     "기준입니다. ‘N번 복원해’ 또는 ‘전부 되돌려’라고 요청할 수 있습니다.'라고 안내한다. "
     "'N번 복원해' 요청이 오면 사용자가 본 표의 N번에 해당하는 정확한 item_id를 먼저 고정한다. "
     "복원 직전에 목록을 다시 조회해 현재 상태를 확인하되, 새 목록의 번호로 바꾸지 않고 고정한 "
-    "item_id로 unhide_context를 호출한다. 복원 뒤 목록으로 같은 ID가 original인지 확인한다. "
+    "item_id로 unhide_context를 호출한다. 복원 뒤 목록으로 같은 ID가 visible인지 확인한다. "
     "'그거 되돌려'는 대상 하나가 분명할 때만 그 item_id로 복원하고, 여러 대상이 가능하면 묻고 "
     "임의로 고르지 않는다. '그거/그것/그 항목'처럼 번호도 ID도 없으면 바로 복원하지 않는다. "
     "직전 대화에서 가리키는 숨김 항목이 하나일 때만 복원하고, 숨김이 2건 이상이거나 대상이 "
@@ -113,8 +109,8 @@ SUPERVISION_SECTION_TEXT = (
     "목록의 1번을 임의로 고르지 않는다. '전부 되돌려'는 필터 없는 목록에서 숨김 item_id 집합을 고정해 한 건씩 "
     "복원한 뒤 전체 목록으로 성공·실패·남은 건수를 보고한다. 숨김이 0건이면 '현재 숨겨진 항목 없음'이라고만 "
     "말한다. 오래된 큰 도구 결과가 쌓이면 manage_context로 자동 정리할 수 있다. "
-    "숨김 상태는 같은 프로필·세션·프로세스에서만 보이고 재시작하면 "
-    "사라진다. 재시작 여부를 모를 때 원인을 단정하지 않는다."
+    "숨김 상태는 SQLite에 영속화되어 재시작·fork 이후에도 유지된다. "
+    "재시작 여부를 모를 때 원인을 단정하지 않는다."
 )
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
@@ -184,7 +180,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "item_id": {
                     "type": "string",
                     "description": "The hidden item ID to unhide.",
-                }
+                },
+                "expected_version": {
+                    "type": "integer",
+                    "description": "CAS guard from the listed row version; stale replays are rejected.",
+                },
             },
             "required": ["item_id"],
             "additionalProperties": False,

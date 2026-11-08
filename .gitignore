@@ -11,3 +11,4 @@ dist/
 
 # session handoff artifacts (use local://, never commit)
 docs/handoff-*.md
+node_modules/

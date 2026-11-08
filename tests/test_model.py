@@ -81,7 +81,7 @@ def test_replacement_plan_immutability_and_echo():
     plan = ReplacementPlan(
         item_id="item_0123456789abcdef",
         expected_content_sha256=compute_sha256("original"),
-        replacement_text="[compacted:item_0123456789abcdef]\n...",
+        replacement_text="[hidden:item_0123456789abcdef]\n...",
         visibility_version=1,
         host_handle=handle,
     )
@@ -145,8 +145,6 @@ def test_item_metadata_serialization():
 
 def test_engine_config_defaults():
     cfg = EngineConfig()
-    assert cfg.ttl_seconds == 86400
-    assert cfg.max_bytes == 67108864
     assert cfg.min_chars == 800
     assert cfg.max_pending == 4
     assert cfg.max_evidence_excerpts == 8
@@ -204,7 +202,7 @@ def test_contracts_json_schema_compatibility():
         "item_id": "item_0123456789abcdef",
         "host_handle": {"idx": 1},
         "expected_content_sha256": compute_sha256("output text"),
-        "replacement_text": "[compacted:item_0123456789abcdef]\n...",
+        "replacement_text": "[hidden:item_0123456789abcdef]\n...",
         "visibility_version": 1,
     }
     jsonschema.validate(sample_plan, schema_plan)

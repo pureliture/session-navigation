@@ -72,16 +72,33 @@ Three paths kept separate (agent-observatory design):
 - Non-interactive (pipe/background): abort. Never silently send originals.
 - DB failure is reported as failure, never as hide success. Model request
   fail-open (original preserved) is separate from persistence failure reporting.
+- Hermes `llm_request` middleware exception (verified 2026-11-08, user decision):
+  the host swallows middleware exceptions and proceeds with the original
+  (`hermes_cli/plugins_dispatch.py` delivery contract); no abort hook exists.
+  Middleware DB failure is therefore loud-report (error log + `db_error_pending`
+  surfaced in list output + trace reason), not request abort. Tool paths
+  still return `db_error` + choices.
 
 ## D10. UI order — Paseo → OMP TUI → Hermes TUI
 
 - Paseo Explorer panel first (row-unit verification platform).
-- Hermes needs widget-bridge host changes (verified); last.
+- Hermes TUI = `/nav` text command (verified 2026-11-08, user decision):
+  list/hide/unhide/rehide/summarize/manage via `register_command` +
+  `slash.exec`; no host changes required. The graphic widget bridge
+  (widget↔gateway) needs host changes that cannot land on main and would
+  be overwritten by updates; deferred.
 
-## Outline rows — message units (Palantir parity)
+## Outline rows (deferred 2026-11-08, user decision)
 
-- Row = one message: user / assistant / tool-call / tool-result(sub-row of call).
-- Token per row per D2. No turn grouping as identity unit.
+In-scope rows = tool-result units only (`item_` / `pair_`). The message-unit
+outline (user / assistant / tool-call `msg_` rows) is deferred.
+`message_unit_id()` / the `msg_` namespace and `units.message_uid` remain
+reserved, unwired; production `units` rows are `pair_` tool-result rows only
+(the schema permits other kinds for forward-compat; tests may seed them).
+Per-message token attribution (D2.2 to message rows) is deferred with the
+outline; tool-result rows show `—` until D2.2 is wired to them. D2.1 session
+totals are unaffected.
+- No turn grouping as identity unit.
 - Tool hide is pair-atomic (call+result together); application is
   envelope-preserving text replacement, never deletion (deletion vs placeholder
   provider acceptance unverified).
@@ -92,8 +109,8 @@ Three paths kept separate (agent-observatory design):
   never content-hash alone (Hermes `_call_id_for_plan` mis-substitution reproduced).
 - OMP identity fence must be durable (restart reproduced patches 1→0 with
   memory-only identities).
-- `message_uid`-based `msg_`/`pair_` namespaces for message units (separate
-  from `item_` prefix).
+- `pair_` namespace for tool call+result units (separate from `item_` prefix).
+  `msg_` namespace reserved, deferred per Outline rows above.
 - Concurrent writers: version CAS; stale writer rejected, UI refreshes.
 
 ## Migration

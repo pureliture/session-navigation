@@ -32,12 +32,10 @@ code actually read):
 
 Decisions recorded here (first-version scope):
 
-- Summarization is rule-only by default: the plugin creates the engine
-  without an external summarizer, so no model call, no credentials,
-  and no extra cost happen unless an operator explicitly wires one.
-  When an LFM summarizer is added later it must be a separate local
-  call, never the main-model path (`ctx.llm`), to keep usage, auth,
-  and trust boundaries apart and keep fail-open simple.
+- D5 session-model-only: `hide_context` is rule-only (never calls a model);
+  `summarize_context` uses the session model via `ctx.llm` (25s timeout),
+  and returns `summarizer_unavailable` when no session model exists. No
+  local-model settings exist.
 - `branch_scope` is `"unknown"`: Hermes exposes no exact branch API
   to the plugin, so no full fork isolation is claimed. A compression
   rotation issues a new `session_id`, which naturally starts a fresh
@@ -65,9 +63,8 @@ from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
 from session_navigation.model import Scope
 from session_navigation.engine import SessionNavigationEngine
-from session_navigation.openai_compatible import OpenAICompatibleTransport
-from session_navigation.summary import ModelSummarizer, SummarizerConfig
 from session_navigation.transport import Summarizer, SummarizerError
+from .llm import CtxLlmSummarizer
 from .schemas import ADAPTER_ID, BRANCH_SCOPE, SOURCE
 logger = logging.getLogger(__name__)
 
@@ -112,55 +109,8 @@ class PluginState:
     is_enabled: Callable[[], bool] = field(default=lambda: False)
     count_middlewares: Callable[[], int] = field(
         default=_default_count_llm_middlewares)
+    db_error_pending: bool = False
 
-
-def _make_configured_summarizer(ctx: Any) -> Summarizer | None:
-    """Create only an explicitly configured local model summarizer."""
-    get_config = getattr(ctx, "get_config", None)
-    if not callable(get_config):
-        return None
-
-    def setting(name: str, default: Any) -> Any:
-        try:
-            return get_config(name, default)
-        except Exception:
-            return default
-
-    mode = setting("summary_mode", "rules")
-    if mode == "rules":
-        return None
-    if mode != "llm":
-        logger.warning("session-navigation summarizer disabled error_code=invalid_mode")
-        return None
-
-    base_url = setting("base_url", "")
-    model = setting("model", "")
-    timeout_seconds = setting("timeout_seconds", 60)
-    max_input_bytes = setting("max_input_bytes", 12_288)
-    max_output_tokens = setting("max_output_tokens", 384)
-    if not isinstance(base_url, str) or not base_url.strip() or not isinstance(model, str) or not model.strip():
-        logger.warning("session-navigation summarizer disabled error_code=invalid_configuration")
-        return None
-    for value in (timeout_seconds, max_input_bytes, max_output_tokens):
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            logger.warning("session-navigation summarizer disabled error_code=invalid_configuration")
-            return None
-
-    try:
-        transport = OpenAICompatibleTransport(base_url)
-    except SummarizerError as exc:
-        logger.warning(
-            "session-navigation summarizer disabled error_code=%s", exc.reason)
-        return None
-    return ModelSummarizer(
-        generate=transport.generate,
-        config=SummarizerConfig(
-            model=model,
-            timeout_seconds=timeout_seconds,
-            max_input_bytes=max_input_bytes,
-            max_output_tokens=max_output_tokens,
-        ),
-    )
 
 def scope_for(state: PluginState, session_id: Any) -> Scope | None:
     """Derive the engine scope from host identifiers, None when absent.
@@ -200,7 +150,10 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             state.engine, state.store, scope, target.strip(),
         )
         if not result.ok or result.plan is None:
-            return _dump({"ok": False, "error": result.error or "not_found"})
+            err = result.error or "not_found"
+            if err == "db_error":
+                return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
+            return _dump({"ok": False, "error": err})
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
@@ -228,10 +181,15 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        if state.summarizer is not None and hasattr(state.summarizer, "current_scope_key"):
+            state.summarizer.current_scope_key = scope.scope_key()
         result = _engine_summarize(
             state.engine, state.store, scope, target.strip(), state.summarizer)
         if not result.ok or result.plan is None:
-            return _dump({"ok": False, "error": result.error or "not_found"})
+            err = result.error or "not_found"
+            if err == "db_error":
+                return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
+            return _dump({"ok": False, "error": err})
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
@@ -270,13 +228,18 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
             (item["display_number"], item["item_id"])
             for item in items if item["display_number"] is not None
         ])
-        compacted_count = sum(item["visibility"] == "compacted" for item in items)
+        compacted_count = sum(item["visibility"] == "hidden" for item in items)
         prefix = "검색 조건에 맞는" if query else "현재"
         message = f"{prefix} 숨겨진 항목 {compacted_count}건" if compacted_count else f"{prefix} 숨겨진 항목 없음"
-        return _dump({
+        payload: dict[str, Any] = {
             "ok": True, "count": len(items), "items": items,
             "compacted_count": compacted_count, "message": message,
-        })
+        }
+        if state.db_error_pending:
+            payload["db_error_pending"] = True
+            payload["db_error_choices"] = ["abort_request", "send_original"]
+            state.db_error_pending = False
+        return _dump(payload)
 
     return list_context_items
 
@@ -298,9 +261,15 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
         if resolve_error is not None:
             # Fail closed on number references: never guess a target.
             return _dump({"ok": False, "error": resolve_error})
-        result = _engine_restore(state.engine, scope, resolved or "")
+        expected = args.get("expected_version") if isinstance(args, dict) else None
+        if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
+            return _dump({"ok": False, "error": "invalid_version"})
+        result = _engine_restore(state.engine, scope, resolved or "", expected_version=expected)
         if not result.ok or result.item is None:
-            return _dump({"ok": False, "error": result.error or "not_found"})
+            err = result.error or "not_found"
+            if err == "db_error":
+                return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
+            return _dump({"ok": False, "error": err})
         state.presentations.mark_visible(scope.scope_key(), result.item.item_id)
         return _dump({
             "ok": True,
@@ -368,9 +337,24 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
             entries = [e for e in entries if e.call_id in wanted]
         results: list[dict[str, Any]] = []
         for entry in entries[:max_items]:
+            # D8: manage_context IS auto-manage regardless of action value; destructive
+            # commands are excluded here and allowed only via manual hide_context.
+            # Gate errors fail closed (skip the item, report) — never auto-hide blind.
+            try:
+                from session_navigation.policy import is_destructive_command
+                destructive = is_destructive_command(entry.tool_name, entry.raw_arguments)
+            except Exception:
+                logger.warning("session-navigation D8 gate error; skipping auto-hide")
+                results.append({"tool_call_id": entry.call_id, "ok": False, "error": "destructive_check_failed"})
+                continue
+            if destructive:
+                results.append({"tool_call_id": entry.call_id, "ok": False, "error": "destructive_command"})
+                continue
             use_summarizer = action == "summarize" or (action == "auto" and state.summarizer is not None)
             item_id: str | None = None
             if use_summarizer:
+                if state.summarizer is not None and hasattr(state.summarizer, "current_scope_key"):
+                    state.summarizer.current_scope_key = scope.scope_key()
                 outcome = _engine_summarize(
                     state.engine, state.store, scope, entry.call_id, state.summarizer)
                 if outcome.ok and outcome.plan is not None:
@@ -443,6 +427,22 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             applied = step["applied"]
             skipped = step["skipped"]
             reason = step["trace"].get("reason", "")
+            if reason == "db_error" or any(
+                    (isinstance(x, dict) and x.get("reason") == "db_error") for x in (skipped or [])):
+                # D9: the host swallows middleware exceptions and proceeds with the
+                # original (fail-open by host contract). There is no abort hook, so
+                # the request cannot be stopped here. Record the failure LOUDLY:
+                # error log + pending flag surfaced in list output + trace reason.
+                # Model-request fail-open (original preserved) is separate from
+                # persistence-failure reporting per spec D9.
+                logger.error("session-navigation DB error during middleware: persistence failed, request proceeds with originals")
+                state.db_error_pending = True
+                return {
+                    "request": copy.deepcopy(request),
+                    "source": SOURCE,
+                    "reason": "db_error_persistence_failed_request_fail_open",
+                    "pending": True,
+                }
             if not reason:
                 reason = f"applied {len(applied)}, skipped {len(skipped)}"
             logger.debug(
@@ -454,9 +454,12 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 "reason": reason,
             }
         except Exception as exc:
-            # Fail open: Hermes logs and continues with the original request.
-            logger.warning(
-                "session-navigation middleware fail-open: %s", type(exc).__name__)
+            logger.error("session-navigation middleware DB error: %s", type(exc).__name__)
+            try:
+                state.db_error_pending = True
+            except Exception:
+                pass
+            raise
     return on_llm_request
 
 

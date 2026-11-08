@@ -6,6 +6,7 @@ synthetic provider-format kwargs shaped like the real contract.
 """
 
 from __future__ import annotations
+import os, tempfile, gc, pytest
 
 import copy
 import json
@@ -81,10 +82,21 @@ def _mw_kwargs(request: dict, session: str, api_mode: str) -> dict:
     }
 
 
+
+@pytest.fixture(autouse=True)
+def _gc_collect():
+    yield
+    gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+
 def test_register_wires_three_tools_and_one_middleware():
     ctx = FakeCtx()
     plugin.register(ctx)
-    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context", "manage_context"}
+    assert set(ctx.tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
     assert set(ctx.middlewares) == {"llm_request"}
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():
@@ -256,85 +268,33 @@ def test_bridge_collision_set_matches_bridge_contract():
     assert plugin.bridge_should_yield(None) is False
 
 
-def test_hide_never_calls_configured_summarizer(monkeypatch):
-    observed: dict = {"requests": []}
-
-    class FakeTransport:
-        def __init__(self, base_url: str):
-            observed["base_url"] = base_url
-
-        async def generate(self, **request):
-            observed["requests"].append(request)
-            raise AssertionError("hide_context must not call the model")
-
-    monkeypatch.setattr(factories, "OpenAICompatibleTransport", FakeTransport, raising=False)
-    ctx = _enabled_ctx(
-        summary_mode="llm",
-        base_url="http://127.0.0.1/v1",
-        model="mlx-community/LFM3-1.7B-OptiQ-4bit:no-think",
-        timeout_seconds=23,
-        max_input_bytes=4096,
-        max_output_tokens=128,
-    )
+def test_hide_is_rule_based_without_summarizer():
+    ctx = _enabled_ctx()
     state = plugin.register(ctx)
-    assert state.summarizer is not None
+    assert state.summarizer is None
 
     body = _long_body()
     mw = ctx.middlewares["llm_request"][0]
-    mw(**_mw_kwargs(_codex_request(body), "sess-llm", "codex_responses"))
+    mw(**_mw_kwargs(_codex_request(body), "sess-rule", "codex_responses"))
     hidden = json.loads(ctx.tools["hide_context"]["handler"](
-        {"tool_call_id": "call_1"}, session_id="sess-llm"))
+        {"tool_call_id": "call_1"}, session_id="sess-rule"))
 
     assert hidden["ok"] is True
-    assert observed["requests"] == []
 
 
-def test_llm_settings_build_summarizer_for_summarize_handler(monkeypatch):
-    observed: dict = {"requests": []}
-
-    class FakeTransport:
-        def __init__(self, base_url: str):
-            observed["base_url"] = base_url
-
-        async def generate(self, **request):
-            observed["requests"].append(request)
-            return {
-                "text": json.dumps({
-                    "summary": (
-                        "id: 01234567-89ab-cdef-0123-456789abcdef; "
-                        "results/output.json generated successfully."
-                    )
-                }),
-                "finish_reason": "stop",
-                "usage": {"completion_tokens": 18},
-            }
-
-    monkeypatch.setattr(factories, "OpenAICompatibleTransport", FakeTransport, raising=False)
-    ctx = _enabled_ctx(
-        summary_mode="llm",
-        base_url="http://127.0.0.1/v1",
-        model="mlx-community/LFM3-1.7B-OptiQ-4bit:no-think",
-        timeout_seconds=23,
-        max_input_bytes=4096,
-        max_output_tokens=128,
-    )
+def test_summarize_with_ctx_llm_none_returns_unavailable():
+    ctx = _enabled_ctx()
     state = plugin.register(ctx)
-    assert state.summarizer is not None
+    assert state.summarizer is None
 
     body = _long_body()
     mw = ctx.middlewares["llm_request"][0]
-    mw(**_mw_kwargs(_codex_request(body), "sess-llm", "codex_responses"))
+    mw(**_mw_kwargs(_codex_request(body), "sess-none", "codex_responses"))
     summarized = json.loads(ctx.tools["summarize_context"]["handler"](
-        {"tool_call_id": "call_1"}, session_id="sess-llm"))
+        {"tool_call_id": "call_1"}, session_id="sess-none"))
 
-    assert summarized["ok"] is True
-    assert observed["base_url"] == "http://127.0.0.1/v1"
-    assert len(observed["requests"]) == 1
-    assert observed["requests"][0]["model"] == (
-        "mlx-community/LFM3-1.7B-OptiQ-4bit:no-think"
-    )
-    assert observed["requests"][0]["timeout_seconds"] == 23
-    assert observed["requests"][0]["max_tokens"] == 128
+    assert summarized["ok"] is False
+    assert summarized["error"] == "summarizer_unavailable"
 
 
 def test_rules_mode_default_does_not_create_local_transport(monkeypatch):
@@ -352,15 +312,8 @@ def test_rules_mode_default_does_not_create_local_transport(monkeypatch):
     assert constructions == []
 
 
-def test_manifest_summarizer_settings_are_explicit_and_rules_default():
+def test_manifest_has_no_local_summarizer_settings():
     manifest = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text()
-    expected = (
-        "  summary_mode:\n    type: str\n    default: rules\n    choices: [rules, llm]",
-        '  base_url:\n    type: str\n    default: ""',
-        '  model:\n    type: str\n    default: ""',
-        "  timeout_seconds:\n    type: int\n    default: 60",
-        "  max_input_bytes:\n    type: int\n    default: 12288",
-        "  max_output_tokens:\n    type: int\n    default: 384",
-    )
-    for setting in expected:
-        assert setting in manifest
+    for removed in ("summary_mode", "base_url", "model:", "timeout_seconds", "max_input_bytes", "max_output_tokens"):
+        assert removed not in manifest
+

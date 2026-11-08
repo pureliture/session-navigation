@@ -4,6 +4,8 @@ No live Hermes, no network. Synthetic provider-format requests only.
 """
 
 from __future__ import annotations
+import pytest
+import os, tempfile
 
 import json
 
@@ -56,6 +58,11 @@ def _chat_request(body: str, call_id: str = "call_2") -> dict:
 def _scope(session: str) -> Scope:
     return Scope(adapter_id="hermes", host_profile="test", session_id=session)
 
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
 
 def test_allowlist_filters_and_rejects():
     invocation, omitted = filter_invocation("read_file", {"path": "a.txt"})

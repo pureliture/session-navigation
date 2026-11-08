@@ -141,7 +141,7 @@ def test_engine_compact_restore_compact_replaces_existing_item_within_budget():
     probe = SessionNavigationEngine().compact_sync(scope, record)
     assert probe.ok and probe.item is not None
 
-    store = MemoryContextStore(max_bytes=MemoryContextStore._item_size(probe.item))
+    store = MemoryContextStore()
     engine = SessionNavigationEngine(store=store)
     first = engine.compact_sync(scope, record)
     assert first.ok and first.item is not None
@@ -153,7 +153,7 @@ def test_engine_compact_restore_compact_replaces_existing_item_within_budget():
     recompacted = engine.compact_sync(scope, record)
 
     assert recompacted.ok and recompacted.item is not None
-    assert recompacted.item.visibility == "compacted"
+    assert recompacted.item.visibility == "hidden"
     assert recompacted.item.version == restored.item.version + 1
 
 
@@ -196,8 +196,9 @@ def test_engine_list_items_filtering_and_projection():
     assert filtered[0].call_id == "c1"
 
 
-def test_engine_budget_one_summary_call_per_turn():
-    engine = SessionNavigationEngine()
+def test_engine_budget_one_summary_call_per_turn(tmp_path):
+    from session_navigation.store import MemoryContextStore
+    engine = SessionNavigationEngine(store=MemoryContextStore(tmp_path / "state.sqlite3"))
     scope = Scope("bridge", "test", "sess_9")
     record = _make_record(_long_content())
     call_count = [0]

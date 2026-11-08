@@ -50,24 +50,6 @@ def test_manifest_exists_and_parses() -> None:
     assert isinstance(data.get("version"), str) and data["version"]
 
 
-def test_manifest_declares_opt_in_model_summarizer_settings() -> None:
-    schema = _parse_manifest().get("config_schema")
-    assert isinstance(schema, dict)
-    expected = {
-        "summary_mode", "base_url", "model", "timeout_seconds",
-        "max_input_bytes", "max_output_tokens",
-    }
-    assert expected <= set(schema)
-    assert schema["summary_mode"]["type"] == "str"
-    assert schema["summary_mode"]["default"] == "rules"
-    assert schema["summary_mode"]["choices"] == ["rules", "llm"]
-    assert schema["base_url"]["default"] == ""
-    assert schema["model"]["default"] == ""
-    assert schema["timeout_seconds"]["default"] == 60
-    assert schema["max_input_bytes"]["default"] == 12_288
-    assert schema["max_output_tokens"]["default"] == 384
-
-
 def test_manifest_declares_provided_tools_and_middleware() -> None:
     data = _parse_manifest()
     # The plugin ships exactly five tools; the middleware is registered in code.
@@ -169,7 +151,7 @@ def test_plugin_registers_through_root_export_default_off() -> None:
     module = _load_plugin_root()
     ctx = _FakeCtx()
     state = module.register(ctx)
-    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context", "manage_context"}
+    assert set(ctx.tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
     assert list(ctx.middlewares) == ["llm_request"]
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():

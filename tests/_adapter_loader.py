@@ -36,7 +36,7 @@ def hermes_adapter() -> types.ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[_PACKAGE_NAME] = module
     spec.loader.exec_module(module)
-    for child in ("payload", "allowlist", "session", "handlers", "presentation", "plugin"):
+    for child in ("payload", "allowlist", "session", "handlers", "presentation", "plugin", "llm", "command"):
         try:
             importlib.import_module(f"{_PACKAGE_NAME}.{child}")
         except ImportError as exc:

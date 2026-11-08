@@ -55,16 +55,26 @@ test("실패, 이미지, 중복 ID와 확인되지 않은 세션은 원본을 �
   } finally { await events.session_shutdown(); }
 });
 
-test("데몬이 없어도 context는 원본을 유지한다", async () => {
+test("데몬이 없으면 headless는 abort하고 interactive는 선택한다 (D9)", async () => {
   const { events } = setup("/nonexistent/session-navigation-daemon");
-  expect(await events.context({ messages: messages() }, ctx)).toBeUndefined();
+  const headless: any = { mode: "print", sessionManager: { getSessionId: () => "test-session" }, ui: { notify: () => {}, select: async () => "abort_request" }, abort: () => { headless._aborted = true; } };
+  let threw: unknown = null;
+  try { await events.context({ messages: messages() }, headless); } catch (e) { threw = e; }
+  expect(String((threw as Error)?.message ?? "")).toContain("aborted");
+  expect(headless._aborted).toBe(true);
   await events.session_shutdown();
+  const { events: events2 } = setup("/nonexistent/session-navigation-daemon");
+  let asked = false;
+  const interactive: any = { mode: "tui", sessionManager: { getSessionId: () => "test-session" }, ui: { notify: () => {}, select: async () => { asked = true; return "send_original"; } }, abort: () => {} };
+  expect(await events2.context({ messages: messages() }, interactive)).toBeUndefined();
+  expect(asked).toBe(true);
+  await events2.session_shutdown();
 });
 
 test("응답이 멈춘 데몬을 폐기하고 이전 snapshot을 승인하지 않는다", async () => {
   const dir = mkdtempSync(join(tmpdir(), "session-nav-hang-"));
   const daemon = join(dir, "daemon");
-  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":2}\'\nexec sleep 10\n');
+  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":3}\'\nexec sleep 10\n');
   chmodSync(daemon, 0o755);
   const oldTimeout = globalThis.setTimeout;
   globalThis.setTimeout = ((callback: any, delay?: number, ...args: any[]) => oldTimeout(callback, delay === 2000 ? 100 : delay, ...args)) as typeof setTimeout;
@@ -83,7 +93,7 @@ test("응답이 멈춘 데몬을 폐기하고 이전 snapshot을 승인하지 �
 test("실행 중 취소하면 데몬과 snapshot을 함께 폐기한다", async () => {
   const dir = mkdtempSync(join(tmpdir(), "session-nav-abort-"));
   const daemon = join(dir, "daemon");
-  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":2}\'\nread -r line\necho \'{"id":2,"ok":true,"patches":[]}\'\nexec sleep 10\n');
+  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":3}\'\nread -r line\necho \'{"id":2,"ok":true,"patches":[]}\'\nexec sleep 10\n');
   chmodSync(daemon, 0o755);
   const { events, tools } = setup(daemon);
   try {
@@ -97,13 +107,70 @@ test("실행 중 취소하면 데몬과 snapshot을 함께 폐기한다", async 
   } finally { await events.session_shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("닫힌 데몬 stdin에 큰 요청을 보내도 EPIPE가 세션을 종료하지 않는다", async () => {
+test("닫힌 데몬 stdin(EPIPE)은 구조적 사망으로 D9 abort한다", async () => {
   const dir = mkdtempSync(join(tmpdir(), "session-nav-epipe-"));
   const daemon = join(dir, "daemon");
-  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":2}\'\nexec 0<&-\nexec sleep 10\n');
+  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":3}\'\nexec 0<&-\nexec sleep 10\n');
   chmodSync(daemon, 0o755);
   const { events } = setup(daemon);
+  const headless: any = { mode: "print", sessionManager: { getSessionId: () => "test-session" }, ui: { notify: () => {}, select: async () => "abort_request" }, abort: () => { headless._aborted = true; } };
   try {
-    expect(await events.context({ messages: messages([{ type: "text", text: "a".repeat(1_000_000) }]) }, ctx)).toBeUndefined();
+    let threw: unknown = null;
+    try { await events.context({ messages: messages([{ type: "text", text: "a".repeat(1_000_000) }]) }, headless); } catch (e) { threw = e; }
+    expect(String((threw as Error)?.message ?? "")).toContain("aborted");
+    expect(headless._aborted).toBe(true);
   } finally { await events.session_shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("prepare DB 오류 시 headless는 abort하고 조용히 원본을 보내지 않는다", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "session-nav-dberr-"));
+  const daemon = join(dir, "daemon");
+  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":3}\'\nread -r line\necho \'{"id":2,"ok":false,"error":"db_error","choices":["abort_request","send_original"]}\'\nsleep 10\n');
+  chmodSync(daemon, 0o755);
+  const { events } = setup(daemon);
+  const headless: any = { mode: "print", sessionManager: { getSessionId: () => "test-session" }, ui: { notify: () => {}, select: async () => "abort_request" }, abort: () => { headless._aborted = true; } };
+  try {
+    let threw: unknown = null;
+    try { await events.context({ messages: messages() }, headless); } catch (e) { threw = e; }
+    expect(String((threw as Error)?.message ?? "")).toContain("db_error");
+    expect(headless._aborted).toBe(true);
+  } finally { await events.session_shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("prepare DB 오류 시 interactive는 선택지를 묻고 abort 선택 시 중단한다", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "session-nav-dbchoice-"));
+  const daemon = join(dir, "daemon");
+  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":3}\'\nread -r line\necho \'{"id":2,"ok":false,"error":"db_error","choices":["abort_request","send_original"]}\'\nsleep 10\n');
+  chmodSync(daemon, 0o755);
+  const { events } = setup(daemon);
+  let asked: unknown = null;
+  const interactive: any = { mode: "tui", sessionManager: { getSessionId: () => "test-session" }, ui: { notify: () => {}, select: async (_t: string, o: unknown) => { asked = o; return "abort_request"; } }, abort: () => { interactive._aborted = true; } };
+  try {
+    let threw: unknown = null;
+    try { await events.context({ messages: messages() }, interactive); } catch (e) { threw = e; }
+    expect(asked).toBeDefined();
+    expect(String((threw as Error)?.message ?? "")).toContain("aborted");
+    expect(interactive._aborted).toBe(true);
+  } finally { await events.session_shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("collect는 read와 bash 결과를 모두 수집한다", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "session-nav-bash-"));
+  const daemon = join(dir, "daemon");
+  writeFileSync(daemon, '#!/bin/sh\nread -r line\necho \'{"id":1,"ok":true,"protocol":3}\'\nread -r line\necho "$line" >> "$0.seen"\necho \'{"id":2,"ok":true,"patches":[]}\'\nsleep 10\n');
+  chmodSync(daemon, 0o755);
+  const { events } = setup(daemon);
+  const bashMessages = [
+    { role: "assistant", content: [{ type: "toolCall", id: "call-b", name: "bash", arguments: { command: "ls -la" } }] },
+    { role: "toolResult", toolCallId: "call-b", toolName: "bash", content: [{ type: "text", text: longText }], isError: false },
+  ];
+  try {
+    expect(await events.context({ messages: bashMessages }, ctx)).toBeUndefined();
+    await events.session_shutdown();
+    const { readFileSync, existsSync } = await import("node:fs");
+    expect(existsSync(daemon + ".seen")).toBe(true);
+    const seen = readFileSync(daemon + ".seen", "utf8");
+    expect(seen).toContain('"tool_name":"bash"');
+    expect(seen).toContain('"command":"ls -la"');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

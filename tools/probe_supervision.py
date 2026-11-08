@@ -89,7 +89,7 @@ def main() -> int:
     ok = (
         entry is not None
         and callable(getattr(getattr(entry, 'module', None), 'register', None))
-        and set(tools) == {"hide_context", "list_context_items", "unhide_context", "manage_context"}
+        and set(tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
         and len(middlewares) == 1
         and any(s.id == "session-navigation.human-supervision" for s in sections)
     )

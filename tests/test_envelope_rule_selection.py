@@ -66,7 +66,7 @@ def test_rule_path_compacts_read_file_envelope_and_restores():
     assert result.plan.expected_content_sha256 == compute_sha256(raw)
 
     rendered = result.plan.replacement_text
-    assert "[compacted:" in rendered
+    assert "[hidden:" in rendered
     assert "원문 발췌:" in rendered
     assert len(rendered) < len(raw)
     # The line-number noise the read_file tool adds must not ride along.

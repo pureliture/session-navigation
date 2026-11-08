@@ -69,7 +69,7 @@ class Presentation:
     compaction_order: int
     compacted_at: str
     original_bytes_size: int
-    last_visibility: str = "compacted"
+    last_visibility: str = "hidden"
 
 
 class PresentationRegistry:
@@ -91,7 +91,7 @@ class PresentationRegistry:
         with self._lock:
             entries = self._entries.setdefault(scope_key, {})
             existing = entries.get(item_id)
-            if existing is not None and existing.last_visibility == "compacted":
+            if existing is not None and existing.last_visibility == "hidden":
                 existing.original_bytes_size = original_bytes_size
                 return
             order = self._next_order.get(scope_key, 0) + 1
@@ -101,7 +101,7 @@ class PresentationRegistry:
                 compaction_order=order,
                 compacted_at=_utc_now_iso(),
                 original_bytes_size=original_bytes_size,
-                last_visibility="compacted",
+                last_visibility="hidden",
             )
 
     def mark_visible(self, scope_key: str, item_id: str) -> None:
@@ -109,7 +109,7 @@ class PresentationRegistry:
         with self._lock:
             entry = self._entries.get(scope_key, {}).get(item_id)
             if entry is not None:
-                entry.last_visibility = "original"
+                entry.last_visibility = "visible"
 
     def record_view(
         self, scope_key: str, numbered_items: list[tuple[int, str]]
@@ -167,7 +167,7 @@ class PresentationRegistry:
 
 
 def _sort_key(item: dict[str, Any]) -> tuple[int, int, int, str]:
-    compacted = item.get("visibility") == "compacted"
+    compacted = item.get("visibility") == "hidden"
     order = item.get("compaction_order")
     known = isinstance(order, int)
     return (
@@ -205,7 +205,7 @@ def decorate_items(
     decorated.sort(key=_sort_key)
     number = 0
     for item in decorated:
-        if item.get("visibility") == "compacted":
+        if item.get("visibility") == "hidden":
             number += 1
             item["display_number"] = number
     return decorated

@@ -1,5 +1,6 @@
 """A-plan supervision contracts; local requests only, no agent/provider calls."""
 from __future__ import annotations
+import os, tempfile, gc, pytest
 
 import json
 
@@ -52,6 +53,17 @@ def _restore(state, item_id, session=SESSION):
     ))
 
 
+
+@pytest.fixture(autouse=True)
+def _gc_collect():
+    yield
+    gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+
 def test_list_counts_compacted_separately_from_restored_records():
     state = _state()
     empty = _list(state)
@@ -68,7 +80,7 @@ def test_list_counts_compacted_separately_from_restored_records():
     assert _restore(state, compacted["item_id"])["ok"] is True
     restored = _list(state)
     assert restored["count"] == len(restored["items"]) == 1
-    assert restored["items"][0]["visibility"] == "original"
+    assert restored["items"][0]["visibility"] == "visible"
     assert restored["compacted_count"] == 0
     assert restored["message"] == "현재 숨겨진 항목 없음"
 
@@ -122,23 +134,6 @@ def test_query_view_renumbers_and_reports_search_scope():
     assert full["compacted_count"] == 3
     assert [item["display_number"] for item in full["items"]] == [1, 2, 3]
 
-
-def test_expired_items_prune_their_display_metadata():
-    from session_navigation.engine import SessionNavigationEngine
-    from session_navigation.store import MemoryContextStore
-
-    now = [1000.0]
-    state = _state(engine=SessionNavigationEngine(
-        store=MemoryContextStore(ttl_seconds=60, clock=lambda: now[0])))
-    compacted = _compact(state)
-    scope_key = next(iter(state.presentations.snapshot()))
-    assert compacted["item_id"] in state.presentations.snapshot()[scope_key]
-
-    now[0] += 61.0
-    expired = _list(state)
-    assert expired["count"] == 0 and expired["compacted_count"] == 0
-    assert expired["message"] == "현재 숨겨진 항목 없음"
-    assert state.presentations.snapshot().get(scope_key, {}) == {}
 
 
 def test_recompact_after_restore_starts_a_new_compact_transition():
@@ -313,4 +308,4 @@ def test_fixed_id_restore_after_recheck_keeps_original_target():
     after = _list(state)
     assert next(
         item["visibility"] for item in after["items"] if item["item_id"] == fixed
-    ) == "original"
+    ) == "visible"

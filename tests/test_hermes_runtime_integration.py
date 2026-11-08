@@ -43,7 +43,7 @@ def host_modules():
         if path not in sys.path:
             sys.path.insert(0, path)
     import importlib
-
+    pytest.importorskip("ruamel.yaml", reason="hermes_yaml needs ruamel (host env only)")
     manifest_mod = importlib.import_module("hermes_cli.plugins_manifest")
     loader_mod = importlib.import_module("hermes_cli.plugins_loader")
     plugins_mod = importlib.import_module("hermes_cli.plugins")
@@ -103,15 +103,11 @@ def test_host_manifest_parser_accepts_this_repository(host_modules) -> None:
     assert set(manifest.provides_tools or []) == {
         "hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context",
     }
-    schema = manifest.config_schema
-    assert schema["summary_mode"]["type"] == "str"
-    assert schema["summary_mode"]["default"] == "rules"
-    assert schema["summary_mode"]["choices"] == ["rules", "llm"]
-    assert schema["base_url"]["default"] == ""
-    assert schema["model"]["default"] == ""
-    assert schema["timeout_seconds"]["default"] == 60
-    assert schema["max_input_bytes"]["default"] == 12_288
-    assert schema["max_output_tokens"]["default"] == 384
+    schema = manifest.config_schema or {}
+    # D5: session-model-only; the manifest carries no local-model settings.
+    assert "summary_mode" not in schema
+    assert "base_url" not in schema
+    assert "model" not in schema
     assert manifest.manifest_version <= manifest_mod.SUPPORTED_MANIFEST_VERSION
 
 
@@ -122,7 +118,7 @@ def test_host_loader_imports_plugin_root_and_calls_register() -> None:
     ctx = _HostCtx(profile="daedalus")
     state = module.register(ctx)
     assert state is not None
-    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context", "manage_context"}
+    assert set(ctx.tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
     assert list(ctx.middlewares) == ["llm_request"]
     for name, entry in ctx.tools.items():
         assert entry["toolset"] == "session_navigation"

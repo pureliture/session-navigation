@@ -23,6 +23,7 @@ from session_navigation.model import (
     Scope,
     ToolResultRecord,
     compute_invocation_digest,
+    pair_unit_id,
 )
 from session_navigation.transport import Summarizer
 
@@ -113,12 +114,13 @@ def list_records(
 
 
 def restore(
-    engine: SessionNavigationEngine, scope: Scope, item_id: str
+    engine: SessionNavigationEngine, scope: Scope, item_id: str,
+    expected_version: int | None = None,
 ) -> MutationResult:
     """Mark one item visible again without rerunning tools."""
     if not isinstance(item_id, str) or not item_id.strip():
         return MutationResult(ok=False, error="not_found")
-    return engine.restore(scope, item_id.strip())
+    return engine.restore(scope, item_id.strip(), expected_version=expected_version)
 
 
 def middleware_step(
@@ -179,11 +181,21 @@ def middleware_step(
             )
         )
     plans = engine.project(scope, records)
+    # Pair-atomic units: one pair_ row per transmitted record (call+result).
+    try:
+        upsert = getattr(engine.store, "upsert_unit", None)
+        if callable(upsert):
+            for record in records:
+                upsert(scope, unit_id=pair_unit_id(scope.scope_key(), record.call_id, record.content_sha256),
+                       kind="tool_result", tool_call_id=record.call_id,
+                       content_sha256=record.content_sha256, char_count=len(record.content))
+    except Exception:
+        pass
     plan_dicts = [
         {
             "item_id": plan.item_id,
             "host_handle": handle_by_call_id.get(
-                _call_id_for_plan(plan, records), plan.host_handle),
+                getattr(plan, "tool_call_id", ""), plan.host_handle),
             "expected_content_sha256": plan.expected_content_sha256,
             "replacement_text": plan.replacement_text,
         }
@@ -198,10 +210,3 @@ def middleware_step(
         "skipped": record_skipped + apply_skipped,
         "trace": trace,
     }
-
-
-def _call_id_for_plan(plan: Any, records: list[ToolResultRecord]) -> str:
-    for record in records:
-        if record.content_sha256 == plan.expected_content_sha256:
-            return record.call_id
-    return ""
