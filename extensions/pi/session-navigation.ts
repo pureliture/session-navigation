@@ -129,7 +129,8 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			typeof message.content[0].text !== "string") continue;
 		let args: Record<string, unknown>;
 		if (call.name === "read") {
-			if (Object.keys(call.arguments).length !== 1 || typeof call.arguments.path !== "string" || !call.arguments.path.trim()) continue;
+			// Real shape: {i, path} (+ query params for internal URIs). Identity = path only.
+			if (typeof call.arguments.path !== "string" || !call.arguments.path.trim()) continue;
 			args = { path: call.arguments.path };
 		} else {
 			if (typeof call.arguments.command !== "string" || !call.arguments.command.trim()) continue;
