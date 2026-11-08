@@ -12,7 +12,7 @@ from adapters.hermes.handlers import (
     summarize as _engine_summarize,
     unhide as _engine_unhide,
 )
-from adapters.hermes.plugin import _make_configured_summarizer
+from adapters.hermes.factories import _make_configured_summarizer
 from adapters.hermes.session import SessionTranscriptStore
 from context_hide.engine import ContextHideEngine
 from context_hide.model import Scope
@@ -51,7 +51,7 @@ class Daemon:
         except ValueError:
             return None
         try:
-            from adapters.hermes.plugin import _make_configured_summarizer
+            from adapters.hermes.factories import _make_configured_summarizer
             # reuse factory by faking ctx
             class _Ctx:
                 def get_config(self, key, default=None):
