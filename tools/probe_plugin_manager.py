@@ -1,16 +1,17 @@
 """S3 evidence: load this repository as a Hermes directory plugin for real.
 
 Runs the ACTUAL ``hermes_cli.plugins.PluginManager`` discovery + load against a
-throwaway ``HERMES_HOME`` that contains a copy of the candidate plugin root and
-manifest. Nothing outside the temp home is written; no provider is contacted.
+throwaway ``HERMES_HOME`` that contains a copy of the candidate plugin root,
+manifest, and ``vendor/`` tree. Nothing outside the temp home is written;
+no provider is contacted.
 
-Usage (needs ruamel.yaml AND cachetools in one interpreter):
-    uv run --python <hermes-env-python> --with cachetools --isolated \
-        python tools_and_tests/probe_plugin_manager.py
+Usage (needs ruamel.yaml in one interpreter):
+    uv run --with ruamel.yaml -- python tools/probe_plugin_manager.py
 """
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -36,6 +37,11 @@ def main() -> int:
             print(f"MISSING CANDIDATE FILE: {source}")
             return 2
         (plugin_dir / name).write_bytes(source.read_bytes())
+    vendor = REPO / "vendor"
+    if not vendor.is_dir():
+        print(f"MISSING CANDIDATE DIR: {vendor}")
+        return 2
+    shutil.copytree(vendor, plugin_dir / "vendor")
     (home / "config.yaml").write_text(
         "plugins:\n"
         "  enabled: [session-navigation]\n"
