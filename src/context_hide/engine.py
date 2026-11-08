@@ -220,10 +220,14 @@ class ContextHideEngine:
         scope: Scope,
         record: ToolResultRecord,
         *,
+        summarizer: Summarizer | None = None,
         options_omitted: bool = False,
     ) -> MutationResult:
-        """Synchronous hide method using conservative RuleSpanSelector."""
-        return asyncio.run(self.hide(scope, record, options_omitted=options_omitted))
+        """Synchronously hide content with an optional model and rule fallback."""
+        return asyncio.run(self._apply(
+            scope, record, summarizer=summarizer,
+            options_omitted=options_omitted, allow_fallback=True,
+        ))
 
     def list_items(self, scope: Scope, query: str = "") -> list[ItemMetadata]:
         """List metadata of context items belonging to scope."""

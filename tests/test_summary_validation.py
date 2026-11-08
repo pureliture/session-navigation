@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from jsonschema import Draft202012Validator
 import pytest
 
+import context_hide
 from context_hide.model import SpanChoice
 from context_hide.store import MemoryContextStore
 from context_hide.summary import (
@@ -40,13 +42,84 @@ def _evidence() -> tuple[str, ...]:
     )
 
 
+def test_model_summarizer_uses_configured_model_id_without_provider_aliasing():
+    requests: list[dict[str, Any]] = []
+
+    async def generate(**request: Any) -> dict[str, Any]:
+        requests.append(request)
+        return {"text": json.dumps(SUMMARY), "finish_reason": "stop"}
+
+    model_id = "vendor-independent/local-model:build-7"
+    result = asyncio.run(
+        ModelSummarizer(
+            generate=generate,
+            config=SummarizerConfig(model=model_id),
+        ).summarize(_source(), _evidence())
+    )
+
+    assert result == SUMMARY
+    assert requests[0]["model"] == model_id
+    assert ModelSummarizer.__name__ == "ModelSummarizer"
+    assert context_hide.ModelSummarizer is ModelSummarizer
+
+
 def test_summary_config_defaults_and_bounds():
     cfg = SummarizerConfig()
-    assert cfg.model == "lfm2.5-thinking:latest"
+    assert cfg.model == ""
     assert cfg.max_input_chars == 50_000
     assert cfg.max_input_bytes == 12_288
     assert cfg.max_output_tokens == 384
     assert cfg.timeout_seconds == 60
+
+
+def test_model_summarizer_logs_safe_metrics_without_source_or_model_content(caplog):
+    source = _source() + "\nCommand: PRIVATE_COMMAND_MARKER"
+    response_text = json.dumps(SUMMARY)
+    requests: list[dict[str, Any]] = []
+
+    async def generate(**request: Any) -> dict[str, Any]:
+        requests.append(request)
+        return {
+            "text": response_text,
+            "finish_reason": "stop",
+            "usage": {"completion_tokens": 11},
+        }
+
+    summarizer = ModelSummarizer(
+        generate=generate,
+        config=SummarizerConfig(model="PRIVATE_MODEL_ID"),
+    )
+    with caplog.at_level(logging.INFO, logger="context_hide.summary"):
+        result = asyncio.run(summarizer.summarize(source, _evidence()))
+
+    assert result == SUMMARY
+    assert "PRIVATE_COMMAND_MARKER" in requests[0]["messages"][1]["content"]
+    assert "call=true" in caplog.text
+    assert "latency_ms=" in caplog.text
+    assert "completion_tokens=11" in caplog.text
+    assert "error_code=none" in caplog.text
+    assert "PRIVATE_COMMAND_MARKER" not in caplog.text
+    assert "PRIVATE_MODEL_ID" not in caplog.text
+    assert response_text not in caplog.text
+
+
+def test_model_summarizer_logs_only_error_code_for_invalid_response(caplog):
+    async def generate(**_request: Any) -> dict[str, Any]:
+        return {"text": "PRIVATE_RESPONSE_MARKER not-json", "finish_reason": "stop"}
+
+    summarizer = ModelSummarizer(
+        generate=generate,
+        config=SummarizerConfig(model="model-id"),
+    )
+    with caplog.at_level(logging.INFO, logger="context_hide.summary"):
+        with pytest.raises(SummarizerUnavailable, match="invalid_json"):
+            asyncio.run(summarizer.summarize(_source(), _evidence()))
+
+    assert "call=true" in caplog.text
+    assert "latency_ms=" in caplog.text
+    assert "completion_tokens=0" in caplog.text
+    assert "error_code=invalid_json" in caplog.text
+    assert "PRIVATE_RESPONSE_MARKER" not in caplog.text
 
 
 def test_summary_prompt_payload_untrusted_isolation():
@@ -59,7 +132,10 @@ def test_summary_prompt_payload_untrusted_isolation():
             "finish_reason": "stop",
         }
 
-    summarizer = ModelSummarizer(generate=generate, config=SummarizerConfig())
+    test_model_id = "provider-neutral-test-model"
+    summarizer = ModelSummarizer(
+        generate=generate, config=SummarizerConfig(model=test_model_id),
+    )
     count: list[int] = []
 
     # 1. Unstructured text route (plain string source)
@@ -76,7 +152,7 @@ def test_summary_prompt_payload_untrusted_isolation():
     assert count == [1]
     assert len(calls) == 1
     request = calls[0]
-    assert request["model"] == "lfm2.5-thinking:latest"
+    assert request["model"] == test_model_id
     assert request["temperature"] == 0
     assert request["reasoning"] == {"effort": "none"}
     assert request["response_format"]["type"] == "json_schema"
@@ -110,7 +186,7 @@ def test_summary_prompt_payload_untrusted_isolation():
     assert count == [1, 2]
     assert len(calls) == 2
     req_struct = calls[1]
-    assert req_struct["model"] == "lfm2.5-thinking:latest"
+    assert req_struct["model"] == test_model_id
     assert req_struct["temperature"] == 0
     assert req_struct["reasoning"] == {"effort": "none"}
     assert req_struct["response_format"]["type"] == "json_schema"

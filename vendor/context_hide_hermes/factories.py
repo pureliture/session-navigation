@@ -194,7 +194,10 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
-        result = _engine_hide(state.engine, state.store, scope, target.strip())
+        result = _engine_hide(
+            state.engine, state.store, scope, target.strip(),
+            summarizer=state.summarizer,
+        )
         if not result.ok or result.plan is None:
             return _dump({"ok": False, "error": result.error or "not_found"})
         original_bytes = 0
