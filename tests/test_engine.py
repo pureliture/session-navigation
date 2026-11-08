@@ -150,11 +150,11 @@ def test_engine_compact_restore_compact_replaces_existing_item_within_budget():
     assert restored.ok and restored.item is not None
     assert restored.item.version == first.item.version + 1
 
-    rehidden = engine.compact_sync(scope, record)
+    recompacted = engine.compact_sync(scope, record)
 
-    assert rehidden.ok and rehidden.item is not None
-    assert rehidden.item.visibility == "compacted"
-    assert rehidden.item.version == restored.item.version + 1
+    assert recompacted.ok and recompacted.item is not None
+    assert recompacted.item.visibility == "compacted"
+    assert recompacted.item.version == restored.item.version + 1
 
 
 def test_engine_project_generates_replacement_plans_for_compacted_items():
