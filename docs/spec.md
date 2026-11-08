@@ -2,6 +2,16 @@
 
 User-locked decisions D1–D10. Implementation contracts below are binding.
 
+## Overall goal (locked)
+
+> session-navigation 전체 목표: tool-result의 hide·unhide·rehide·manage가 SQLite
+> 영속화로 프로세스 재시작과 세션 fork 이후에도 유지되고, Hermes terminal·OMP
+> read·bash 포함 자동관리와 Paseo Explorer·OMP TUI·Hermes TUI 3개 UI에서의 동일
+> 조작을 제공하며, E2E(재시작·fork·DB오류·비대화형·3UI 동시조작·대용량)와 전체 회귀
+> green(기저 결함 수정 포함)을 통과한다. 범위 밖: 메시지 row 수동숨김,
+> remove(영구삭제), 설치본 배포, 운영 런북. 성능: 목록 1000건 <1s, 요약 timeout 25s,
+> DB 용량 상한 없음.
+
 ## D1. No remove — hide/unhide only
 
 - `hide_context`, `summarize_context`, `unhide_context`, `list_context_items`, `manage_context`.

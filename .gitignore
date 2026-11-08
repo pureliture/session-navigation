@@ -8,3 +8,6 @@ build/
 dist/
 *.egg-info/
 .venv/
+
+# session handoff artifacts (use local://, never commit)
+docs/handoff-*.md
