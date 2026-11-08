@@ -4,6 +4,7 @@ import {
   forkScopeRpc,
   hideItemRpc,
   listItemsRpc,
+  listScopesRpc,
   manageItemsRpc,
   summarizeItemRpc,
   unhideItemRpc,
@@ -13,6 +14,7 @@ import {
   forkScope,
   hideItem,
   listItems,
+  listScopes,
   manageItems,
   summarizeItem,
   unhideItem,
@@ -20,6 +22,7 @@ import {
 
 export default function contribute(server: PluginServerContext) {
   server.handle(listItemsRpc, listItems);
+  server.handle(listScopesRpc, listScopes);
   server.handle(hideItemRpc, hideItem);
   server.handle(unhideItemRpc, unhideItem);
   server.handle(summarizeItemRpc, summarizeItem);

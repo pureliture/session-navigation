@@ -236,6 +236,14 @@ class SQLiteContextStore:
             rows = self._conn.execute("SELECT * FROM items").fetchall()
             return [_row_to_item(r) for r in rows]
 
+    def list_scopes(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT scope_key, COUNT(*) AS n FROM items GROUP BY scope_key ORDER BY scope_key"
+            ).fetchall()
+            return [{"scope_key": r["scope_key"], "items": int(r["n"])} for r in rows]
+
+
     def put(
         self,
         scope: Any,

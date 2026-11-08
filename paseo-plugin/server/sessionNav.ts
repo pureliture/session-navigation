@@ -6,6 +6,7 @@ import {
   forkScopeRpc,
   hideItemRpc,
   listItemsRpc,
+  listScopesRpc,
   manageItemsRpc,
   summarizeItemRpc,
   unhideItemRpc,
@@ -115,6 +116,19 @@ function dbNoteSuccess(scopeKey: string): void {
 }
 
 
+export async function listScopes() {
+  try {
+    const res = invokeCli(["scopes"]);
+    if (res.ok !== true) { const err = dbErrorResponse(res); return { ok: false as const, scopes: [], error: err.error, choices: err.choices }; }
+    const scopes = Array.isArray(res.scopes) ? res.scopes.map((s: unknown) => {
+      const o = (typeof s === "object" && s !== null ? s : {}) as Record<string, unknown>;
+      return { scope_key: typeof o.scope_key === "string" ? o.scope_key : "", items: typeof o.items === "number" ? o.items : 0 };
+    }).filter((s) => s.scope_key) : [];
+    return { ok: true, scopes };
+  } catch {
+    return { ok: false, scopes: [], error: "db_error", choices: ["abort_request", "send_original"] };
+  }
+}
 
 
 export async function listItems(input: RpcInput<typeof listItemsRpc>) {

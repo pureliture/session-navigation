@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p_db = sub.add_parser("db-info")
     p_db.add_argument("--path", default=None)
+    p_scopes = sub.add_parser("scopes")
+    p_scopes.add_argument("--path", default=None)
+
 
     p_list = sub.add_parser("list")
     p_list.add_argument("--scope", required=True)
@@ -73,7 +76,15 @@ def main(argv: list[str] | None = None) -> int:
             _print(db_info(args.path))
             return 0
 
-        if args.command == "list":
+        if args.command == "scopes":
+            store = _store(args.path)
+            try:
+                rows = store.list_scopes() if hasattr(store, "list_scopes") else []
+                _print({"ok": True, "scopes": rows})
+                return 0
+            finally:
+                store.close()
+
             store = _store(args.path)
             try:
                 items = store.items(args.scope)

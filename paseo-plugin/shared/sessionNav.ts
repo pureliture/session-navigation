@@ -75,6 +75,18 @@ export const DbChoiceResultSchema = z.object({
   ok: z.boolean(),
   error: z.string().optional(),
 });
+export const ScopesResultSchema = z.object({
+  ok: z.boolean(),
+  scopes: z.array(z.object({ scope_key: z.string(), items: z.number().int() })),
+  error: z.string().optional(),
+});
+
+export const listScopesRpc = defineRpc({
+  name: "session-nav.scopes",
+  input: z.object({}),
+  output: ScopesResultSchema,
+});
+
 
 export const listItemsRpc = defineRpc({
   name: "session-nav.list",

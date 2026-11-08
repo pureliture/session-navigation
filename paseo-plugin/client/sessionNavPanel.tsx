@@ -7,6 +7,7 @@ import {
   dbChoiceRpc,
   hideItemRpc,
   listItemsRpc,
+  listScopesRpc,
   manageItemsRpc,
   scopeKeyFromWorkspace,
   summarizeItemRpc,
@@ -17,8 +18,10 @@ import {
 
 export function SessionNavPanel({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
   const queryClient = useQueryClient();
-  const scopeKey = scopeKeyFromWorkspace(workspaceId);
+  const defaultScope = scopeKeyFromWorkspace(workspaceId);
+  const [scopeKey, setScopeKey] = useState(defaultScope);
   const listRpc = useRpc(listItemsRpc);
+  const scopesRpc = useRpc(listScopesRpc);
   const hideRpc = useRpc(hideItemRpc);
   const unhideRpc = useRpc(unhideItemRpc);
   const summarizeRpc = useRpc(summarizeItemRpc);
@@ -27,6 +30,16 @@ export function SessionNavPanel({ theme, layout, workspaceId }: PluginWorkspaceP
 
   const [dbErrorOpen, setDbErrorOpen] = useState(false);
   const [notice, setNotice] = useState(null as string | null);
+  const [scopeOpen, setScopeOpen] = useState(false);
+
+  const scopesQuery = useQuery({
+    queryKey: ["session-nav", "scopes"],
+    queryFn: async () => {
+      const result = await scopesRpc({});
+      if (!result.ok) throw new Error(result.error ?? "scopes_failed");
+      return result.scopes;
+    },
+  });
 
   const queryKey = useMemo(() => ["session-nav", "list", scopeKey], [scopeKey]);
 
@@ -145,6 +158,43 @@ export function SessionNavPanel({ theme, layout, workspaceId }: PluginWorkspaceP
           <Text style={styles.manageText}>Manage</Text>
         </Pressable>
       </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Select scope"
+        style={styles.action}
+        onPress={() => setScopeOpen(true)}
+      >
+        <Text style={styles.actionText}>Scope: {scopeKey || "(none)"}</Text>
+      </Pressable>
+      <Modal visible={scopeOpen} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.title}>Select scope</Text>
+            <FlatList
+              data={scopesQuery.data ?? []}
+              keyExtractor={(s) => s.scope_key}
+              renderItem={({ item: s }) => (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use scope ${s.scope_key}`}
+                  style={styles.action}
+                  onPress={() => { setScopeKey(s.scope_key); setScopeOpen(false); }}
+                >
+                  <Text style={styles.actionText}>{s.scope_key} ({s.items})</Text>
+                </Pressable>
+              )}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close scope picker"
+              style={styles.manage}
+              onPress={() => setScopeOpen(false)}
+            >
+              <Text style={styles.manageText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       <FlatList
         data={rows}
