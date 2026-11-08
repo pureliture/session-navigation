@@ -7,14 +7,14 @@ from typing import Any
 
 import pytest
 
-from context_hide.summary import (
+from session_navigation.summary import (
     ModelSummarizer,
     SummarizerConfig,
     _SYSTEM_PROMPT,
     prepare_result_source,
     validate_summary_text,
 )
-from context_hide.transport import SummarizerUnavailable
+from session_navigation.transport import SummarizerUnavailable
 
 CONFIG = '''[project]
 name = "cedar-api"

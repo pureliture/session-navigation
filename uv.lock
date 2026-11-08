@@ -30,7 +30,7 @@ wheels = [
 ]
 
 [[package]]
-name = "context-hide"
+name = "session-navigation"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

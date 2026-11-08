@@ -5,9 +5,9 @@ import asyncio
 import json
 from typing import Any
 
-from context_hide.model import SpanChoice
-from context_hide.store import MemoryContextStore
-from context_hide.summary import ModelSummarizer, SummarizerConfig, validate_summary_text
+from session_navigation.model import SpanChoice
+from session_navigation.store import MemoryContextStore
+from session_navigation.summary import ModelSummarizer, SummarizerConfig, validate_summary_text
 
 
 def test_one_summary_field_is_generated_applied_and_restored():
@@ -60,7 +60,7 @@ def test_one_summary_field_is_generated_applied_and_restored():
     assert "실행:" not in saved.item.compacted
     assert "미확인·한계:" not in saved.item.compacted
 
-    assert store.unhide("test", saved.item.item_id).ok
+    assert store.restore("test", saved.item.item_id).ok
     assert store.visible_content("test", "one", source) == source
 
 

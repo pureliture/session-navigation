@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 
-from context_hide.engine import ContextHideEngine
-from context_hide.model import (
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import (
     Scope,
     ToolResultRecord,
     compute_invocation_digest,
@@ -55,35 +55,35 @@ def _terminal_envelope(lines: int = 80) -> str:
     return json.dumps({"output": out, "exit_code": 0, "error": None})
 
 
-def test_rule_path_hides_read_file_envelope_and_restores():
+def test_rule_path_compacts_read_file_envelope_and_restores():
     raw = _read_file_envelope()
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("hermes", "test", "sess-env-read")
 
-    result = engine.hide_sync(scope, _record(raw))
+    result = engine.compact_sync(scope, _record(raw))
     assert result.ok is True, result.error
     assert result.plan is not None
     assert result.plan.expected_content_sha256 == compute_sha256(raw)
 
     rendered = result.plan.replacement_text
-    assert "[hidden:" in rendered
+    assert "[compacted:" in rendered
     assert "원문 발췌:" in rendered
     assert len(rendered) < len(raw)
     # The line-number noise the read_file tool adds must not ride along.
     assert "1|Synthetic row" not in rendered
     assert "Synthetic row 001" in rendered
 
-    # Unhidden items produce no replacement plan again.
-    assert engine.unhide(scope, result.plan.item_id).ok is True
+    # Restored items produce no replacement plan again.
+    assert engine.restore(scope, result.plan.item_id).ok is True
     assert engine.project(scope, [_record(raw)]) == []
 
 
-def test_rule_path_hides_terminal_output_envelope():
+def test_rule_path_compacts_terminal_output_envelope():
     raw = _terminal_envelope()
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("hermes", "test", "sess-env-out")
 
-    result = engine.hide_sync(scope, _record(raw))
+    result = engine.compact_sync(scope, _record(raw))
     assert result.ok is True, result.error
     assert result.plan is not None
     assert len(result.plan.replacement_text) < len(raw)
@@ -93,9 +93,9 @@ def test_rule_path_hides_terminal_output_envelope():
 def test_unknown_json_shape_still_refuses():
     """An envelope the decoder does not recognize must stay fail-open."""
     raw = json.dumps({"unmapped_entries": ["x" * 40 for _ in range(40)]})
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("hermes", "test", "sess-env-unknown")
 
-    result = engine.hide_sync(scope, _record(raw))
+    result = engine.compact_sync(scope, _record(raw))
     assert result.ok is False
     assert result.error == "verification_failed"

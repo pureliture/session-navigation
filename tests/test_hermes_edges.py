@@ -11,9 +11,9 @@ import copy
 import json
 
 from _adapter_loader import hermes_adapter as _load_hermes_adapter
-from context_hide.engine import ContextHideEngine
-from context_hide.model import Scope
-from context_hide.store import MemoryContextStore
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import Scope
+from session_navigation.store import MemoryContextStore
 
 _adapter = _load_hermes_adapter()
 plugin = _adapter.plugin
@@ -74,30 +74,30 @@ def _mw(state, body: str, session: str, call_id: str = "call_1") -> dict:
 
 def test_compression_rotation_starts_fresh_scope():
     ctx, state = _enabled_pair()
-    hide = ctx.tools["hide_context"]["handler"]
-    unhide = ctx.tools["unhide_context"]["handler"]
+    compact = ctx.tools["compact_context"]["handler"]
+    restore = ctx.tools["restore_context"]["handler"]
     body = _long_body()
 
     _mw(state, body, "sess-before")
-    before_item = json.loads(hide({"tool_call_id": "call_1"},
+    before_item = json.loads(compact({"tool_call_id": "call_1"},
                                    session_id="sess-before"))["item_id"]
 
-    # Compression rotated the session id: the old hidden state does NOT
+    # Compression rotated the session id: the old compacted state does NOT
     # carry over, so the new scope's request passes the original body.
     rotated = _mw(state, body, "sess-after")
     assert rotated["request"]["input"][1]["output"] == body
 
-    # The new scope manages its own independent hidden set.
-    after_item = json.loads(hide({"tool_call_id": "call_1"},
+    # The new scope manages its own independent compacted set.
+    after_item = json.loads(compact({"tool_call_id": "call_1"},
                                   session_id="sess-after"))["item_id"]
     assert after_item != before_item
     assert _mw(state, body, "sess-after")["request"]["input"][1][
         "output"] != body
 
-    # Unhiding the old scope leaves the new scope hidden (isolation).
-    unhide_result = json.loads(unhide({"item_id": before_item},
+    # Unhiding the old scope leaves the new scope compacted (isolation).
+    restore_result = json.loads(restore({"item_id": before_item},
                                        session_id="sess-before"))
-    assert unhide_result["ok"] is True
+    assert restore_result["ok"] is True
     assert _mw(state, body, "sess-before")["request"]["input"][1][
         "output"] == body
     assert _mw(state, body, "sess-after")["request"]["input"][1][
@@ -106,19 +106,19 @@ def test_compression_rotation_starts_fresh_scope():
 
 def test_subagent_sessions_stay_isolated():
     ctx, state = _enabled_pair()
-    hide = ctx.tools["hide_context"]["handler"]
+    compact = ctx.tools["compact_context"]["handler"]
     body = _long_body()
 
     _mw(state, body, "sess-parent")
-    parent_item = json.loads(hide({"tool_call_id": "call_1"},
+    parent_item = json.loads(compact({"tool_call_id": "call_1"},
                                    session_id="sess-parent"))["item_id"]
 
-    # The child scope starts unhidden even for the same body.
+    # The child scope starts restored even for the same body.
     child = _mw(state, body, "sess-child")
     assert child["request"]["input"][1]["output"] == body
 
-    # Each scope hides its own copy under its own item id.
-    child_item = json.loads(hide({"tool_call_id": "call_1"},
+    # Each scope compacts its own copy under its own item id.
+    child_item = json.loads(compact({"tool_call_id": "call_1"},
                                   session_id="sess-child"))["item_id"]
     assert child_item != parent_item
 
@@ -128,8 +128,8 @@ def test_subagent_sessions_stay_isolated():
 
 def test_session_expiry_forgets_quiet_scopes():
     # Every new request refreshes the "last transmission" record, so
-    # expiry only bites after silence: a late hide finds nothing, while
-    # a fresh request re-records and hiding works again.
+    # expiry only bites after silence: a late compact finds nothing, while
+    # a fresh request re-records and compacting works again.
     now = [1000.0]
     store = SessionTranscriptStore(ttl_seconds=60, time_func=lambda: now[0])
     state = plugin.PluginState(store=store,
@@ -141,23 +141,23 @@ def test_session_expiry_forgets_quiet_scopes():
 
     handlers.middleware_step(state.engine, store, scope, "codex_responses",
                              _codex_request(body))
-    assert handlers.hide(state.engine, store, scope, "call_1").ok is True
+    assert handlers.compact(state.engine, store, scope, "call_1").ok is True
 
     now[0] += 61.0
     # Silence longer than the TTL: the tool path finds no record.
     assert store.entries(scope.scope_key()) == []
-    late = handlers.hide(state.engine, store, scope, "call_1")
+    late = handlers.compact(state.engine, store, scope, "call_1")
     assert late.ok is False and late.error == "not_found"
 
-    # A new request re-records, so hiding works again on the fresh entry.
+    # A new request re-records, so compacting works again on the fresh entry.
     handlers.middleware_step(state.engine, store, scope, "codex_responses",
                              _codex_request(body))
-    assert handlers.hide(state.engine, store, scope, "call_1").ok is True
+    assert handlers.compact(state.engine, store, scope, "call_1").ok is True
 
 
 def test_engine_store_expiry_stops_replacement():
     now = [5000.0]
-    engine = ContextHideEngine(
+    engine = SessionNavigationEngine(
         store=MemoryContextStore(ttl_seconds=60, clock=lambda: now[0]))
     store = SessionTranscriptStore()
     scope = Scope(adapter_id="hermes", host_profile="test",
@@ -166,7 +166,7 @@ def test_engine_store_expiry_stops_replacement():
 
     handlers.middleware_step(engine, store, scope, "codex_responses",
                              _codex_request(body))
-    assert handlers.hide(engine, store, scope, "call_1").ok is True
+    assert handlers.compact(engine, store, scope, "call_1").ok is True
 
     now[0] += 61.0
     later = handlers.middleware_step(engine, store, scope, "codex_responses",
@@ -179,12 +179,12 @@ def test_disable_returns_to_original_and_reenable_applies():
     ctx = FakeCtx(config={"enabled": True})
     state = plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
-    hide = ctx.tools["hide_context"]["handler"]
+    compact = ctx.tools["compact_context"]["handler"]
     body = _long_body()
     kwargs = dict(session_id="sess-toggle", api_mode="codex_responses")
 
     mw(request=_codex_request(body), **kwargs)
-    assert json.loads(hide({"tool_call_id": "call_1"},
+    assert json.loads(compact({"tool_call_id": "call_1"},
                             session_id="sess-toggle"))["ok"] is True
     applied = mw(request=_codex_request(body), **kwargs)
     assert applied["request"]["input"][1]["output"] != body
@@ -203,14 +203,14 @@ def test_disable_returns_to_original_and_reenable_applies():
 
 def test_first_version_is_rule_only_no_external_call():
     ctx, state = _enabled_pair()
-    hide = ctx.tools["hide_context"]["handler"]
-    list_items = ctx.tools["list_context_items"]["handler"]
+    compact = ctx.tools["compact_context"]["handler"]
+    list_items = ctx.tools["list_session_items"]["handler"]
     body = _long_body()
 
     plugin.make_middleware(state)(request=_codex_request(body),
                                   session_id="sess-rule",
                                   api_mode="codex_responses")
-    assert json.loads(hide({"tool_call_id": "call_1"},
+    assert json.loads(compact({"tool_call_id": "call_1"},
                             session_id="sess-rule"))["ok"] is True
     listed = json.loads(list_items({}, session_id="sess-rule"))
     assert listed["count"] == 1

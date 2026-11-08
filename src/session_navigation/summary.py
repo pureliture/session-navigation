@@ -11,8 +11,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from context_hide.policy import _EXIT_CLAIM, verified_facts
-from context_hide.transport import OnCall, SummarizerError, SummarizerUnavailable
+from session_navigation.policy import _EXIT_CLAIM, verified_facts
+from session_navigation.transport import OnCall, SummarizerError, SummarizerUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ _PLAIN_RESULT_PROMPT = (
 
 _INJECTION_OUTPUT_PATTERNS = (
     re.compile(r"(?i)\bignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b"),
-    re.compile(r"(?i)\b(?:reveal|print|expose)\s+(?:the\s+)?(?:system|developer|hidden)\s+(?:prompt|message)\b"),
+    re.compile(r"(?i)\b(?:reveal|print|expose)\s+(?:the\s+)?(?:system|developer|compacted)\s+(?:prompt|message)\b"),
     re.compile(r"(?i)\b(?:execute|run)\s+(?:this|the)\s+command\b"),
     re.compile(r"(?i)\b(?:api key|password|credential|secret)\b"),
     re.compile(r"이전 지시를 무시|시스템 프롬프트|개발자 지시|비밀을 공개|명령을 실행"),
@@ -384,7 +384,7 @@ class ModelSummarizer:
         if (len(user_content) > self._config.max_input_chars
                 or len((system_prompt + user_content).encode("utf-8")) > self._config.max_input_bytes):
             logger.info(
-                "context-hide summarizer call=false latency_ms=0 "
+                "session-navigation summarizer call=false latency_ms=0 "
                 "completion_tokens=0 error_code=input_too_large"
             )
             raise SummarizerUnavailable("input_too_large")
@@ -406,7 +406,7 @@ class ModelSummarizer:
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
-                        "name": "context_hide_summary",
+                        "name": "session_navigation_summary",
                         "strict": True,
                         "schema": {
                             "type": "object",
@@ -454,7 +454,7 @@ class ModelSummarizer:
                 reason = "request_failed"
             latency_ms = max(0, int((time.monotonic() - started) * 1000))
             logger.info(
-                "context-hide summarizer call=true latency_ms=%d "
+                "session-navigation summarizer call=true latency_ms=%d "
                 "completion_tokens=%d error_code=%s",
                 latency_ms,
                 completion_tokens,
@@ -464,7 +464,7 @@ class ModelSummarizer:
 
         latency_ms = max(0, int((time.monotonic() - started) * 1000))
         logger.info(
-            "context-hide summarizer call=true latency_ms=%d "
+            "session-navigation summarizer call=true latency_ms=%d "
             "completion_tokens=%d error_code=none",
             latency_ms,
             completion_tokens,

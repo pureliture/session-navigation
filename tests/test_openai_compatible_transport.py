@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from context_hide.openai_compatible import OpenAICompatibleTransport
-from context_hide.transport import SummarizerError
+from session_navigation.openai_compatible import OpenAICompatibleTransport
+from session_navigation.transport import SummarizerError
 
 
 class FakeResponse:

@@ -1,11 +1,11 @@
-"""Context hide common engine orchestrating store, policy, and summarization."""
+"""Session navigation common engine orchestrating store, policy, and summarization."""
 from __future__ import annotations
 
 import asyncio
 import copy
 from typing import Any
 
-from context_hide.model import (
+from session_navigation.model import (
     ContextItem,
     EngineConfig,
     ItemMetadata,
@@ -15,7 +15,7 @@ from context_hide.model import (
     SpanChoice,
     ToolResultRecord,
 )
-from context_hide.policy import (
+from session_navigation.policy import (
     RuleSpanSelector,
     excerpts_are_exact,
     refusal_reason,
@@ -23,12 +23,12 @@ from context_hide.policy import (
     required_evidence_lines,
     verified_facts,
 )
-from context_hide.store import MemoryContextStore, _item_id
-from context_hide.summary import selectable_text, validate_summary_text
-from context_hide.transport import Summarizer
+from session_navigation.store import MemoryContextStore, _item_id
+from session_navigation.summary import selectable_text, validate_summary_text
+from session_navigation.transport import Summarizer
 
 
-class ContextHideEngine:
+class SessionNavigationEngine:
     """Host-neutral tool result summarization and context compaction engine."""
 
     def __init__(
@@ -52,7 +52,7 @@ class ContextHideEngine:
         options_omitted: bool = False,
         allow_fallback: bool = True,
     ) -> MutationResult:
-        """Hide/summarize a tool result. Fail-open on any failure.
+        """Compact/summarize a tool result. Fail-open on any failure.
         Guarantees: Fail-Open on any failure. Never crashes host loop.
         """
         # 1. Policy & input validation
@@ -143,7 +143,7 @@ class ContextHideEngine:
                 raise asyncio.CancelledError
 
             # 7-8. Shared compaction decision (validation, rendering, bounds, final check)
-            from context_hide.compaction import evaluate_compaction
+            from session_navigation.compaction import evaluate_compaction
             choice, rendered, err = evaluate_compaction(
                 original=record.content,
                 item_id=item_id,
@@ -194,14 +194,14 @@ class ContextHideEngine:
 
         finally:
             self.store.release(scope, item_id, token)
-    async def hide(
+    async def compact(
         self,
         scope: Scope,
         record: ToolResultRecord,
         *,
         options_omitted: bool = False,
     ) -> MutationResult:
-        """Deterministic hide (rule-based). No LLM call."""
+        """Deterministic compact (rule-based). No LLM call."""
         return await self._apply(scope, record, summarizer=None, options_omitted=options_omitted, allow_fallback=True)
 
     async def summarize(
@@ -215,7 +215,7 @@ class ContextHideEngine:
         """LLM-based summarize. No silent fallback to rule on failure."""
         return await self._apply(scope, record, summarizer=summarizer, options_omitted=options_omitted, allow_fallback=False)
 
-    def hide_sync(
+    def compact_sync(
         self,
         scope: Scope,
         record: ToolResultRecord,
@@ -223,7 +223,7 @@ class ContextHideEngine:
         summarizer: Summarizer | None = None,
         options_omitted: bool = False,
     ) -> MutationResult:
-        """Synchronously hide content with an optional model and rule fallback."""
+        """Synchronously compact content with an optional model and rule fallback."""
         return asyncio.run(self._apply(
             scope, record, summarizer=summarizer,
             options_omitted=options_omitted, allow_fallback=True,
@@ -253,14 +253,14 @@ class ContextHideEngine:
             )
         return results
 
-    def unhide(self, scope: Scope, item_id: str) -> MutationResult:
-        """Unhide item, marking visibility as original without re-running tools."""
-        return self.store.unhide(scope, item_id)
+    def restore(self, scope: Scope, item_id: str) -> MutationResult:
+        """Restore item, marking visibility as original without re-running tools."""
+        return self.store.restore(scope, item_id)
 
     def project(self, scope: Scope, records: list[ToolResultRecord]) -> list[ReplacementPlan]:
         """Generate replacement plans for host transcript mutation.
 
-        Unhidden items (visibility == 'original') or absent items yield no replacement plan,
+        Restored items (visibility == 'original') or absent items yield no replacement plan,
         leaving host transcript content untouched.
         """
         plans: list[ReplacementPlan] = []

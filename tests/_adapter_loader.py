@@ -4,7 +4,7 @@ The adapter stays outside the published core wheel and is never imported
 through a generic top-level package name (which can collide with the
 host's own packages). Tests use `hermes_adapter()` to get the package
 module loaded from this repository's `adapters/hermes/` directory under
-the unique name `hermes_hide_adapter`, then reach submodules as
+the unique name `hermes_navigation_adapter`, then reach submodules as
 attributes (`adapter.handlers`, `adapter.session`, ...). Relative
 imports inside the adapter package keep working under that name.
 """
@@ -17,7 +17,7 @@ import sys
 import types
 from pathlib import Path
 
-_PACKAGE_NAME = "hermes_hide_adapter"
+_PACKAGE_NAME = "hermes_navigation_adapter"
 
 
 def hermes_adapter() -> types.ModuleType:

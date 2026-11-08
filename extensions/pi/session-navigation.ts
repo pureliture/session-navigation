@@ -18,7 +18,7 @@ interface RpcParams {
 	[key: string]: unknown;
 }
 
-export default function contextHideExtension(pi: ExtensionAPI) {
+export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	const z = pi.zod;
 	let proc: ChildProcess | null = null;
 	let rl: readline.Interface | null = null;
@@ -27,7 +27,7 @@ export default function contextHideExtension(pi: ExtensionAPI) {
 
 	function startDaemon() {
 		const here = path.dirname(fileURLToPath(import.meta.url));
-		const daemonPath = path.resolve(here, "../../pi_context_hide_daemon.py");
+		const daemonPath = path.resolve(here, "../../pi_session_navigation_daemon.py");
 		proc = spawn("python3", [daemonPath], { stdio: ["pipe", "pipe", "pipe"] });
 		rl = readline.createInterface({ input: proc.stdout! });
 		rl.on("line", (line: string) => {
@@ -83,21 +83,21 @@ export default function contextHideExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "hide_context",
-		label: "Hide Context",
-		description: "Hide one already-transmitted tool result: later requests carry its summary instead of the full body.",
+		name: "compact_context",
+		label: "Compact Context",
+		description: "Compact one already-transmitted tool result: later requests carry its summary instead of the full body.",
 		parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_toolCallId, params, _onUpdate, ctx, _signal) {
 			const sk = scopeKey(ctx);
-			const res = await rpc("hide", { scope_key: sk, tool_call_id: params.tool_call_id });
+			const res = await rpc("compact", { scope_key: sk, tool_call_id: params.tool_call_id });
 			return { content: [{ type: "text", text: JSON.stringify(res) }], details: res };
 		},
 	});
 
 	pi.registerTool({
-		name: "summarize_context",
-		label: "Summarize Context",
-		description: "Hide one tool result using a configured local model summary. Fails (no silent fallback) if the model is unavailable or validation fails.",
+		name: "summarize_session",
+		label: "Summarize Session",
+		description: "Compact one tool result using a configured local model summary. Fails (no silent fallback) if the model is unavailable or validation fails.",
 		parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_toolCallId, params, _onUpdate, ctx, _signal) {
 			const sk = scopeKey(ctx);
@@ -107,21 +107,21 @@ export default function contextHideExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "unhide_context",
-		label: "Unhide Context",
-		description: "Restore a hidden item to its original full body.",
+		name: "restore_context",
+		label: "Restore Context",
+		description: "Restore a compacted item to its original full body.",
 		parameters: z.object({ item_id: z.string() }),
 		async execute(_toolCallId, params, _onUpdate, ctx, _signal) {
 			const sk = scopeKey(ctx);
-			const res = await rpc("unhide", { scope_key: sk, item_id: params.item_id });
+			const res = await rpc("restore", { scope_key: sk, item_id: params.item_id });
 			return { content: [{ type: "text", text: JSON.stringify(res) }], details: res };
 		},
 	});
 
 	pi.registerTool({
-		name: "list_context_items",
-		label: "List Context Items",
-		description: "List hidden items in this session.",
+		name: "list_session_items",
+		label: "List Session Items",
+		description: "List compacted items in this session.",
 		parameters: z.object({ query: z.string().optional() }),
 		async execute(_toolCallId, params, _onUpdate, ctx, _signal) {
 			const sk = scopeKey(ctx);
@@ -134,5 +134,3 @@ export default function contextHideExtension(pi: ExtensionAPI) {
 		if (proc) { proc.kill(); proc = null; }
 	});
 }
-PY
-echo done

@@ -9,17 +9,17 @@ from typing import Any
 from jsonschema import Draft202012Validator
 import pytest
 
-import context_hide
-from context_hide.model import SpanChoice
-from context_hide.store import MemoryContextStore
-from context_hide.summary import (
+import session_navigation
+from session_navigation.model import SpanChoice
+from session_navigation.store import MemoryContextStore
+from session_navigation.summary import (
     ModelSummarizer,
     SummarizerConfig,
     _PLAIN_RESULT_PROMPT,
     _SYSTEM_PROMPT,
     validate_summary_text,
 )
-from context_hide.transport import SummarizerUnavailable
+from session_navigation.transport import SummarizerUnavailable
 
 INVOCATION = {"tool_name": "terminal", "arguments": {"command": "pytest"}}
 SUMMARY = {"summary": "sample-addon component registry: 12 checks passed; exit code 0."}
@@ -60,7 +60,7 @@ def test_model_summarizer_uses_configured_model_id_without_provider_aliasing():
     assert result == SUMMARY
     assert requests[0]["model"] == model_id
     assert ModelSummarizer.__name__ == "ModelSummarizer"
-    assert context_hide.ModelSummarizer is ModelSummarizer
+    assert session_navigation.ModelSummarizer is ModelSummarizer
 
 
 def test_summary_config_defaults_and_bounds():
@@ -89,7 +89,7 @@ def test_model_summarizer_logs_safe_metrics_without_source_or_model_content(capl
         generate=generate,
         config=SummarizerConfig(model="PRIVATE_MODEL_ID"),
     )
-    with caplog.at_level(logging.INFO, logger="context_hide.summary"):
+    with caplog.at_level(logging.INFO, logger="session_navigation.summary"):
         result = asyncio.run(summarizer.summarize(source, _evidence()))
 
     assert result == SUMMARY
@@ -111,7 +111,7 @@ def test_model_summarizer_logs_only_error_code_for_invalid_response(caplog):
         generate=generate,
         config=SummarizerConfig(model="model-id"),
     )
-    with caplog.at_level(logging.INFO, logger="context_hide.summary"):
+    with caplog.at_level(logging.INFO, logger="session_navigation.summary"):
         with pytest.raises(SummarizerUnavailable, match="invalid_json"):
             asyncio.run(summarizer.summarize(_source(), _evidence()))
 
@@ -349,7 +349,7 @@ def test_summary_explicit_missing_details_quote_remains_valid_evidence():
     assert validate_summary_text(original, summary, (), invocation=INVOCATION) == summary
 
 
-def test_summary_compaction_keeps_only_required_evidence_and_unhide_restores_exact_source():
+def test_summary_compaction_keeps_only_required_evidence_and_restore_restores_exact_source():
     source = _source()
     store = MemoryContextStore(min_chars=100)
     choice = SpanChoice(_evidence(), "llm", SUMMARY)
@@ -369,7 +369,7 @@ def test_summary_compaction_keeps_only_required_evidence_and_unhide_restores_exa
     assert all(line in saved.item.compacted for line in _evidence())
     assert store.visible_content("synthetic-conversation", "tool-1", source) == saved.item.compacted
 
-    restored = store.unhide("synthetic-conversation", saved.item.item_id)
+    restored = store.restore("synthetic-conversation", saved.item.item_id)
     assert restored.ok and restored.item is not None
     assert store.visible_content("synthetic-conversation", "tool-1", source) == source
     assert restored.item.original == source

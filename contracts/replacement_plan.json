@@ -19,7 +19,7 @@
     },
     "replacement_text": {
       "type": "string",
-      "description": "Compacted or summarized replacement body with [hidden:{item_id}] envelope"
+      "description": "Compacted or summarized replacement body with [compacted:{item_id}] envelope"
     },
     "visibility_version": {
       "type": "integer",

@@ -84,19 +84,19 @@ def _mw_kwargs(request: dict, session: str, api_mode: str) -> dict:
 def test_register_wires_three_tools_and_one_middleware():
     ctx = FakeCtx()
     plugin.register(ctx)
-    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context"}
+    assert set(ctx.tools) == {"compact_context", "list_session_items", "restore_context"}
     assert set(ctx.middlewares) == {"llm_request"}
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():
         schema = entry["schema"]
         assert schema["name"] == name
         assert schema["parameters"]["type"] == "object"
-        assert entry["toolset"] == "context_hide"
+        assert entry["toolset"] == "session_navigation"
         assert callable(entry["handler"])
-    hide_params = ctx.tools["hide_context"]["schema"]["parameters"]
-    assert hide_params["required"] == ["tool_call_id"]
-    unhide_params = ctx.tools["unhide_context"]["schema"]["parameters"]
-    assert unhide_params["required"] == ["item_id"]
+    compact_params = ctx.tools["compact_context"]["schema"]["parameters"]
+    assert compact_params["required"] == ["tool_call_id"]
+    restore_params = ctx.tools["restore_context"]["schema"]["parameters"]
+    assert restore_params["required"] == ["item_id"]
 
 
 def test_disabled_by_default():
@@ -111,13 +111,13 @@ def test_disabled_by_default():
         assert json.loads(raw) == {"ok": False, "error": "disabled"}
 
 
-def test_enabled_end_to_end_hide_two_requests_list_unhide():
+def test_enabled_end_to_end_compact_two_requests_list_restore():
     ctx = _enabled_ctx()
     plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
-    hide = ctx.tools["hide_context"]["handler"]
-    list_items = ctx.tools["list_context_items"]["handler"]
-    unhide = ctx.tools["unhide_context"]["handler"]
+    compact = ctx.tools["compact_context"]["handler"]
+    list_items = ctx.tools["list_session_items"]["handler"]
+    restore = ctx.tools["restore_context"]["handler"]
     body = _long_body()
 
     before = _codex_request(body)
@@ -128,9 +128,9 @@ def test_enabled_end_to_end_hide_two_requests_list_unhide():
     assert first["request"]["input"][1]["output"] == body
     assert before == snapshot
 
-    hidden = json.loads(hide({"tool_call_id": "call_1"}, session_id="sess-e2e"))
-    assert hidden["ok"] is True
-    item_id = hidden["item_id"]
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-e2e"))
+    assert compacted["ok"] is True
+    item_id = compacted["item_id"]
     assert isinstance(item_id, str) and item_id.startswith("item_")
 
     second = mw(**_mw_kwargs(_codex_request(body), "sess-e2e", "codex_responses"))
@@ -148,7 +148,7 @@ def test_enabled_end_to_end_hide_two_requests_list_unhide():
     assert "arguments" not in listed["items"][0]
     assert "command" not in json.dumps(listed)
 
-    restored = json.loads(unhide({"item_id": item_id}, session_id="sess-e2e"))
+    restored = json.loads(restore({"item_id": item_id}, session_id="sess-e2e"))
     assert restored["ok"] is True
 
     fourth = mw(**_mw_kwargs(_codex_request(body), "sess-e2e", "codex_responses"))
@@ -161,7 +161,7 @@ def test_middleware_result_shape_and_trace():
     mw = ctx.middlewares["llm_request"][0]
     out = mw(**_mw_kwargs(_codex_request(_long_body()), "sess-shape", "codex_responses"))
     assert set(out) == {"request", "source", "reason"}
-    assert out["source"] == "context-hide-hermes"
+    assert out["source"] == "session-navigation-hermes"
     assert isinstance(out["reason"], str) and out["reason"]
 
 
@@ -183,23 +183,23 @@ def test_missing_session_fails_open():
     out = mw(**_mw_kwargs(payload, "", "codex_responses"))
     assert out["request"] == payload
     assert out["reason"] == "missing_session"
-    hide = ctx.tools["hide_context"]["handler"]
-    assert json.loads(hide({"tool_call_id": "call_1"}, session_id="")) == {
+    compact = ctx.tools["compact_context"]["handler"]
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="")) == {
         "ok": False, "error": "not_found"}
 
 
-def test_hide_missing_target_and_unknown_item():
+def test_compact_missing_target_and_unknown_item():
     ctx = _enabled_ctx()
     plugin.register(ctx)
-    hide = ctx.tools["hide_context"]["handler"]
-    unhide = ctx.tools["unhide_context"]["handler"]
-    assert json.loads(hide({}, session_id="sess-x")) == {
+    compact = ctx.tools["compact_context"]["handler"]
+    restore = ctx.tools["restore_context"]["handler"]
+    assert json.loads(compact({}, session_id="sess-x")) == {
         "ok": False, "error": "missing_tool_call_id"}
-    assert json.loads(hide({"tool_call_id": "nope"}, session_id="sess-x")) == {
+    assert json.loads(compact({"tool_call_id": "nope"}, session_id="sess-x")) == {
         "ok": False, "error": "not_found"}
-    assert json.loads(unhide({}, session_id="sess-x")) == {
+    assert json.loads(restore({}, session_id="sess-x")) == {
         "ok": False, "error": "not_found"}
-    assert json.loads(unhide({"item_id": "item_0123456789abcdef"},
+    assert json.loads(restore({"item_id": "item_0123456789abcdef"},
                               session_id="sess-x"))["ok"] is False
 
 
@@ -219,9 +219,9 @@ def test_count_middlewares_counts_others_not_self() -> None:
     # Recorded for the tools, but the outgoing request is NOT rewritten.
     assert out["reason"] == "other_middleware_present"
     assert out["request"]["input"][1]["output"] == body
-    hidden = json.loads(ctx.tools["hide_context"]["handler"](
+    compacted = json.loads(ctx.tools["compact_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-other"))
-    assert hidden["ok"] is True, "recording must still feed the tool handlers"
+    assert compacted["ok"] is True, "recording must still feed the tool handlers"
 
 
 def test_coexistence_records_but_does_not_apply() -> None:
@@ -233,9 +233,9 @@ def test_coexistence_records_but_does_not_apply() -> None:
     out = mw(**_mw_kwargs(_codex_request(body), "sess-coex", "codex_responses"))
     assert out["request"]["input"][1]["output"] == body
     assert out["reason"] == "other_middleware_present"
-    hide = ctx.tools["hide_context"]["handler"]
-    hidden = json.loads(hide({"tool_call_id": "call_1"}, session_id="sess-coex"))
-    assert hidden["ok"] is True
+    compact = ctx.tools["compact_context"]["handler"]
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-coex"))
+    assert compacted["ok"] is True
 
 
 def test_middleware_fail_open_on_bad_shapes():
@@ -249,14 +249,14 @@ def test_middleware_fail_open_on_bad_shapes():
 
 def test_bridge_collision_set_matches_bridge_contract():
     assert plugin.BRIDGE_COLLISION_TOOLS == {
-        "hide_context", "summarize_context", "list_context_items", "unhide_context"}
-    assert plugin.bridge_should_yield(["read_file", "hide_context"]) is True
+        "compact_context", "summarize_session", "list_session_items", "restore_context"}
+    assert plugin.bridge_should_yield(["read_file", "compact_context"]) is True
     assert plugin.bridge_should_yield(["terminal", "read_file"]) is False
     assert plugin.bridge_should_yield([]) is False
     assert plugin.bridge_should_yield(None) is False
 
 
-def test_llm_settings_build_summarizer_and_pass_it_through_hide_handler(monkeypatch):
+def test_llm_settings_build_summarizer_and_pass_it_through_compact_handler(monkeypatch):
     observed: dict = {"requests": []}
 
     class FakeTransport:
@@ -291,10 +291,10 @@ def test_llm_settings_build_summarizer_and_pass_it_through_hide_handler(monkeypa
     body = _long_body()
     mw = ctx.middlewares["llm_request"][0]
     mw(**_mw_kwargs(_codex_request(body), "sess-llm", "codex_responses"))
-    hidden = json.loads(ctx.tools["hide_context"]["handler"](
+    compacted = json.loads(ctx.tools["compact_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-llm"))
 
-    assert hidden["ok"] is True
+    assert compacted["ok"] is True
     assert observed["base_url"] == "http://127.0.0.1/v1"
     assert len(observed["requests"]) == 1
     assert observed["requests"][0]["model"] == (

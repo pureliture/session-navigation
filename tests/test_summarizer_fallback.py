@@ -1,4 +1,4 @@
-"""End-to-end fail-open tests from local transport through the hide engine."""
+"""End-to-end fail-open tests from local transport through the compact engine."""
 from __future__ import annotations
 
 import json
@@ -7,15 +7,15 @@ from typing import Any
 
 import pytest
 
-from context_hide.engine import ContextHideEngine
-from context_hide.model import (
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import (
     Scope,
     ToolResultRecord,
     compute_invocation_digest,
     compute_sha256,
 )
-from context_hide.openai_compatible import OpenAICompatibleTransport
-from context_hide.summary import ModelSummarizer, SummarizerConfig
+from session_navigation.openai_compatible import OpenAICompatibleTransport
+from session_navigation.summary import ModelSummarizer, SummarizerConfig
 
 
 class FakeResponse:
@@ -109,7 +109,7 @@ def test_local_summarizer_failures_fall_back_to_rules(failure_mode, expected_cal
     summarizer = ModelSummarizer(generate=transport.generate, config=config)
     body = _long_body()
 
-    result = ContextHideEngine().hide_sync(
+    result = SessionNavigationEngine().compact_sync(
         Scope("hermes", "test-profile", "session-fallback"),
         _record(body),
         summarizer=summarizer,

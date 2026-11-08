@@ -1,9 +1,9 @@
-# Hermes context-hide: 채팅에서 확인·복원하기 (A안)
+# Hermes session-navigation: 채팅에서 확인·복원하기 (A안)
 
 ## 1. 사용자가 할 수 있는 일
 
 사용자는 **같은 세션의 채팅**에서 숨김 목록이나 복원을 요청한다. 에이전트는
-`list_context_items` / `unhide_context`를 실제로 호출하고 결과를 사용자 언어로
+`list_session_items` / `restore_context`를 실제로 호출하고 결과를 사용자 언어로
 정리한다. 도구를 호출하지 않고 상태나 성공 여부를 추측해서 답하지 않는다.
 
 이 문서는 플러그인의 사람용 확인·복원 규약이다. 설치본 동기화와 재시작은
@@ -11,15 +11,15 @@ Atlas의 작업이며, 저장소의 구현·테스트 완료와 실제 배포 �
 
 | 사용자 표현 | 에이전트 행동 |
 |---|---|
-| “숨김 목록 보여줘”, “뭐 숨겨져 있어?” | 필터 없는 `list_context_items({})`를 호출하고 현재 숨김 항목만 표로 보여준다. |
+| “숨김 목록 보여줘”, “뭐 숨겨져 있어?” | 필터 없는 `list_session_items({})`를 호출하고 현재 숨김 항목만 표로 보여준다. |
 | “검색 결과 중 숨긴 것 보여줘” | 대상을 분명히 알 수 있을 때만 `query`를 사용한다. 검색된 일부 목록임을 표시한다. |
 | “N번 복원해” | 직전에 사용자에게 보여준 표의 N번을 `item_id`로 고정한 뒤 아래 재확인 절차를 따른다. |
 | “그거 되돌려” | 직전 대화에서 대상 하나가 명확하면 그 `item_id`를 고정한다. 여러 대상이 가능하면 어느 항목인지 묻는다. |
 | “전부 되돌려” | 현재 세션 전체를 다시 조회하고, 그 시점의 숨김 `item_id` 집합을 고정하여 한 건씩 복원한다. |
 
-자동 감시나 주기적인 목록 출력·복원은 없다. 상태 변경은 `hide_context` 또는
-`unhide_context` **호출 시에만** 일어난다. 에이전트가 작업 전환에 맞춰
-`hide_context`를 선택하는 기존 기능은 유지한다.
+자동 감시나 주기적인 목록 출력·복원은 없다. 상태 변경은 `compact_context` 또는
+`restore_context` **호출 시에만** 일어난다. 에이전트가 작업 전환에 맞춰
+`compact_context`를 선택하는 기존 기능은 유지한다.
 
 ## 2. 사람에게 보여줄 표준 형식
 
@@ -38,7 +38,7 @@ Atlas의 작업이며, 저장소의 구현·테스트 완료와 실제 배포 �
 - **원문 크기**: `original_bytes_size`의 UTF-8 바이트 수. B 또는 KiB로 표시한다.
   기존 `bytes_size`는 원문·요약·메타데이터를 합친 저장소 점유 크기이므로
   원문 크기로 표시하면 안 된다.
-- **숨김 시각**: `hidden_at`의 UTC 시각. 현지 시각으로 바꾸면 시간대를 함께 쓴다.
+- **숨김 시각**: `compacted_at`의 UTC 시각. 현지 시각으로 바꾸면 시간대를 함께 쓴다.
   이 값은 최근에 숨김 상태로 바뀐 시각이다. 이미 숨긴 항목을 다시 hide해도
   시각을 바꾸지 않고, 복원 후 다시 숨기면 갱신한다.
 - **요약 한 줄**: `summary_line`을 사용한다. 기존 검증된 발췌의 첫 비어 있지 않은
@@ -60,23 +60,23 @@ Atlas의 작업이며, 저장소의 구현·테스트 완료와 실제 배포 �
    대신하지 않는다. 숫자가 아닌 문자열은 정확한 item_id로 취급한다.
 2. **복원 직전에 목록을 다시 조회해 현재 상태를 확인한다.**
    재조회는 상태 확인용이며, 새 목록의 번호로 대상을 바꾸지 않는다. 고정한 `item_id`로
-   `unhide_context`를 호출한다. 목록이 오래됐다고 판단되면 새 목록을 보여주고
+   `restore_context`를 호출한다. 목록이 오래됐다고 판단되면 새 목록을 보여주고
    번호를 다시 선택받아 고정부터 다시 한다.
 3. **해석 실패는 fail-closed다.** 다른 항목으로 대체하지 않는다.
    - `no_recent_list`: 아직 목록을 보여주지 않았다. 먼저 목록을 조회해 표를
      보여준 뒤 번호를 받는다.
    - `unknown_display_number`: 마지막 목록에 없는 번호다. 새 목록을 보여주고
      다시 선택받는다.
-4. 고정한 `item_id`로 `unhide_context`를 호출하고, 결과를 목록으로 다시
+4. 고정한 `item_id`로 `restore_context`를 호출하고, 결과를 목록으로 다시
    확인해 대상이 `original`인지 검증한 뒤 성공·실패를 사용자에게 말한다.
    도구 성공과 이후 확인이 다르면 현재 확인 가능한 상태만 알린다.
 
 표시 번호는 **목록 호출마다 새로 부여**된다. 복원 직전 재조회로 얻은 새 번호를 과거 표의
 번호에 덮어쓰면 안 된다. 고정한 `item_id`를 유지한다. 다음에 사용자에게 새 표를 보여주면 그 표가 새 번호
 기준이 된다. 목록 표시와 복원 사이의 동시 변경을 잠그는 거래 단위는 없으므로,
-`unhide_context`의 실제 결과를 반드시 확인한다. "그거 되돌려"는 대상 하나가 분명할 때만
+`restore_context`의 실제 결과를 반드시 확인한다. "그거 되돌려"는 대상 하나가 분명할 때만
 그 `item_id`로 복원하고, 여러 대상이 가능하면 어느 항목인지 묻고 임의로 고르지 않는다.
-번호도 ID도 없는 "그거/그것/그 항목"만으로는 `unhide_context`를 호출하지 않고 먼저 묻는다.
+번호도 ID도 없는 "그거/그것/그 항목"만으로는 `restore_context`를 호출하지 않고 먼저 묻는다.
 목록의 1번을 임의로 고르지 않는다.
 
 ### 전부 복원
@@ -84,7 +84,7 @@ Atlas의 작업이며, 저장소의 구현·테스트 완료와 실제 배포 �
 - 기존 표가 검색된 일부였어도 필터 없는 목록부터 조회한다.
 - 그 목록에서 `compacted`인 ID만 고정한다. 복원 중 새로 숨겨진 항목까지
   계속 추가하지 않는다. 이번 요청은 **처음 고정한 집합**에 한정한다.
-- ID마다 `unhide_context`를 한 번 호출한다. 새로운 일괄 복원 도구나 `all` 인자는
+- ID마다 `restore_context`를 한 번 호출한다. 새로운 일괄 복원 도구나 `all` 인자는
   만들지 않는다. 실패한 항목을 무제한 재시도하지 않는다.
 - 마지막으로 전체 목록을 다시 확인하고 성공·실패 건수와 남은 숨김 건수를
   각각 보고한다. 일부 실패를 “전부 복원 완료”로 표시하지 않는다.
@@ -93,15 +93,15 @@ Atlas의 작업이며, 저장소의 구현·테스트 완료와 실제 배포 �
 
 | 상황 | 사용자에게 할 말과 다음 행동 |
 |---|---|
-| 전체 조회 `hidden_count == 0` | **“현재 숨겨진 항목 없음”**. `count > 0`이어도 복원된 기록만 있으면 같은 안내다. |
-| 검색 조회 `hidden_count == 0` | “검색 조건에 맞는 숨겨진 항목 없음”. 세션 전체가 비었다고 말하지 않는다. 필요하면 전체 조회한다. |
-| `unhide_context`가 `not_found` | “복원할 항목을 현재 세션·프로세스에서 찾을 수 없습니다. 재시작, 세션 변경 또는 보관 기한 만료가 원인일 수 있습니다. 현재 목록을 다시 확인해 주세요.” 다른 ID로 대체하지 않는다. |
-| `unhide_context`가 `no_recent_list` | “아직 숨김 목록을 보여주지 않았습니다.” 목록을 조회해 표를 보여준 뒤 번호를 다시 받는다. |
-| `unhide_context`가 `unknown_display_number` | “그 번호는 마지막 목록에 없습니다.” 새 목록을 보여주고 다시 선택받는다. |
+| 전체 조회 `compacted_count == 0` | **“현재 숨겨진 항목 없음”**. `count > 0`이어도 복원된 기록만 있으면 같은 안내다. |
+| 검색 조회 `compacted_count == 0` | “검색 조건에 맞는 숨겨진 항목 없음”. 세션 전체가 비었다고 말하지 않는다. 필요하면 전체 조회한다. |
+| `restore_context`가 `not_found` | “복원할 항목을 현재 세션·프로세스에서 찾을 수 없습니다. 재시작, 세션 변경 또는 보관 기한 만료가 원인일 수 있습니다. 현재 목록을 다시 확인해 주세요.” 다른 ID로 대체하지 않는다. |
+| `restore_context`가 `no_recent_list` | “아직 숨김 목록을 보여주지 않았습니다.” 목록을 조회해 표를 보여준 뒤 번호를 다시 받는다. |
+| `restore_context`가 `unknown_display_number` | “그 번호는 마지막 목록에 없습니다.” 새 목록을 보여주고 다시 선택받는다. |
 | 재시작이 실제로 확인된 경우 | “프로세스가 재시작되어 이전 숨김 목록이 사라졌습니다. 이전 항목 ID로는 복원할 수 없습니다. 대화 원문 기록은 삭제되지 않았습니다.” |
 | 빈 목록이지만 재시작 여부를 모름 | “현재 숨겨진 항목 없음”만 단정한다. 재시작을 확정 원인으로 말하지 않는다. |
 | 대상이 모호하거나 번호가 없음 | “어느 항목을 복원할까요?”라고 묻고 현재 목록을 보여준다. 임의로 선택하지 않는다. |
-| `disabled` / 도구를 사용할 수 없음 | “이 세션에서 context-hide 도구를 사용할 수 없습니다.” 빈 목록이나 복원 성공으로 설명하지 않는다. 활성화는 Atlas에 요청한다. |
+| `disabled` / 도구를 사용할 수 없음 | “이 세션에서 session-navigation 도구를 사용할 수 없습니다.” 빈 목록이나 복원 성공으로 설명하지 않는다. 활성화는 Atlas에 요청한다. |
 
 오류 JSON의 기존 `error` 값은 유지하고, 번호 해석용으로 `no_recent_list`,
 `unknown_display_number` 두 코드를 추가했다. 사람용 설명은 도구 설명과 시스템
@@ -116,29 +116,29 @@ Atlas의 작업이며, 저장소의 구현·테스트 완료와 실제 배포 �
 
 | 추가 필드 | 의미 |
 |---|---|
-| 응답 `hidden_count` | 이번 조회 결과 중 `visibility == "compacted"`인 수. 검색이면 검색 범위의 수다. |
+| 응답 `compacted_count` | 이번 조회 결과 중 `visibility == "compacted"`인 수. 검색이면 검색 범위의 수다. |
 | 응답 `message` | 전체/검색 숨김 건수 또는 위 빈 목록 문구. |
 | 항목 `original_bytes_size` | 원문 문자열을 UTF-8로 인코딩한 바이트 수. 알 수 없으면 null. |
-| 항목 `hidden_at` | 최근 실제 숨김 전환의 UTC ISO 8601 시각. 알 수 없으면 null. |
-| 항목 `hidden_order` | 세션·프로세스 안의 숨김 전환 순서. 재-hide 때 증가하며 영구 ID가 아니다. 알 수 없으면 null. |
+| 항목 `compacted_at` | 최근 실제 숨김 전환의 UTC ISO 8601 시각. 알 수 없으면 null. |
+| 항목 `compaction_order` | 세션·프로세스 안의 숨김 전환 순서. 재-compact 때 증가하며 영구 ID가 아니다. 알 수 없으면 null. |
 | 항목 `display_number` | 현재 숨김 항목에만 1부터 연속으로 부여한 표시 번호. 복원된 항목은 null. |
 | 항목 `summary_line` | 기존 발췌에서 만든 최대 160자의 한 줄. 없으면 빈 문자열. |
 
 `items`는 최근 숨김 전환 순서가 먼저 오도록 정렬한다. 시각이 같은 경우나 시스템
-시계가 바뀐 경우에도 `hidden_order`를 사용한다. 순서를 알 수 없는 항목은 뒤에
+시계가 바뀐 경우에도 `compaction_order`를 사용한다. 순서를 알 수 없는 항목은 뒤에
 두고 `item_id`로 안정적으로 정렬한다. 검색 필터를 적용한 뒤 표시 번호를 부여한다.
 
 추가 표시 정보는 플러그인의 메모리에만 두고 실제 엔진 항목과 같은 scope로
-묶는다. `list_context_items`가 반환할 때마다 그 목록의 `번호 → item_id` 스냅샷을
+묶는다. `list_session_items`가 반환할 때마다 그 목록의 `번호 → item_id` 스냅샷을
 scope별로 보관하며, 이후 도착하는 숫자 참조는 이 스냅샷으로 해석된다(§3).
-엔진에서 만료된 항목의 표시 정보는 hide/list/unhide 도구 접근 때 정리한다.
+엔진에서 만료된 항목의 표시 정보는 compact/list/restore 도구 접근 때 정리한다.
 원문을 별도 복제하지 않는다. 엔진을 직접 사용하는 코드가 만들어 표시 정보가
 없는 항목도 조회할 수 있지만 시각·순서는 추정하지 않는다.
 
 ## 6. 적용 위치와 시스템 안내 결정
 
 **채택: 도구 설명 + 짧은 정적 시스템 프롬프트 섹션.** 규약의 실행 지침은
-`adapters/hermes/plugin.py`와 배포 복사본 `vendor/context_hide_hermes/plugin.py`에
+`adapters/hermes/plugin.py`와 배포 복사본 `vendor/session_navigation_hermes/plugin.py`에
 둔다. 스킬이나 이 문서를 사용자가 직접 불러야만 작동하는 구조가 아니다.
 웹UI·CLI·맥앱과 프로필별 설정에 사람용 규약을 따로 복사하지 않는다.
 
@@ -153,10 +153,10 @@ scope별로 보관하며, 이후 도착하는 숫자 참조는 이 스냅샷으�
   도구·미들웨어의 기존 기능은 그대로 유지한다. 호스트 내부를 바꾸는 우회는
   하지 않는다. 섹션은 새 세션마다 한 번 렌더링되어 그 세션 동안 고정되므로
   동적인 목록 내용을 넣지 않는다.
-- 섹션 ID는 `context-hide.human-supervision`, 위치는 `after_memory`, 내용 상한은
+- 섹션 ID는 `session-navigation.human-supervision`, 위치는 `after_memory`, 내용 상한은
   1,200자다. 실제 안내 본문은 **575자**(2026-10-13 구현 기준, 공백 포함 문자
   수)다. 자연어 요청의 도구 연결, 번호 그대로 전달, 실패 코드별 재선택 규칙을
-  이 안내에 담았다. 도구 설명은 `list_context_items` 260자, `unhide_context`
+  이 안내에 담았다. 도구 설명은 `list_session_items` 260자, `restore_context`
   309자다.
 - 번호 해석 자체는 모델 품질에 기대지 않는다: 사용자의 "N번"이 코드에서
   결정적으로 item_id로 해석되므로(fail-closed, §3), 모델은 사용자가 말한
@@ -180,7 +180,7 @@ API 근거: 공식 플러그인 안내 및 미들웨어 문서, 위 설치본 �
   원문 기록·화면 표시는 바꾸거나 지우지 않는다. 재시작 후에도 현재 모델
   컨텍스트에 남아 있는 원문은 그대로 요청된다. 이미 호스트가 압축·제거한
   과거 내용을 이 플러그인이 다시 대화에 추가하는 것은 아니다.
-- hide/unhide는 **다음 모델 요청의 사본부터** 적용한다. 이미 전송된 요청을
+- compact/restore는 **다음 모델 요청의 사본부터** 적용한다. 이미 전송된 요청을
   취소·수정하거나 도구를 다시 실행하지 않는다.
 - 기존 최신 64건 후보 보관, 24시간 TTL, 최대 128개 후보 scope와 엔진의
   64 MiB 보관 예산을 바꾸지 않는다. `expires_at`은 엔진의 단조 시계 값이며
@@ -202,8 +202,8 @@ API 근거: 공식 플러그인 안내 및 미들웨어 문서, 위 설치본 �
 확인한 뒤 실행한다.
 
 ```bash
-cd ~/.hermes/profiles/atlas/workspace/.worktrees/context-hide-hermes-pilot
-PYTHONPATH= ./.venv/bin/python -c 'import os; from pathlib import Path; p = Path(os.environ["TMPDIR"]) / "context-hide-human-supervision.txt"; p.write_text("\n".join(f"Row {i:03d}: " + "a" * 72 for i in range(120)), encoding="utf-8"); print(p)'
+cd ~/.hermes/profiles/atlas/workspace/.worktrees/session-navigation-hermes-pilot
+PYTHONPATH= ./.venv/bin/python -c 'import os; from pathlib import Path; p = Path(os.environ["TMPDIR"]) / "session-navigation-human-supervision.txt"; p.write_text("\n".join(f"Row {i:03d}: " + "a" * 72 for i in range(120)), encoding="utf-8"); print(p)'
 hermes -p atlas chat
 ```
 
@@ -215,10 +215,10 @@ hermes -p atlas chat
 | 단계 | 실행 요청/도구 | 기대 결과 |
 |---|---|---|
 | ① 큰 파일 읽기 | “`<출력된 실제 파일 경로>`를 read_file로 전부 읽어줘.” | 실제 read_file 결과가 다음 모델 요청에 포함된다. 아직 숨김 없음. |
-| ② hide | 아래 조회에서 확인한 **실제 read_file 호출 ID**로 `hide_context({"tool_call_id": "<실제 ID>"})`를 호출하도록 요청한다. | `ok: true`, 실제 `item_id`, `visibility_version: 1`. |
+| ② compact | 아래 조회에서 확인한 **실제 read_file 호출 ID**로 `compact_context({"tool_call_id": "<실제 ID>"})`를 호출하도록 요청한다. | `ok: true`, 실제 `item_id`, `visibility_version: 1`. |
 | ③ 사람용 목록 | **“숨김 목록 보여줘”** | 에이전트가 list를 실제 호출하고 1건의 표를 보여준다. 실제 원문 크기·시각·요약·“1번 복원해” 안내가 있다. |
-| ④ 복원 | **“1번 복원해”** | 에이전트가 사용자가 말한 숫자 `1`을 `unhide_context(item_id="1")`로 전달 → 어댑터가 ③ 목록의 1번으로 해석 → unhide → 목록 사후 확인. 성공 시 `visibility_version: 2`, 해당 항목 `original`. |
-| ⑤ 최종 목록 | **“뭐 숨겨져 있어?”** | `hidden_count: 0`, **“현재 숨겨진 항목 없음”**. 복원된 항목이 `items`에 남아 `count: 1`이어도 숨김으로 표시하지 않는다. |
+| ④ 복원 | **“1번 복원해”** | 에이전트가 사용자가 말한 숫자 `1`을 `restore_context(item_id="1")`로 전달 → 어댑터가 ③ 목록의 1번으로 해석 → restore → 목록 사후 확인. 성공 시 `visibility_version: 2`, 해당 항목 `original`. |
+| ⑤ 최종 목록 | **“뭐 숨겨져 있어?”** | `compacted_count: 0`, **“현재 숨겨진 항목 없음”**. 복원된 항목이 `items`에 남아 `count: 1`이어도 숨김으로 표시하지 않는다. |
 | ⑥ (선택) 오류 경로 | 목록 없이 **“1번 복원해”**를 먼저 시도 | `no_recent_list` 오류 → 에이전트가 목록을 먼저 보여주는지 확인. |
 
 ②의 ID를 모르면 다른 터미널에서 **읽기 전용** 조회한다. 파일 본문은 출력하지
@@ -234,13 +234,13 @@ sqlite3 -readonly "$HOME/.hermes/profiles/atlas/state.db" \
 자연어만 사용하여 플러그인 안내의 효과도 검증한다.
 
 **기록할 증거:** 배포 후보 커밋, 설치본 파일 해시, 실제 세션 ID, 도구 호출 순서,
-개인 정보 없는 목록 표, hide/unhide 결과, 최종 `count`/`hidden_count`/`visibility`.
+개인 정보 없는 목록 표, compact/restore 결과, 최종 `count`/`compacted_count`/`visibility`.
 요청 사본 원복은 통합 검증에서 별도로 확인하고, 화면 원문이 그대로라는 이유만으로
 모델 요청의 복원이 검증됐다고 말하지 않는다.
 
 ## 9. 자동 검증과 운영 인계
 
-기존 list/unhide 및 요청 사본 복원 테스트를 유지한다. 새 검증은 원문 바이트 수,
+기존 list/restore 및 요청 사본 복원 테스트를 유지한다. 새 검증은 원문 바이트 수,
 숨김 전환 시각·순서, 번호 재부여, 검색 범위, 복원 기록의 보존, 빈 목록 안내,
 메타데이터 만료 정리, 정적 안내 등록과 구버전 API 부재 대응, 배포 번들 일치,
 그리고 번호 참조 해석(마지막 목록 기준·목록 전 재조회 금지·`no_recent_list`/
@@ -248,7 +248,7 @@ sqlite3 -readonly "$HOME/.hermes/profiles/atlas/state.db" \
 이해는 결정적 단위 테스트가 아니라 위 통합 시나리오로 확인한다.
 
 ```bash
-cd ~/.hermes/profiles/atlas/workspace/.worktrees/context-hide-hermes-pilot
+cd ~/.hermes/profiles/atlas/workspace/.worktrees/session-navigation-hermes-pilot
 PYTHONPATH= ./.venv/bin/python -m pytest tests/ -q -p no:cacheprovider
 ```
 

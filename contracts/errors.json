@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ContextHideErrors",
-  "description": "Schema and catalog of standard refusal and error codes emitted by context-hide engine",
+  "title": "SessionNavigationErrors",
+  "description": "Schema and catalog of standard refusal and error codes emitted by session-navigation engine",
   "type": "object",
   "properties": {
     "error": {

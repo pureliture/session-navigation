@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from context_hide.summary import (
+from session_navigation.summary import (
     ModelSummarizer,
     SummarizerConfig,
     prepare_result_source,

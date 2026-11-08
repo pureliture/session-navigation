@@ -1,4 +1,4 @@
-"""Stdio JSON-RPC daemon exposing context-hide to the pi/omp extension."""
+"""Stdio JSON-RPC daemon exposing session-navigation to the pi/omp extension."""
 from __future__ import annotations
 
 import json
@@ -6,16 +6,16 @@ import sys
 from typing import Any
 
 from adapters.hermes.handlers import (
-    hide as _engine_hide,
+    compact as _engine_compact,
     list_records as _engine_list,
     middleware_step as _engine_step,
     summarize as _engine_summarize,
-    unhide as _engine_unhide,
+    restore as _engine_restore,
 )
 from adapters.hermes.factories import _make_configured_summarizer
 from adapters.hermes.session import SessionTranscriptStore
-from context_hide.engine import ContextHideEngine
-from context_hide.model import Scope
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import Scope
 
 BRANCH_SCOPE = "unknown"
 
@@ -32,7 +32,7 @@ def _scope(scope_key: str) -> Scope:
 
 class Daemon:
     def __init__(self) -> None:
-        self.engines: dict[str, ContextHideEngine] = {}
+        self.engines: dict[str, SessionNavigationEngine] = {}
         self.stores: dict[str, SessionTranscriptStore] = {}
         self.summarizers: dict[str, Any] = {}
         self._default_summarizer = self._build_summarizer_from_env()
@@ -40,14 +40,14 @@ class Daemon:
     @staticmethod
     def _build_summarizer_from_env():
         import os
-        base_url = os.environ.get("CONTEXT_HIDE_BASE_URL", "").strip()
-        model = os.environ.get("CONTEXT_HIDE_MODEL", "").strip()
+        base_url = os.environ.get("SESSION_NAVIGATION_BASE_URL", "").strip()
+        model = os.environ.get("SESSION_NAVIGATION_MODEL", "").strip()
         if not base_url or not model:
             return None
         try:
-            timeout = int(os.environ.get("CONTEXT_HIDE_TIMEOUT", "60"))
-            max_input = int(os.environ.get("CONTEXT_HIDE_MAX_INPUT_BYTES", "12288"))
-            max_output = int(os.environ.get("CONTEXT_HIDE_MAX_OUTPUT_TOKENS", "384"))
+            timeout = int(os.environ.get("SESSION_NAVIGATION_TIMEOUT", "60"))
+            max_input = int(os.environ.get("SESSION_NAVIGATION_MAX_INPUT_BYTES", "12288"))
+            max_output = int(os.environ.get("SESSION_NAVIGATION_MAX_OUTPUT_TOKENS", "384"))
         except ValueError:
             return None
         try:
@@ -70,7 +70,7 @@ class Daemon:
 
     def _state(self, scope_key: str):
         if scope_key not in self.engines:
-            self.engines[scope_key] = ContextHideEngine()
+            self.engines[scope_key] = SessionNavigationEngine()
             self.stores[scope_key] = SessionTranscriptStore()
             self.summarizers[scope_key] = self._default_summarizer
         return self.engines[scope_key], self.stores[scope_key], self.summarizers[scope_key]
@@ -89,11 +89,11 @@ class Daemon:
                 return {"ok": True, "messages": step["request"].get("messages", messages),
                         "applied": step.get("applied", []), "skipped": step.get("skipped", []),
                         "reason": step.get("trace", {}).get("reason", "")}
-            if method == "hide":
+            if method == "compact":
                 scope_key = params["scope_key"]
                 engine, store, _ = self._state(scope_key)
                 scope = _scope(scope_key)
-                res = _engine_hide(engine, store, scope, params["tool_call_id"])
+                res = _engine_compact(engine, store, scope, params["tool_call_id"])
                 return {"ok": res.ok, "item_id": getattr(res.plan, "item_id", None) if res.plan else None,
                         "error": res.error}
             if method == "summarize":
@@ -105,11 +105,11 @@ class Daemon:
                 res = _engine_summarize(engine, store, scope, params["tool_call_id"], summ)
                 return {"ok": res.ok, "item_id": getattr(res.plan, "item_id", None) if res.plan else None,
                         "error": res.error}
-            if method == "unhide":
+            if method == "restore":
                 scope_key = params["scope_key"]
                 engine, store, _ = self._state(scope_key)
                 scope = _scope(scope_key)
-                res = _engine_unhide(engine, scope, params["item_id"])
+                res = _engine_restore(engine, scope, params["item_id"])
                 return {"ok": res.ok, "item_id": getattr(res.item, "item_id", None) if res.item else None,
                         "error": res.error}
             if method == "list_items":

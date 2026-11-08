@@ -10,7 +10,7 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from context_hide.transport import SummarizerError
+from session_navigation.transport import SummarizerError
 
 _MAX_RESPONSE_BYTES = 65_536
 

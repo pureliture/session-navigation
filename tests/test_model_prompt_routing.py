@@ -7,13 +7,13 @@ from typing import Any
 
 import pytest
 
-from context_hide.summary import (
+from session_navigation.summary import (
     ModelSummarizer,
     SummarizerConfig,
     _PLAIN_RESULT_PROMPT,
     _SYSTEM_PROMPT,
 )
-from context_hide.transport import SummarizerUnavailable
+from session_navigation.transport import SummarizerUnavailable
 
 
 @pytest.mark.parametrize(

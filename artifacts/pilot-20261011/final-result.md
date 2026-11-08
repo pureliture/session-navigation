@@ -1,4 +1,4 @@
-# context-hide Hermes 파일럿 — 최종 결과 (S6 인계)
+# session-navigation Hermes 파일럿 — 최종 결과 (S6 인계)
 
 - 일시: 2026-10-11 ~ 2026-10-12 (KST)
 - 작성: Atlas
@@ -9,29 +9,29 @@
 - 실제 요청 경로에서 도구 결과 숨김→복원이 **3사이클 반복 확인**됐다. 숨김 시 요청은 3795→1071바이트(71.8% 감소), 복원 시 원문과 바이트 단위로 완전히 같았다(SHA-256 `c25d8388…4619`).
 - 기능을 끄고 플러그인을 비활성화하면 새 세션에서 도구가 아예 보이지 않고 요청은 원문 그대로 나간다. 다시 켜면 정상 동작이 재현됐다(3번째 사이클).
 - 비대상 프로필 6곳(daedalus·atlas·tyche·metis·plutus·ariadne)은 설정·등록 변화가 없다. 원문 이력(state.db)도 그대로다.
-- 이 작업은 브리지와 별개다. 브리지 쪽 context-hide는 2026-10-10부터 비활성 상태를 유지하고 있다(ops PR #8).
+- 이 작업은 브리지와 별개다. 브리지 쪽 session-navigation는 2026-10-10부터 비활성 상태를 유지하고 있다(ops PR #8).
 
 ## 후보 식별자 (설치한 코드)
 
-- worktree: `~/.hermes/profiles/atlas/workspace/.worktrees/context-hide-hermes-pilot`, 브랜치 `atlas/hermes-plugin-pilot-20261011`
+- worktree: `~/.hermes/profiles/atlas/workspace/.worktrees/session-navigation-hermes-pilot`, 브랜치 `atlas/hermes-plugin-pilot-20261011`
 - 커밋(전부 로컬, push 없음): `34879cf` → `5e7d68d` → `7166067` → `e7e2f20` → `85fa709` → `678b649`
 - 배포 트리 SHA-256: `4bdf5cd3ad319321cadbe6ea4e947a5742514154be89ecd1ea50b67bd141fbe4` (S6 전후 동일)
 
 ## 설치/환경 세대
 
 - Hermes Agent v0.21.6+373.g46d7718 (2026.9.24), 설치 HEAD `46d7718a52`
-- 설치 위치: `~/.hermes/plugins/context-hide/` (directory plugin, pip/엔트리포인트 없음)
-- 대상: `default` 프로필(HOME `~/.hermes`), `toolsets`에 `context_hide` 포함
+- 설치 위치: `~/.hermes/plugins/session-navigation/` (directory plugin, pip/엔트리포인트 없음)
+- 대상: `default` 프로필(HOME `~/.hermes`), `toolsets`에 `session_navigation` 포함
 - 검증용 모델 전환: `step-5-preview-free`(opencode-go). 원복 백업 `config.yaml.bak-model-before-step5-20261011`
 
 ## 수행 명령 (요약)
 
 | 목적 | 명령 |
 |---|---|
-| 활성화 | `hermes -p default plugins enable context-hide --no-allow-tool-override` + `config set plugins.entries.context-hide.settings.enabled true` |
-| 비활성화(롤백) | `config set plugins.entries.context-hide.settings.enabled false` + `plugins disable context-hide` |
+| 활성화 | `hermes -p default plugins enable session-navigation --no-allow-tool-override` + `config set plugins.entries.session-navigation.settings.enabled true` |
+| 비활성화(롤백) | `config set plugins.entries.session-navigation.settings.enabled false` + `plugins disable session-navigation` |
 | 실검증 | `HERMES_DUMP_REQUESTS=1 hermes -p default chat --resume <세션> --query-file <프롬프트>` |
-| 상태 확인 | `hermes -p default plugins list --plain --no-bundled`, `config get plugins.entries.context-hide.settings.enabled` |
+| 상태 확인 | `hermes -p default plugins list --plain --no-bundled`, `config get plugins.entries.session-navigation.settings.enabled` |
 
 ## 실제 모델 호출 수 (request dump 기준)
 
@@ -66,13 +66,13 @@
 ## 롤백 방법
 
 ```sh
-hermes -p default config set plugins.entries.context-hide.settings.enabled false
-hermes -p default plugins disable context-hide
+hermes -p default config set plugins.entries.session-navigation.settings.enabled false
+hermes -p default plugins disable session-navigation
 ```
 
 새 세션에서 도구 미노출·원문 유지 확인(2026-10-12 실측). 설정 백업:
-- `config.yaml.bak-pre-context-hide-20261011`
-- `config.yaml.bak-pre-context-hide-toolset-20261011`
+- `config.yaml.bak-pre-session-navigation-20261011`
+- `config.yaml.bak-pre-session-navigation-toolset-20261011`
 - `config.yaml.bak-model-before-step5-20261011`
 - `config.yaml.bak-pre-s6-rollback-20261011`
 

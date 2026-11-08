@@ -2,7 +2,7 @@
 
 The plugin tool handlers only receive identifiers, never the conversation
 messages. The `llm_request` middleware fills this record on every outbound
-request and the hide/list/unhide handlers read it by scope + tool call ID.
+request and the compact/list/restore handlers read it by scope + tool call ID.
 
 Bounds: at most `max_sessions` scopes, at most `max_results_per_session`
 results per scope, entries older than `ttl_seconds` expire on access.

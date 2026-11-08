@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from context_hide.summary import validate_summary_text, verify_exit_claims
+from session_navigation.summary import validate_summary_text, verify_exit_claims
 
 
 @pytest.mark.parametrize(

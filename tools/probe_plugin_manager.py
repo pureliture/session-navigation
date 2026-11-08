@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN_FILES = ("__init__.py", "plugin.yaml")
-PLUGIN_ID = "context-hide"
+PLUGIN_ID = "session-navigation"
 
 
 def main() -> int:
@@ -38,9 +38,9 @@ def main() -> int:
         (plugin_dir / name).write_bytes(source.read_bytes())
     (home / "config.yaml").write_text(
         "plugins:\n"
-        "  enabled: [context-hide]\n"
+        "  enabled: [session-navigation]\n"
         "  entries:\n"
-        "    context-hide:\n"
+        "    session-navigation:\n"
         "      settings:\n"
         "        enabled: true\n",
         encoding="utf-8",
@@ -58,7 +58,7 @@ def main() -> int:
     module = getattr(entry, "module", None) if entry else None
 
     print(f"hermes_home     : {home}")
-    print(f"loaded          : {'context-hide' in loaded}")
+    print(f"loaded          : {'session-navigation' in loaded}")
     print(f"enabled         : {getattr(entry, 'enabled', None)}")
     print(f"deferred        : {getattr(entry, 'deferred', None)}")
     print(f"module          : {module}")
@@ -70,7 +70,7 @@ def main() -> int:
         entry is not None
         and getattr(entry, "enabled", False)
         and callable(getattr(module, "register", None))
-        and set(tools) == {"hide_context", "list_context_items", "unhide_context"}
+        and set(tools) == {"compact_context", "list_session_items", "restore_context"}
         and len(middlewares) == 1
     )
     print(f"VERDICT         : {'PASS' if ok else 'FAIL'}")

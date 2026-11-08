@@ -1,4 +1,4 @@
-"""Unit tests for ContextHideEngine high-level orchestrator and contracts."""
+"""Unit tests for SessionNavigationEngine high-level orchestrator and contracts."""
 from __future__ import annotations
 
 import asyncio
@@ -6,16 +6,16 @@ from typing import Any
 
 import pytest
 
-from context_hide.engine import ContextHideEngine
-from context_hide.model import (
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import (
     EngineConfig,
     Scope,
     ToolResultRecord,
     compute_invocation_digest,
     compute_sha256,
 )
-from context_hide.transport import SummarizerError
-from context_hide.store import MemoryContextStore
+from session_navigation.transport import SummarizerError
+from session_navigation.store import MemoryContextStore
 
 
 def _make_record(
@@ -48,12 +48,12 @@ def _long_content() -> str:
     return "\n".join(lines)
 
 
-def test_engine_hide_with_rule_fallback():
-    engine = ContextHideEngine()
+def test_engine_compact_with_rule_fallback():
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_1")
     record = _make_record(_long_content())
 
-    result = engine.hide_sync(scope, record)
+    result = engine.compact_sync(scope, record)
     assert result.ok is True
     assert result.plan is not None
     assert result.plan.item_id.startswith("item_")
@@ -61,8 +61,8 @@ def test_engine_hide_with_rule_fallback():
     assert "원문 발췌:" in result.plan.replacement_text
 
 
-def test_engine_hide_with_summarizer():
-    engine = ContextHideEngine()
+def test_engine_compact_with_summarizer():
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_2")
     record = _make_record(_long_content())
 
@@ -78,32 +78,32 @@ def test_engine_hide_with_summarizer():
     assert result.item.compaction_source == "llm"
 
 
-def test_engine_hide_preserves_host_handle():
-    engine = ContextHideEngine()
+def test_engine_compact_preserves_host_handle():
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_3")
     handle = {"turn_id": 4, "subagent": "worker"}
     record = _make_record(_long_content(), host_handle=handle)
 
-    result = engine.hide_sync(scope, record)
+    result = engine.compact_sync(scope, record)
     assert result.ok is True
     assert result.plan is not None
     assert result.plan.host_handle == handle
 
 
-def test_engine_hide_fails_open_on_protected_error():
-    engine = ContextHideEngine()
+def test_engine_compact_fails_open_on_protected_error():
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_4")
     error_content = "Traceback (most recent call last):\n  File 'app.py', line 10\nZeroDivisionError\n" + _long_content()
     record = _make_record(error_content)
 
-    result = engine.hide_sync(scope, record)
+    result = engine.compact_sync(scope, record)
     assert result.ok is False
     assert result.error == "protected_error"
     assert engine.list_items(scope) == []
 
 
 def test_engine_summarize_fails_on_model_failure_no_fallback():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_5")
     record = _make_record(_long_content())
 
@@ -116,61 +116,61 @@ def test_engine_summarize_fails_on_model_failure_no_fallback():
     assert result.plan is None
     assert engine.list_items(scope) == []
 
-def test_engine_unhide_restores_visibility_without_reexecution():
-    engine = ContextHideEngine()
+def test_engine_restore_restores_visibility_without_reexecution():
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_6")
     record = _make_record(_long_content())
 
-    hide_res = engine.hide_sync(scope, record)
-    assert hide_res.ok and hide_res.plan is not None
+    compact_res = engine.compact_sync(scope, record)
+    assert compact_res.ok and compact_res.plan is not None
 
     plans_before = engine.project(scope, [record])
     assert len(plans_before) == 1
 
-    unhide_res = engine.unhide(scope, hide_res.plan.item_id)
-    assert unhide_res.ok
+    restore_res = engine.restore(scope, compact_res.plan.item_id)
+    assert restore_res.ok
 
-    # Unhidden item produces no replacement plan (original remains in transcript)
+    # Restored item produces no replacement plan (original remains in transcript)
     plans_after = engine.project(scope, [record])
     assert plans_after == []
 
 
-def test_engine_hide_unhide_hide_replaces_existing_item_within_budget():
-    scope = Scope("bridge", "test", "sess_rehide")
+def test_engine_compact_restore_compact_replaces_existing_item_within_budget():
+    scope = Scope("bridge", "test", "sess_recompact")
     record = _make_record(_long_content())
-    probe = ContextHideEngine().hide_sync(scope, record)
+    probe = SessionNavigationEngine().compact_sync(scope, record)
     assert probe.ok and probe.item is not None
 
     store = MemoryContextStore(max_bytes=MemoryContextStore._item_size(probe.item))
-    engine = ContextHideEngine(store=store)
-    first = engine.hide_sync(scope, record)
+    engine = SessionNavigationEngine(store=store)
+    first = engine.compact_sync(scope, record)
     assert first.ok and first.item is not None
 
-    unhidden = engine.unhide(scope, first.item.item_id)
-    assert unhidden.ok and unhidden.item is not None
-    assert unhidden.item.version == first.item.version + 1
+    restored = engine.restore(scope, first.item.item_id)
+    assert restored.ok and restored.item is not None
+    assert restored.item.version == first.item.version + 1
 
-    rehidden = engine.hide_sync(scope, record)
+    rehidden = engine.compact_sync(scope, record)
 
     assert rehidden.ok and rehidden.item is not None
     assert rehidden.item.visibility == "compacted"
-    assert rehidden.item.version == unhidden.item.version + 1
+    assert rehidden.item.version == restored.item.version + 1
 
 
 def test_engine_project_generates_replacement_plans_for_compacted_items():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_7")
 
     rec1 = _make_record(_long_content() + "\n1", call_id="c1", host_handle=1)
     rec2 = _make_record(_long_content() + "\n2", call_id="c2", host_handle=2)
     rec3 = _make_record(_long_content() + "\n3", call_id="c3", host_handle=3)
 
-    res1 = engine.hide_sync(scope, rec1)
-    res2 = engine.hide_sync(scope, rec2)
-    res3 = engine.hide_sync(scope, rec3)
+    res1 = engine.compact_sync(scope, rec1)
+    res2 = engine.compact_sync(scope, rec2)
+    res3 = engine.compact_sync(scope, rec3)
 
-    # Unhide rec2
-    engine.unhide(scope, res2.plan.item_id)
+    # Restore rec2
+    engine.restore(scope, res2.plan.item_id)
 
     plans = engine.project(scope, [rec1, rec2, rec3])
     assert len(plans) == 2
@@ -179,14 +179,14 @@ def test_engine_project_generates_replacement_plans_for_compacted_items():
 
 
 def test_engine_list_items_filtering_and_projection():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_8")
 
     rec1 = _make_record(_long_content() + "\napple finding", call_id="c1")
     rec2 = _make_record(_long_content() + "\nbanana finding", call_id="c2")
 
-    engine.hide_sync(scope, rec1)
-    engine.hide_sync(scope, rec2)
+    engine.compact_sync(scope, rec1)
+    engine.compact_sync(scope, rec2)
 
     all_items = engine.list_items(scope)
     assert len(all_items) == 2
@@ -197,7 +197,7 @@ def test_engine_list_items_filtering_and_projection():
 
 
 def test_engine_budget_one_summary_call_per_turn():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_9")
     record = _make_record(_long_content())
     call_count = [0]
@@ -213,12 +213,12 @@ def test_engine_budget_one_summary_call_per_turn():
 
 
 def test_engine_invalid_invocation_fails_closed():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope = Scope("bridge", "test", "sess_10")
 
     # Negative result position
     invalid_pos = _make_record(_long_content(), position=-1)
-    res_pos = engine.hide_sync(scope, invalid_pos)
+    res_pos = engine.compact_sync(scope, invalid_pos)
     assert not res_pos.ok
     assert res_pos.error == "invalid_invocation_order"
 
@@ -227,19 +227,19 @@ def test_engine_invalid_invocation_fails_closed():
         _long_content(),
         invocation_args={"token": "Bearer secret_token_xyz"},
     )
-    res_sens = engine.hide_sync(scope, sensitive_rec)
+    res_sens = engine.compact_sync(scope, sensitive_rec)
     assert not res_sens.ok
     assert res_sens.error == "sensitive_invocation"
 
 
 def test_engine_scope_isolation():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     scope_a = Scope("bridge", "test", "session_A")
     scope_b = Scope("bridge", "test", "session_B")
 
     record = _make_record(_long_content())
 
-    res_a = engine.hide_sync(scope_a, record)
+    res_a = engine.compact_sync(scope_a, record)
     assert res_a.ok
 
     assert len(engine.list_items(scope_a)) == 1

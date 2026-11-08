@@ -1,4 +1,4 @@
-"""Unit tests for context_hide core models and contracts."""
+"""Unit tests for session_navigation core models and contracts."""
 from __future__ import annotations
 
 import dataclasses
@@ -9,7 +9,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from context_hide.model import (
+from session_navigation.model import (
     ContextItem,
     EngineConfig,
     ItemMetadata,
@@ -81,7 +81,7 @@ def test_replacement_plan_immutability_and_echo():
     plan = ReplacementPlan(
         item_id="item_0123456789abcdef",
         expected_content_sha256=compute_sha256("original"),
-        replacement_text="[hidden:item_0123456789abcdef]\n...",
+        replacement_text="[compacted:item_0123456789abcdef]\n...",
         visibility_version=1,
         host_handle=handle,
     )
@@ -204,7 +204,7 @@ def test_contracts_json_schema_compatibility():
         "item_id": "item_0123456789abcdef",
         "host_handle": {"idx": 1},
         "expected_content_sha256": compute_sha256("output text"),
-        "replacement_text": "[hidden:item_0123456789abcdef]\n...",
+        "replacement_text": "[compacted:item_0123456789abcdef]\n...",
         "visibility_version": 1,
     }
     jsonschema.validate(sample_plan, schema_plan)

@@ -8,7 +8,7 @@ the packaging contract the installed Hermes plugin manager actually reads:
 - the repo-root ``__init__.py`` exports ``register``
 - importing the package root pulls the engine and the adapter together, so a
   wheel built from ``pyproject.toml`` cannot ship a plugin whose ``register``
-  fails on ``import context_hide``
+  fails on ``import session_navigation``
 - default-off: with no settings at all the plugin registers its tools but every
   tool reports ``disabled`` and the middleware returns ``None``
 - adapters stay outside the pure engine: the engine package never imports the
@@ -72,7 +72,7 @@ def test_manifest_declares_provided_tools_and_middleware() -> None:
     data = _parse_manifest()
     # The plugin ships exactly three tools; the middleware is registered in code.
     declared = set(data.get("provides_tools") or [])
-    assert declared == {"hide_context", "list_context_items", "unhide_context"}, (
+    assert declared == {"compact_context", "list_session_items", "restore_context"}, (
         f"manifest tools {sorted(declared)} must match the adapter TOOL_SCHEMAS"
     )
 
@@ -97,16 +97,16 @@ def test_root_import_brings_engine_and_adapter(tmp_path: Path) -> None:
     # to import it as a test package. Load it by path, the way Hermes does.
     assert PACKAGE_INIT.is_file()
     module = _load_plugin_root()
-    from context_hide.engine import ContextHideEngine
+    from session_navigation.engine import SessionNavigationEngine
 
     assert callable(module.register)
-    assert module.ContextHideEngine is ContextHideEngine
+    assert module.SessionNavigationEngine is SessionNavigationEngine
 
 
 def _load_plugin_root():
     import importlib.util
 
-    name = "context_hide_plugin_root_under_test"
+    name = "session_navigation_plugin_root_under_test"
     spec = importlib.util.spec_from_file_location(
         name, PACKAGE_INIT, submodule_search_locations=[str(REPO / "src")]
     )
@@ -119,12 +119,12 @@ def _load_plugin_root():
 
 def test_engine_stays_host_neutral() -> None:
     """The pure engine must not import the Hermes adapter or any host package."""
-    engine_sources = sorted((REPO / "src" / "context_hide").glob("*.py"))
+    engine_sources = sorted((REPO / "src" / "session_navigation").glob("*.py"))
     assert engine_sources, "engine sources not found"
     offenders = []
     for path in engine_sources:
         text = path.read_text(encoding="utf-8")
-        for banned in ("adapters", "hermes", "hermes_hide_adapter"):
+        for banned in ("adapters", "hermes", "hermes_navigation_adapter"):
             if banned in text:
                 offenders.append(f"{path.name}:{banned}")
     assert not offenders, f"engine must stay host-neutral, found {offenders}"
@@ -169,11 +169,11 @@ def test_plugin_registers_through_root_export_default_off() -> None:
     module = _load_plugin_root()
     ctx = _FakeCtx()
     state = module.register(ctx)
-    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context"}
+    assert set(ctx.tools) == {"compact_context", "list_session_items", "restore_context"}
     assert list(ctx.middlewares) == ["llm_request"]
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():
-        assert entry["toolset"] == "context_hide"
+        assert entry["toolset"] == "session_navigation"
         assert entry["schema"]["name"] == name
         assert callable(entry["handler"])
     # No settings at all => everything reports disabled and nothing is recorded.
@@ -189,8 +189,8 @@ def test_plugin_registers_through_root_export_default_off() -> None:
 
 def test_vendored_packages_match_source_trees() -> None:
     pairs = (
-        (REPO / "src" / "context_hide", REPO / "vendor" / "context_hide"),
-        (REPO / "adapters" / "hermes", REPO / "vendor" / "context_hide_hermes"),
+        (REPO / "src" / "session_navigation", REPO / "vendor" / "session_navigation"),
+        (REPO / "adapters" / "hermes", REPO / "vendor" / "session_navigation_hermes"),
     )
     for source_dir, vendor_dir in pairs:
         def file_bytes(directory: Path) -> dict[Path, bytes]:

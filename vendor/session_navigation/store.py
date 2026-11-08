@@ -13,9 +13,9 @@ from typing import Any
 try:  # prefer the real package when the host provides it
     from cachetools import TLRUCache
 except ImportError:  # standalone/host environments without cachetools
-    from context_hide._tlru import TLRUCache
+    from session_navigation._tlru import TLRUCache
 
-from context_hide.model import (
+from session_navigation.model import (
     ContextItem,
     MutationResult,
     Scope,
@@ -24,7 +24,7 @@ from context_hide.model import (
     compute_invocation_digest,
     compute_sha256,
 )
-from context_hide.policy import (
+from session_navigation.policy import (
     RuleSpanSelector,
     check_refusal_reason,
     excerpts_are_exact,
@@ -32,8 +32,8 @@ from context_hide.policy import (
     required_evidence_indexes,
     verified_facts,
 )
-from context_hide.compaction import evaluate_compaction
-from context_hide.summary import selectable_text
+from session_navigation.compaction import evaluate_compaction
+from session_navigation.summary import selectable_text
 
 DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024  # 64 MB
@@ -187,7 +187,7 @@ class MemoryContextStore:
             self._items[key] = item
             return MutationResult(ok=True, item=item)
 
-    def unhide(self, scope: Scope | str, item_id: str, *, now: float | None = None) -> MutationResult:
+    def restore(self, scope: Scope | str, item_id: str, *, now: float | None = None) -> MutationResult:
         with self._lock:
             moment = self.now() if now is None else now
             self._items.expire(moment)

@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import pytest
 
-from context_hide.model import SpanChoice
-from context_hide.policy import (
+from session_navigation.model import SpanChoice
+from session_navigation.policy import (
     RuleSpanSelector,
     check_refusal_reason,
     is_business_state_critical,
     is_protected_error,
 )
-from context_hide.store import MemoryContextStore
+from session_navigation.store import MemoryContextStore
 
 
 def output_with(*evidence: str) -> str:

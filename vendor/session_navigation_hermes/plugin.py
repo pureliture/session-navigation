@@ -1,15 +1,15 @@
-"""Reference Hermes plugin wiring for context-hide (S4, M2-3).
+"""Reference Hermes plugin wiring for session-navigation (S4, M2-3).
 
 This is the host-process shim between Hermes and the pure helpers
 (`payload`, `session`, `handlers`). It owns everything host-specific:
 
-- tool registration (`hide_context`, `list_context_items`, `unhide_context`)
+- tool registration (`compact_context`, `list_session_items`, `restore_context`)
 - the `llm_request` middleware (record -> plan -> apply on a copy)
 - scope derivation from host identifiers (never model arguments)
 - enabled-off default, coexistence record-only mode, fail-open errors
 
 It owns nothing engine-specific: summarization, protection rules,
-storage, and visibility stay in `context_hide`. The engine never
+storage, and visibility stay in `session_navigation`. The engine never
 imports this module; the wheel never ships it.
 
 Verified against (stale-checkout warning: the local Hermes reference
@@ -41,7 +41,7 @@ Decisions recorded here (first-version scope):
 - `branch_scope` is `"unknown"`: Hermes exposes no exact branch API
   to the plugin, so no full fork isolation is claimed. A compression
   rotation issues a new `session_id`, which naturally starts a fresh
-  scope: hidden state never carries over silently.
+  scope: compacted state never carries over silently.
 - `transform_tool_result` is NOT used: stored conversation history is
   never rewritten, only the outgoing request copy.
 - Logs carry counts, item IDs, and error codes only, never result
@@ -56,17 +56,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .handlers import hide as _engine_hide
+from .handlers import compact as _engine_compact
 from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
-from .handlers import unhide as _engine_unhide
+from .handlers import restore as _engine_restore
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
-from context_hide.model import Scope
-from context_hide.engine import ContextHideEngine
-from context_hide.openai_compatible import OpenAICompatibleTransport
-from context_hide.summary import ModelSummarizer, SummarizerConfig
-from context_hide.transport import Summarizer, SummarizerError
+from session_navigation.model import Scope
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.openai_compatible import OpenAICompatibleTransport
+from session_navigation.summary import ModelSummarizer, SummarizerConfig
+from session_navigation.transport import Summarizer, SummarizerError
 
 logger = logging.getLogger(__name__)
 
@@ -75,18 +75,18 @@ from .factories import (
     _default_count_llm_middlewares,
     _dump,
     _make_configured_summarizer,
-    make_hide_handler,
+    make_compact_handler,
     make_list_handler,
     make_middleware,
     make_summarize_handler,
-    make_unhide_handler,
+    make_restore_handler,
     scope_for,
 )
 from .schemas import (
     ADAPTER_ID,
     BRANCH_SCOPE,
     BRIDGE_COLLISION_TOOLS,
-    HIDE_TOOL,
+    COMPACT_TOOL,
     LIST_TOOL,
     SUMMARIZE_TOOL,
     SUPERVISION_SECTION_ID,
@@ -94,7 +94,7 @@ from .schemas import (
     SUPERVISION_SECTION_TEXT,
     TOOL_SCHEMAS,
     TOOLSET,
-    UNHIDE_TOOL,
+    RESTORE_TOOL,
     bridge_should_yield,
     SOURCE,
 )
@@ -126,11 +126,11 @@ def register(ctx: Any) -> PluginState:
         summarizer=_make_configured_summarizer(ctx),
     )
     ctx.register_tool(
-        name=HIDE_TOOL,
+        name=COMPACT_TOOL,
         toolset=TOOLSET,
-        schema=TOOL_SCHEMAS[HIDE_TOOL],
-        handler=make_hide_handler(state),
-        description=TOOL_SCHEMAS[HIDE_TOOL]["description"],
+        schema=TOOL_SCHEMAS[COMPACT_TOOL],
+        handler=make_compact_handler(state),
+        description=TOOL_SCHEMAS[COMPACT_TOOL]["description"],
     )
     if state.summarizer is not None:
         ctx.register_tool(
@@ -148,11 +148,11 @@ def register(ctx: Any) -> PluginState:
         description=TOOL_SCHEMAS[LIST_TOOL]["description"],
     )
     ctx.register_tool(
-        name=UNHIDE_TOOL,
+        name=RESTORE_TOOL,
         toolset=TOOLSET,
-        schema=TOOL_SCHEMAS[UNHIDE_TOOL],
-        handler=make_unhide_handler(state),
-        description=TOOL_SCHEMAS[UNHIDE_TOOL]["description"],
+        schema=TOOL_SCHEMAS[RESTORE_TOOL],
+        handler=make_restore_handler(state),
+        description=TOOL_SCHEMAS[RESTORE_TOOL]["description"],
     )
     ctx.register_middleware("llm_request", make_middleware(state))
 
@@ -169,6 +169,6 @@ def register(ctx: Any) -> PluginState:
                 max_chars=SUPERVISION_SECTION_MAX_CHARS,
             )
         except Exception:
-            logger.debug("context-hide: system prompt section unavailable")
-    logger.debug("context-hide plugin registered (profile=%s)", profile)
+            logger.debug("session-navigation: system prompt section unavailable")
+    logger.debug("session-navigation plugin registered (profile=%s)", profile)
     return state

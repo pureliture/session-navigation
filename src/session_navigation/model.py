@@ -1,4 +1,4 @@
-"""Host-neutral data models and contracts for context-hide engine."""
+"""Host-neutral data models and contracts for session-navigation engine."""
 from __future__ import annotations
 
 import hashlib
@@ -143,7 +143,7 @@ class ItemMetadata:
 
 @dataclass(frozen=True)
 class MutationResult:
-    """Result of hide/unhide mutation on engine store."""
+    """Result of compact/restore mutation on engine store."""
     ok: bool
     error: str | None = None
     plan: ReplacementPlan | None = None

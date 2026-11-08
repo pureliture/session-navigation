@@ -1,15 +1,15 @@
-"""Reference Hermes plugin wiring for context-hide (S4, M2-3).
+"""Reference Hermes plugin wiring for session-navigation (S4, M2-3).
 
 This is the host-process shim between Hermes and the pure helpers
 (`payload`, `session`, `handlers`). It owns everything host-specific:
 
-- tool registration (`hide_context`, `list_context_items`, `unhide_context`)
+- tool registration (`compact_context`, `list_session_items`, `restore_context`)
 - the `llm_request` middleware (record -> plan -> apply on a copy)
 - scope derivation from host identifiers (never model arguments)
 - enabled-off default, coexistence record-only mode, fail-open errors
 
 It owns nothing engine-specific: summarization, protection rules,
-storage, and visibility stay in `context_hide`. The engine never
+storage, and visibility stay in `session_navigation`. The engine never
 imports this module; the wheel never ships it.
 
 Verified against (stale-checkout warning: the local Hermes reference
@@ -41,7 +41,7 @@ Decisions recorded here (first-version scope):
 - `branch_scope` is `"unknown"`: Hermes exposes no exact branch API
   to the plugin, so no full fork isolation is claimed. A compression
   rotation issues a new `session_id`, which naturally starts a fresh
-  scope: hidden state never carries over silently.
+  scope: compacted state never carries over silently.
 - `transform_tool_result` is NOT used: stored conversation history is
   never rewritten, only the outgoing request copy.
 - Logs carry counts, item IDs, and error codes only, never result
@@ -56,17 +56,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .handlers import hide as _engine_hide
+from .handlers import compact as _engine_compact
 from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
-from .handlers import unhide as _engine_unhide
+from .handlers import restore as _engine_restore
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
-from context_hide.model import Scope
-from context_hide.engine import ContextHideEngine
-from context_hide.openai_compatible import OpenAICompatibleTransport
-from context_hide.summary import ModelSummarizer, SummarizerConfig
-from context_hide.transport import Summarizer, SummarizerError
+from session_navigation.model import Scope
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.openai_compatible import OpenAICompatibleTransport
+from session_navigation.summary import ModelSummarizer, SummarizerConfig
+from session_navigation.transport import Summarizer, SummarizerError
 from .schemas import ADAPTER_ID, BRANCH_SCOPE, SOURCE
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def _default_count_llm_middlewares() -> int:
     registration order -- each callback receives the previous callback's
     payload, and the last dict returned under ``request`` is what the provider
     sees. So a later middleware can overwrite our replacement and we can
-    overwrite theirs; the chain does not by itself guarantee a single hide
+    overwrite theirs; the chain does not by itself guarantee a single compact
     owner.
 
     This probe therefore only reports how many OTHER callbacks exist. The
@@ -103,7 +103,7 @@ def _default_count_llm_middlewares() -> int:
 class PluginState:
     """Live per-registration plugin state (one per Hermes process load)."""
 
-    engine: ContextHideEngine = field(default_factory=ContextHideEngine)
+    engine: SessionNavigationEngine = field(default_factory=SessionNavigationEngine)
     summarizer: Summarizer | None = None
     store: SessionTranscriptStore = field(default_factory=SessionTranscriptStore)
     presentations: PresentationRegistry = field(default_factory=PresentationRegistry)
@@ -129,7 +129,7 @@ def _make_configured_summarizer(ctx: Any) -> Summarizer | None:
     if mode == "rules":
         return None
     if mode != "llm":
-        logger.warning("context-hide summarizer disabled error_code=invalid_mode")
+        logger.warning("session-navigation summarizer disabled error_code=invalid_mode")
         return None
 
     base_url = setting("base_url", "")
@@ -138,18 +138,18 @@ def _make_configured_summarizer(ctx: Any) -> Summarizer | None:
     max_input_bytes = setting("max_input_bytes", 12_288)
     max_output_tokens = setting("max_output_tokens", 384)
     if not isinstance(base_url, str) or not base_url.strip() or not isinstance(model, str) or not model.strip():
-        logger.warning("context-hide summarizer disabled error_code=invalid_configuration")
+        logger.warning("session-navigation summarizer disabled error_code=invalid_configuration")
         return None
     for value in (timeout_seconds, max_input_bytes, max_output_tokens):
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            logger.warning("context-hide summarizer disabled error_code=invalid_configuration")
+            logger.warning("session-navigation summarizer disabled error_code=invalid_configuration")
             return None
 
     try:
         transport = OpenAICompatibleTransport(base_url)
     except SummarizerError as exc:
         logger.warning(
-            "context-hide summarizer disabled error_code=%s", exc.reason)
+            "session-navigation summarizer disabled error_code=%s", exc.reason)
         return None
     return ModelSummarizer(
         generate=transport.generate,
@@ -182,10 +182,10 @@ def _dump(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def make_hide_handler(state: PluginState) -> Callable[..., str]:
-    """Build the `hide_context` tool handler bound to this registration."""
+def make_compact_handler(state: PluginState) -> Callable[..., str]:
+    """Build the `compact_context` tool handler bound to this registration."""
 
-    def hide_context(args: Any, session_id: str = "", **_extra: Any) -> str:
+    def compact_context(args: Any, session_id: str = "", **_extra: Any) -> str:
         if not state.is_enabled():
             return _dump({"ok": False, "error": "disabled"})
         target = args.get("tool_call_id") if isinstance(args, dict) else None
@@ -194,7 +194,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
-        result = _engine_hide(
+        result = _engine_compact(
             state.engine, state.store, scope, target.strip(),
             summarizer=state.summarizer,
         )
@@ -203,7 +203,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
-        state.presentations.record_hidden(
+        state.presentations.record_compacted(
             scope.scope_key(), result.plan.item_id, original_bytes)
         return _dump({
             "ok": True,
@@ -211,12 +211,12 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             "visibility_version": result.plan.visibility_version,
         })
 
-    return hide_context
+    return compact_context
 
 def make_summarize_handler(state: PluginState) -> Callable[..., str]:
-    """Build the `summarize_context` tool handler bound to this registration."""
+    """Build the `summarize_session` tool handler bound to this registration."""
 
-    def summarize_context(args: Any, session_id: str = "", **_extra: Any) -> str:
+    def summarize_session(args: Any, session_id: str = "", **_extra: Any) -> str:
         if not state.is_enabled():
             return _dump({"ok": False, "error": "disabled"})
         if state.summarizer is None:
@@ -234,7 +234,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
-        state.presentations.record_hidden(
+        state.presentations.record_compacted(
             scope.scope_key(), result.plan.item_id, original_bytes)
         return _dump({
             "ok": True,
@@ -243,13 +243,13 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
             "compaction_source": "llm",
         })
 
-    return summarize_context
+    return summarize_session
 
 
 def make_list_handler(state: PluginState) -> Callable[..., str]:
-    """Build the `list_context_items` tool handler bound to this registration."""
+    """Build the `list_session_items` tool handler bound to this registration."""
 
-    def list_context_items(args: Any = None, session_id: str = "", **_extra: Any) -> str:
+    def list_session_items(args: Any = None, session_id: str = "", **_extra: Any) -> str:
         if not state.is_enabled():
             return _dump({"ok": False, "error": "disabled"})
         query = ""
@@ -269,21 +269,21 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
             (item["display_number"], item["item_id"])
             for item in items if item["display_number"] is not None
         ])
-        hidden_count = sum(item["visibility"] == "compacted" for item in items)
+        compacted_count = sum(item["visibility"] == "compacted" for item in items)
         prefix = "검색 조건에 맞는" if query else "현재"
-        message = f"{prefix} 숨겨진 항목 {hidden_count}건" if hidden_count else f"{prefix} 숨겨진 항목 없음"
+        message = f"{prefix} 숨겨진 항목 {compacted_count}건" if compacted_count else f"{prefix} 숨겨진 항목 없음"
         return _dump({
             "ok": True, "count": len(items), "items": items,
-            "hidden_count": hidden_count, "message": message,
+            "compacted_count": compacted_count, "message": message,
         })
 
-    return list_context_items
+    return list_session_items
 
 
-def make_unhide_handler(state: PluginState) -> Callable[..., str]:
-    """Build the `unhide_context` tool handler bound to this registration."""
+def make_restore_handler(state: PluginState) -> Callable[..., str]:
+    """Build the `restore_context` tool handler bound to this registration."""
 
-    def unhide_context(args: Any, session_id: str = "", **_extra: Any) -> str:
+    def restore_context(args: Any, session_id: str = "", **_extra: Any) -> str:
         if not state.is_enabled():
             return _dump({"ok": False, "error": "disabled"})
         target = args.get("item_id") if isinstance(args, dict) else None
@@ -297,7 +297,7 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
         if resolve_error is not None:
             # Fail closed on number references: never guess a target.
             return _dump({"ok": False, "error": resolve_error})
-        result = _engine_unhide(state.engine, scope, resolved or "")
+        result = _engine_restore(state.engine, scope, resolved or "")
         if not result.ok or result.item is None:
             return _dump({"ok": False, "error": result.error or "not_found"})
         state.presentations.mark_visible(scope.scope_key(), result.item.item_id)
@@ -307,7 +307,7 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
             "visibility_version": result.item.version,
         })
 
-    return unhide_context
+    return restore_context
 
 
 def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
@@ -341,7 +341,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 stored, skipped, _error = state.store.record_request(
                     scope.scope_key(), api_mode, request)
                 logger.debug(
-                    "context-hide coexistence: recorded %d results, skipped %d, "
+                    "session-navigation coexistence: recorded %d results, skipped %d, "
                     "request unchanged", len(stored), len(skipped))
                 return {
                     "request": copy.deepcopy(request),
@@ -355,7 +355,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             if not reason:
                 reason = f"applied {len(applied)}, skipped {len(skipped)}"
             logger.debug(
-                "context-hide middleware: %s (found %s)",
+                "session-navigation middleware: %s (found %s)",
                 reason, step["trace"].get("found", 0))
             return {
                 "request": step["request"],
@@ -365,7 +365,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
         except Exception as exc:
             # Fail open: Hermes logs and continues with the original request.
             logger.warning(
-                "context-hide middleware fail-open: %s", type(exc).__name__)
+                "session-navigation middleware fail-open: %s", type(exc).__name__)
     return on_llm_request
 
 

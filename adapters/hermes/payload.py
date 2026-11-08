@@ -33,7 +33,7 @@ class FoundResult:
 
 @dataclass(frozen=True)
 class SkippedEntry:
-    """A payload entry examined but not offered for hiding."""
+    """A payload entry examined but not offered for compacting."""
 
     host_handle: dict[str, Any]
     reason: str

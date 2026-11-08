@@ -2,7 +2,7 @@
 
 Why this exists: the host process (Hermes) does not have ``cachetools``
 installed, and adding a runtime dependency to a shared interpreter is not an
-option for a plugin. ``context_hide.store`` needs exactly one thing from
+option for a plugin. ``session_navigation.store`` needs exactly one thing from
 cachetools — a size- and time-bounded LRU mapping with a TTU (time-to-use)
 expiry — so this module implements that one contract with the standard library
 only.

@@ -1,4 +1,4 @@
-"""S3 synthetic tests: session record + hide/list/unhide + middleware flow.
+"""S3 synthetic tests: session record + compact/list/restore + middleware flow.
 
 No live Hermes, no network. Synthetic provider-format requests only.
 """
@@ -8,8 +8,8 @@ from __future__ import annotations
 import json
 
 from _adapter_loader import hermes_adapter as _load_hermes_adapter
-from context_hide.engine import ContextHideEngine
-from context_hide.model import Scope
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import Scope
 
 _adapter = _load_hermes_adapter()
 handlers = _adapter.handlers
@@ -68,15 +68,15 @@ def test_allowlist_filters_and_rejects():
     else:
         raise AssertionError("expected unsupported_tool")
     try:
-        filter_invocation("hide_context", {"tool_call_id": "call_1"})
+        filter_invocation("compact_context", {"tool_call_id": "call_1"})
     except AdapterRejected as exc:
         assert exc.code == "internal_target"
     else:
         raise AssertionError("expected internal_target")
 
 
-def test_codex_hide_then_two_requests_stay_hidden_then_unhide():
-    engine = ContextHideEngine()
+def test_codex_compact_then_two_requests_stay_compacted_then_restore():
+    engine = SessionNavigationEngine()
     store = SessionTranscriptStore()
     scope = _scope("s3-codex")
     body = _long_body()
@@ -87,10 +87,10 @@ def test_codex_hide_then_two_requests_stay_hidden_then_unhide():
     assert step1["applied"] == []
     assert first == before
 
-    hidden = handlers.hide(engine, store, scope, "call_1")
-    assert hidden.ok is True
-    assert hidden.plan is not None
-    item_id = hidden.plan.item_id
+    compacted = handlers.compact(engine, store, scope, "call_1")
+    assert compacted.ok is True
+    assert compacted.plan is not None
+    item_id = compacted.plan.item_id
 
     step2 = handlers.middleware_step(engine, store, scope, "codex_responses",
                                      _codex_request(body))
@@ -108,7 +108,7 @@ def test_codex_hide_then_two_requests_stay_hidden_then_unhide():
     assert len(items) == 1
     assert items[0]["item_id"] == item_id
 
-    restored = handlers.unhide(engine, scope, item_id)
+    restored = handlers.restore(engine, scope, item_id)
     assert restored.ok is True
 
     step4 = handlers.middleware_step(engine, store, scope, "codex_responses",
@@ -117,37 +117,37 @@ def test_codex_hide_then_two_requests_stay_hidden_then_unhide():
     assert step4["request"]["input"][1]["output"] == body
 
 
-def test_chat_hide_and_unhide_exact():
-    engine = ContextHideEngine()
+def test_chat_compact_and_restore_exact():
+    engine = SessionNavigationEngine()
     store = SessionTranscriptStore()
     scope = _scope("s3-chat")
     body = _long_body()
 
     handlers.middleware_step(engine, store, scope, "chat_completions",
                               _chat_request(body))
-    hidden = handlers.hide(engine, store, scope, "call_2")
-    assert hidden.ok is True
-    assert hidden.plan is not None
+    compacted = handlers.compact(engine, store, scope, "call_2")
+    assert compacted.ok is True
+    assert compacted.plan is not None
 
     step = handlers.middleware_step(engine, store, scope, "chat_completions",
                                     _chat_request(body))
-    assert step["applied"] == [hidden.plan.item_id]
+    assert step["applied"] == [compacted.plan.item_id]
     assert step["request"]["messages"][0] == {"role": "user", "content": "please read the file"}
     assert step["request"]["messages"][2]["content"] != body
 
-    handlers.unhide(engine, scope, hidden.plan.item_id)
+    handlers.restore(engine, scope, compacted.plan.item_id)
     again = handlers.middleware_step(engine, store, scope, "chat_completions",
                                      _chat_request(body))
     assert again["applied"] == []
     assert again["request"]["messages"][2]["content"] == body
 
 
-def test_hide_not_found_ambiguous_and_unsupported():
-    engine = ContextHideEngine()
+def test_compact_not_found_ambiguous_and_unsupported():
+    engine = SessionNavigationEngine()
     store = SessionTranscriptStore()
     scope = _scope("s3-edge")
 
-    missing = handlers.hide(engine, store, scope, "call_missing")
+    missing = handlers.compact(engine, store, scope, "call_missing")
     assert missing.ok is False and missing.error == "not_found"
 
     dup_body_a = _long_body()
@@ -161,7 +161,7 @@ def test_hide_not_found_ambiguous_and_unsupported():
         ]
     }
     handlers.middleware_step(engine, store, scope, "codex_responses", dup)
-    ambiguous = handlers.hide(engine, store, scope, "call_d")
+    ambiguous = handlers.compact(engine, store, scope, "call_d")
     assert ambiguous.ok is False and ambiguous.error == "ambiguous"
 
     evil = {
@@ -172,12 +172,12 @@ def test_hide_not_found_ambiguous_and_unsupported():
         ]
     }
     handlers.middleware_step(engine, store, _scope("s3-evil"), "codex_responses", evil)
-    rejected = handlers.hide(engine, store, _scope("s3-evil"), "call_e")
+    rejected = handlers.compact(engine, store, _scope("s3-evil"), "call_e")
     assert rejected.ok is False and rejected.error == "unsupported_tool"
 
 
 def test_middleware_unsupported_mode_leaves_request():
-    engine = ContextHideEngine()
+    engine = SessionNavigationEngine()
     store = SessionTranscriptStore()
     scope = _scope("s3-unsupported")
     payload = {"messages": [{"role": "user", "content": "hello"}]}
@@ -206,7 +206,7 @@ def test_session_bounds_ttl_and_capacity():
     }
     kept, _, _ = store.record_request(scope_a.scope_key(), "codex_responses", two_calls)
     assert len(kept) == 1
-    assert kept[0].call_id == "call_2"  # newest result stays: recent targets remain hideable
+    assert kept[0].call_id == "call_2"  # newest result stays: recent targets remain compactable
     store.record_request(scope_b.scope_key(), "codex_responses", _codex_request("body b"))
     store.record_request(scope_c.scope_key(), "codex_responses", _codex_request("body c"))
     assert len(store) == 2

@@ -13,7 +13,7 @@ from typing import Any
 
 ALLOWED_TOOLS = ("terminal", "read_file", "search_files")
 
-INTERNAL_TOOLS = ("hide_context", "list_context_items", "unhide_context")
+INTERNAL_TOOLS = ("compact_context", "list_session_items", "restore_context")
 
 FIELDS: dict[str, set[str]] = {
     "terminal": {"command", "workdir"},

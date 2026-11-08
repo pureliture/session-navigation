@@ -1,14 +1,14 @@
-# M1 milestones: Hermes 세션에 context-hide 연결
+# M1 milestones: Hermes 세션에 session-navigation 연결
 
-> **Goal (approved plan, quoted):** context-hide를 Hermes의 요청 전송 단계에 연결하고, 승인된 `daedalus` 또는 `default` 중 한 프로필에서만 숨김·조회·복원과 비대상 프로필 무영향을 검증한다.
+> **Goal (approved plan, quoted):** session-navigation를 Hermes의 요청 전송 단계에 연결하고, 승인된 `daedalus` 또는 `default` 중 한 프로필에서만 숨김·조회·복원과 비대상 프로필 무영향을 검증한다.
 
 ## Status
 
 - **Selected contract:** `agentic-execution` (사용자 명시 선택, 2026-10-11).
-- **Plan:** `~/.hermes/profiles/atlas/workspace/.hermes/plans/2026-10-11_104747-context-hide-hermes-profile-pilot.md`
+- **Plan:** `~/.hermes/profiles/atlas/workspace/.hermes/plans/2026-10-11_104747-session-navigation-hermes-profile-pilot.md`
 - **Approved scope (user, 2026-10-11):** 구현·설치·활성화 진행. 적용 프로필은 `daedalus` 또는 `default` 중 하나. Atlas·다른 프로필 자동 확대 없음. Daedalus는 활성 후보이며, `default`는 추가 대상이 아닌 대체 후보로 남긴다. 프로필 확정은 사용자의 다음 지시가 필요할 수 있다.
 - **Authority boundary (unchanged):** 프로필 선택 변경, main 병합, pull request 생성, 전체 gateway 재시작, 브리지 재배포, 과금, 데이터 유실, 비가역 변경은 중단하고 승인을 요청한다. Non-goals: 양쪽 프로필 동시 적용, `atlas`/기타 프로필 적용, 유료 서비스, 외부 DB, LFM 요약기 본체 연결.
-- **Result (2026-10-12):** pilot COMPLETE — S1–S6 all DONE. Feature enabled in `default` only; commits local-only (no push/PR). Handoff: workspace `artifacts/2026-10-11/context-hide-hermes-pilot/final-result.md`.
+- **Result (2026-10-12):** pilot COMPLETE — S1–S6 all DONE. Feature enabled in `default` only; commits local-only (no push/PR). Handoff: workspace `artifacts/2026-10-11/session-navigation-hermes-pilot/final-result.md`.
 
 ## Slices
 
@@ -40,26 +40,26 @@
   `test_count_middlewares_counts_others_not_self`), and the integration test's
   sole-middleware fixture set to 0.
 - **Regression after the change:** 161 passed, 4 skipped, twice (0.67s / 0.65s),
-  exit 0. Wheel still builds (`Successfully built context_hide-0.1.0-py3-none-any.whl`).
+  exit 0. Wheel still builds (`Successfully built session_navigation-0.1.0-py3-none-any.whl`).
 - **Direct end-to-end drive through the plugin's own middleware** (project venv,
   real plugin root, real handler objects): first transmission keeps the original
-  body; after `hide_context` the second transmission carries the replacement
-  (4180 → 757 bytes, contains the item id); after `unhide_context` the body rides
+  body; after `compact_context` the second transmission carries the replacement
+  (4180 → 757 bytes, contains the item id); after `restore_context` the body rides
   again byte-identical. No provider was contacted.
 
 ## Prior slice evidence — S1 DONE
 
 - Branch/worktree: `atlas/hermes-plugin-pilot-20261011` at
-  `~/.hermes/profiles/atlas/workspace/.worktrees/context-hide-hermes-pilot`,
+  `~/.hermes/profiles/atlas/workspace/.worktrees/session-navigation-hermes-pilot`,
   created from `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`.
 - **Manifest (real host parser):** `hermes_cli.plugins_manifest.parse_manifest_file`
-  accepted `plugin.yaml` → `key=context-hide`, `name=context-hide`,
-  `kind=standalone`, `provides_tools=[hide_context, list_context_items, unhide_context]`,
+  accepted `plugin.yaml` → `key=session-navigation`, `name=session-navigation`,
+  `kind=standalone`, `provides_tools=[compact_context, list_session_items, restore_context]`,
   `manifest_version=1 <= 2`. `provides_tools` is informational only; tools are
   registered in code through `ctx.register_tool`.
 - **Register export (real loader path):** the plugin root loads by file path
   (the way `_load_directory_module` does), exports `register(ctx)`, and `register`
-  wires exactly `hide_context`, `list_context_items`, `unhide_context` plus one
+  wires exactly `compact_context`, `list_session_items`, `restore_context` plus one
   `llm_request` middleware.
 - **Default off:** with no settings, every tool returns
   `{"ok": false, "error": "disabled"}` and the middleware returns `None` — nothing
@@ -67,13 +67,13 @@
 - **Enabled isolation:** with `enabled=true` and one middleware, the caller's
   request dict is never mutated; the first transmission still carries the original
   body; the second carries the short replacement (smaller, contains `item_id`);
-  `list` leaks no original body; after `unhide` the body rides again byte-identical.
+  `list` leaks no original body; after `restore` the body rides again byte-identical.
   Scope is isolated by profile and by session (different profile/session →
   `not_found`, no cross-scope restore).
 - **No host internals:** loading the plugin root imports no `agent.*`,
   `hermes_cli.*`, or `tools.*` module.
 - **Wheel:** `python -m build --wheel` succeeded; the wheel contains
-  `context_hide_plugin_root/__init__.py`, `context_hide_plugin_root/plugin.yaml`,
+  `session_navigation_plugin_root/__init__.py`, `session_navigation_plugin_root/plugin.yaml`,
   the engine, and the adapter package.
 - **Regression:** `pytest -q --ignore=tests/test_model.py --ignore=tests/test_summary_validation.py`
   → 160 passed, 4 skipped, twice (0.81s / 0.57s), exit 0.
@@ -87,13 +87,13 @@
 hatchling's `sources` remap is incompatible with editable installs (editables
 issue #20), and the repo has no committed `uv.lock`. Working around this by
 patching `uv.lock` or hand-building the venv was **not** done — it would have
-hidden the real packaging defect. The wheel build path is verified instead.
+compacted the real packaging defect. The wheel build path is verified instead.
 
 ## Design amendments recorded (requirements-preserving)
 
 1. **Adapter import name.** The wheel cannot rename `adapters/hermes` without
    breaking editable installs, so the plugin root resolves the adapter through a
-   small fallback chain (`hermes.plugin`, then `context_hide_hermes.plugin`, then
+   small fallback chain (`hermes.plugin`, then `session_navigation_hermes.plugin`, then
    a path load). Required behaviour and non-goals unchanged.
 2. **`provides_tools` is documentation, not behaviour.** Verified against the host
    parser: registration happens in `register()` via `ctx.register_tool`. The test
@@ -105,10 +105,10 @@ hidden the real packaging defect. The wheel build path is verified instead.
   `tools_and_tests/probe_plugin_manager.py` copies only `__init__.py` +
   `plugin.yaml` into a temp home and runs the installed
   `hermes_cli.plugins.PluginManager.discover_and_load()` with
-  `plugins.entries.context-hide.settings.enabled: true`. Result:
+  `plugins.entries.session-navigation.settings.enabled: true`. Result:
   `loaded=True, enabled=True, deferred=False`, module imported as
-  `hermes_plugins.context_hide`, `register` callable,
-  `tools_registered=['hide_context','list_context_items','unhide_context']`,
+  `hermes_plugins.session_navigation`, `register` callable,
+  `tools_registered=['compact_context','list_session_items','restore_context']`,
   `llm_request` middlewares `1`, **VERDICT PASS** (twice).
 - **Default-off on the real registry:** with the settings entry absent the same
   load registers the tools and middleware, and the registered middleware returns
@@ -116,11 +116,11 @@ hidden the real packaging defect. The wheel build path is verified instead.
 - **Enabled end-to-end through the real registry and the real middleware
   chain** (no provider contacted):
   1. first transmission keeps the original body,
-  2. `hide_context` → `ok`, item `item_2c6fa15a34a3cfbb`,
+  2. `compact_context` → `ok`, item `item_2c6fa15a34a3cfbb`,
   3. second transmission replaced (4180 → 757 bytes, contains the item id),
   4. `original_payload` pristine,
-  5. `list_context_items` count 1, leaks no original body,
-  6. `unhide_context` ok,
+  5. `list_session_items` count 1, leaks no original body,
+  6. `restore_context` ok,
   7. restored byte-identical.
 - **Interpreter note:** the Hermes-managed environment has ruamel.yaml but not
   cachetools; the project venv has cachetools but not ruamel. The probe ran with
@@ -137,7 +137,7 @@ touches live operator state, so it stops for approval:
 
 - **Which profile?** `daedalus` (recommended) or `default`. Only one.
 - **Install path.** Native directory plugin under that profile's
-  `~/.hermes/profiles/<name>/plugins/context-hide/` (or `~/.hermes/plugins/` for
+  `~/.hermes/profiles/<name>/plugins/session-navigation/` (or `~/.hermes/plugins/` for
   default), copied from this candidate — no pip install, no entry point, no
   shared-environment change.
 - **Enable posture.** Installed but `settings.enabled: false` until S5 starts,
@@ -148,7 +148,7 @@ touches live operator state, so it stops for approval:
   credential.
 
 Branch state: `atlas/hermes-plugin-pilot-20261011` at
-`~/.hermes/profiles/atlas/workspace/.worktrees/context-hide-hermes-pilot`,
+`~/.hermes/profiles/atlas/workspace/.worktrees/session-navigation-hermes-pilot`,
 base `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`. Uncommitted, no push.
 
 ## Stop conditions
@@ -164,31 +164,31 @@ base `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`. Uncommitted, no push.
   "fix(hermes): pin the engine and adapter inside the deployed plugin", which
   fixes the vendor `sys.path` defect found during install and makes the repo
   mirror the deployed tree byte-for-byte.
-- **Install:** directory plugin at `~/.hermes/plugins/context-hide/`
+- **Install:** directory plugin at `~/.hermes/plugins/session-navigation/`
   containing `__init__.py` (register entry point), `plugin.yaml`, and pinned
-  `vendor/context_hide/` + `vendor/context_hide_hermes/` copies. No pip install,
+  `vendor/session_navigation/` + `vendor/session_navigation_hermes/` copies. No pip install,
   no entry point, no shared-environment change.
 - **Allow-list:** `hermes -p default config set plugins.enabled` added
-  `context-hide` to the existing three. Backup kept at
-  `~/.hermes/config.yaml.bak-pre-context-hide-20261011`.
-- **Feature posture:** `plugins.entries.context-hide.settings.enabled: false`
+  `session-navigation` to the existing three. Backup kept at
+  `~/.hermes/config.yaml.bak-pre-session-navigation-20261011`.
+- **Feature posture:** `plugins.entries.session-navigation.settings.enabled: false`
   (verified via `hermes -p default config get`), so no live session can rewrite a
   request yet.
 - **Real default-profile load:** `discovered=True, enabled=True`, module
-  `hermes_plugins.context_hide`, `register` callable,
-  `tools_registered=['hide_context','list_context_items','unhide_context']`,
+  `hermes_plugins.session_navigation`, `register` callable,
+  `tools_registered=['compact_context','list_session_items','restore_context']`,
   `llm_request` middlewares `1`, and the three pre-existing user plugins still
   load.
 - **Inert when off:** with the setting absent/false the registered middleware
   leaves the body unchanged and the tools report `disabled`.
 - **Enabled end-to-end on the real registry** (no provider contacted): first
-  transmission keeps the original body; `hide_context` ok; second transmission
-  replaced 4180 → 757 bytes; `unhide_context` ok; restored byte-identical;
+  transmission keeps the original body; `compact_context` ok; second transmission
+  replaced 4180 → 757 bytes; `restore_context` ok; restored byte-identical;
   turning the setting back off makes it inert again.
 - **Non-target profiles unchanged:** `daedalus`, `atlas`, `ariadne`, `metis`,
   `plutus`, `tyche` keep their previous `plugins.enabled` values.
 - **Install-time defect found and fixed:** the first installed root put the
-  vendor PACKAGE directories on `sys.path`, so `import context_hide` failed and
+  vendor PACKAGE directories on `sys.path`, so `import session_navigation` failed and
   the host reported "has no register() function". The parent `vendor/` directory
   is the correct entry. The repository root and `vendor/` now mirror the
   installed tree byte-for-byte.
@@ -197,29 +197,29 @@ base `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`. Uncommitted, no push.
 
 - **Live session:** `20261011_233013_544841` (default profile, model
   `step-5-preview-free` via opencode-go), resumed with the three tool steps.
-  Trace: `hide=ok list=1 unhide=ok`; a second resume repeated the same
-  hide→list→unhide cycle with the same result.
-- **Defect found by the first live attempt:** `hide_context` returned
+  Trace: `compact=ok list=1 restore=ok`; a second resume repeated the same
+  compact→list→restore cycle with the same result.
+- **Defect found by the first live attempt:** `compact_context` returned
   `verification_failed`. Cause: real host tool results ride as single-line JSON
   envelopes (`read_file`: `{"content": "1|..\n2|.."}` with ESCAPED newlines;
   `terminal`: `{"output": ".."}`), and the rule selector works line by line — it
   can never excerpt one long escaped line. Bridge precedent for decoding first:
   `openai_compatible_bridge/context_compaction.py` (`json.loads(raw)`).
 - **Fix (engine, shared by every consumer):** new `summary.selectable_text()` +
-  `strip_consecutive_numbering()`; `engine.hide()` now selects the baseline and
+  `strip_consecutive_numbering()`; `engine.compact()` now selects the baseline and
   rule-side required evidence from the decoded view, while identity, hashing,
   the stored original, and the payload replacement keep the raw string. LFM path
   and unknown JSON shapes are untouched (fail-open stays).
 - **RED → GREEN:** `tests/test_envelope_rule_selection.py` (3 tests) failed on
   the old code (`artifacts/envelope-red.log`), passes now
   (`artifacts/envelope-green.log`).
-- **Deployed-plugin drive (no provider):** hide ok → second transmission
-  1395 → 1161 bytes with the item id → list count 1 → unhide ok → restored
+- **Deployed-plugin drive (no provider):** compact ok → second transmission
+  1395 → 1161 bytes with the item id → list count 1 → restore ok → restored
   byte-identical.
 - **Real request-dump evidence (27 dumps, two full cycles):** cycle 1 — 15
-  dumps carry the raw 3795-byte envelope; after `hide_context` the next 3
-  dumps carry the 1071-byte replacement (`[hidden:item_67076f438c7213b6]` +
-  excerpts); after `unhide_context` the raw 3795 bytes ride again. Cycle 2
+  dumps carry the raw 3795-byte envelope; after `compact_context` the next 3
+  dumps carry the 1071-byte replacement (`[compacted:item_67076f438c7213b6]` +
+  excerpts); after `restore_context` the raw 3795 bytes ride again. Cycle 2
   repeated the pattern (3 raw → 2 replacement → raw again). Across all 27
   dumps: 20 raw / 5 replacement; both cycles restore byte-identically
   (SHA-256 `c25d838803eb8a78e359b025e6aca9e92754adbb13c6b8d6be16608aa3144619`
@@ -230,38 +230,38 @@ base `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`. Uncommitted, no push.
 - **Regression:** 164 passed, 4 skipped, twice, exit 0
   (`artifacts/envelope-full-3.log`, `artifacts/envelope-full-4.log`).
 - **Host-env support fix riding along:** `store.py` falls back to the pinned
-  `context_hide._tlru.TLRUCache` when the host interpreter lacks `cachetools`;
+  `session_navigation._tlru.TLRUCache` when the host interpreter lacks `cachetools`;
   `src/` and `vendor/` are byte-identical and all three docs trees match the
   deployed plugin.
 
 ## Active slice evidence — S6 DONE (rollback, re-activation, handoff)
 
 - **Feature-off rollback (fresh session):** with
-  `plugins.entries.context-hide.settings.enabled=false` and the plugin
-  disabled, session `20261012_003252_f59c4f` sees no hide tools
+  `plugins.entries.session-navigation.settings.enabled=false` and the plugin
+  disabled, session `20261012_003252_f59c4f` sees no compact tools
   (`tool_describe` → `not_found`) and its `read_file` result rides the request
-  RAW (4 dumps, zero `[hidden:` markers). Reply: `S6 tool=missing read=ok`.
-  Probe: `context_hide loaded: False`, registry/selected empty, catalog 55
-  (vs 58 enabled), CLI platform toolset without `context_hide`
+  RAW (4 dumps, zero `[compacted:` markers). Reply: `S6 tool=missing read=ok`.
+  Probe: `session_navigation loaded: False`, registry/selected empty, catalog 55
+  (vs 58 enabled), CLI platform toolset without `session_navigation`
   (`artifacts/s6-probe-disabled.log`).
 - **Re-activation (approved target only):** re-enabled via
-  `plugins enable context-hide --no-allow-tool-override` +
+  `plugins enable session-navigation --no-allow-tool-override` +
   `settings.enabled true`; probe matches the pre-test state again
   (`artifacts/s6-probe-reenabled.log` == `artifacts/s6-probe-before.log`,
   catalog 58). First re-check session `20261012_004012_07ef5f` hit a
   tool-argument validation error; the retry `20261012_004054_29eb72` resolves
   the tool — reply `S6R tool=found`.
 - **Third full live cycle after re-activation:** resumed session
-  `20261011_233013_544841` → `DONE2 hide=ok list=1 unhide=ok`; dumps
+  `20261011_233013_544841` → `DONE2 compact=ok list=1 restore=ok`; dumps
   `004304 RAW → 004307/004311 REPLACEMENT → 004314 RAW`; restore
   byte-identical (raw SHA-256 `c25d8388…4619` unchanged; replacement 1071 B,
   SHA-256 `bcc59b33…e7d3`). Session totals: 31 dumps = 22 raw / 7 replacement
   / 2 pre-read (`artifacts/dump-accounting.txt`).
 - **Original history unchanged:** the stored `read_file` message in `state.db`
-  is still the raw 3795-byte envelope; the only `[hidden:` strings in stored
-  messages are inside the plugin's own `list_context_items` outputs (expected).
+  is still the raw 3795-byte envelope; the only `[compacted:` strings in stored
+  messages are inside the plugin's own `list_session_items` outputs (expected).
 - **Non-target profiles unchanged:** daedalus/atlas/tyche/metis/plutus/ariadne
-  have zero context-hide config or plugin dirs; the default config diff vs the
+  have zero session-navigation config or plugin dirs; the default config diff vs the
   pre-feature backup is exactly the three intended keys (model, plugin,
   toolset) plus the two CLI-normalized keys from re-enable
   (`allow_tool_override: false`, empty `disabled: []`).
@@ -273,14 +273,14 @@ base `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`. Uncommitted, no push.
   success chain is session 233013 (31) + S6 sessions (4+5+3=12). Day pair
   total 104.
 - **Handoff:** `final-result.md` in the workspace
-  (`artifacts/2026-10-11/context-hide-hermes-pilot/`); commits remain
+  (`artifacts/2026-10-11/session-navigation-hermes-pilot/`); commits remain
   local — push/PR and any other profile stay out of scope.
 
 ## A-plan slice: 사람용 확인·복원 규약 — DONE (2026-10-13, local)
 
 - **Scope:** `docs/hermes-human-supervision.md` (규약·수동 시나리오),
   README 링크, 어댑터 도구 설명 개정, 정적 시스템 안내(487자,
-  `context-hide.human-supervision`), 목록 메타데이터(`presentation.py`),
+  `session-navigation.human-supervision`), 목록 메타데이터(`presentation.py`),
   `tests/test_hermes_human_supervision.py` 8건, `tools/probe_supervision.py`.
 - **Commits (local):** `7fd4968` docs → `97b954f` feat → probe+milestones 커밋
   (이 문서를 포함한 커밋; `git log` 참조).
@@ -291,9 +291,9 @@ base `main` `8e85a4a4d0ee28e24e4884f62191aae966c90619`. Uncommitted, no push.
   (hatchling 없음, 기존 스킵).
 - **Real PluginManager probe (`tools/probe_supervision.py`): VERDICT PASS** —
   임시 `HERMES_HOME`에서 실제 매니저가 도구 3종 + `llm_request` 1개 +
-  섹션(575자)을 로드, hide → list(`hidden_count=1`, `display_number=1`,
-  `original_bytes_size=8879`, `hidden_at=…Z`) → `unhide("1번")`이 그 목록의
-  1번 항목으로 해석되어 `hidden_count=0` 확인.
+  섹션(575자)을 로드, compact → list(`compacted_count=1`, `display_number=1`,
+  `original_bytes_size=8879`, `compacted_at=…Z`) → `restore("1번")`이 그 목록의
+  1번 항목으로 해석되어 `compacted_count=0` 확인.
 - **번호 참조는 모델 기억에 의존하지 않음(코드 해석):** 사용자가 "N번"이라고
   하면 어댑터가 마지막 목록 결과의 번호 스냅샷으로 해석한다. 실패는
   fail-closed(`no_recent_list`, `unknown_display_number`). 자연어 연결의

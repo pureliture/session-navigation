@@ -1,15 +1,15 @@
 """Human-supervision display metadata for the Hermes adapter (A-plan).
 
-The engine stores items, but it has no wall-clock "hidden at" time and no
-hide order. This module keeps that *display-only* metadata in process
+The engine stores items, but it has no wall-clock "compacted at" time and no
+compact order. This module keeps that *display-only* metadata in process
 memory, scope-bound, and never duplicates original bodies:
 
-- ``hidden_order``: per-scope counter of hide transitions (newest first
+- ``compaction_order``: per-scope counter of compact transitions (newest first
   when listed). Not a stable ID.
-- ``hidden_at``: UTC wall-clock of the latest hide transition. A re-hide
-  of an already-hidden item keeps the earlier timestamp; a hide after an
-  unhide refreshes it (it is a new transition).
-- ``original_bytes_size``: UTF-8 size of the original at hide time.
+- ``compacted_at``: UTC wall-clock of the latest compact transition. A re-compact
+  of an already-compacted item keeps the earlier timestamp; a compact after an
+  restore refreshes it (it is a new transition).
+- ``original_bytes_size``: UTF-8 size of the original at compact time.
 - ``summary_line``: derived from the stored excerpt lines, never from a
   new model call.
 
@@ -63,11 +63,11 @@ def summary_line_from_excerpts(excerpt_lines: Iterable[str]) -> str:
 
 @dataclass
 class Presentation:
-    """Display-only metadata for one hidden item."""
+    """Display-only metadata for one compacted item."""
 
     item_id: str
-    hidden_order: int
-    hidden_at: str
+    compaction_order: int
+    compacted_at: str
     original_bytes_size: int
     last_visibility: str = "compacted"
 
@@ -81,13 +81,13 @@ class PresentationRegistry:
         self._next_order: dict[str, int] = {}
         self._views: dict[str, list[tuple[int, str]]] = {}
 
-    def record_hidden(
+    def record_compacted(
         self,
         scope_key: str,
         item_id: str,
         original_bytes_size: int,
     ) -> None:
-        """Record a hide transition; refresh only after a visible period."""
+        """Record a compact transition; refresh only after a visible period."""
         with self._lock:
             entries = self._entries.setdefault(scope_key, {})
             existing = entries.get(item_id)
@@ -98,14 +98,14 @@ class PresentationRegistry:
             self._next_order[scope_key] = order
             entries[item_id] = Presentation(
                 item_id=item_id,
-                hidden_order=order,
-                hidden_at=_utc_now_iso(),
+                compaction_order=order,
+                compacted_at=_utc_now_iso(),
                 original_bytes_size=original_bytes_size,
                 last_visibility="compacted",
             )
 
     def mark_visible(self, scope_key: str, item_id: str) -> None:
-        """Record an unhide; the hide timestamp and order are retained."""
+        """Record an restore; the compact timestamp and order are retained."""
         with self._lock:
             entry = self._entries.get(scope_key, {}).get(item_id)
             if entry is not None:
@@ -167,11 +167,11 @@ class PresentationRegistry:
 
 
 def _sort_key(item: dict[str, Any]) -> tuple[int, int, int, str]:
-    hidden = item.get("visibility") == "compacted"
-    order = item.get("hidden_order")
+    compacted = item.get("visibility") == "compacted"
+    order = item.get("compaction_order")
     known = isinstance(order, int)
     return (
-        0 if hidden else 1,
+        0 if compacted else 1,
         0 if known else 1,
         -order if known else 0,
         str(item.get("item_id", "")),
@@ -182,10 +182,10 @@ def decorate_items(
     items: list[dict[str, Any]],
     snapshot: dict[str, Presentation],
 ) -> list[dict[str, Any]]:
-    """Add display fields, sort (newest hide first), and number the hidden.
+    """Add display fields, sort (newest compact first), and number the compacted.
 
     Restored records keep their display metadata (so the history stays
-    readable) but carry ``display_number: None`` and sort after hidden
+    readable) but carry ``display_number: None`` and sort after compacted
     items. Unknown-order entries sort last by item id; no value is ever
     invented.
     """
@@ -196,8 +196,8 @@ def decorate_items(
         item["original_bytes_size"] = (
             entry.original_bytes_size if entry is not None else None
         )
-        item["hidden_at"] = entry.hidden_at if entry is not None else None
-        item["hidden_order"] = entry.hidden_order if entry is not None else None
+        item["compacted_at"] = entry.compacted_at if entry is not None else None
+        item["compaction_order"] = entry.compaction_order if entry is not None else None
         item["display_number"] = None
         item["summary_line"] = summary_line_from_excerpts(
             item.get("excerpt_lines") or [])

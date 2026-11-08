@@ -1,13 +1,13 @@
 """Shared compaction decision logic used by engine and store paths."""
 from __future__ import annotations
 
-from context_hide.policy import (
+from session_navigation.policy import (
     excerpts_are_exact,
     render_compaction,
     required_evidence_lines,
     verified_facts,
 )
-from context_hide.summary import validate_summary_text
+from session_navigation.summary import validate_summary_text
 
 
 def evaluate_compaction(
@@ -39,7 +39,7 @@ def evaluate_compaction(
                 return None, None, "verification_failed"
             choice = baseline
         else:
-            from context_hide.model import SpanChoice
+            from session_navigation.model import SpanChoice
             choice = SpanChoice(required, "llm", summary)
     else:
         choice = baseline

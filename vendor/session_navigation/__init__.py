@@ -1,6 +1,6 @@
-"""Context Hide common engine package."""
-from context_hide.engine import ContextHideEngine
-from context_hide.model import (
+"""Session Navigation common engine package."""
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import (
     ContextItem,
     EngineConfig,
     ItemMetadata,
@@ -13,7 +13,7 @@ from context_hide.model import (
     compute_invocation_digest,
     compute_sha256,
 )
-from context_hide.policy import (
+from session_navigation.policy import (
     RuleSpanSelector,
     check_refusal_reason,
     excerpts_are_exact,
@@ -26,8 +26,8 @@ from context_hide.policy import (
     validate_evidence_retention,
     verified_facts,
 )
-from context_hide.store import MemoryContextStore
-from context_hide.summary import (
+from session_navigation.store import MemoryContextStore
+from session_navigation.summary import (
     ModelSummarizer,
     SummarizerConfig,
     is_lossless_encoded,
@@ -37,7 +37,7 @@ from context_hide.summary import (
     validate_summary_text,
     verify_exit_claims,
 )
-from context_hide.transport import (
+from session_navigation.transport import (
     OnCall,
     Summarizer,
     SummarizerError,
@@ -47,7 +47,7 @@ from context_hide.transport import (
 __version__ = "0.1.0"
 
 __all__ = [
-    "ContextHideEngine",
+    "SessionNavigationEngine",
     "ContextItem",
     "EngineConfig",
     "ItemMetadata",
@@ -92,11 +92,11 @@ __all__ = [
 def __getattr__(name: str):
     """Resolve deprecated model-specific names lazily."""
     if name == "LFMSummarizer":
-        from context_hide.summary import __getattr__ as summary_getattr
+        from session_navigation.summary import __getattr__ as summary_getattr
 
         return summary_getattr(name)
     if name == "LFMUnavailable":
-        from context_hide.transport import __getattr__ as transport_getattr
+        from session_navigation.transport import __getattr__ as transport_getattr
 
         return transport_getattr(name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -17,18 +17,18 @@ from typing import Any
 from .allowlist import AdapterRejected, filter_invocation
 from .payload import UNSUPPORTED_API_MODE, apply_replacements
 from .session import SessionTranscriptStore
-from context_hide.engine import ContextHideEngine
-from context_hide.model import (
+from session_navigation.engine import SessionNavigationEngine
+from session_navigation.model import (
     MutationResult,
     Scope,
     ToolResultRecord,
     compute_invocation_digest,
 )
-from context_hide.transport import Summarizer
+from session_navigation.transport import Summarizer
 
 
-def hide(
-    engine: ContextHideEngine,
+def compact(
+    engine: SessionNavigationEngine,
     store: SessionTranscriptStore,
     scope: Scope,
     tool_call_id: str,
@@ -36,7 +36,7 @@ def hide(
     status: str = "ok",
     summarizer: Summarizer | None = None,
 ) -> MutationResult:
-    """Hide one transmitted tool result found via the session record."""
+    """Compact one transmitted tool result found via the session record."""
     if not isinstance(tool_call_id, str) or not tool_call_id.strip():
         return MutationResult(ok=False, error="missing_tool_call_id")
     entries = store.lookup(scope.scope_key(), tool_call_id.strip())
@@ -63,11 +63,11 @@ def hide(
         host_handle=entry.host_handle,
     )
     options_omitted = bool(omitted)
-    return engine.hide_sync(scope, record, summarizer=summarizer, options_omitted=options_omitted)
+    return engine.compact_sync(scope, record, summarizer=summarizer, options_omitted=options_omitted)
 
 
 def summarize(
-    engine: ContextHideEngine,
+    engine: SessionNavigationEngine,
     store: SessionTranscriptStore,
     scope: Scope,
     tool_call_id: str,
@@ -106,23 +106,23 @@ def summarize(
 
 
 def list_records(
-    engine: ContextHideEngine, scope: Scope, query: str = ""
+    engine: SessionNavigationEngine, scope: Scope, query: str = ""
 ) -> list[dict[str, Any]]:
-    """List hidden item metadata without originals or commands."""
+    """List compacted item metadata without originals or commands."""
     return [item.to_dict() for item in engine.list_items(scope, query)]
 
 
-def unhide(
-    engine: ContextHideEngine, scope: Scope, item_id: str
+def restore(
+    engine: SessionNavigationEngine, scope: Scope, item_id: str
 ) -> MutationResult:
     """Mark one item visible again without rerunning tools."""
     if not isinstance(item_id, str) or not item_id.strip():
         return MutationResult(ok=False, error="not_found")
-    return engine.unhide(scope, item_id.strip())
+    return engine.restore(scope, item_id.strip())
 
 
 def middleware_step(
-    engine: ContextHideEngine,
+    engine: SessionNavigationEngine,
     store: SessionTranscriptStore,
     scope: Scope,
     api_mode: str,
@@ -132,7 +132,7 @@ def middleware_step(
     stored, skipped, record_error = store.record_request(
         scope.scope_key(), api_mode, payload)
     trace: dict[str, Any] = {
-        "source": "context-hide-hermes",
+        "source": "session-navigation-hermes",
         "api_mode": api_mode,
         "found": len(stored),
         "skipped": len(skipped),

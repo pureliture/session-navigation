@@ -55,7 +55,7 @@ def _load_root_by_path():
     """Import the repo root the way ``_load_directory_module`` does."""
     import importlib.util
 
-    name = "context_hide_plugin_root_host_test"
+    name = "session_navigation_plugin_root_host_test"
     spec = importlib.util.spec_from_file_location(
         name, REPO / "__init__.py", submodule_search_locations=[str(REPO)]
     )
@@ -97,11 +97,11 @@ def test_host_manifest_parser_accepts_this_repository(host_modules) -> None:
         root / "plugin.yaml", root, "user", ""
     )
     assert manifest is not None, "the installed Hermes parser rejected plugin.yaml"
-    assert manifest.key == "context-hide"
-    assert manifest.name == "context-hide"
+    assert manifest.key == "session-navigation"
+    assert manifest.name == "session-navigation"
     assert manifest.kind == "standalone"
     assert set(manifest.provides_tools or []) == {
-        "hide_context", "list_context_items", "unhide_context",
+        "compact_context", "list_session_items", "restore_context",
     }
     schema = manifest.config_schema
     assert schema["summary_mode"]["type"] == "str"
@@ -122,10 +122,10 @@ def test_host_loader_imports_plugin_root_and_calls_register() -> None:
     ctx = _HostCtx(profile="daedalus")
     state = module.register(ctx)
     assert state is not None
-    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context"}
+    assert set(ctx.tools) == {"compact_context", "list_session_items", "restore_context"}
     assert list(ctx.middlewares) == ["llm_request"]
     for name, entry in ctx.tools.items():
-        assert entry["toolset"] == "context_hide"
+        assert entry["toolset"] == "session_navigation"
         assert entry["schema"]["name"] == name
         assert callable(entry["handler"])
 
@@ -135,7 +135,7 @@ def test_register_does_not_import_host_internals() -> None:
     module = _load_root_by_path()
     before = set(sys.modules)
     module.__dict__.pop("register", None)
-    del sys.modules["context_hide_plugin_root_host_test"]
+    del sys.modules["session_navigation_plugin_root_host_test"]
     _load_root_by_path()
     imported = set(sys.modules) - before
     banned = {
@@ -204,10 +204,10 @@ def test_enabled_rewrites_only_the_outgoing_copy() -> None:
     )
     assert first["request"]["messages"][1]["content"] != first["request"]["messages"][1]["content"].replace(body, "")
 
-    hidden = json.loads(ctx.tools["hide_context"]["handler"](
+    compacted = json.loads(ctx.tools["compact_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-on"))
-    assert hidden["ok"] is True, hidden
-    item_id = hidden["item_id"]
+    assert compacted["ok"] is True, compacted
+    item_id = compacted["item_id"]
 
     second = mw(**_mw_kwargs(_chat_request(body), "sess-on"))
     replaced = second["request"]["messages"][1]["content"]
@@ -216,24 +216,24 @@ def test_enabled_rewrites_only_the_outgoing_copy() -> None:
     )
     assert len(replaced.encode("utf-8")) < len(body.encode("utf-8"))
 
-    listed = json.loads(ctx.tools["list_context_items"]["handler"](
+    listed = json.loads(ctx.tools["list_session_items"]["handler"](
         {}, session_id="sess-on"))
     assert listed["ok"] is True and listed["count"] == 1
     assert listed["items"][0]["item_id"] == item_id
     assert body not in json.dumps(listed), "list must not leak the original body"
 
-    restored = json.loads(ctx.tools["unhide_context"]["handler"](
+    restored = json.loads(ctx.tools["restore_context"]["handler"](
         {"item_id": item_id}, session_id="sess-on"))
     assert restored["ok"] is True, restored
 
     third = mw(**_mw_kwargs(_chat_request(body), "sess-on"))
     assert third["request"]["messages"][1]["content"] == body, (
-        "after unhide the original body must ride again, byte-identical"
+        "after restore the original body must ride again, byte-identical"
     )
 
 
 def test_scope_is_isolated_by_profile_and_session() -> None:
-    """Separate Hermes processes must not share hidden-item identity.
+    """Separate Hermes processes must not share compacted-item identity.
 
     ``item_id`` is derived from the scope key, so two registrations with the
     same profile, session and body legitimately agree; the isolation that
@@ -248,9 +248,9 @@ def test_scope_is_isolated_by_profile_and_session() -> None:
     body = _long_body()
     for ctx, session in ((ctx_a, "sess-A"), (ctx_b, "sess-A")):
         ctx.middlewares["llm_request"][0](**_mw_kwargs(_chat_request(body), session))
-    hid_a = json.loads(ctx_a.tools["hide_context"]["handler"](
+    hid_a = json.loads(ctx_a.tools["compact_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-A"))
-    hid_b = json.loads(ctx_b.tools["hide_context"]["handler"](
+    hid_b = json.loads(ctx_b.tools["compact_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-A"))
     assert hid_a["ok"] is True and hid_b["ok"] is True
     assert hid_a["item_id"] != hid_b["item_id"], (
@@ -258,10 +258,10 @@ def test_scope_is_isolated_by_profile_and_session() -> None:
     )
 
     # The other registration must not resolve or restore this item.
-    cross = json.loads(ctx_b.tools["unhide_context"]["handler"](
+    cross = json.loads(ctx_b.tools["restore_context"]["handler"](
         {"item_id": hid_a["item_id"]}, session_id="sess-A"))
     assert cross["ok"] is False and cross["error"] == "not_found"
-    listed_b = json.loads(ctx_b.tools["list_context_items"]["handler"](
+    listed_b = json.loads(ctx_b.tools["list_session_items"]["handler"](
         {}, session_id="sess-A"))
     assert all(item["item_id"] != hid_a["item_id"] for item in listed_b["items"])
 
@@ -273,12 +273,12 @@ def test_scope_is_isolated_by_session() -> None:
     body = _long_body()
     ctx.middlewares["llm_request"][0](**_mw_kwargs(_chat_request(body), "sess-A"))
     ctx.middlewares["llm_request"][0](**_mw_kwargs(_chat_request(body), "sess-B"))
-    hid_a = json.loads(ctx.tools["hide_context"]["handler"](
+    hid_a = json.loads(ctx.tools["compact_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-A"))
     assert hid_a["ok"] is True
-    wrong_session = json.loads(ctx.tools["unhide_context"]["handler"](
+    wrong_session = json.loads(ctx.tools["restore_context"]["handler"](
         {"item_id": hid_a["item_id"]}, session_id="sess-B"))
     assert wrong_session["ok"] is False and wrong_session["error"] == "not_found"
-    listed_b = json.loads(ctx.tools["list_context_items"]["handler"](
+    listed_b = json.loads(ctx.tools["list_session_items"]["handler"](
         {}, session_id="sess-B"))
-    assert listed_b["count"] == 0, "sess-B has not hidden anything yet"
+    assert listed_b["count"] == 0, "sess-B has not compacted anything yet"

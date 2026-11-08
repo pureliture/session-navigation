@@ -7,8 +7,8 @@ from dataclasses import replace
 
 import pytest
 
-from context_hide.model import ContextItem, Scope
-from context_hide.store import MemoryContextStore
+from session_navigation.model import ContextItem, Scope
+from session_navigation.store import MemoryContextStore
 
 
 import time
@@ -18,7 +18,7 @@ def _sample_item(
     item_id: str = "item_123",
     tool_call_id: str = "call_1",
     original: str = "sample output",
-    compacted: str = "[hidden:item_123]\nsample output",
+    compacted: str = "[compacted:item_123]\nsample output",
     visibility: str = "compacted",
     version: int = 1,
     expires_at: float | None = None,
@@ -238,24 +238,24 @@ def test_store_cancellation_release():
     asyncio.run(scenario())
 
 
-def test_store_unhide_toggles_visibility_and_increments_version():
+def test_store_restore_toggles_visibility_and_increments_version():
     store = MemoryContextStore()
-    item = _sample_item(item_id="item_unhide", visibility="compacted", version=1)
-    store.put("scope_unhide", item)
+    item = _sample_item(item_id="item_restore", visibility="compacted", version=1)
+    store.put("scope_restore", item)
 
-    unhide_res = store.unhide("scope_unhide", "item_unhide")
-    assert unhide_res.ok and unhide_res.item is not None
-    assert unhide_res.item.visibility == "original"
-    assert unhide_res.item.version == 2
+    restore_res = store.restore("scope_restore", "item_restore")
+    assert restore_res.ok and restore_res.item is not None
+    assert restore_res.item.visibility == "original"
+    assert restore_res.item.version == 2
 
-    # Second unhide does not increment version if already original
-    unhide_res2 = store.unhide("scope_unhide", "item_unhide")
-    assert unhide_res2.ok and unhide_res2.item.version == 2
+    # Second restore does not increment version if already original
+    restore_res2 = store.restore("scope_restore", "item_restore")
+    assert restore_res2.ok and restore_res2.item.version == 2
 
 
-def test_store_unhide_nonexistent_returns_not_found():
+def test_store_restore_nonexistent_returns_not_found():
     store = MemoryContextStore()
-    res = store.unhide("scope_unknown", "item_unknown")
+    res = store.restore("scope_unknown", "item_unknown")
     assert not res.ok
     assert res.error == "not_found"
 
@@ -301,7 +301,7 @@ def test_store_thread_safety():
         item = _sample_item(item_id=f"item_{idx}", tool_call_id=f"call_{idx}")
         store.put(scope, item)
         store.get(scope, f"item_{idx}")
-        store.unhide(scope, f"item_{idx}")
+        store.restore(scope, f"item_{idx}")
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(worker, range(50)))

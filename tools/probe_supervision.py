@@ -8,10 +8,10 @@ throwaway ``HERMES_HOME`` that contains a full copy of this plugin directory
 2. registers nothing else; the real ``PluginContext`` validation applied to
    the static supervision section (id/position/max_chars) either accepts it or
    the probe records the host's refusal,
-3. exercises one full hide -> list -> unhide cycle through the registered
+3. exercises one full compact -> list -> restore cycle through the registered
    handlers and middleware callback, checking the new human-supervision
-   fields (``hidden_count``, ``display_number``, ``summary_line``,
-   ``original_bytes_size``, ``hidden_at``).
+   fields (``compacted_count``, ``display_number``, ``summary_line``,
+   ``original_bytes_size``, ``compacted_at``).
 
 No provider is contacted; nothing outside the temp home is written.
 
@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PLUGIN_ID = "context-hide"
+PLUGIN_ID = "session-navigation"
 SESSION = "probe-human-supervision"
 
 
@@ -61,9 +61,9 @@ def main() -> int:
     shutil.copytree(REPO / "vendor", plugin_dir / "vendor")
     (home / "config.yaml").write_text(
         "plugins:\n"
-        "  enabled: [context-hide]\n"
+        "  enabled: [session-navigation]\n"
         "  entries:\n"
-        "    context-hide:\n"
+        "    session-navigation:\n"
         "      settings:\n"
         "        enabled: true\n",
         encoding="utf-8",
@@ -89,31 +89,31 @@ def main() -> int:
     ok = (
         entry is not None
         and callable(getattr(getattr(entry, 'module', None), 'register', None))
-        and set(tools) == {"hide_context", "list_context_items", "unhide_context"}
+        and set(tools) == {"compact_context", "list_session_items", "restore_context"}
         and len(middlewares) == 1
-        and any(s.id == "context-hide.human-supervision" for s in sections)
+        and any(s.id == "session-navigation.human-supervision" for s in sections)
     )
-    section = next((s for s in sections if s.id == "context-hide.human-supervision"), None)
+    section = next((s for s in sections if s.id == "session-navigation.human-supervision"), None)
     if section is not None:
-        print(f"section tokens  : {[t for t in ('list_context_items', 'unhide_context') if t in section.content]}")
+        print(f"section tokens  : {[t for t in ('list_session_items', 'restore_context') if t in section.content]}")
         ok = ok and len(section.content) <= 1200
 
     if ok:
         from tools.registry import registry
 
         entries = {name: registry.get_entry(name) for name in (
-            "hide_context", "list_context_items", "unhide_context")}
+            "compact_context", "list_session_items", "restore_context")}
         missing = sorted(name for name, e in entries.items() if e is None)
         if missing:
             print(f"MISSING registry entries: {missing}")
             print("VERDICT         : FAIL")
             return 1
-        hide_entry = registry.get_entry("hide_context")
-        list_entry = registry.get_entry("list_context_items")
-        unhide_entry = registry.get_entry("unhide_context")
-        assert hide_entry is not None and list_entry is not None and unhide_entry is not None
-        hide, list_items, unhide = (
-            hide_entry.handler, list_entry.handler, unhide_entry.handler)
+        compact_entry = registry.get_entry("compact_context")
+        list_entry = registry.get_entry("list_session_items")
+        restore_entry = registry.get_entry("restore_context")
+        assert compact_entry is not None and list_entry is not None and restore_entry is not None
+        compact, list_items, restore = (
+            compact_entry.handler, list_entry.handler, restore_entry.handler)
         mw = middlewares[0]
         body = _body()
         before = _codex_request(body)
@@ -123,40 +123,40 @@ def main() -> int:
                    provider="probe", model="probe", task_id="t", turn_id="u",
                    api_request_id="r")
         ok = ok and before == snapshot and first is not None
-        hidden = json.loads(hide({"tool_call_id": "call_probe"}, session_id=SESSION))
-        print(f"hide            : {hidden}")
-        ok = ok and hidden.get("ok") is True
+        compacted = json.loads(compact({"tool_call_id": "call_probe"}, session_id=SESSION))
+        print(f"compact            : {compacted}")
+        ok = ok and compacted.get("ok") is True
 
         second = mw(request=_codex_request(body),
                     original_request=_codex_request(body), session_id=SESSION,
                     api_mode="codex_responses", provider="probe", model="probe",
                     task_id="t", turn_id="u", api_request_id="r")
         replaced = second["request"]["input"][1]["output"]
-        ok = ok and hidden["item_id"] in replaced and replaced != body
+        ok = ok and compacted["item_id"] in replaced and replaced != body
 
         listed = json.loads(list_items({"query": ""}, session_id=SESSION))
         item = listed["items"][0]
-        print(f"list            : hidden_count={listed['hidden_count']} "
+        print(f"list            : compacted_count={listed['compacted_count']} "
               f"message={listed['message']!r} count={listed['count']}")
         print(f"item fields     : display_number={item['display_number']} "
               f"original_bytes_size={item['original_bytes_size']} "
-              f"hidden_at={item['hidden_at']!r} "
+              f"compacted_at={item['compacted_at']!r} "
               f"summary_line={item['summary_line'][:40]!r}...")
-        ok = ok and listed["hidden_count"] == 1 and item["display_number"] == 1
+        ok = ok and listed["compacted_count"] == 1 and item["display_number"] == 1
         ok = ok and item["original_bytes_size"] == len(body.encode("utf-8"))
-        ok = ok and isinstance(item["hidden_at"], str) and item["hidden_at"].endswith("Z")
+        ok = ok and isinstance(item["compacted_at"], str) and item["compacted_at"].endswith("Z")
 
-        restored = json.loads(unhide({"item_id": "1번"}, session_id=SESSION))
+        restored = json.loads(restore({"item_id": "1번"}, session_id=SESSION))
         after = json.loads(list_items({"query": ""}, session_id=SESSION))
-        print(f"unhide('1번')   : {restored}")
-        print(f"after           : hidden_count={after['hidden_count']} "
+        print(f"restore('1번')   : {restored}")
+        print(f"after           : compacted_count={after['compacted_count']} "
               f"visibility={after['items'][0]['visibility']} "
               f"display_number={after['items'][0]['display_number']}")
         ok = ok and restored.get("ok") is True
-        if restored.get("item_id") != hidden["item_id"]:
+        if restored.get("item_id") != compacted["item_id"]:
             print("number reference resolved to a different item")
             ok = False
-        ok = ok and after["hidden_count"] == 0
+        ok = ok and after["compacted_count"] == 0
         ok = ok and after["items"][0]["visibility"] == "original"
         ok = ok and after["items"][0]["display_number"] is None
 
