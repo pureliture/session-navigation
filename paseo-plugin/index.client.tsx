@@ -2,9 +2,6 @@ import type { PluginClientContext, PluginScreenProps, PluginSidebarItemProps, Pl
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { SessionNavPanel } from "./client/sessionNavPanel";
 
-function Panel(props: PluginWorkspacePanelProps) {
-  return <SessionNavPanel {...props} />;
-}
 
 function Screen(props: PluginScreenProps) {
   const workspaceId = (props.params as { workspaceId?: string } | undefined)?.workspaceId ?? "";
@@ -22,13 +19,6 @@ function NavItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
 }
 
 export default function contribute(client: PluginClientContext) {
-  client.addWorkspacePanel({
-    id: "session-nav",
-    title: "Session navigation",
-    icon: "List",
-    locations: ["explorer"],
-    Component: Panel,
-  });
   client.addScreen({ id: "session-nav", title: "Session navigation", Component: Screen });
   client.addSidebarHeaderItem({ id: "session-nav", title: "Session navigation", Component: NavItem });
   client.addCommandCenterItem({
@@ -36,8 +26,8 @@ export default function contribute(client: PluginClientContext) {
     title: "Open session navigation",
     icon: "List",
     context: "workspace",
-    onSelect({ openPanel }) {
-      openPanel("session-nav");
+    onSelect({ openScreen }) {
+      openScreen({ screenId: "session-nav" });
     },
   });
   client.addSlashCommand({
@@ -45,8 +35,8 @@ export default function contribute(client: PluginClientContext) {
     description: "Open session navigation",
     argumentHint: "",
     context: "workspace",
-    async onSubmit({ openPanel }) {
-      openPanel("session-nav");
+    async onSubmit({ openScreen }) {
+      openScreen({ screenId: "session-nav" });
     },
   });
   return () => {};
