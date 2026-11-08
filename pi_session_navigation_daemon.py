@@ -106,6 +106,7 @@ class Daemon:
             if key in self.identities and self.identities[key] != record.invocation_digest:
                 return {"ok": False, "error": "invocation_conflict"}
             if method == "compact":
+                # hide path is rule-based only: the daemon summarizer is reserved for summarize.
                 result = self.engine.compact_sync(scope, record)
             elif self.summarizer is None:
                 return {"ok": False, "error": "summarizer_unavailable"}
@@ -123,6 +124,58 @@ class Daemon:
         if method == "restore":
             result = self.engine.restore(scope, params.get("item_id", ""))
             return {"ok": result.ok, "error": result.error, "item_id": result.item.item_id if result.item else None}
+        if method == "manage":
+            snapshot = self.snapshots.get(session)
+            if not snapshot or params.get("snapshot_id") != snapshot[0]:
+                return {"ok": False, "error": "unconfirmed_snapshot"}
+            action = params.get("action", "auto")
+            if action not in ("auto", "hide", "summarize"):
+                return {"ok": False, "error": "invalid_action"}
+            max_items = params.get("max_items", 20)
+            if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1 or max_items > 64:
+                return {"ok": False, "error": "invalid_max_items"}
+            if action == "summarize" and self.summarizer is None:
+                return {"ok": False, "error": "summarizer_unavailable"}
+            want = params.get("tool_call_ids")
+            records = list(snapshot[1].values())
+            if want is not None:
+                if not isinstance(want, list) or not all(isinstance(x, str) for x in want):
+                    return {"ok": False, "error": "invalid_tool_call_ids"}
+                wanted = {x for x in want if x}
+                records = [r for r in records if r.call_id in wanted]
+            items: list[dict[str, Any]] = []
+            for record in records[:max_items]:
+                key = (session, record.call_id, record.content_sha256)
+                if key not in self.identities and self.engine.store.get(scope, _item_id(scope.scope_key(), record.call_id, record.content_sha256)) is not None:
+                    items.append({"tool_call_id": record.call_id, "ok": False, "error": "identity_expired"})
+                    continue
+                if key in self.identities and self.identities[key] != record.invocation_digest:
+                    items.append({"tool_call_id": record.call_id, "ok": False, "error": "invocation_conflict"})
+                    continue
+                if action == "summarize" or (action == "auto" and self.summarizer is not None):
+                    if self.summarizer is None:
+                        items.append({"tool_call_id": record.call_id, "ok": False, "error": "summarizer_unavailable"})
+                        continue
+                    result = asyncio.run(self.engine.summarize(scope, record, self.summarizer))
+                    if result.ok and result.plan is not None:
+                        self.identities[key] = record.invocation_digest
+                        self.identities.move_to_end(key)
+                        items.append({"tool_call_id": record.call_id, "ok": True, "item_id": result.plan.item_id})
+                        continue
+                    if action == "summarize":
+                        items.append({"tool_call_id": record.call_id, "ok": False, "error": result.error or "not_found"})
+                        continue
+                result = self.engine.compact_sync(scope, record)
+                if result.ok and result.plan is not None:
+                    self.identities[key] = record.invocation_digest
+                    self.identities.move_to_end(key)
+                    items.append({"tool_call_id": record.call_id, "ok": True, "item_id": result.plan.item_id})
+                else:
+                    items.append({"tool_call_id": record.call_id, "ok": False, "error": result.error or "not_found"})
+            while len(self.identities) > 1024:
+                self.identities.popitem(last=False)
+            applied = sum(1 for row in items if row["ok"])
+            return {"ok": all(row["ok"] for row in items), "applied": applied, "failed": len(items) - applied, "items": items}
         return {"ok": False, "error": "unknown_method"}
 
 

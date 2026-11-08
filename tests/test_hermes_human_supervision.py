@@ -33,7 +33,7 @@ def _compact(state, call_id="call_1", body=None, session=SESSION):
         request=_request(original, call_id), session_id=session,
         api_mode="codex_responses",
     )
-    result = json.loads(plugin.make_compact_handler(state)(
+    result = json.loads(plugin.make_hide_handler(state)(
         {"tool_call_id": call_id}, session_id=session,
     ))
     assert result["ok"] is True, result
@@ -47,7 +47,7 @@ def _list(state, query="", session=SESSION):
 
 
 def _restore(state, item_id, session=SESSION):
-    return json.loads(plugin.make_restore_handler(state)(
+    return json.loads(plugin.make_unhide_handler(state)(
         {"item_id": item_id}, session_id=session,
     ))
 
@@ -207,7 +207,7 @@ def test_enabled_plugin_registers_static_supervision_section():
     assert section["max_chars"] == 1200
     text = section["content"]
     assert isinstance(text, str) and len(text) <= 1200
-    for token in ("list_session_items", "restore_context", "숨김"):
+    for token in ("list_context_items", "unhide_context", "숨김"):
         assert token in text, token
 
 
@@ -223,15 +223,15 @@ def test_section_registration_degrades_without_api_or_when_disabled():
 
 def test_tool_descriptions_route_human_list_and_restore_requests():
     sections = plugin.TOOL_SCHEMAS
-    list_desc = sections["list_session_items"]["description"]
-    restore_desc = sections["restore_context"]["description"]
+    list_desc = sections["list_context_items"]["description"]
+    restore_desc = sections["unhide_context"]["description"]
     assert "사용자" in list_desc and "보여" in list_desc
     assert "복원" in restore_desc and "item_id" in restore_desc
     assert "목록" in restore_desc
 
 
 def test_restore_description_routes_number_references_verbatim():
-    desc = plugin.TOOL_SCHEMAS["restore_context"]["description"]
+    desc = plugin.TOOL_SCHEMAS["unhide_context"]["description"]
     assert "번" in desc and "고정" in desc
     assert "복원 직전" in desc and "임의로" in desc
 

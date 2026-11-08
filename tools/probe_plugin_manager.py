@@ -76,7 +76,7 @@ def main() -> int:
         entry is not None
         and getattr(entry, "enabled", False)
         and callable(getattr(module, "register", None))
-        and set(tools) == {"compact_context", "list_session_items", "restore_context"}
+        and set(tools) == {"hide_context", "list_context_items", "unhide_context", "manage_context"}
         and len(middlewares) == 1
     )
     print(f"VERDICT         : {'PASS' if ok else 'FAIL'}")

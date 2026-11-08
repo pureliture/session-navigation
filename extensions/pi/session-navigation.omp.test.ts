@@ -15,10 +15,10 @@ test.skipIf(!omp)("실제 OMP에서 read 결과를 압축하고 다음 요청에
     const n = requests.length - 1;
     let delta: any; let finish = "tool_calls";
     if (n === 0) delta = { tool_calls: [{ index: 0, id: "read1", type: "function", function: { name: "read", arguments: JSON.stringify({ path: fixture }) } }] };
-    else if (n === 1) delta = { tool_calls: [{ index: 0, id: "compact1", type: "function", function: { name: "eval", arguments: JSON.stringify({ language: "js", code: 'console.log(await tool.compact_context({tool_call_id:"read1"}))', title: "compact" }) } }] };
+    else if (n === 1) delta = { tool_calls: [{ index: 0, id: "compact1", type: "function", function: { name: "eval", arguments: JSON.stringify({ language: "js", code: 'console.log(await tool.hide_context({tool_call_id:"read1"}))', title: "compact" }) } }] };
     else if (n === 2) {
       const id = JSON.stringify(body.messages).match(/item_[0-9a-f]+/)?.[0];
-      delta = { tool_calls: [{ index: 0, id: "restore1", type: "function", function: { name: "eval", arguments: JSON.stringify({ language: "js", code: `console.log(await tool.restore_context({item_id:"${id}"}))`, title: "restore" }) } }] };
+      delta = { tool_calls: [{ index: 0, id: "restore1", type: "function", function: { name: "eval", arguments: JSON.stringify({ language: "js", code: `console.log(await tool.unhide_context({item_id:"${id}"}))`, title: "restore" }) } }] };
     } else { delta = { content: "done" }; finish = "stop"; }
     const chunk = (data: any) => `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, ...data }] })}\n\n`;
     return new Response(chunk({ delta, finish_reason: null }) + chunk({ delta: {}, finish_reason: finish }) + "data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } });

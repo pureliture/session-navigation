@@ -156,17 +156,19 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	async function tool(method: string, params: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal) {
 		const session = sessionId(ctx);
 		if (!session) return { ok: false, error: "invalid_session" };
-		if ((method === "compact" || method === "summarize") && (!candidate?.confirmed || candidate.session !== session)) return { ok: false, error: "unconfirmed_snapshot" };
-		return rpc(method, { ...params, session_id: session, snapshot_id: candidate?.token }, method === "summarize" ? 25_000 : 5000, signal);
+		if ((method === "compact" || method === "summarize" || method === "manage") && (!candidate?.confirmed || candidate.session !== session)) return { ok: false, error: "unconfirmed_snapshot" };
+		return rpc(method, { ...params, session_id: session, snapshot_id: candidate?.token }, method === "summarize" || method === "manage" ? 25_000 : 5000, signal);
 	}
 	function result(value: Reply) { return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value }; }
-	pi.registerTool({ name: "compact_context", label: "Compact Context", description: "Compact one confirmed, eligible read result.", parameters: z.object({ tool_call_id: z.string() }),
+	pi.registerTool({ name: "hide_context", label: "Hide Context", description: "Hide one confirmed, eligible read result using rule-based excerpts only (never calls a model).", parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("compact", params, ctx, signal)); } });
-	pi.registerTool({ name: "summarize_session", label: "Summarize Session", description: "Summarize one confirmed, eligible read result with a configured local model.", parameters: z.object({ tool_call_id: z.string() }),
+	pi.registerTool({ name: "summarize_context", label: "Summarize Context", description: "Hide one confirmed, eligible read result with a configured model summary. Requires a configured summarizer.", parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("summarize", params, ctx, signal)); } });
-	pi.registerTool({ name: "restore_context", label: "Restore Context", description: "Restore a compacted result.", parameters: z.object({ item_id: z.string() }),
+	pi.registerTool({ name: "unhide_context", label: "Unhide Context", description: "Unhide a hidden result; the stored summary is kept for re-hiding.", parameters: z.object({ item_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("restore", params, ctx, signal)); } });
-	pi.registerTool({ name: "list_session_items", label: "List Session Items", description: "List compacted results in this session.", parameters: z.object({ query: z.string().optional() }),
+	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "List hidden results in this session.", parameters: z.object({ query: z.string().optional() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("list_items", params, ctx, signal)); } });
+	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Automatically hide confirmed, eligible read results. action=auto prefers a model summary with rule fallback.", parameters: z.object({ tool_call_ids: z.array(z.string()).optional(), action: z.enum(["auto", "hide", "summarize"]).optional(), max_items: z.number().int().min(1).max(64).optional() }),
+		async execute(_id, params, signal, _update, ctx) { return result(await tool("manage", params, ctx, signal)); } });
 	pi.on("session_shutdown", async () => { candidate = null; if (proc) invalidate(proc, "shutdown"); });
 }

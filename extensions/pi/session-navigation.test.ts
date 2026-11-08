@@ -9,7 +9,8 @@ function setup(command = resolve(".venv/bin/session-navigation-daemon")) {
   process.env.SESSION_NAVIGATION_DAEMON = command;
   const events: Record<string, Function> = {};
   const tools: Record<string, any> = {};
-  const pi = { zod: { object: () => ({}), string: () => ({ optional: () => ({}) }) },
+  const chainable = () => ({ optional: () => ({}) });
+  const pi = { zod: { object: () => ({}), string: chainable, number: () => ({ int: () => ({ min: () => ({ max: chainable }) }) }), array: () => chainable(), enum: () => chainable() },
     on: (name: string, handler: Function) => { events[name] = handler; },
     registerTool: (tool: any) => { tools[tool.name] = tool; } };
   extension(pi as any);
@@ -27,15 +28,15 @@ test("실제 데몬으로 확인된 read 결과의 압축과 복원을 수행한
   const { events, tools } = setup(); const input = messages();
   try {
     expect(await events.context({ messages: input }, ctx)).toBeUndefined();
-    expect((await execute(tools.compact_context, { tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
-    const compact = await execute(tools.compact_context, { tool_call_id: "call-1" });
+    const compact = await execute(tools.hide_context, { tool_call_id: "call-1" });
     expect(compact.ok).toBe(true);
     const transformed = await events.context({ messages: input }, ctx);
     expect(transformed.messages[1].content[0].text).not.toBe(longText);
     expect(input[1].content[0].text).toBe(longText);
     expect(transformed.messages[1].details).toEqual({ preserved: true });
-    const restored = await execute(tools.restore_context, { item_id: compact.item_id });
+    const restored = await execute(tools.unhide_context, { item_id: compact.item_id });
     expect(restored.ok).toBe(true);
     expect(await events.context({ messages: input }, ctx)).toBeUndefined();
   } finally { await events.session_shutdown(); }
@@ -47,9 +48,9 @@ test("실패, 이미지, 중복 ID와 확인되지 않은 세션은 원본을 �
     for (const input of [messages(undefined, true), messages([{ type: "text", text: longText }, { type: "image", data: "abc" }]), [...messages(), messages()[1]]]) {
       expect(await events.context({ messages: input }, ctx)).toBeUndefined();
       await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
-      expect((await execute(tools.compact_context, { tool_call_id: "call-1" })).error).toBe("not_found");
+      expect((await execute(tools.hide_context, { tool_call_id: "call-1" })).error).toBe("not_found");
     }
-    expect((await execute(tools.compact_context, { tool_call_id: "call-1" }, { sessionManager: { getSessionId: () => "other" } })).error).toBe("unconfirmed_snapshot");
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" }, { sessionManager: { getSessionId: () => "other" } })).error).toBe("unconfirmed_snapshot");
     expect(await events.context({ messages: messages() }, {})).toBeUndefined();
   } finally { await events.session_shutdown(); }
 });
@@ -71,7 +72,7 @@ test("응답이 멈춘 데몬을 폐기하고 이전 snapshot을 승인하지 �
   try {
     expect(await events.context({ messages: messages() }, ctx)).toBeUndefined();
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
-    expect((await execute(tools.compact_context, { tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
     expect(await events.context({ messages: messages() }, ctx)).toBeUndefined();
   } finally {
     await events.session_shutdown(); globalThis.setTimeout = oldTimeout;
@@ -89,10 +90,10 @@ test("실행 중 취소하면 데몬과 snapshot을 함께 폐기한다", async 
     await events.context({ messages: messages() }, ctx);
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
     const controller = new AbortController();
-    const pending = tools.compact_context.execute("test", { tool_call_id: "call-1" }, controller.signal, undefined, ctx);
+    const pending = tools.hide_context.execute("test", { tool_call_id: "call-1" }, controller.signal, undefined, ctx);
     controller.abort();
     expect((await pending).details.error).toBe("cancelled");
-    expect((await execute(tools.compact_context, { tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
   } finally { await events.session_shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 

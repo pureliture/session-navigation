@@ -215,12 +215,12 @@ def render_compaction(
             + ("추가 실행 옵션은 요약 입력에서 생략됨\n" if options_omitted else "")
             + f"브리지 확인 사실: {canonical(facts)}\n"
             + f"필수 원문 증거:\n{excerpts}\n"
-            f"나머지 결과는 보관됨. 필요하면 restore_context({item_id})."
+            f"나머지 결과는 보관됨. 필요하면 unhide_context({item_id})."
         )
     return (
         f"[compacted:{item_id}]\n"
         f"{excerpts}\n"
-        f"나머지 결과는 보관됨. 필요하면 restore_context({item_id})."
+        f"나머지 결과는 보관됨. 필요하면 unhide_context({item_id})."
     )
 
 

@@ -28,4 +28,4 @@ export SESSION_NAVIGATION_MAX_INPUT_BYTES=12288  # optional
 export SESSION_NAVIGATION_MAX_OUTPUT_TOKENS=384  # optional
 ```
 
-설정하지 않으면 `summarize_session`은 `summarizer_unavailable`을 반환하며 `compact_context`는 사용할 수 있습니다.
+설정하지 않으면 `summarize_context`은 `summarizer_unavailable`을 반환하며 `hide_context`는 사용할 수 있습니다.

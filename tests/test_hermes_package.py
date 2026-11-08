@@ -70,9 +70,9 @@ def test_manifest_declares_opt_in_model_summarizer_settings() -> None:
 
 def test_manifest_declares_provided_tools_and_middleware() -> None:
     data = _parse_manifest()
-    # The plugin ships exactly three tools; the middleware is registered in code.
+    # The plugin ships exactly five tools; the middleware is registered in code.
     declared = set(data.get("provides_tools") or [])
-    assert declared == {"compact_context", "list_session_items", "restore_context"}, (
+    assert declared == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}, (
         f"manifest tools {sorted(declared)} must match the adapter TOOL_SCHEMAS"
     )
 
@@ -169,7 +169,7 @@ def test_plugin_registers_through_root_export_default_off() -> None:
     module = _load_plugin_root()
     ctx = _FakeCtx()
     state = module.register(ctx)
-    assert set(ctx.tools) == {"compact_context", "list_session_items", "restore_context"}
+    assert set(ctx.tools) == {"hide_context", "list_context_items", "unhide_context", "manage_context"}
     assert list(ctx.middlewares) == ["llm_request"]
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():

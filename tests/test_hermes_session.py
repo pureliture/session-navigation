@@ -68,7 +68,7 @@ def test_allowlist_filters_and_rejects():
     else:
         raise AssertionError("expected unsupported_tool")
     try:
-        filter_invocation("compact_context", {"tool_call_id": "call_1"})
+        filter_invocation("hide_context", {"tool_call_id": "call_1"})
     except AdapterRejected as exc:
         assert exc.code == "internal_target"
     else:

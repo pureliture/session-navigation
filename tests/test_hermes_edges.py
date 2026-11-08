@@ -74,8 +74,8 @@ def _mw(state, body: str, session: str, call_id: str = "call_1") -> dict:
 
 def test_compression_rotation_starts_fresh_scope():
     ctx, state = _enabled_pair()
-    compact = ctx.tools["compact_context"]["handler"]
-    restore = ctx.tools["restore_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
+    restore = ctx.tools["unhide_context"]["handler"]
     body = _long_body()
 
     _mw(state, body, "sess-before")
@@ -106,7 +106,7 @@ def test_compression_rotation_starts_fresh_scope():
 
 def test_subagent_sessions_stay_isolated():
     ctx, state = _enabled_pair()
-    compact = ctx.tools["compact_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
     body = _long_body()
 
     _mw(state, body, "sess-parent")
@@ -179,7 +179,7 @@ def test_disable_returns_to_original_and_reenable_applies():
     ctx = FakeCtx(config={"enabled": True})
     state = plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
-    compact = ctx.tools["compact_context"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
     body = _long_body()
     kwargs = dict(session_id="sess-toggle", api_mode="codex_responses")
 
@@ -203,8 +203,8 @@ def test_disable_returns_to_original_and_reenable_applies():
 
 def test_first_version_is_rule_only_no_external_call():
     ctx, state = _enabled_pair()
-    compact = ctx.tools["compact_context"]["handler"]
-    list_items = ctx.tools["list_session_items"]["handler"]
+    compact = ctx.tools["hide_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
     body = _long_body()
 
     plugin.make_middleware(state)(request=_codex_request(body),

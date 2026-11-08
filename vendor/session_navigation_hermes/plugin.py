@@ -3,7 +3,7 @@
 This is the host-process shim between Hermes and the pure helpers
 (`payload`, `session`, `handlers`). It owns everything host-specific:
 
-- tool registration (`compact_context`, `list_session_items`, `restore_context`)
+- tool registration (`hide_context`, `summarize_context`, `list_context_items`, `unhide_context`, `manage_context`)
 - the `llm_request` middleware (record -> plan -> apply on a copy)
 - scope derivation from host identifiers (never model arguments)
 - enabled-off default, coexistence record-only mode, fail-open errors
@@ -75,32 +75,34 @@ from .factories import (
     _default_count_llm_middlewares,
     _dump,
     _make_configured_summarizer,
-    make_compact_handler,
+    make_hide_handler,
     make_list_handler,
+    make_manage_handler,
     make_middleware,
     make_summarize_handler,
-    make_restore_handler,
+    make_unhide_handler,
     scope_for,
 )
 from .schemas import (
     ADAPTER_ID,
     BRANCH_SCOPE,
     BRIDGE_COLLISION_TOOLS,
-    COMPACT_TOOL,
+    HIDE_TOOL,
     LIST_TOOL,
+    MANAGE_TOOL,
     SUMMARIZE_TOOL,
     SUPERVISION_SECTION_ID,
     SUPERVISION_SECTION_MAX_CHARS,
     SUPERVISION_SECTION_TEXT,
     TOOL_SCHEMAS,
     TOOLSET,
-    RESTORE_TOOL,
+    UNHIDE_TOOL,
     bridge_should_yield,
     SOURCE,
 )
 
 def register(ctx: Any) -> PluginState:
-    """Hermes plugin entry point: register 3 tools + 1 middleware.
+    """Hermes plugin entry point: register tools + 1 middleware.
 
     The plugin starts disabled: tools report `disabled` and the
     middleware returns `None` (no recording, no rewriting) until the
@@ -126,11 +128,11 @@ def register(ctx: Any) -> PluginState:
         summarizer=_make_configured_summarizer(ctx),
     )
     ctx.register_tool(
-        name=COMPACT_TOOL,
+        name=HIDE_TOOL,
         toolset=TOOLSET,
-        schema=TOOL_SCHEMAS[COMPACT_TOOL],
-        handler=make_compact_handler(state),
-        description=TOOL_SCHEMAS[COMPACT_TOOL]["description"],
+        schema=TOOL_SCHEMAS[HIDE_TOOL],
+        handler=make_hide_handler(state),
+        description=TOOL_SCHEMAS[HIDE_TOOL]["description"],
     )
     if state.summarizer is not None:
         ctx.register_tool(
@@ -148,11 +150,18 @@ def register(ctx: Any) -> PluginState:
         description=TOOL_SCHEMAS[LIST_TOOL]["description"],
     )
     ctx.register_tool(
-        name=RESTORE_TOOL,
+        name=UNHIDE_TOOL,
         toolset=TOOLSET,
-        schema=TOOL_SCHEMAS[RESTORE_TOOL],
-        handler=make_restore_handler(state),
-        description=TOOL_SCHEMAS[RESTORE_TOOL]["description"],
+        schema=TOOL_SCHEMAS[UNHIDE_TOOL],
+        handler=make_unhide_handler(state),
+        description=TOOL_SCHEMAS[UNHIDE_TOOL]["description"],
+    )
+    ctx.register_tool(
+        name=MANAGE_TOOL,
+        toolset=TOOLSET,
+        schema=TOOL_SCHEMAS[MANAGE_TOOL],
+        handler=make_manage_handler(state),
+        description=TOOL_SCHEMAS[MANAGE_TOOL]["description"],
     )
     ctx.register_middleware("llm_request", make_middleware(state))
 
