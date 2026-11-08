@@ -1,11 +1,10 @@
 """OMP daemon."""
 from __future__ import annotations
-import asyncio
 import json, sys
 from collections import OrderedDict
 from typing import Any
 from session_navigation.db import DBError, DBFullError
-from session_navigation.engine import SessionNavigationEngine
+from session_navigation.engine import SessionNavigationEngine, _run_sync
 from session_navigation.model import Scope, ToolResultRecord, _item_id, compute_invocation_digest, compute_sha256, pair_unit_id
 from session_navigation.policy import is_destructive_command, required_evidence_lines
 from session_navigation.sqlite_store import SQLiteContextStore
@@ -95,8 +94,7 @@ class Daemon:
                 if not isinstance(result_position, int) or isinstance(result_position, bool):
                     return {"ok": False, "error": "invalid_record"}
                 if tool_name == "read":
-                    if (set(args.keys()) != {"path"}
-                            or not isinstance(args.get("path"), str)
+                    if (not isinstance(args.get("path"), str)
                             or not str(args.get("path")).strip()):
                         return {"ok": False, "error": "invalid_record"}
                 else:
@@ -129,8 +127,10 @@ class Daemon:
                 raise
             except Exception:
                 pass
+            evicted: list[str] = []
             while len(self.snapshots) > MAX_SCOPES:
-                self.snapshots.popitem(last=False)
+                key, _ = self.snapshots.popitem(last=False)
+                evicted.append(key)
             items_by_key = {}
             for item in self.store.items(scope):
                 items_by_key.setdefault((item.tool_call_id, item.content_sha256, item.invocation_digest or ""), item)
@@ -143,7 +143,10 @@ class Daemon:
                         "sha256": record.content_sha256,
                         "text": item.compacted,
                     })
-            return {"ok": True, "patches": patches}
+            out: dict[str, Any] = {"ok": True, "patches": patches}
+            if evicted:
+                out["evicted_snapshots"] = evicted
+            return out
 
         if method in ("compact", "summarize"):
             return self._compact_or_summarize(method, scope, session, params)
@@ -271,7 +274,7 @@ class Daemon:
                 async def summarize(self, original, required_evidence, on_call=None, *, invocation=None, context=None):
                     return {"summary": summary_text}
 
-            result = asyncio.run(self.engine.summarize(scope, record, _SuppliedSummarizer()))
+            result = _run_sync(self.engine.summarize(scope, record, _SuppliedSummarizer()))
         else:
             result = self.engine.compact_sync(scope, record)
 
@@ -349,7 +352,7 @@ class Daemon:
                     async def summarize(self, original, required_evidence, on_call=None, *, invocation=None, context=None):
                         return {"summary": summary_text}
 
-                result = asyncio.run(self.engine.summarize(scope, record, _SuppliedSummarizer()))
+                result = _run_sync(self.engine.summarize(scope, record, _SuppliedSummarizer()))
             else:
                 result = self.engine.compact_sync(scope, record)
 

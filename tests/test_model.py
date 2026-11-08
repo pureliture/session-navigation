@@ -83,6 +83,7 @@ def test_replacement_plan_immutability_and_echo():
         expected_content_sha256=compute_sha256("original"),
         replacement_text="[hidden:item_0123456789abcdef]\n...",
         visibility_version=1,
+        tool_call_id="call-1",
         host_handle=handle,
     )
     assert plan.item_id == "item_0123456789abcdef"
@@ -99,6 +100,7 @@ def test_mutation_result_variants():
         expected_content_sha256="abc",
         replacement_text="text",
         visibility_version=1,
+        tool_call_id="call-1",
     )
     success = MutationResult(ok=True, plan=plan)
     assert success.ok is True
@@ -204,6 +206,7 @@ def test_contracts_json_schema_compatibility():
         "expected_content_sha256": compute_sha256("output text"),
         "replacement_text": "[hidden:item_0123456789abcdef]\n...",
         "visibility_version": 1,
+        "tool_call_id": "call-1",
     }
     jsonschema.validate(sample_plan, schema_plan)
 
@@ -216,3 +219,26 @@ def test_contracts_json_schema_compatibility():
         "retryable": False,
     }
     jsonschema.validate(sample_error, schema_errors)
+
+def test_error_enum_covers_emitted_codes():
+    import re
+    root = Path(__file__).resolve().parent.parent
+    enum = set(json.load(open(root / "contracts" / "errors.json", encoding="utf-8"))["properties"]["error"]["enum"])
+    emitted: set[str] = set()
+    patterns = [
+        re.compile(r'"error":\s*"([a-z_]+)"'),
+        re.compile(r"'error':\s*'([a-z_]+)'"),
+        re.compile(r'error="([a-z_]+)"'),
+        re.compile(r"return \"([a-z_]+)\""),
+    ]
+    for base in ("src", "adapters"):
+        for path in (root / base).rglob("*.py"):
+            if "__pycache__" in str(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for pat in patterns:
+                emitted.update(pat.findall(text))
+    # Filter to snake_case codes actually used as error values (exclude prose).
+    emitted = {e for e in emitted if re.fullmatch(r"[a-z]+(_[a-z]+)*", e)}
+    missing = sorted(emitted - enum)
+    assert not missing, f"error codes emitted but missing from contracts/errors.json: {missing}"

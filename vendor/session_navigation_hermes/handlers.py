@@ -10,14 +10,12 @@ Tool flow (model calls): look the tool call ID up in the session record by
 scope + ID. Reject when absent or duplicated, otherwise call the engine.
 """
 
-import asyncio
-
 from typing import Any
 
 from .allowlist import AdapterRejected, filter_invocation
 from .payload import UNSUPPORTED_API_MODE, apply_replacements
 from .session import SessionTranscriptStore
-from session_navigation.engine import SessionNavigationEngine
+from session_navigation.engine import SessionNavigationEngine, _run_sync
 from session_navigation.model import (
     MutationResult,
     Scope,
@@ -103,7 +101,7 @@ def summarize(
         host_handle=entry.host_handle,
     )
     options_omitted = bool(omitted)
-    return asyncio.run(engine.summarize(scope, record, summarizer, options_omitted=options_omitted))
+    return _run_sync(engine.summarize(scope, record, summarizer, options_omitted=options_omitted))
 
 
 def list_records(

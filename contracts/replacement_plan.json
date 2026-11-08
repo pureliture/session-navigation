@@ -35,7 +35,8 @@
     "item_id",
     "expected_content_sha256",
     "replacement_text",
-    "visibility_version"
+    "visibility_version",
+    "tool_call_id"
   ],
   "additionalProperties": false
 }

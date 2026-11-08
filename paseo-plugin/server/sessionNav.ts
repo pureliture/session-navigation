@@ -218,11 +218,9 @@ export async function unhideItem(input: RpcInput<typeof unhideItemRpc>) {
   }
 }
 
-export async function summarizeItem(input: RpcInput<typeof summarizeItemRpc>) {
-  if (!input.summary_text || !input.summary_text.trim()) {
-    return { ok: false, error: "summarizer_unavailable" };
-  }
-  return hideItem({ scope_key: input.scope_key, item_id: input.item_id, expected_version: input.expected_version });
+export async function summarizeItem(_input: RpcInput<typeof summarizeItemRpc>) {
+  // D5: Paseo has no session model. Never report a rule hide as a summary.
+  return { ok: false, error: "summarizer_unavailable" };
 }
 
 export async function manageItems(input: RpcInput<typeof manageItemsRpc>) {

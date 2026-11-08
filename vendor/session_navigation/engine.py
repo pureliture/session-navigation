@@ -29,6 +29,17 @@ from session_navigation.summary import selectable_text, validate_summary_text
 from session_navigation.transport import Summarizer
 
 
+def _run_sync(coro):
+    """Run a coroutine from sync code, tolerating a running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 def _scope_key(scope):
     if hasattr(scope, 'scope_key') and callable(scope.scope_key):
         return str(scope.scope_key())
@@ -231,7 +242,7 @@ class SessionNavigationEngine:
         options_omitted: bool = False,
     ) -> MutationResult:
         """Synchronously compact content with an optional model and rule fallback."""
-        return asyncio.run(self._apply(
+        return _run_sync(self._apply(
             scope, record, summarizer=summarizer,
             options_omitted=options_omitted, allow_fallback=True,
         ))

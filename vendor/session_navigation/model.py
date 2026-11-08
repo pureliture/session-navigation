@@ -94,7 +94,7 @@ class ReplacementPlan:
     expected_content_sha256: str
     replacement_text: str
     visibility_version: int
-    tool_call_id: str = ""
+    tool_call_id: str
     host_handle: Any = None
 
 
