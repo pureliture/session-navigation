@@ -148,12 +148,88 @@ type NavigationOptions = {
   turnExpanded?: boolean;
 };
 
-function loadOlder(root: any, doc: any): void {
-  const scrollable = [root, ...Array.from(root.querySelectorAll("*"))].find((node: any) =>
+function chatScroller(root: any): any {
+  return [root, ...Array.from(root.querySelectorAll("*"))].find((node: any) =>
     node.scrollHeight > node.clientHeight) ?? root;
+}
+
+function emitScroll(scrollable: any, doc: any, type: "scroll" | "wheel"): void {
+  const Constructor = doc.defaultView?.[type === "wheel" ? "WheelEvent" : "Event"];
+  if (Constructor) scrollable.dispatchEvent?.(new Constructor(type, { bubbles: true, deltaY: -1 }));
+}
+
+type SearchBounds = { low?: number; high?: number; extent?: number };
+
+function seekMountedWindow(root: any, doc: any, rows: Row[], target: Row, bounds: SearchBounds): boolean {
+  const targetIndex = rows.findIndex((candidate) => candidate === target ||
+    (!!target.item_id && candidate.item_id === target.item_id) ||
+    (!!target.tool_call_id && candidate.tool_call_id === target.tool_call_id));
+  if (targetIndex < 0) return false;
+  const virtual = Array.from(root.querySelectorAll("[data-history-row-id][data-index]")) as any[];
+  let nodes = virtual.length ? virtual : Array.from(root.querySelectorAll(ROW)) as any[];
+  const viewport = root.getBoundingClientRect?.();
+  if (viewport) {
+    const nearby = nodes.filter((node) => {
+      const rect = node.getBoundingClientRect?.();
+      return rect && rect.bottom >= viewport.top && rect.top <= viewport.bottom;
+    });
+    if (nearby.length) nodes = nearby;
+  }
+  const mounted = nodes.flatMap((node) => {
+    const values = IDENTITY_ATTRIBUTES.map((attr) => node.getAttribute(attr)).filter(Boolean) as string[];
+    let index = rows.findIndex((candidate) => values.some((value) =>
+      [candidate.item_id, candidate.tool_call_id].some((id) => id && identityMatches(value, id))));
+    if (index < 0) {
+      const text = normalized(node.textContent ?? "");
+      let longest = 0;
+      rows.forEach((candidate, candidateIndex) => {
+        const needle = normalized(candidate.summary_line ?? "").slice(0, 36);
+        if (needle.length >= 4 && needle.length > longest && text.includes(needle)) {
+          index = candidateIndex;
+          longest = needle.length;
+        }
+      });
+    }
+    return index < 0 ? [] : [index];
+  });
+  if (!mounted.length) return false;
+  const first = Math.min(...mounted), last = Math.max(...mounted);
+  const older = targetIndex < (first + last) / 2;
+  const scrollable = chatScroller(root);
+  const extent = Math.max(0, scrollable.scrollHeight - scrollable.clientHeight);
+  if (!(extent > 0)) return false;
+  const style = doc.defaultView?.getComputedStyle?.(scrollable);
+  const negative = style?.flexDirection === "column-reverse" || scrollable.scrollTop < 0;
+  const inverted = !negative && (style?.transform === "scaleY(-1)" ||
+    /^matrix\([^,]+,[^,]+,[^,]+,\s*-1,/.test(style?.transform ?? ""));
+  const position = negative ? scrollable.scrollTop + extent :
+    inverted ? extent - scrollable.scrollTop : scrollable.scrollTop;
+  if (bounds.extent !== extent) { bounds.low = undefined; bounds.high = undefined; bounds.extent = extent; }
+  if (older && position <= 1) {
+    // A virtual index above zero means the old edge hasn't mounted yet, not that another page is needed.
+    return virtual.length > 0 && !virtual.some((node) => node.getAttribute("data-index") === "0");
+  }
+  if (!older && position >= extent - 1) return true;
+  if (older) bounds.high = position;
+  else bounds.low = position;
+  const gap = older ? first - targetIndex : targetIndex - last;
+  const step = scrollable.clientHeight * Math.max(0.8, Math.min(8, gap / Math.max(1, last - first + 1)));
+  const next = bounds.low !== undefined && bounds.high !== undefined
+    ? (bounds.low + bounds.high) / 2
+    : Math.max(0, Math.min(extent, position + (older ? -step : step)));
+  const top = negative ? next - extent : inverted ? extent - next : next;
+  // Reading intent prevents Paseo's follow-output anchor from snapping back to the live head.
+  emitScroll(scrollable, doc, "wheel");
+  if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top, behavior: "instant" });
+  else scrollable.scrollTop = top;
+  emitScroll(scrollable, doc, "scroll");
+  return true;
+}
+
+function loadOlder(root: any, doc: any): void {
+  const scrollable = chatScroller(root);
   const emit = (type: "scroll" | "wheel") => {
-    const Constructor = doc.defaultView?.[type === "wheel" ? "WheelEvent" : "Event"];
-    if (Constructor) scrollable.dispatchEvent?.(new Constructor(type, { bubbles: true, deltaY: -1 }));
+    emitScroll(scrollable, doc, type);
   };
   const reversed = doc.defaultView?.getComputedStyle?.(scrollable)?.flexDirection === "column-reverse" ||
     scrollable.scrollTop < 0;
@@ -190,15 +266,20 @@ export async function scrollToMessageInChat(
   if (!root) { options.onNotFound?.(); return false; }
   const now = options.now ?? Date.now;
   const deadline = now() + 60000;
-  const wait = options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 250)));
+  const wait = options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
   let lastAttempt = -Infinity;
+  const bounds: SearchBounds = {};
   while (version === navigationVersion) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
     if (version !== navigationVersion) return false;
     if (now() >= deadline) break;
-    if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 1000) {
-      loadOlder(root, doc);
-      lastAttempt = now();
+    if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 100) {
+      if (seekMountedWindow(root, doc, rows, row, bounds)) {
+        lastAttempt = now();
+      } else if (now() - lastAttempt >= 250) {
+        loadOlder(root, doc);
+        lastAttempt = now();
+      }
     }
     await wait();
   }

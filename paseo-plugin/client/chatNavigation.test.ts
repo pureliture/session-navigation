@@ -66,6 +66,62 @@ test("loads older history over multiple rounds in the chosen chat root", async (
   expect(notice).toBe(false);
 });
 
+for (const [start, targetIndex, inverted] of [[590, 300, false], [0, 300, false], [300, 500, false],
+  [590, 300, true], [300, 500, true]] as const) {
+  test(`virtualized window seeks ${start} -> ${targetIndex}, inverted=${inverted}, without paging`, async () => {
+    const root = new Element({ "data-testid": "agent-chat-scroll" });
+    const doc = new Element().add(root);
+    (doc as any).defaultView = { getComputedStyle: () => ({ flexDirection: inverted ? "column-reverse" : "column" }) };
+    const rows = Array.from({ length: 601 }, (_, i) => ({ ...row(`C_user_${i}`, "user"), summary_line: `Prompt ${i}` }));
+    root.scrollHeight = 60100;
+    root.clientHeight = 300;
+    const extent = root.scrollHeight - root.clientHeight;
+    root.scrollTop = inverted ? start * 100 - extent : start * 100;
+    const slot = new Element({ "data-testid": "older-history-slot" });
+    let paging = 0, steps = 0, clock = 0;
+    slot.scrollIntoView = () => { paging++; };
+    const render = () => {
+      const logical = inverted ? root.scrollTop + extent : root.scrollTop;
+      const first = Math.floor(logical / 100);
+      root.children = [];
+      root.add(slot);
+      for (let i = first; i <= Math.min(600, first + 4); i++) {
+        root.add(new Element({ "data-history-row-id": rows[i].item_id!, "data-index": String(i) }));
+      }
+      // The live head remains mounted regardless of the virtual window.
+      root.add(new Element({ "data-message-id": "C_user_600" }));
+    };
+    render();
+    expect(await scrollToMessageInChat(rows[targetIndex], rows, {
+      document: doc, now: () => clock,
+      afterLoad: async () => { clock += 100; steps++; render(); },
+    })).toBe(true);
+    expect(root.querySelector(`[data-history-row-id="C_user_${targetIndex}"]`)?.scrolled).toBe(true);
+    expect(paging).toBe(0);
+    expect(steps).toBeLessThan(50);
+  });
+}
+
+test("virtual window text anchors seek when native and outline identities differ", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc = new Element().add(root);
+  root.scrollHeight = 20000;
+  root.clientHeight = 500;
+  const rows = Array.from({ length: 100 }, (_, i) => ({ ...row(`outline-${i}`, "user"), summary_line: `unique prompt ${i}` }));
+  let clock = 0;
+  const render = () => {
+    const first = Math.floor(root.scrollTop / 200);
+    root.children = [];
+    for (let i = first; i <= Math.min(99, first + 5); i++) {
+      root.add(new Element({ "data-history-row-id": `native-${i}`, "data-index": String(i) }, rows[i].summary_line));
+    }
+  };
+  render();
+  expect(await scrollToMessageInChat(rows[50], rows, {
+    document: doc, now: () => clock, afterLoad: async () => { clock += 100; render(); },
+  })).toBe(true);
+});
+
 test("no history progress waits for the generous timeout, not an idle two-second window", async () => {
   const f = fixture();
   let waits = 0;
