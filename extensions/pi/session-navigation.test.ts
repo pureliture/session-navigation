@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension from "./session-navigation";
 
+const testDb = join(mkdtempSync(join(tmpdir(), "sn-test-")), "state.sqlite3");
+process.env.SESSION_NAVIGATION_STATE_PATH = testDb;
+
 function setup(command = resolve(".venv/bin/session-navigation-daemon")) {
   process.env.SESSION_NAVIGATION_DAEMON = command;
   const events: Record<string, Function> = {};

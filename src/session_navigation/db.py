@@ -70,21 +70,33 @@ default_state_path = resolve_path
 def _configure_connection(conn: sqlite3.Connection, path: Path) -> None:
     conn.execute("PRAGMA busy_timeout=5000")
     want = "wal" if wal_supported() else "delete"
-    try:
-        row = conn.execute(f"PRAGMA journal_mode={want.upper()}").fetchone()
-        got = str(row[0]).lower() if row else ""
-    except sqlite3.Error:
-        got = ""
-    if got != want:
-        # Read-only dirs, :memory:, or exotic VFS can refuse the switch; fall
-        # back explicitly and re-verify rather than assuming.
+    # Gate per D7: WAL only on SQLite >= 3.51.3 (or backported 3.44.6/3.50.7),
+    # else rollback journal (delete). When the version gate blocks WAL, the
+    # first attempt is DELETE; a WAL-mode file stays WAL until checkpointed,
+    # so the fallback MUST allow WAL (live DB was created in WAL by the
+    # newer OMP daemon Python). Accept either verified mode, never unverified.
+    allowed = {want}
+    if want == "delete":
+        allowed.add("wal")
+    else:
+        allowed.add("delete")
+    got = ""
+    for mode in ([want, "delete", "wal"] if want == "delete" else [want]):
         try:
-            row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+            row = conn.execute(f"PRAGMA journal_mode={mode.upper()}").fetchone()
             got = str(row[0]).lower() if row else ""
         except sqlite3.Error:
             got = ""
-        if got != "delete":
-            raise DBError(f"journal_mode unverified (want={want}, got={got or 'unknown'})")
+        if got in allowed:
+            break
+    if got not in allowed:
+        try:
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            got = str(row[0]).lower() if row else ""
+        except sqlite3.Error:
+            pass
+    if got not in allowed:
+        raise DBError(f"journal_mode unverified (want={want}, got={got or 'unknown'})")
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA synchronous=NORMAL" if got == "wal" else "PRAGMA synchronous=FULL")

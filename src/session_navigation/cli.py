@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
+import os
 import sys
 from typing import Any
 
 from session_navigation.db import DBError, DBFullError, db_info, resolve_path
+from session_navigation.model import (
+    ToolResultRecord,
+    _item_id,
+    compute_invocation_digest,
+    compute_sha256,
+)
 from session_navigation.sqlite_store import SQLiteContextStore
 
 
@@ -20,6 +28,243 @@ def _store(path: str | None) -> SQLiteContextStore:
 
 def _scope_arg(value: str) -> str:
     return value
+
+
+def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], dict[str, ToolResultRecord]]:
+    """Load chronological timeline entries (user, assistant, tools) and confirmed ToolResultRecords for an OMP session."""
+    parts = scope_key.split(":")
+    if len(parts) < 3 or parts[0] != "pi":
+        return [], {}
+    session_id = parts[2]
+    sessions_root = os.path.expanduser("~/.omp/agent/sessions")
+    pattern = os.path.join(sessions_root, "**", f"*_{session_id}.jsonl")
+    matched = glob.glob(pattern, recursive=True)
+    if not matched:
+        return [], {}
+    path = matched[0]
+    messages: list[dict[str, Any]] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(data, dict):
+                    if data.get("type") == "message" and isinstance(data.get("message"), dict):
+                        messages.append(data["message"])
+                    elif "role" in data:
+                        messages.append(data)
+    except Exception:
+        return [], {}
+
+    calls: dict[str, tuple[dict[str, Any], int]] = {}
+    duplicates: set[str] = set()
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "toolCall":
+                continue
+            cid = block.get("id")
+            if not isinstance(cid, str) or not cid:
+                continue
+            if cid in calls:
+                duplicates.add(cid)
+            else:
+                calls[cid] = (block, idx)
+
+    result_counts: dict[str, int] = {}
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "toolResult":
+            cid = msg.get("toolCallId")
+            if isinstance(cid, str):
+                result_counts[cid] = result_counts.get(cid, 0) + 1
+
+    records: dict[str, ToolResultRecord] = {}
+    timeline: list[dict[str, Any]] = []
+    total_bytes = 0
+    MAX_BYTES = 4 * 1024 * 1024
+    MAX_RECORDS = 1000
+
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role == "user":
+            c = msg.get("content", "")
+            text = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            summary = "\n".join(lines[:2])[:220]
+            if summary:
+                timeline.append({
+                    "item_id": f"usr_{idx}",
+                    "tool_call_id": "",
+                    "kind": "user",
+                    "tool_name": "user",
+                    "status": "visible",
+                    "visibility": "visible",
+                    "version": 1,
+                    "compaction_source": "user_prompt",
+                    "summary_line": summary,
+                    "bytes_size": len(text.encode("utf-8")),
+                })
+        elif role == "assistant":
+            c = msg.get("content", [])
+            text = ""
+            if isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        text += b.get("text", "")
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            summary = "\n".join(lines[:2])[:220]
+            if summary:
+                timeline.append({
+                    "item_id": f"ast_{idx}",
+                    "tool_call_id": "",
+                    "kind": "assistant",
+                    "tool_name": "assistant",
+                    "status": "visible",
+                    "visibility": "visible",
+                    "version": 1,
+                    "compaction_source": "assistant_output",
+                    "summary_line": summary,
+                    "bytes_size": len(text.encode("utf-8")),
+                })
+        elif role == "toolResult":
+            cid = msg.get("toolCallId")
+            if not isinstance(cid, str) or cid in duplicates or result_counts.get(cid) != 1:
+                continue
+            found = calls.get(cid)
+            if not found:
+                continue
+            call_block, call_idx = found
+            if call_idx >= idx:
+                continue
+            tool_name = call_block.get("name")
+            if tool_name not in ("read", "bash") or msg.get("toolName") != tool_name:
+                continue
+            if msg.get("isError") is not False:
+                continue
+            call_args = call_block.get("arguments")
+            if not isinstance(call_args, dict):
+                continue
+            content_list = msg.get("content")
+            if not isinstance(content_list, list) or len(content_list) != 1:
+                continue
+            block0 = content_list[0]
+            if not isinstance(block0, dict) or block0.get("type") != "text" or not isinstance(block0.get("text"), str):
+                continue
+
+            if tool_name == "read":
+                p = call_args.get("path")
+                if not isinstance(p, str) or not p.strip():
+                    continue
+                args = {"path": p}
+            else:
+                cmd = call_args.get("command")
+                if not isinstance(cmd, str) or not cmd.strip():
+                    continue
+                args = {"command": cmd}
+                cwd = call_args.get("cwd")
+                if isinstance(cwd, str) and cwd.strip():
+                    args["cwd"] = cwd
+
+            text = block0["text"]
+            raw_bytes = len(text.encode("utf-8"))
+            total_bytes += raw_bytes
+            if total_bytes > MAX_BYTES or len(records) >= MAX_RECORDS:
+                break
+
+            invocation = {"tool_name": tool_name, "arguments": args}
+            inv_digest = compute_invocation_digest(invocation)
+            content_hash = compute_sha256(text)
+            rec = ToolResultRecord(
+                call_id=cid,
+                content=text,
+                content_sha256=content_hash,
+                invocation=invocation,
+                invocation_digest=inv_digest,
+                status="ok",
+                result_position=0,
+            )
+            records[cid] = rec
+            item_id = _item_id(scope_key, cid, content_hash, inv_digest, 0)
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            summary = "\n".join(lines[:2])[:220]
+            timeline.append({
+                "item_id": item_id,
+                "tool_call_id": cid,
+                "kind": "tool",
+                "tool_name": tool_name,
+                "status": "visible",
+                "visibility": "visible",
+                "version": 1,
+                "compaction_source": "unrecorded",
+                "summary_line": summary,
+                "bytes_size": raw_bytes,
+                "record": rec,
+            })
+
+    return timeline, records
+
+
+def _explicit_hide_fallback(
+    store: SQLiteContextStore,
+    scope: str,
+    target_rec: ToolResultRecord,
+    compaction_source: str = "explicit_user_hide",
+) -> Any:
+    """Store an explicit user hide fallback ContextItem when automatic compaction policy refuses."""
+    from session_navigation.model import ContextItem
+    lines = target_rec.content.splitlines()
+    head = [lines[i] for i in range(min(3, len(lines)))]
+    tail = [lines[i] for i in range(max(0, len(lines) - 2), len(lines))] if len(lines) > 3 else []
+    excerpt = "\n".join(head + (["..."] if tail else []) + tail)
+    tname = target_rec.invocation.get("tool_name", "tool")
+    header = "summary" if compaction_source in ("rule_summary", "llm", "llm_summary", "summarize") else "hidden"
+    compacted = f"[{header}: {tname} {target_rec.call_id}]\n{excerpt}"
+    iid = _item_id(scope, target_rec.call_id, target_rec.content_sha256, target_rec.invocation_digest or "", 0)
+    fallback_item = ContextItem(
+        item_id=iid,
+        tool_call_id=target_rec.call_id,
+        content_sha256=target_rec.content_sha256,
+        original=target_rec.content,
+        compacted=compacted,
+        excerpt_lines=head + tail,
+        visibility="hidden",
+        version=1,
+        expires_at=0.0,
+        tool_name=tname,
+        compaction_source=compaction_source,
+        invocation_snapshot=None,
+        invocation_digest=target_rec.invocation_digest or "",
+        result_position=target_rec.result_position,
+    )
+    put_res = store.put(scope, fallback_item)
+    if put_res.ok and put_res.item is not None:
+        store.fence_set(
+            scope,
+            tool_call_id=target_rec.call_id,
+            content_sha256=target_rec.content_sha256,
+            invocation_digest=target_rec.invocation_digest or "",
+            result_position=target_rec.result_position,
+            item_id=put_res.item.item_id,
+            version=put_res.item.version,
+        )
+    return put_res
+
+
+def _load_omp_session_records(scope_key: str) -> dict[str, ToolResultRecord]:
+    """Compatibility wrapper returning just the confirmed ToolResultRecords dictionary."""
+    _, records = _load_omp_session_timeline(scope_key)
+    return records
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     p_hide.add_argument("--scope", required=True)
     p_hide.add_argument("--item-id", required=True)
     p_hide.add_argument("--expected-version", type=int, default=None)
+    p_hide.add_argument("--mode", default="hide", choices=["hide", "summarize"])
     p_hide.add_argument("--path", default=None)
 
     p_unhide = sub.add_parser("unhide")
@@ -85,20 +331,146 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 store.close()
 
+        if args.command == "list":
             store = _store(args.path)
             try:
-                items = store.items(args.scope)
+                db_items_list = store.items(args.scope)
+                db_items = {it.tool_call_id: it for it in db_items_list}
+                timeline, omp_records = _load_omp_session_timeline(args.scope)
                 out = []
-                for it in items:
-                    if args.query and args.query.lower() not in (it.compacted or "").lower() and args.query.lower() not in it.item_id.lower():
-                        continue
-                    out.append({
-                        "item_id": it.item_id,
-                        "tool_call_id": it.tool_call_id,
-                        "visibility": it.visibility,
-                        "version": it.version,
-                        "compaction_source": it.compaction_source,
-                    })
+
+                if timeline:
+                    for entry in timeline:
+                        kind = entry.get("kind", "tool")
+                        if kind in ("user", "assistant"):
+                            if args.query and args.query.lower() not in (entry.get("summary_line") or "").lower():
+                                continue
+                            out.append({
+                                "item_id": entry["item_id"],
+                                "tool_call_id": "",
+                                "kind": kind,
+                                "tool_name": entry["tool_name"],
+                                "status": "visible",
+                                "visibility": "visible",
+                                "version": 1,
+                                "compaction_source": entry["compaction_source"],
+                                "summary_line": entry["summary_line"],
+                                "bytes_size": entry["bytes_size"],
+                            })
+                        else:
+                            cid = entry.get("tool_call_id", "")
+                            it = db_items.get(cid)
+                            if it is not None:
+                                status = "hidden" if it.visibility == "hidden" else ("unhidden" if it.version > 1 else "visible")
+                                if it.visibility != "hidden" and entry.get("summary_line"):
+                                    summary_line = entry["summary_line"]
+                                else:
+                                    summary_lines: list[str] = []
+                                    source_text = (it.compacted or "") if it.visibility == "hidden" else (it.original or "")
+                                    for ln in source_text.splitlines():
+                                        collapsed = " ".join(ln.split())
+                                        if collapsed and not collapsed.startswith("[hidden:") and not collapsed.startswith("나머지 결과는 보관됨"):
+                                            summary_lines.append(collapsed)
+                                            if len(summary_lines) >= 2:
+                                                break
+                                    if not summary_lines:
+                                        for ln in (it.original or "").splitlines():
+                                            collapsed = " ".join(ln.split())
+                                            if collapsed:
+                                                summary_lines.append(collapsed)
+                                                if len(summary_lines) >= 2:
+                                                    break
+                                    summary_line = "\n".join(summary_lines[:2])[:220]
+                                if args.query and args.query.lower() not in (it.compacted or "").lower() and args.query.lower() not in (summary_line or "").lower() and args.query.lower() not in it.item_id.lower() and args.query.lower() not in cid.lower():
+                                    continue
+                                out.append({
+                                    "item_id": it.item_id,
+                                    "tool_call_id": it.tool_call_id,
+                                    "kind": "tool",
+                                    "status": status,
+                                    "visibility": it.visibility,
+                                    "tool_name": it.tool_name,
+                                    "version": it.version,
+                                    "compaction_source": it.compaction_source,
+                                    "summary_line": summary_line,
+                                    "bytes_size": len((it.original or "").encode("utf-8")),
+                                })
+                            else:
+                                if args.query and args.query.lower() not in (entry.get("summary_line") or "").lower() and args.query.lower() not in entry.get("item_id", "").lower() and args.query.lower() not in cid.lower():
+                                    continue
+                                out.append({
+                                    "item_id": entry["item_id"],
+                                    "tool_call_id": cid,
+                                    "kind": "tool",
+                                    "status": "visible",
+                                    "visibility": "visible",
+                                    "version": 1,
+                                    "compaction_source": "unrecorded",
+                                    "tool_name": entry["tool_name"],
+                                    "summary_line": entry["summary_line"],
+                                    "bytes_size": entry["bytes_size"],
+                                })
+                else:
+                    recorded_calls: set[str] = set()
+                    for it in db_items_list:
+                        recorded_calls.add(it.tool_call_id)
+                        if args.query and args.query.lower() not in (it.compacted or "").lower() and args.query.lower() not in it.item_id.lower() and args.query.lower() not in (it.tool_call_id or "").lower():
+                            continue
+                        status = "hidden" if it.visibility == "hidden" else ("unhidden" if it.version > 1 else "visible")
+                        summary_lines = []
+                        source_text = (it.compacted or "") if it.visibility == "hidden" else (it.original or "")
+                        for ln in source_text.splitlines():
+                            collapsed = " ".join(ln.split())
+                            if collapsed and not collapsed.startswith("[hidden:") and not collapsed.startswith("나머지 결과는 보관됨"):
+                                summary_lines.append(collapsed)
+                                if len(summary_lines) >= 2:
+                                    break
+                        if not summary_lines:
+                            for ln in (it.original or "").splitlines():
+                                collapsed = " ".join(ln.split())
+                                if collapsed:
+                                    summary_lines.append(collapsed)
+                                    if len(summary_lines) >= 2:
+                                        break
+                        summary_line = "\n".join(summary_lines[:2])[:220]
+                        out.append({
+                            "item_id": it.item_id,
+                            "tool_call_id": it.tool_call_id,
+                            "kind": "tool",
+                            "status": status,
+                            "visibility": it.visibility,
+                            "tool_name": it.tool_name,
+                            "version": it.version,
+                            "compaction_source": it.compaction_source,
+                            "summary_line": summary_line,
+                            "bytes_size": len((it.original or "").encode("utf-8")),
+                        })
+
+                    unrecorded_units = [u for u in store.list_units(args.scope) if u.get("kind") == "tool_result" and u.get("tool_call_id") not in recorded_calls]
+                    for u in unrecorded_units:
+                        cid = u.get("tool_call_id")
+                        if not cid or cid in recorded_calls:
+                            continue
+                        recorded_calls.add(cid)
+                        item_id = f"unit_{u.get('unit_id', cid)}"
+                        summary_line = f"[{u.get('kind', 'tool_result')}] {cid}"
+                        bytes_size = int(u.get("char_count", 0))
+                        tool_name = "tool"
+                        if args.query and args.query.lower() not in summary_line.lower() and args.query.lower() not in item_id.lower() and args.query.lower() not in (cid or "").lower():
+                            continue
+                        out.append({
+                            "item_id": item_id,
+                            "tool_call_id": cid,
+                            "kind": "tool",
+                            "status": "visible",
+                            "visibility": "visible",
+                            "version": 1,
+                            "compaction_source": "unrecorded",
+                            "tool_name": tool_name,
+                            "summary_line": summary_line,
+                            "bytes_size": bytes_size,
+                        })
+
                 _print({"ok": True, "items": out})
                 return 0
             finally:
@@ -107,16 +479,54 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "hide":
             store = _store(args.path)
             try:
+                from dataclasses import replace
+                chosen_source = "rule_summary" if getattr(args, "mode", "hide") == "summarize" else "explicit_user_hide"
                 item = store.get(args.scope, args.item_id)
                 if item is None:
+                    _, omp_records = _load_omp_session_timeline(args.scope)
+                    target_rec = None
+                    for rec in omp_records.values():
+                        iid = _item_id(args.scope, rec.call_id, rec.content_sha256, rec.invocation_digest or "", 0)
+                        if iid == args.item_id or rec.call_id == args.item_id:
+                            target_rec = rec
+                            break
+                    if target_rec is not None:
+                        from session_navigation.engine import SessionNavigationEngine
+                        engine = SessionNavigationEngine(store=store)
+                        c_res = engine.compact_sync(args.scope, target_rec)
+                        if c_res.ok and c_res.item is not None:
+                            final_item = c_res.item
+                            if final_item.compaction_source != chosen_source:
+                                updated_src = replace(final_item, compaction_source=chosen_source, version=final_item.version + 1)
+                                put_src = store.put(args.scope, updated_src, expected_version=final_item.version)
+                                if put_src.ok and put_src.item is not None:
+                                    final_item = put_src.item
+                            store.fence_set(
+                                args.scope,
+                                tool_call_id=target_rec.call_id,
+                                content_sha256=target_rec.content_sha256,
+                                invocation_digest=target_rec.invocation_digest or "",
+                                result_position=target_rec.result_position,
+                                item_id=final_item.item_id,
+                                version=final_item.version,
+                            )
+                            _print({"ok": True, "item_id": final_item.item_id, "visibility": "hidden", "version": final_item.version, "source": final_item.compaction_source})
+                            return 0
+                        else:
+                            fallback_res = _explicit_hide_fallback(store, args.scope, target_rec, compaction_source=chosen_source)
+                            if fallback_res.ok and fallback_res.item is not None:
+                                _print({"ok": True, "item_id": fallback_res.item.item_id, "visibility": "hidden", "version": fallback_res.item.version, "source": fallback_res.item.compaction_source})
+                                return 0
+                            else:
+                                _print({"ok": False, "error": fallback_res.error or "hide_failed"})
+                                return 2
                     _print({"ok": False, "error": "not_found"})
                     return 2
-                if item.visibility == "hidden":
-                    _print({"ok": True, "item_id": item.item_id, "visibility": "hidden", "version": item.version})
+                if item.visibility == "hidden" and item.compaction_source == chosen_source:
+                    _print({"ok": True, "item_id": item.item_id, "visibility": "hidden", "version": item.version, "source": item.compaction_source})
                     return 0
-                # mark hidden by updating visibility/version
-                from dataclasses import replace
-                updated = replace(item, visibility="hidden", version=item.version + 1)
+                # mark hidden by updating visibility/version and compaction_source
+                updated = replace(item, visibility="hidden", compaction_source=chosen_source, version=item.version + 1)
                 res = store.put(args.scope, updated, expected_version=args.expected_version if args.expected_version is not None else item.version)
                 if not res.ok:
                     if res.error == "version_conflict":
@@ -124,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
                         return 4
                     _print({"ok": False, "error": res.error})
                     return 3 if res.error in ("db_error", "db_full") else 2
-                _print({"ok": True, "item_id": res.item.item_id, "visibility": "hidden", "version": res.item.version})
+                _print({"ok": True, "item_id": res.item.item_id, "visibility": "hidden", "version": res.item.version, "source": res.item.compaction_source})
                 return 0
             finally:
                 store.close()
@@ -164,6 +574,40 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         items_out.append({"tool_call_id": item.tool_call_id, "ok": False,
                                           "error": res.error or "not_found"})
+                remaining = max_items - len(items_out)
+                if remaining > 0:
+                    omp_records = _load_omp_session_records(args.scope)
+                    recorded_calls = {it.tool_call_id for it in store.items(args.scope)}
+                    from session_navigation.engine import SessionNavigationEngine
+                    engine = SessionNavigationEngine(store=store)
+                    for rec in omp_records.values():
+                        if remaining <= 0:
+                            break
+                        if rec.call_id in recorded_calls:
+                            continue
+                        c_res = engine.compact_sync(args.scope, rec)
+                        if c_res.ok and c_res.item is not None:
+                            store.fence_set(
+                                args.scope,
+                                tool_call_id=rec.call_id,
+                                content_sha256=rec.content_sha256,
+                                invocation_digest=rec.invocation_digest or "",
+                                result_position=rec.result_position,
+                                item_id=c_res.item.item_id,
+                                version=c_res.item.version,
+                            )
+                            recorded_calls.add(rec.call_id)
+                            items_out.append({"tool_call_id": rec.call_id, "ok": True, "item_id": c_res.item.item_id})
+                            remaining -= 1
+                        else:
+                            fallback_res = _explicit_hide_fallback(store, args.scope, rec)
+                            if fallback_res.ok and fallback_res.item is not None:
+                                recorded_calls.add(rec.call_id)
+                                items_out.append({"tool_call_id": rec.call_id, "ok": True, "item_id": fallback_res.item.item_id})
+                                remaining -= 1
+                            else:
+                                items_out.append({"tool_call_id": rec.call_id, "ok": False, "error": c_res.error or "compact_failed"})
+                                remaining -= 1
                 applied = sum(1 for r in items_out if r["ok"])
                 _print({"ok": all(r["ok"] for r in items_out), "applied": applied,
                         "failed": len(items_out) - applied, "items": items_out})

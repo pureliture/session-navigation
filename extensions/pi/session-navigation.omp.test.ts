@@ -26,7 +26,13 @@ test.skipIf(!omp)("실제 OMP에서 read 결과를 압축하고 다음 요청에
   writeFileSync(provider, `export default function(pi) { pi.registerProvider('snstub', {baseUrl:'http://127.0.0.1:${server.port}/v1',api:'openai-completions',apiKey:'local-test',models:[{id:'test',name:'test',reasoning:false,input:['text'],supportsTools:true,cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:100000,maxTokens:2048}]}); }`);
   try {
     const proc = Bun.spawn([omp!, "--model", "snstub/test", "--mode", "json", "--print", "--no-session", "--no-extensions", "-e", provider, "-e", process.env.SESSION_NAVIGATION_TEST_EXTENSION || resolve("extensions/pi/session-navigation.ts"), "--no-skills", "--no-rules", "--no-context-files", "--no-lsp", "--approval-mode", "yolo", "--max-time", "30", "테스트"], {
-      env: { ...process.env, SESSION_NAVIGATION_DAEMON: process.env.SESSION_NAVIGATION_TEST_DAEMON || resolve(".venv/bin/session-navigation-daemon") }, stdout: "pipe", stderr: "pipe",
+      env: {
+        ...process.env,
+        SESSION_NAVIGATION_DAEMON: process.env.SESSION_NAVIGATION_TEST_DAEMON || resolve(".venv/bin/session-navigation-daemon"),
+        SESSION_NAVIGATION_STATE_PATH: join(dir, "state.sqlite3"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" });

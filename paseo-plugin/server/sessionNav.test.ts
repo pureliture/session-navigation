@@ -72,3 +72,15 @@ test("manage passes action and parses per-item results", async () => {
     expect(res.items.length).toBe(2);
   } finally { restorePath(dir); }
 });
+
+test("hideItem passes --mode hide or summarize to CLI", async () => {
+  const dir = fakeCli(`echo "$*" > "$0.args"\necho '{"ok":true,"item_id":"item_x","visibility":"hidden","version":2}'`);
+  try {
+    const scope = `paseo:default:mode-${Date.now()}:default`;
+    const res: any = await hideItem({ scope_key: scope, item_id: "item_x", expected_version: 1, mode: "summarize" });
+    expect(res.ok).toBe(true);
+    const { readFileSync } = await import("node:fs");
+    const args = readFileSync(join(dir, "session-navigation.args"), "utf8").trim();
+    expect(args).toContain("--mode summarize");
+  } finally { restorePath(dir); }
+});

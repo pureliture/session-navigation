@@ -7,6 +7,7 @@ export const RowSchema = z.object({
   item_id: z.string().nullable(),
   tool_call_id: z.string(),
   tool_name: z.string().nullable().optional(),
+  kind: z.enum(["user", "assistant", "tool"]).optional(),
   status: StatusSchema,
   visibility: z.enum(["hidden", "visible"]).optional(),
   version: z.number().int(),
@@ -14,6 +15,7 @@ export const RowSchema = z.object({
   cost_usd: z.number().nullable().optional(),
   source: z.string().optional(),
   bytes_size: z.number().optional(),
+  summary_line: z.string().optional(),
 });
 
 export const DbErrorChoicesSchema = z.array(z.enum(["abort_request", "send_original"]));
@@ -77,7 +79,13 @@ export const DbChoiceResultSchema = z.object({
 });
 export const ScopesResultSchema = z.object({
   ok: z.boolean(),
-  scopes: z.array(z.object({ scope_key: z.string(), items: z.number().int() })),
+  scopes: z.array(
+    z.object({
+      scope_key: z.string(),
+      items: z.number().int(),
+      agent_id: z.string().optional(),
+    }),
+  ),
   error: z.string().optional(),
 });
 
@@ -104,6 +112,7 @@ export const hideItemRpc = defineRpc({
     scope_key: z.string(),
     item_id: z.string(),
     expected_version: z.number().int().optional(),
+    mode: z.enum(["hide", "summarize"]).optional(),
   }),
   output: MutationResultSchema,
 });

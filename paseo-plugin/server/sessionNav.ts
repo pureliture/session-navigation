@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { RpcInput } from "@getpaseo/plugin";
 import { z } from "zod";
 import {
@@ -64,10 +67,13 @@ function invokeCli(args: string[]): CliResult {
 
 function asRow(item: unknown): z.infer<typeof RowSchema> {
   const obj = typeof item === "object" && item !== null ? (item as Record<string, unknown>) : {};
+  const rawKind = str(obj.kind);
+  const kind = rawKind === "user" || rawKind === "assistant" || rawKind === "tool" ? rawKind : undefined;
   return {
     item_id: str(obj.item_id) ?? null,
     tool_call_id: str(obj.tool_call_id) ?? str(obj.call_id) ?? "",
     tool_name: str(obj.tool_name) ?? null,
+    kind,
     status: (str(obj.status) ?? str(obj.visibility) ?? "hidden") as z.infer<typeof RowSchema>["status"],
     visibility:
       obj.visibility === "hidden" || obj.visibility === "visible"
@@ -78,6 +84,7 @@ function asRow(item: unknown): z.infer<typeof RowSchema> {
     cost_usd: num(obj.cost_usd) ?? null,
     source: str(obj.source) ?? str(obj.compaction_source),
     bytes_size: num(obj.bytes_size),
+    summary_line: str(obj.summary_line),
   };
 }
 
@@ -116,14 +123,100 @@ function dbNoteSuccess(scopeKey: string): void {
 }
 
 
+function findAgentMappings(): {
+  sessionToAgent: Map<string, string>;
+  ompScopes: Array<{ scope_key: string; agent_id: string }>;
+} {
+  const sessionToAgent = new Map<string, string>(); // sessionId -> agentId
+  const ompScopes: Array<{ scope_key: string; agent_id: string }> = [];
+  try {
+    const agentsDir = path.join(os.homedir(), ".paseo", "agents");
+    if (!fs.existsSync(agentsDir)) return { sessionToAgent, ompScopes };
+    const dirs = fs.readdirSync(agentsDir);
+    for (const d of dirs) {
+      const subPath = path.join(agentsDir, d);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(subPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        const files = fs.readdirSync(subPath);
+        for (const f of files) {
+          if (!f.endsWith(".json")) continue;
+          try {
+            const content = fs.readFileSync(path.join(subPath, f), "utf8");
+            const data = JSON.parse(content);
+            const agentId = typeof data.id === "string" ? data.id : f.replace(/\.json$/, "");
+            const sessionId =
+              typeof data.runtimeInfo?.sessionId === "string"
+                ? data.runtimeInfo.sessionId
+                : typeof data.persistence?.sessionId === "string"
+                  ? data.persistence.sessionId
+                  : undefined;
+            const provider =
+              typeof data.runtimeInfo?.provider === "string"
+                ? data.runtimeInfo.provider
+                : typeof data.persistence?.provider === "string"
+                  ? data.persistence.provider
+                  : undefined;
+            const nativeHandle =
+              typeof data.persistence?.nativeHandle === "string"
+                ? data.persistence.nativeHandle
+                : undefined;
+            if (sessionId) {
+              sessionToAgent.set(sessionId, agentId);
+              if (
+                (provider === "omp" || provider === "pi") &&
+                (!nativeHandle || fs.existsSync(nativeHandle))
+              ) {
+                ompScopes.push({
+                  scope_key: `pi:default:${sessionId}:default`,
+                  agent_id: agentId,
+                });
+              }
+            }
+          } catch {
+            // ignore malformed
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { sessionToAgent, ompScopes };
+}
+
 export async function listScopes() {
   try {
     const res = invokeCli(["scopes"]);
     if (res.ok !== true) { const err = dbErrorResponse(res); return { ok: false as const, scopes: [], error: err.error, choices: err.choices }; }
+    const { sessionToAgent: agentMap, ompScopes } = findAgentMappings();
     const scopes = Array.isArray(res.scopes) ? res.scopes.map((s: unknown) => {
       const o = (typeof s === "object" && s !== null ? s : {}) as Record<string, unknown>;
-      return { scope_key: typeof o.scope_key === "string" ? o.scope_key : "", items: typeof o.items === "number" ? o.items : 0 };
+      const scope_key = typeof o.scope_key === "string" ? o.scope_key : "";
+      const parts = scope_key.split(":");
+      const sessionId = parts.length >= 3 && parts[0] === "pi" ? parts[2] : parts[1] || "";
+      const agent_id = sessionId ? agentMap.get(sessionId) : undefined;
+      return {
+        scope_key,
+        items: typeof o.items === "number" ? o.items : 0,
+        ...(agent_id ? { agent_id } : {}),
+      };
     }).filter((s) => s.scope_key) : [];
+    const seen = new Set(scopes.map((s) => s.scope_key));
+    for (const omp of ompScopes) {
+      if (!seen.has(omp.scope_key)) {
+        seen.add(omp.scope_key);
+        scopes.push({
+          scope_key: omp.scope_key,
+          items: 1,
+          agent_id: omp.agent_id,
+        });
+      }
+    }
     return { ok: true, scopes };
   } catch {
     return { ok: false, scopes: [], error: "db_error", choices: ["abort_request", "send_original"] };
@@ -172,6 +265,7 @@ export async function hideItem(input: RpcInput<typeof hideItemRpc>) {
       ...(input.expected_version !== undefined
         ? ["--expected-version", String(input.expected_version)]
         : []),
+      ...(input.mode ? ["--mode", input.mode] : []),
     ]);
     if (res.ok !== true) {
       if (str(res.error) === "version_conflict") {

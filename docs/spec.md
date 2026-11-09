@@ -82,6 +82,13 @@ Three paths kept separate (agent-observatory design):
 ## D10. UI order — Paseo → OMP TUI → Hermes TUI
 
 - Paseo Explorer panel first (row-unit verification platform).
+- Panel location (verified 2026-11-08, user requirement): Paseo 패널은 우측 워크스페이스 탭 영역(파일/변경사항 옆, Explorer 영역, AI FDE / sidechat 스타일)에 렌더링되어야 하며, `addAgentPanel` + `locations: ["explorer"]` (context: `"agent"`)로 등록하고 ⌘K (`open-session-nav`) 및 `/nav` 슬래시 커맨드로 `openPanel("session-nav", { location: "explorer" })`를 호출해 연다. 좌측 사이드바 항목(`addSidebarHeaderItem`/`addSidebarItem`)이나 전체 화면(`addScreen`)으로 등록해서는 안 된다 (`+` 탭 메뉴는 플러그인 패널 탐색 경로가 아님).
+- Panel session binding (verified 2026-11-09, user requirement):
+  - 우측 사이드 패널은 활성화된 에이전트(`agentId`)의 세션 스코프와만 1:1로 직접 바인딩된다.
+  - 임의의 다른 세션을 고르는 드롭다운/모달(스코프 피커)을 두지 않으며, 세션이 없는 곳에서는 `No active session` 빈 화면을 표시한다.
+  - Palantir AI FDE 스타일의 단일 연속 스크롤 목록으로 세션 전체 타임라인(User 질문/프롬프트 ◈, Assistant 모델 답변 ✦, Tool 도구 실행 결과 ◇)을 시간순으로 연속 렌더링한다.
+  - 도구 결과 숨김(`Hide`) 시 행은 목록에서 사라지지 않고 그대로 유지되며, 취소선(`line-through`), 낮은 투명도, `[hidden · v{version}]` 뱃지 및 `Unhide` 버튼으로 전환된다. 사용자의 명시적 `Hide` 명령은 정책 거절(`sensitive_invocation`, `not_long`, `protected_error`) 없이 즉시 `hidden` 상태로 저장된다.
+  - 하단 진행률 게이지 바는 모델의 실제 컨텍스트 윈도우(128k 토큰 ~ 512KB) 스케일 기준으로 활성 비율과 절감량을 시각화한다.
 - Hermes TUI = `/nav` text command (verified 2026-11-08, user decision):
   list/hide/unhide/rehide/summarize/manage via `register_command` +
   `slash.exec`; no host changes required. The graphic widget bridge
