@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODEL = "z-ai/glm-5.3-flash"
 
 
-def serve(directory):
+def serve(directory, *, model=MODEL, provider=None):
     key = os.environ["OPENROUTER_API_KEY"]
     lock = threading.Lock()
 
@@ -31,12 +31,14 @@ def serve(directory):
             identity = uuid.uuid4().hex
             raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             body = json.loads(raw)
-            if body.get("model") != MODEL or key.encode() in raw:
+            if body.get("model") != model or key.encode() in raw:
                 self.send_error(400, "Only approved model and non-secret bodies allowed")
                 event(kind="blocked", id=identity, path=self.path)
                 return
             event(kind="request", id=identity, path=self.path, body=body)
             upstream_body = {**body, "stream": False, "usage": {"include": True}}
+            if provider:
+                upstream_body["provider"] = {"order": [provider], "allow_fallbacks": False}
             upstream_body.pop("stream_options", None)
             for attempt in range(7):
                 event(kind="upstream_request", id=identity, path=self.path, attempt=attempt, body=upstream_body)
@@ -74,13 +76,13 @@ def serve(directory):
                     return
             if body.get("stream"):
                 message = result["choices"][0]["message"]
-                delta = {"role": "assistant", "content": message.get("content") or ""}
+                delta = {**message, "role": "assistant", "content": message.get("content") or ""}
                 if message.get("tool_calls"):
                     delta["tool_calls"] = [{"index": i, **call} for i, call in enumerate(message["tool_calls"])]
                 chunks = [{"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
                     {"choices": [{"index": 0, "delta": {}, "finish_reason": result["choices"][0].get("finish_reason", "stop")}], "usage": result.get("usage", {})}]
                 payload = ("".join("data: " + json.dumps({"id": result.get("id", identity), "object": "chat.completion.chunk",
-                    "created": int(time.time()), "model": MODEL, **chunk}) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n").encode()
+                    "created": int(time.time()), "model": model, **chunk}) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n").encode()
                 content_type = "text/event-stream"
             else:
                 payload = json.dumps(result).encode()
