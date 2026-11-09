@@ -32,7 +32,7 @@ for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
     process.env.SESSION_NAVIGATION_DAEMON = resolve(".venv/bin/session-navigation-daemon");
     const events: Record<string, Function> = {};
     const optional = () => ({ optional: () => ({}) });
-    extension({ zod: { object: () => ({}), string: optional, array: () => ({}), enum: optional,
+    extension({ zod: { object: () => ({}), string: optional, array: optional, enum: optional,
       number: () => ({ int: () => ({ min: () => ({ max: optional }) }) }) },
       on: (name: string, fn: Function) => { events[name] = fn; }, registerTool: () => {} } as any);
     const content = Array.from({ length: 100 }, (_, i) => `Output row ${i.toString().padStart(3, "0")} details`).join("\n");
@@ -80,7 +80,7 @@ test("cleanup discovers IDs, requires explicit choices, limits model concurrency
   const events: Record<string, Function> = {};
   const tools: Record<string, any> = {};
   const optional = () => ({ optional: () => ({}) });
-  extension({ zod: { object: () => ({}), string: optional, array: () => ({}), enum: optional,
+  extension({ zod: { object: () => ({}), string: optional, array: optional, enum: optional,
     number: () => ({ int: () => ({ min: () => ({ max: optional }) }) }) },
     on: (name: string, fn: Function) => { events[name] = fn; },
     registerTool: (tool: any) => { tools[tool.name] = tool; } } as any);

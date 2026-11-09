@@ -94,36 +94,21 @@ MANAGE_TOOL = "manage_context"
 SUPERVISION_SECTION_ID = "session-navigation.human-supervision"
 SUPERVISION_SECTION_MAX_CHARS = 1200
 SUPERVISION_SECTION_TEXT = (
-    "session-navigation 도구는 사용자의 세션 채팅 요청에 따라 숨김 상태를 "
-    "확인·복원할 때 쓴다. 사용자가 '숨김 목록 보여줘'처럼 요청하면 "
-    "list_context_items를 호출해 숨김 건수와 함께 숨김 항목만 골라 표시 번호(1부터), 도구, "
-    "원문 크기, 숨김 시각, 한 줄 요약이 담긴 표로 보여준다. 표 아래에 '번호는 이번 목록 "
-    "기준입니다. ‘N번 복원해’ 또는 ‘전부 되돌려’라고 요청할 수 있습니다.'라고 안내한다. "
-    "'N번 복원해' 요청이 오면 사용자가 본 표의 N번에 해당하는 정확한 item_id를 먼저 고정한다. "
-    "복원 직전에 목록을 다시 조회해 현재 상태를 확인하되, 새 목록의 번호로 바꾸지 않고 고정한 "
-    "item_id로 unhide_context를 호출한다. 복원 뒤 목록으로 같은 ID가 visible인지 확인한다. "
-    "'그거 되돌려'는 대상 하나가 분명할 때만 그 item_id로 복원하고, 여러 대상이 가능하면 묻고 "
-    "임의로 고르지 않는다. '그거/그것/그 항목'처럼 번호도 ID도 없으면 바로 복원하지 않는다. "
-    "직전 대화에서 가리키는 숨김 항목이 하나일 때만 복원하고, 숨김이 2건 이상이거나 대상이 "
-    "분명하지 않으면 unhide_context를 호출하지 않고 '어느 항목을 복원할까요?'라고 먼저 묻는다. "
-    "목록의 1번을 임의로 고르지 않는다. '전부 되돌려'는 필터 없는 목록에서 숨김 item_id 집합을 고정해 한 건씩 "
-    "복원한 뒤 전체 목록으로 성공·실패·남은 건수를 보고한다. 숨김이 0건이면 '현재 숨겨진 항목 없음'이라고만 "
-    "말한다. 하위 작업을 마칠 때마다 이후 작업에 필요 없는 해당 작업의 결과를 판단해 "
-    "manage_context에 tool_call_ids를 지정하고 세션 중 반복 호출한다. "
-    "list_context_items(view=candidates)는 ID 발견용이며 대상을 제한하지 않는다. "
-    "hide는 규칙 기반, summarize는 세션 모델 요약, auto는 모델 요약 우선·규칙 대체다. "
-    "숨김 상태는 SQLite에 영속화되어 재시작·fork 이후에도 유지된다. "
-    "재시작 여부를 모를 때 원인을 단정하지 않는다."
+    "At work-unit boundaries you decide when/what/how to clean: hide unneeded results (rules), "
+    "summarize facts still needed (session LLM); auto prefers summary with rule fallback. "
+    "Use literal IDs from context notes or list_context_items(view=candidates); display limits never restrict targets. "
+    "Deferred tools: exact names via tool_describe, then tool_call. Originals remain restorable. "
+    "For user '숨김 목록'/restore requests, show numbered hidden items with tool, size, time and summary; numbers belong to that list. "
+    "Bind N to its shown item_id BEFORE refreshing; unhide_context that same ID and verify visible. "
+    "Ask on ambiguous references; never pick the first item. Restore-all fixes the unfiltered hidden ID set first, "
+    "then verifies and reports successes/failures/remaining. State persists; do not infer restart causes."
 )
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     HIDE_TOOL: {
         "name": HIDE_TOOL,
         "description": (
-            "Hide one already-transmitted tool result using rule-based excerpts only "
-            "(never calls a model): later model requests carry its summary instead of "
-            "the full body. "
-            "Pass the tool_call_id shown by the model."
+            "Hide one tool result with rule excerpts; no LLM. Originals remain restorable."
         ),
         "parameters": {
             "type": "object",
@@ -140,16 +125,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     LIST_TOOL: {
         "name": LIST_TOOL,
         "description": (
-            "이 세션에서 숨김(compacted) 처리된 도구 결과를 사람이 확인할 수 "
-            "있게 반환한다. 사용자가 '숨김 목록 보여줘', '뭐 숨겨져 있어?'처럼 "
-            "요청하면 이 도구를 호출하고, 결과(숨김 건수·표시 번호·도구·원문 "
-            "크기·숨김 시각·한 줄 요약)를 사람이 읽기 좋은 표로 정리해 "
-            "보여준다. 항목 본문과 명령 원문은 반환하지 않는다. "
-            "표시 번호는 목록 호출마다 새로 부여된다. 복원이 필요하면 사용자가 본 표의 "
-            "번호에 해당하는 정확한 item_id를 먼저 고정하고, 복원 직전 목록으로 현재 상태를 "
-            "확인한 뒤 고정한 item_id로 복원한다. 새 목록의 번호로 바꾸지 않는다. "
-            "view=candidates discovers visible eligible cleanup results, newest first, with "
-            "tool_call_id, tool, command/path hint and bytes (default limit 30). Discovery does not restrict manage_context targets."
+            "Discover visible cleanup IDs with view=candidates; limit is display-only (default 30). "
+            "Default items: 사용자가 숨김 목록을 보여달라면 번호·도구·크기·시각·요약 표로 표시."
         ),
         "parameters": {
             "type": "object",
@@ -168,18 +145,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     UNHIDE_TOOL: {
         "name": UNHIDE_TOOL,
         "description": (
-            "숨긴 항목 하나를 재실행 없이 원문으로 복원한다. 요약은 보관되어 "
-            "다시 숨길 수 있다. 'N번 복원해' 요청은 "
-            "사용자가 본 표의 N번에 해당하는 정확한 item_id를 먼저 고정하고, 복원 직전 "
-            "목록으로 현재 상태를 확인한 뒤 고정한 item_id로 호출한다. 새 목록의 번호로 "
-            "바꾸지 않는다. '그거 되돌려'는 대상 하나가 분명할 때만 그 item_id로 복원하고, "
-            "여러 대상이 가능하면 묻고 임의로 고르지 않는다. 번호도 ID도 없는 '그거/그것/그 항목'만으로는 "
-            "복원을 호출하지 않고 먼저 묻는다. 목록의 1번을 임의로 고르지 않는다. '전부 되돌려'는 필터 없는 목록에서 "
-            "고정한 집합을 한 건씩 복원한 뒤 전체 목록으로 확인한다. 숫자 형식('2', '2번', '#2')은 "
-            "마지막 목록 기준 편의 해석만 하며, 재확인 절차를 대신하지 않는다. "
-            "no_recent_list면 먼저 목록을 보여주고, unknown_display_number면 "
-            "새 목록을 보여주고 다시 선택받는다. 존재하지 않으면 다른 ID로 "
-            "대체하지 않고 오류를 사용자에게 설명한다."
+            "Restore original by item_id, without re-execution. N번: shown item_id 고정; 복원 직전 목록으로 확인, "
+            "같은 ID 복원 후 visible 확인. 모호하면 묻고 임의로 선택하지 않는다. Missing/stale ID: report, never substitute."
         ),
         "parameters": {
             "type": "object",
@@ -200,11 +167,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     SUMMARIZE_TOOL: {
         "name": SUMMARIZE_TOOL,
         "description": (
-            "Hide one already-transmitted tool result using a configured model "
-            "summary: later model requests carry its summary instead of "
-            "the full body. Requires a configured summarizer (fails with "
-            "summarizer_unavailable otherwise) and never silently falls back to rules. "
-            "Pass the tool_call_id shown by the model."
+            "Summarize one tool result using the session LLM; no rule fallback."
         ),
         "parameters": {
             "type": "object",
@@ -221,13 +184,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     MANAGE_TOOL: {
         "name": MANAGE_TOOL,
         "description": (
-            "After completing a unit of work, choose the tool results from that work that later steps "
-            "will not need and pass their tool_call_ids. Scope cleanup by your judgment to the work "
-            "just finished and call repeatedly throughout the session, not once for the entire session. "
-            "Requires non-empty IDs; accepts any eligible transmitted ID, not only listed candidates. "
-            "hide uses rules only; summarize uses the session model; auto prefers model summary with "
-            "rule fallback. Hidden, ineligible and destructive results are skipped before model calls. "
-            "Returns per-item results; partial failures never report full success."
+            "Clean agent-chosen tool_call_ids. hide=rules; summarize=session LLM; auto=summary with rule fallback. "
+            "Any eligible ID accepted; returns per-item outcomes. keep_lines: exact single-line substrings to retain (hide only, total 1024 bytes)."
         ),
         "parameters": {
             "type": "object",
@@ -243,6 +201,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "enum": ["auto", "hide", "summarize"],
                     "description": "hide uses rules only; summarize requires a configured model; auto prefers summarize with rule fallback.",
                 },
+                "keep_lines": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["tool_call_ids"],
             "additionalProperties": False,
@@ -266,4 +225,3 @@ def bridge_should_yield(tool_names: Any) -> bool:
         except TypeError:
             return False
     return bool(BRIDGE_COLLISION_TOOLS & {str(name) for name in names})
-

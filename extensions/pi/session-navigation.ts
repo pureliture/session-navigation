@@ -6,6 +6,32 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 
+export type ReminderItem = { tool_call_id: string; tool_name?: string; hint?: string; bytes_size: number; turn?: number };
+const REMINDER_BYTES = 1000;
+const REMINDER_ITEMS = 3;
+export class BoundaryReminder {
+	private seen: { turn: string; tier: number } | undefined;
+	private tier(tokens: number, window?: number) {
+		return window && window > 0 ? [50, 75, 90].filter(t => 100 * tokens / window >= t).length : 0;
+	}
+	due(turn: string, tokens: number, window?: number): boolean {
+		return !!turn && (!this.seen || this.seen.turn !== turn || this.tier(tokens, window) > this.seen.tier);
+	}
+	note(turn: string, tokens: number, window: number | undefined, total: number, items: ReminderItem[]): string | null {
+		if (!total || !this.due(turn, tokens, window)) return null;
+		const usage = window && window > 0 ? `~${tokens}/${window} tokens (${Math.round(100 * tokens / window)}%)` : `~${tokens}/? tokens (?%)`;
+		const header = `[context-navigation] ${usage}; eligible=${total}. You decide when/what/how: after a work unit, hide unneeded results (rules), summarize facts still needed (session LLM). Display only; any valid ID accepted. More: list_context_items(view=candidates). Rows: [id,tool,path/command,bytes,turn].`;
+		const rows: string[] = [];
+		for (const item of items) {
+			const row = JSON.stringify([item.tool_call_id, (item.tool_name ?? "").slice(0, 24), (item.hint ?? "").slice(0, 48), item.bytes_size, item.turn ?? 0]);
+			if (Buffer.byteLength([header, ...rows, row].join("\n"), "utf8") <= REMINDER_BYTES) rows.push(row);
+			if (rows.length === REMINDER_ITEMS) break;
+		}
+		this.seen = { turn, tier: this.tier(tokens, window) };
+		return [header, ...rows].join("\n");
+	}
+}
+
 type Reply = { id?: number; ok: boolean; error?: string; protocol?: number; patches?: Patch[]; [key: string]: unknown };
 type Patch = { call_id: string; sha256: string; text: string };
 type RecordItem = { call_id: string; tool_name: string; arguments: Record<string, unknown>; status: string; content: string };
@@ -14,7 +40,7 @@ const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_CHUNK_RECORDS = 64;
 const MAX_SUMMARY_CONCURRENCY = 4;
 const SUMMARY_TIMEOUT_MS = 25_000;
-export const CLEANUP_GUIDANCE = "After completing a unit of work, pick the tool results from that work that later steps will not need. Call list_context_items with view=candidates to discover IDs, then manage_context with your chosen tool_call_ids. Scope cleanup by your judgment to the work just finished, and call it repeatedly throughout the session; do not summarize the entire session at once. action=hide uses rules only; action=summarize uses the session model; auto prefers a model summary with rule fallback. Discovery limits do not restrict which eligible IDs you may choose.";
+export const CLEANUP_GUIDANCE = "At work-unit boundaries you decide when/what/how to clean: hide unneeded results (rules), summarize facts still needed (session LLM); auto prefers summary with rule fallback. Use literal IDs from context notes or list_context_items(view=candidates); display limits never restrict targets. Originals remain restorable.";
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 function messageText(message: any): string {
@@ -120,6 +146,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	let busy = false;
 	let nextId = 1;
 	let candidate: Candidate | null = null;
+	const reminders = new Map<string, BoundaryReminder>();
 	let cooldownUntil = 0;
 	let lastWarning = 0;
 	let pending: { child: ChildProcessWithoutNullStreams; id: number; resolve: (r: Reply) => void } | null = null;
@@ -256,8 +283,30 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		const next: Candidate = { session, token: randomUUID(), confirmed: false, records: collected.records };
 		candidate = next;
 		const deadline = Date.now() + SUMMARY_TIMEOUT_MS;
-		const prepared = queue.then(() => prepareRequest(collected.records, session, next.token, rpcOnce,
-			(content, timeout) => summarizeText(ctx, content, timeout), deadline));
+		const users = event.messages.filter(message => message?.role === "user");
+		const turn = users.length ? `${users.length}:${hash(messageText(users.at(-1)))}` : "";
+		let usage: { tokens: number; contextWindow?: number } | undefined;
+		try { usage = ctx.getContextUsage?.(); } catch { /* use request estimate */ }
+		const tokens = usage && Number.isFinite(usage.tokens) && usage.tokens >= 0 ? usage.tokens : Math.ceil(JSON.stringify(event.messages).length / 4);
+		const window = usage?.contextWindow ?? ctx.model?.contextWindow;
+		let reminder = reminders.get(session);
+		if (!reminder) { reminder = new BoundaryReminder(); reminders.set(session, reminder); }
+		if (reminders.size > 128) reminders.delete(reminders.keys().next().value!);
+		let note: string | null = null;
+		let reminderItems: ReminderItem[] = [], eligibleCount = 0;
+		const prepared = queue.then(async () => {
+			const response = await prepareRequest(collected.records, session, next.token, rpcOnce,
+				(content, timeout) => summarizeText(ctx, content, timeout), deadline);
+			if (response.ok && collected.records.length && reminder.due(turn, tokens, window)) {
+				const listed = await rpcOnce("list_candidates", { session_id: session, snapshot_id: next.token, limit: 3 }, 2000);
+				if (listed.ok && Array.isArray(listed.items)) {
+					reminderItems = (listed.items as ReminderItem[]).filter(item => typeof item?.tool_call_id === "string" && typeof item.bytes_size === "number").map(item => ({ ...item,
+						turn: event.messages.slice(0, (collected.positions.get(item.tool_call_id) ?? -1) + 1).filter(message => message.role === "user").length }));
+					eligibleCount = Number(listed.total ?? reminderItems.length);
+				}
+			}
+			return response;
+		});
 		queue = prepared.catch(() => undefined);
 		const response = await prepared;
 		// Structural daemon death (spawn/exit/protocol) means persistence is
@@ -304,6 +353,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		}
 		const hidden = new Set<string>(Array.isArray(response.hidden_messages) ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string") : []);
 		messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
+		const saved = messages ? Math.ceil((JSON.stringify(event.messages).length - JSON.stringify(messages).length) / 4) : 0;
+		note = reminder.note(turn, Math.max(0, tokens - saved), window, eligibleCount, reminderItems);
+		if (note) messages = [...(messages ?? event.messages), { role: "user", content: [{ type: "text", text: note }], timestamp: Date.now() }];
 		if (messages) return { messages };
 	});
 	pi.on("assistant_message", async (event: { message: { role?: string; stopReason?: string } }, ctx: ExtensionContext) => {
@@ -375,9 +427,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		const timer = setTimeout(() => reject(new Error("session-navigation: summarize timeout")), ms);
 		return Promise.race([p.finally(() => clearTimeout(timer)), promise]) as Promise<T>;
 	}
-	pi.registerTool({ name: "hide_context", label: "Hide Context", description: "Hide one confirmed, eligible read result using rule-based excerpts only (never calls a model).", parameters: z.object({ tool_call_id: z.string() }),
+	pi.registerTool({ name: "hide_context", label: "Hide Context", description: "Hide one result with rule excerpts; no LLM.", parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("compact", params, ctx, signal)); } });
-	pi.registerTool({ name: "summarize_context", label: "Summarize Context", description: "Hide one confirmed, eligible read or bash result with a session-model summary. Returns summarizer_unavailable when no session model exists.", parameters: z.object({ tool_call_id: z.string() }),
+	pi.registerTool({ name: "summarize_context", label: "Summarize Context", description: "Summarize one result using the session LLM; no rule fallback.", parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) {
 			const session = sessionId(ctx);
 			if (session && candidate?.confirmed && candidate.session === session) {
@@ -390,9 +442,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			}
 			return result(await tool("summarize", params, ctx, signal));
 		} });
-	pi.registerTool({ name: "unhide_context", label: "Unhide Context", description: "Unhide a hidden result; the stored summary is kept for re-hiding.", parameters: z.object({ item_id: z.string() }),
+	pi.registerTool({ name: "unhide_context", label: "Unhide Context", description: "Restore an original by item_id without re-execution.", parameters: z.object({ item_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("restore", params, ctx, signal)); } });
-	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "List stored results. view=candidates discovers visible eligible cleanup results, newest first, with tool_call_id, tool, command/path hint and bytes. Default limit 30; discovery does not restrict manage_context targets.", parameters: z.object({ query: z.string().optional(), view: z.enum(["items", "candidates"]).optional(), limit: z.number().int().min(1).max(200).optional() }),
+	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "Discover visible cleanup IDs with view=candidates; default items lists stored results. limit is display-only (default 30).", parameters: z.object({ query: z.string().optional(), view: z.enum(["items", "candidates"]).optional(), limit: z.number().int().min(1).max(200).optional() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool(params.view === "candidates" ? "list_candidates" : "list_items", params, ctx, signal)); } });
 	async function manageChosen(params: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal): Promise<Reply> {
 		const ids = params.tool_call_ids;
@@ -403,6 +455,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		if (!session || !snapshot?.confirmed || snapshot.session !== session) return { ok: false, error: "unconfirmed_snapshot" };
 		const action = params.action ?? "auto";
 		if (!["auto", "hide", "summarize"].includes(String(action))) return { ok: false, error: "invalid_action" };
+		if (params.keep_lines !== undefined && action !== "hide") return { ok: false, error: "invalid_keep_lines_action" };
 		const wanted = [...new Set(ids as string[])];
 		const records = new Map(snapshot.records.map((record) => [record.call_id, record]));
 		const items: any[] = [];
@@ -424,14 +477,14 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 				}));
 			}
 			if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
-			const response = await tool("manage", { tool_call_ids: batch, action, summaries }, ctx, signal);
+			const response = await tool("manage", { tool_call_ids: batch, action, summaries, ...(params.keep_lines !== undefined ? { keep_lines: params.keep_lines } : {}) }, ctx, signal);
 			if (!Array.isArray(response.items)) return response;
 			items.push(...response.items);
 		}
 		const applied = items.filter((item) => item.ok).length;
 		return { ok: applied === items.length, applied, failed: items.length - applied, items };
 	}
-	pi.registerTool({ name: "manage_context", label: "Manage Context", description: CLEANUP_GUIDANCE + " Requires a non-empty tool_call_ids list; accepts any eligible confirmed ID, not only listed ones. Already hidden/ineligible results are skipped before model calls.", parameters: z.object({ tool_call_ids: z.array(z.string()), action: z.enum(["auto", "hide", "summarize"]).optional() }),
+	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Clean agent-chosen tool_call_ids. action: hide=rules, summarize=session LLM, auto=summary with rule fallback. keep_lines: exact single-line substrings to retain (hide only, total 1024 bytes).", parameters: z.object({ tool_call_ids: z.array(z.string()), action: z.enum(["auto", "hide", "summarize"]).optional(), keep_lines: z.array(z.string()).optional() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await manageChosen(params, ctx, signal)); } });
 	if (typeof pi.registerCommand === "function") {
 	pi.registerCommand("session-navigation", {

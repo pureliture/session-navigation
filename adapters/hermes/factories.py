@@ -66,6 +66,7 @@ from .session import SessionTranscriptStore
 from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
 from session_navigation.policy import refusal_reason, is_destructive_command
+from session_navigation.reminders import BoundaryReminders
 from .allowlist import AdapterRejected, filter_invocation
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.transport import Summarizer, SummarizerError
@@ -116,6 +117,7 @@ class PluginState:
         default=_default_count_llm_middlewares)
     db_error_pending: bool = False
     usage: UsageTracker = field(default_factory=UsageTracker)
+    reminders: BoundaryReminders = field(default_factory=BoundaryReminders)
 
 
 def scope_for(state: PluginState, session_id: Any) -> Scope | None:
@@ -322,7 +324,7 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
     return _track_mutation(state, unhide_context)
 
 
-def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any) -> tuple[bool, str | None, str | None]:
+def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_lines: list[str] | None = None) -> tuple[bool, str | None, str | None]:
     """Apply one rule-based hide through shared engine paths (manage_context helper)."""
     from session_navigation.model import ToolResultRecord, compute_invocation_digest
     from .allowlist import AdapterRejected, filter_invocation
@@ -344,7 +346,7 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any) -> tupl
         status="ok",
         host_handle=entry.host_handle,
     )
-    result = state.engine.compact_sync(scope, record, options_omitted=bool(omitted))
+    result = state.engine.compact_sync(scope, record, options_omitted=bool(omitted), keep_lines=keep_lines)
     if not result.ok or result.plan is None:
         return False, result.error or "not_found", None
     state.presentations.record_compacted(
@@ -395,6 +397,9 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         action = params.get("action", "auto")
         if action not in ("auto", "hide", "summarize"):
             return _dump({"ok": False, "error": "invalid_action"})
+        keep_lines = params.get("keep_lines")
+        if keep_lines is not None and action != "hide":
+            return _dump({"ok": False, "error": "invalid_keep_lines_action"})
         if action == "summarize" and state.summarizer is None:
             return _dump({"ok": False, "error": "summarizer_unavailable"})
         results: list[dict[str, Any]] = []
@@ -421,7 +426,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                 if action == "summarize":
                     results.append({"tool_call_id": entry.call_id, "ok": False, "error": outcome.error or "not_found"})
                     continue
-            ok, error, item_id = _apply_hide_for_manage(state, scope, entry)
+            ok, error, item_id = _apply_hide_for_manage(state, scope, entry, keep_lines)
             row: dict[str, Any] = {"tool_call_id": entry.call_id, "ok": ok}
             if ok:
                 row["item_id"] = item_id
@@ -514,6 +519,28 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 hidden = set(store.hidden_message_keys(scope))
                 if hidden:
                     request_out = drop_messages(api_mode, request_out, hidden)
+                users = [(index, text) for _key, role, index, text in message_keys(api_mode, request) if role == "user"]
+                if users:
+                    entries = state.store.entries(scope.scope_key())
+                    candidates = []
+                    for entry in reversed(entries):
+                        if _cleanup_error(state, scope, entry) is not None:
+                            continue
+                        index = entry.host_handle.get("index", -1)
+                        candidates.append({"tool_call_id": entry.call_id, "tool_name": entry.tool_name,
+                                           "hint": entry.raw_arguments.get("command") or entry.raw_arguments.get("path") or "",
+                                           "bytes_size": len(entry.content.encode()),
+                                           "turn": sum(i <= index for i, _text in users)})
+                    turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
+                    note = state.reminders.note(scope.scope_key(), turn,
+                        estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
+                        kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates)
+                    if note:
+                        request_out = copy.deepcopy(request_out)
+                        if api_mode == "chat_completions":
+                            request_out["messages"].append({"role": "user", "content": note})
+                        elif isinstance(request_out.get("input"), list):
+                            request_out["input"].append({"role": "user", "content": [{"type": "input_text", "text": note}]})
             return {
                 "request": request_out,
                 "source": SOURCE,

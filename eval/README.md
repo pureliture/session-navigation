@@ -1,5 +1,8 @@
 # A/B 실행기
 
+모델 호출 없는 개선 단계의 고정 overhead 비교는 [개선 문서](../docs/evaluation/improvements.md)와
+`capture_overhead.ts` / `measure_overhead.py`를 사용한다. 기존 결과와 새 offline 추정값을 섞지 않는다.
+
 본 평가 모델: `z-ai/glm-5.3-flash` 하나. `results/setup-glm/` 및 `results/smoke/`는 설치 점검으로 본 통계에 포함하지 않는다.
 
 ```bash

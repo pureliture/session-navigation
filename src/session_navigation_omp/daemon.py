@@ -360,18 +360,20 @@ class Daemon:
             return {"ok": False, "error": "invalid_tool_call_ids"}
         wanted = set(wanted) if wanted is not None else None
         items = []
+        total = 0
         for record in reversed(list(snapshot[1].values())):
             if wanted is not None and record.call_id not in wanted:
                 continue
             if self._cleanup_error(scope, record) is not None:
                 continue
+            total += 1
+            if len(items) >= limit:
+                continue
             args = record.invocation.get("arguments", {})
             items.append({"tool_call_id": record.call_id, "tool_name": record.invocation.get("tool_name"),
                           "hint": str(args.get("command") or args.get("path") or "")[:160],
                           "bytes_size": len(record.content.encode("utf-8")), "tokens_display": "—"})
-            if len(items) >= limit:
-                break
-        return {"ok": True, "items": items}
+        return {"ok": True, "items": items, "total": total}
 
     def _manage(self, scope, session, params):
         want = params.get("tool_call_ids")
@@ -385,6 +387,9 @@ class Daemon:
         action = params.get("action", "auto")
         if action not in ("auto", "hide", "summarize"):
             return {"ok": False, "error": "invalid_action"}
+        keep_lines = params.get("keep_lines")
+        if keep_lines is not None and action != "hide":
+            return {"ok": False, "error": "invalid_keep_lines_action"}
         summaries = params.get("summaries")
         if summaries is not None and not isinstance(summaries, dict):
             return {"ok": False, "error": "invalid_summaries"}
@@ -430,7 +435,7 @@ class Daemon:
 
                 result = _run_sync(self.engine.summarize(scope, record, _SuppliedSummarizer()))
             else:
-                result = self.engine.compact_sync(scope, record)
+                result = self.engine.compact_sync(scope, record, keep_lines=keep_lines)
 
             if result.ok and result.plan is not None and result.item is not None:
                 self._fence_set(scope, record, result.item, "summarize" if do_summarize else "compact")

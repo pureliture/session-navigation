@@ -19,6 +19,12 @@ TAIL_EXCERPTS = 2
 MAX_EVIDENCE_EXCERPTS = 8
 MAX_EXCERPT_LINE = 240
 MAX_INVOCATION_BYTES = 2048
+MAX_EXCERPT_BYTES = 3072
+HIGH_SIGNAL_BYTES = 768
+_HIGH_SIGNAL_PATTERN = re.compile(
+    r"^\s*[A-Za-z_][\w.-]{0,63}\s*[:=]\s*\S|\b(?:error|fail(?:ed|ure)?|warn(?:ing)?)\b",
+    re.IGNORECASE,
+)
 _NUMBERED_LINE = re.compile(r"(\d+)\|(.*)")
 
 _ERROR_PATTERNS = (
@@ -208,7 +214,7 @@ class RuleSpanSelector:
         self.max_evidence = max_evidence
         self.max_line_length = max_line_length
 
-    def select(self, original: str) -> SpanChoice | None:
+    def select(self, original: str, *, keep_lines: tuple[str, ...] = ()) -> SpanChoice | None:
         lines = original.splitlines()
         eligible = [index for index, line in enumerate(lines) if 0 < len(line) <= self.max_line_length]
         if not eligible:
@@ -224,6 +230,22 @@ class RuleSpanSelector:
         for index in eligible[-self.tail_excerpts:]:
             if index not in selected:
                 selected.append(index)
+
+        for index, line in enumerate(lines):
+            if any(part in line for part in keep_lines) and index not in selected:
+                selected.append(index)
+        size = sum(len(lines[index].encode("utf-8")) + 1 for index in selected)
+        if size > MAX_EXCERPT_BYTES:
+            return None
+        extra = 0
+        for index in eligible:
+            if index in selected or not _HIGH_SIGNAL_PATTERN.search(lines[index]):
+                continue
+            cost = len(lines[index].encode("utf-8")) + 1
+            if extra + cost <= HIGH_SIGNAL_BYTES and size + cost <= MAX_EXCERPT_BYTES:
+                selected.append(index)
+                extra += cost
+                size += cost
 
         ordered = tuple(lines[index] for index in sorted(selected))
         if not ordered or not excerpts_are_exact(original, ordered):

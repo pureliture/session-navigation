@@ -65,10 +65,21 @@ class SessionNavigationEngine:
         *,
         options_omitted: bool = False,
         allow_fallback: bool = True,
+        keep_lines: list[str] | None = None,
     ) -> MutationResult:
         """Compact/summarize a tool result. Fail-open on any failure.
         Guarantees: Fail-Open on any failure. Never crashes host loop.
         """
+        rule_source = selectable_text(record.content)
+        if keep_lines is not None and summarizer is not None:
+            return MutationResult(ok=False, error="invalid_keep_lines_action")
+        if keep_lines is not None and (
+            not isinstance(keep_lines, list)
+            or any(not isinstance(line, str) or not line or "\n" in line or "\r" in line
+                   or line not in rule_source for line in keep_lines)
+            or sum(len(line.encode("utf-8")) for line in keep_lines) > 1024
+        ):
+            return MutationResult(ok=False, error="invalid_keep_lines")
         # 1. Policy & input validation
         refusal = refusal_reason(record, self.config)
         if refusal is not None:
@@ -85,6 +96,8 @@ class SessionNavigationEngine:
         # 2. Re-compaction / Cache check (Re-summary exclusion)
         existing = self.store.get(scope, item_id)
         if existing is not None:
+            if keep_lines and any(line not in existing.compacted for line in keep_lines):
+                return MutationResult(ok=False, error="keep_lines_conflict")
             if existing.invocation_digest is not None and existing.invocation_digest != record.invocation_digest:
                 return MutationResult(ok=False, error="invocation_conflict")
             if existing.visibility != "hidden":
@@ -113,13 +126,13 @@ class SessionNavigationEngine:
             return MutationResult(ok=True, plan=plan, item=existing)
 
         # 3. Baseline Rule Excerpt check
-        rule_source = selectable_text(record.content)
-        baseline = RuleSpanSelector(
+        selector = RuleSpanSelector(
             head_excerpts=self.config.head_excerpts,
             tail_excerpts=self.config.tail_excerpts,
             max_evidence=self.config.max_evidence_excerpts,
             max_line_length=self.config.max_excerpt_line_length,
-        ).select(rule_source)
+        )
+        baseline = selector.select(rule_source, keep_lines=tuple(keep_lines)) if keep_lines else selector.select(rule_source)
         if baseline is None:
             return MutationResult(ok=False, error="verification_failed")
 
@@ -218,9 +231,10 @@ class SessionNavigationEngine:
         record: ToolResultRecord,
         *,
         options_omitted: bool = False,
+        keep_lines: list[str] | None = None,
     ) -> MutationResult:
         """Deterministic compact (rule-based). No LLM call."""
-        return await self._apply(scope, record, summarizer=None, options_omitted=options_omitted, allow_fallback=True)
+        return await self._apply(scope, record, summarizer=None, options_omitted=options_omitted, allow_fallback=True, keep_lines=keep_lines)
 
     async def summarize(
         self,
@@ -240,11 +254,13 @@ class SessionNavigationEngine:
         *,
         summarizer: Summarizer | None = None,
         options_omitted: bool = False,
+        keep_lines: list[str] | None = None,
     ) -> MutationResult:
         """Synchronously compact content with an optional model and rule fallback."""
         return _run_sync(self._apply(
             scope, record, summarizer=summarizer,
             options_omitted=options_omitted, allow_fallback=True,
+            keep_lines=keep_lines,
         ))
 
     def list_items(self, scope: Scope, query: str = "") -> list[ItemMetadata]:

@@ -71,6 +71,10 @@ class UsageTracker:
             session = self._session(session_id)
             return session.messages.get(unit["unit_id"], (int(unit.get("char_count") or 0) + 3) // 4)
 
+    def context_window(self, session_id: str) -> int | None:
+        with self._lock:
+            return self._session(session_id).context_length
+
     def adjust(self, session_id: str, removed_tokens: int) -> None:
         with self._lock:
             self._session(session_id).removed_tokens += removed_tokens
