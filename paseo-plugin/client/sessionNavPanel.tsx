@@ -126,6 +126,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const [dbErrorOpen, setDbErrorOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (notice !== "Not loaded in chat") return;
+    const timer = setTimeout(() => setNotice((current) => current === notice ? null : current), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const [lastActionByItem, setLastActionByItem] = useState<Record<string, "hide" | "summarize">>({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [pendingGroupId, setPendingGroupId] = useState<string | null>(null);
@@ -1029,7 +1034,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const handleRowPress = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
-    void scrollToMessageInChat(row, rawRows, { onNotFound: () => setNotice("Not loaded in chat") });
+    void scrollToMessageInChat(row, rawRows, {
+      onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
+      onNotFound: () => setNotice("Not loaded in chat"),
+    });
   };
 
   // Prompts and responses can only be hidden (removed from the outgoing context), never summarized.

@@ -8,6 +8,10 @@ class Element {
   style: Record<string, string> = {};
   scrolled = false;
   onClick?: () => void;
+  onEvent?: (event: { type: string; deltaY?: number }) => void;
+  scrollTop = 0;
+  scrollHeight = 0;
+  clientHeight = 0;
   constructor(public attrs: Record<string, string> = {}, public textContent = "") {}
   add(...nodes: Element[]) {
     for (const node of nodes) { node.parent = this; this.children.push(node); }
@@ -35,6 +39,8 @@ class Element {
     return nodes.indexOf(other) > nodes.indexOf(this) ? 4 : 2;
   }
   click() { this.onClick?.(); }
+  dispatchEvent(event: { type: string; deltaY?: number }) { this.onEvent?.(event); return true; }
+  scrollTo({ top }: { top: number }) { this.scrollTop = top; }
   scrollIntoView() { this.scrolled = true; }
 }
 
@@ -60,16 +66,17 @@ test("loads older history over multiple rounds in the chosen chat root", async (
   expect(notice).toBe(false);
 });
 
-test("no history progress gives up with the panel notice callback", async () => {
+test("no history progress waits for the generous timeout, not an idle two-second window", async () => {
   const f = fixture();
   let waits = 0;
   let notice = "";
   expect(await scrollToMessageInChat(row("not-loaded", "user"), f.rows, {
     document: f.doc,
+    now: () => waits * 250,
     afterLoad: async () => { waits++; },
     onNotFound: () => { notice = "Not loaded in chat"; },
   })).toBe(false);
-  expect(waits).toBe(8);
+  expect(waits).toBe(240);
   expect(notice).toBe("Not loaded in chat");
 });
 
@@ -80,10 +87,72 @@ test("scroll fallback handles a reversed scrollable descendant", async () => {
   scroller.clientHeight = 100;
   scroller.scrollTop = -200;
   f.root.add(scroller);
+  let clock = 0;
   await scrollToMessageInChat(row("missing", "user"), [], {
-    document: f.doc, afterLoad: async () => {},
+    document: f.doc, now: () => clock, afterLoad: async () => { clock += 1000; },
   });
   expect(scroller.scrollTop).toBe(-900);
+});
+
+test("pages rearm only after leaving the start and returning with scroll and wheel events", async () => {
+  const f = fixture();
+  class FakeEvent {
+    deltaY?: number;
+    constructor(public type: string, init?: { deltaY?: number }) { this.deltaY = init?.deltaY; }
+  }
+  (f.doc as any).defaultView = { Event: FakeEvent, WheelEvent: FakeEvent };
+  f.root.scrollHeight = 4000;
+  f.root.clientHeight = 500;
+  let ready = false, intent = false, loading = false;
+  let requests = 0, clock = 0, settleTicks = 0;
+  const spinner = new Element({ "data-testid": "load-older-history-spinner" });
+  const slot = new Element({ "data-testid": "older-history-slot" });
+  slot.scrollIntoView = () => { f.root.scrollTop = 0; };
+  f.root.add(slot);
+  const target = row("old-prompt", "user");
+  const targetNode = new Element({ "data-message-id": "old-prompt" });
+  f.root.onEvent = (event) => {
+    if (event.type === "wheel" && (event.deltaY ?? 0) < 0) intent = true;
+    if (f.root.scrollTop > 96) ready = true;
+    if (!ready || !intent || loading || f.root.scrollTop > 1) return;
+    loading = true;
+    ready = false;
+    intent = false;
+    settleTicks = 0;
+    requests++;
+    slot.add(spinner);
+  };
+  expect(await scrollToMessageInChat(target, [target, ...f.rows], {
+    document: f.doc, now: () => clock,
+    afterLoad: async () => {
+      clock += 250;
+      if (!loading || ++settleTicks < 12) return; // Slow page: the previous idle cutoff was two seconds.
+      slot.children = [];
+      f.root.add(requests === 4 ? targetNode : new Element({ "data-message-id": `page-${requests}` }));
+      loading = false;
+      f.root.scrollTop = 500; // Paseo restores the reading anchor after each prepend.
+    },
+  })).toBe(true);
+  expect(requests).toBe(4);
+  expect(targetNode.scrolled).toBe(true);
+  expect(clock).toBeGreaterThanOrEqual(12000);
+});
+
+test("next navigation clears the old failure notice even when the recent target is already loaded", async () => {
+  const f = fixture();
+  let notice: string | null = null;
+  let clock = 0;
+  const options = {
+    document: f.doc, now: () => clock,
+    afterLoad: async () => { clock += 1000; },
+    onStart: () => { if (notice === "Not loaded in chat") notice = null; },
+    onNotFound: () => { notice = "Not loaded in chat"; },
+  };
+  await scrollToMessageInChat(row("missing", "user"), f.rows, options);
+  expect(notice).toBe("Not loaded in chat");
+  expect(await scrollToMessageInChat(f.previous, f.rows, options)).toBe(true);
+  expect(notice).toBeNull();
+  expect(f.anchor.scrolled).toBe(true);
 });
 
 function row(id: string, kind: Row["kind"] = "tool"): Row {
@@ -178,7 +247,10 @@ test("failed expansion still scrolls and highlights the native group", async () 
 test("missing document/chat/target is safe, non-tool direct and snippet navigation still work", async () => {
   const f = fixture();
   expect(await scrollToMessageInChat(f.second, [], { document: new Element() })).toBe(false);
-  expect(await scrollToMessageInChat(row("missing"), [], { document: f.doc })).toBe(false);
+  let clock = 0;
+  expect(await scrollToMessageInChat(row("missing"), [], {
+    document: f.doc, now: () => clock, afterLoad: async () => { clock += 1000; },
+  })).toBe(false);
   await scrollToMessageInChat(f.previous, f.rows, f.options);
   expect(f.anchor.scrolled).toBe(true);
   const unmatched = row("different-id", "user");

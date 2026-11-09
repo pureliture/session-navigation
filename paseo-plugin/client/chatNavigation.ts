@@ -142,28 +142,40 @@ type NavigationOptions = {
   document?: any;
   afterExpand?: () => Promise<void>;
   afterLoad?: () => Promise<void>;
+  now?: () => number;
+  onStart?: () => void;
   onNotFound?: () => void;
   turnExpanded?: boolean;
 };
 
-function historySignature(root: any): string {
-  return JSON.stringify((Array.from(root.querySelectorAll(ROW)) as any[]).map((node) =>
-    [node.getAttribute("data-history-row-id"), node.getAttribute("data-message-id")]));
-}
-
 function loadOlder(root: any, doc: any): void {
   const scrollable = [root, ...Array.from(root.querySelectorAll("*"))].find((node: any) =>
     node.scrollHeight > node.clientHeight) ?? root;
-  // The older-history slot is at the logical start even for Paseo's inverted list.
+  const emit = (type: "scroll" | "wheel") => {
+    const Constructor = doc.defaultView?.[type === "wheel" ? "WheelEvent" : "Event"];
+    if (Constructor) scrollable.dispatchEvent?.(new Constructor(type, { bubbles: true, deltaY: -1 }));
+  };
+  const reversed = doc.defaultView?.getComputedStyle?.(scrollable)?.flexDirection === "column-reverse" ||
+    scrollable.scrollTop < 0;
+  const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
+  const top = reversed ? -extent : 0;
+  const scroll = (position: number) => {
+    if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top: position, behavior: "instant" });
+    else scrollable.scrollTop = position;
+    emit("scroll");
+  };
+  // Paseo latches pagination at the edge. Leave its 96px threshold before re-entering.
+  scroll(top + Math.min(extent, 192));
+  emit("wheel");
   const edge = root.querySelector('[data-testid="older-history-slot"]') ?? root.querySelector(ROW);
   edge?.scrollIntoView?.({ behavior: "instant", block: "start" });
   if (!root.querySelector('[data-testid="older-history-slot"]')) {
-    const reversed = doc.defaultView?.getComputedStyle?.(scrollable)?.flexDirection === "column-reverse" ||
-      scrollable.scrollTop < 0;
-    const top = reversed ? -(scrollable.scrollHeight - scrollable.clientHeight) : 0;
-    if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top, behavior: "instant" });
-    else scrollable.scrollTop = top;
+    scroll(top);
+  } else {
+    emit("scroll");
   }
+  // Upward wheel intent also rearms a latched/dormant paginator already at scrollTop=0.
+  emit("wheel");
 }
 
 export async function scrollToMessageInChat(
@@ -172,25 +184,23 @@ export async function scrollToMessageInChat(
   options: NavigationOptions = {},
 ): Promise<boolean> {
   const version = ++navigationVersion;
+  options.onStart?.();
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
   const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row);
   if (!root) { options.onNotFound?.(); return false; }
-  const deadline = Date.now() + 15000;
+  const now = options.now ?? Date.now;
+  const deadline = now() + 60000;
   const wait = options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 250)));
+  let lastAttempt = -Infinity;
   while (version === navigationVersion) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
     if (version !== navigationVersion) return false;
-    if (Date.now() >= deadline) break;
-    const signature = historySignature(root);
-    loadOlder(root, doc);
-    let progressed = false;
-    for (let attempt = 0; (attempt < 8 || root.querySelector('[data-testid="load-older-history-spinner"]')) &&
-      Date.now() < deadline; attempt++) {
-      await wait();
-      if (version !== navigationVersion) return false;
-      if (historySignature(root) !== signature) { progressed = true; break; }
+    if (now() >= deadline) break;
+    if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 1000) {
+      loadOlder(root, doc);
+      lastAttempt = now();
     }
-    if (!progressed) break;
+    await wait();
   }
   if (version === navigationVersion) options.onNotFound?.();
   return false;
