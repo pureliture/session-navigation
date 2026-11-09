@@ -1,0 +1,575 @@
+{
+  "groups": {
+    "omp/A": {
+      "sessions": 4,
+      "after_compaction": 0,
+      "repeat_visible": 4,
+      "new": 104,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash_after_compaction": 0,
+      "bash_repeat_visible": 2,
+      "bash_new": 12,
+      "read_after_compaction": 0,
+      "read_repeat_visible": 2,
+      "read_new": 92
+    },
+    "omp/B-new": {
+      "sessions": 4,
+      "after_compaction": 17,
+      "repeat_visible": 4,
+      "new": 105,
+      "same_turn": 13,
+      "later_turn": 4,
+      "unhide_calls": 9,
+      "bash_after_compaction": 0,
+      "bash_repeat_visible": 0,
+      "bash_new": 12,
+      "read_after_compaction": 17,
+      "read_repeat_visible": 4,
+      "read_new": 93
+    },
+    "omp/B-old": {
+      "sessions": 4,
+      "after_compaction": 4,
+      "repeat_visible": 4,
+      "new": 103,
+      "same_turn": 3,
+      "later_turn": 1,
+      "unhide_calls": 22,
+      "bash_after_compaction": 1,
+      "bash_repeat_visible": 1,
+      "bash_new": 12,
+      "read_after_compaction": 3,
+      "read_repeat_visible": 3,
+      "read_new": 91
+    }
+  },
+  "unavailable": [
+    {
+      "id": "v2cf-hermes-atlas-A-1",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-atlas-A-2",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-atlas-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-atlas-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-atlas-B-old-1",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-atlas-B-old-2",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-boreal-A-1",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-boreal-A-2",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-boreal-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-boreal-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-boreal-B-old-1",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v2cf-hermes-boreal-B-old-2",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    }
+  ],
+  "sessions": [
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 0,
+      "new": 27,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 24
+      },
+      "id": "v2cf-omp-atlas-A-1",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 2,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 2,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 23
+      },
+      "id": "v2cf-omp-atlas-A-2",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 26,
+      "after_compaction": 1,
+      "repeat_visible": 0,
+      "new": 25,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 22
+      },
+      "id": "v2cf-omp-atlas-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 33,
+      "after_compaction": 3,
+      "repeat_visible": 2,
+      "new": 28,
+      "same_turn": 0,
+      "later_turn": 3,
+      "unhide_calls": 7,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 3,
+        "repeat_visible": 2,
+        "new": 25
+      },
+      "id": "v2cf-omp-atlas-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 29,
+      "after_compaction": 4,
+      "repeat_visible": 0,
+      "new": 25,
+      "same_turn": 3,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 3,
+        "repeat_visible": 0,
+        "new": 22
+      },
+      "id": "v2cf-omp-atlas-B-old-1",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 27,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 21,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 24
+      },
+      "id": "v2cf-omp-atlas-B-old-2",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 23
+      },
+      "id": "v2cf-omp-boreal-A-1",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 26,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 25,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v2cf-omp-boreal-A-2",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 39,
+      "after_compaction": 13,
+      "repeat_visible": 1,
+      "new": 25,
+      "same_turn": 13,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 13,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v2cf-omp-boreal-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 27,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 24
+      },
+      "id": "v2cf-omp-boreal-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 23
+      },
+      "id": "v2cf-omp-boreal-B-old-1",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 2,
+      "new": 25,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v2cf-omp-boreal-B-old-2",
+      "host": "omp",
+      "arm": "B-old"
+    }
+  ],
+  "details": {
+    "v2cf-omp-atlas-A-1": [],
+    "v2cf-omp-atlas-A-2": [],
+    "v2cf-omp-atlas-B-new-1": [
+      {
+        "turn": 24,
+        "tool": "read",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 17
+      }
+    ],
+    "v2cf-omp-atlas-B-new-2": [
+      {
+        "turn": 23,
+        "tool": "read",
+        "files": [
+          "audit-01"
+        ],
+        "gap": 18
+      },
+      {
+        "turn": 23,
+        "tool": "read",
+        "files": [
+          "audit-08"
+        ],
+        "gap": 13
+      },
+      {
+        "turn": 23,
+        "tool": "read",
+        "files": [
+          "audit-15"
+        ],
+        "gap": 6
+      }
+    ],
+    "v2cf-omp-atlas-B-old-1": [
+      {
+        "turn": 1,
+        "tool": "read",
+        "files": [
+          "audit-01"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 1,
+        "tool": "bash",
+        "files": [
+          "audit-01"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 8,
+        "tool": "read",
+        "files": [
+          "audit-08"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 24,
+        "tool": "read",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 20
+      }
+    ],
+    "v2cf-omp-atlas-B-old-2": [],
+    "v2cf-omp-boreal-A-1": [],
+    "v2cf-omp-boreal-A-2": [],
+    "v2cf-omp-boreal-B-new-1": [
+      {
+        "turn": 8,
+        "tool": "read",
+        "files": [
+          "audit-08"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 9,
+        "tool": "read",
+        "files": [
+          "audit-09"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 10,
+        "tool": "read",
+        "files": [
+          "audit-10"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 12,
+        "tool": "read",
+        "files": [
+          "audit-11"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 13,
+        "tool": "read",
+        "files": [
+          "audit-12"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 14,
+        "tool": "read",
+        "files": [
+          "audit-13"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 15,
+        "tool": "read",
+        "files": [
+          "audit-14"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 16,
+        "tool": "read",
+        "files": [
+          "audit-15"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 17,
+        "tool": "read",
+        "files": [
+          "audit-16"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 18,
+        "tool": "read",
+        "files": [
+          "audit-17"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 19,
+        "tool": "read",
+        "files": [
+          "audit-18"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 20,
+        "tool": "read",
+        "files": [
+          "audit-19"
+        ],
+        "gap": 0
+      },
+      {
+        "turn": 21,
+        "tool": "read",
+        "files": [
+          "audit-20"
+        ],
+        "gap": 0
+      }
+    ],
+    "v2cf-omp-boreal-B-new-2": [],
+    "v2cf-omp-boreal-B-old-1": [],
+    "v2cf-omp-boreal-B-old-2": []
+  }
+}

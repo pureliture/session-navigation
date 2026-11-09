@@ -93,3 +93,13 @@ judge는 실제 전송된 rule replacement도 채점하지만 LLM summary 점수
 JSON 실패는 동일 입력에 한 번만 4,096-token 한도로 재시도하고 모든 시도의 비용을 wire에 남긴다.
 
 v1 설계/평가 한계는 [design-v1](../docs/evaluation/design-v1.md), 수치는 [results](../docs/evaluation/results.md)를 참고한다.
+
+## v3 (중단) 과 Hide 이후 재접근 지표
+
+`v2_rereads.py DIR`은 events의 read/bash와 성공한 정리 operation을 시간순으로 맞춰
+(a) 숨김 대상 파일 재접근, (b) 보이는 상태의 재접근, (c) 신규를 나눈다.
+(a)는 같은 턴과 이후 턴으로 쪼개고 unhide 수를 함께 낸다. `v2_analyze.py`가 자동으로 호출하며
+`rereads.json`을 남긴다. 접근 proxy이며 정보 유실로 인한 재독의 인과 증거가 아니다.
+`tool_execution_start`가 없는 호스트(현재 Hermes)는 0이 아니라 `unavailable`로 남긴다.
+v3 Crouton 실행은 모델 폐기(HTTP 404)로 중단됐다. `2026-11-09-v3-crouton`에는
+`non-qualifying.json`이 있으므로 gate/pilot으로 쓸 수 없고 통계에 섞지 않는다.

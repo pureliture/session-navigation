@@ -287,6 +287,10 @@ OMP summary는 입력 12K 제한으로 일부 사실을 놓쳤다. 별도 DeepSe
 A $0.114316 / B-new $0.202723(**+77.3%**)로 절감은 입증하지 못했다.
 [v2 설계](docs/evaluation/design.md) · [v2 결과·실패·비용](docs/evaluation/results-v2.md)
 
+[v3 구현·재평가 차단](docs/evaluation/results-v3.md): 줄번호 주요 정보 보존과 영어·배치 정리 안내를
+구현했다. Crouton이 2026-11-09 폐기되어 재평가는 차단됐으며 DeepSeek 비용 비교는 시작하지 않았다.
+v2 로그의 Hide 이후 재접근 지표를 추가했으며, 개선 효과는 아직 미검증이다.
+
 **v1:** 실제 OMP/Hermes에서 **GLM 5.3 Flash**로 A/B 48세션(셀별 3회)을 실행했다.
 양 군 모두 과제·회상 24/24 성공했지만, 자발적 hide는 OMP B 한 세션뿐이고 LLM summary는 없어 요약 품질은 미평가다.
 보고 비용은 B가 OMP +10.91%, Hermes +5.53%였으며, 정리의 독립적인 인과 효과로 단정하지 않는다.

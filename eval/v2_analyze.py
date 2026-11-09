@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from analyze import analyze, contains, is_work_call, label, native_records, read, read_wire
+from v2_rereads import rereads
 from session_navigation.model import EngineConfig, ToolResultRecord, compute_invocation_digest, compute_sha256
 from session_navigation.policy import refusal_reason
 
@@ -138,6 +139,7 @@ def score(directory):
                 "reference_cost": sum(u["gpt41_reference_usd"] for u in usage), "reference_no_cache": sum(u["gpt41_uncached_upper_usd"] for u in usage)}
     gate = adoption_gate(reports)
     result = {"groups": groups, "deepseek_gate": gate}
+    result["rereads"] = rereads(directory)["groups"]
     (directory / "summary-v2.json").write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
     return result

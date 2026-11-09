@@ -19,10 +19,69 @@ from v2_cost import projection
 from v2_archive import archive
 from analyze import read_wire
 from v2_cache import transitions
+from v2_rereads import session_rereads
 import gzip
 
 
 class V2Tests(unittest.TestCase):
+    def test_rereads_empty_events_and_rejected_cleanup(self):
+        self.assertEqual(session_rereads([], [])["work_calls"], 0)
+        events = [{"time": index, "turn": index, "kind": "host_event",
+                   "event": {"type": "tool_execution_start", "toolCallId": str(index),
+                             "toolName": "read", "args": {"path": "audit-01.jsonl"}}}
+                  for index in (1, 3)]
+        events.append({"time": 2, "turn": 1, "kind": "nav_end", "id": "n"})
+        rejected = [{"id": "n", "name": "hide_context", "turn": 1,
+                     "args": {"tool_call_id": "1"}, "result": {"ok": False}}]
+        report = session_rereads(events, rejected)
+        self.assertEqual((report["after_compaction"], report["repeat_visible"]), (0, 1))
+
+    def test_rereads_separate_hidden_targets_from_still_visible_repeats(self):
+        def start(time, turn, call_id, tool, args):
+            return {"time": time, "turn": turn, "kind": "host_event",
+                    "event": {"type": "tool_execution_start", "toolCallId": call_id,
+                              "toolName": tool, "args": args}}
+
+        events = [
+            start(1, 1, "c1", "read", {"path": "audit-01.jsonl"}),
+            start(2, 1, "c2", "bash", {"command": "wc -l audit-02.jsonl"}),
+            {"time": 3, "turn": 1, "kind": "nav_end", "id": "n1"},
+            start(4, 1, "c3", "bash", {"command": "grep seal audit-01.jsonl"}),
+            start(5, 3, "c4", "read", {"path": "audit-02.jsonl"}),
+            start(6, 3, "c5", "read", {"path": "audit-09.jsonl"}),
+        ]
+        operations = [{"id": "n1", "name": "manage_context", "turn": 1,
+                       "args": {"action": "hide", "tool_call_ids": ["c1"]},
+                       "result": {"ok": True, "item_id": "item_1"}}]
+        summary = session_rereads(events, operations)
+        self.assertEqual(summary["after_compaction"], 1)
+        self.assertEqual(summary["repeat_visible"], 1)
+        self.assertEqual(summary["new"], 3)
+        self.assertEqual((summary["same_turn"], summary["later_turn"]), (1, 0))
+        self.assertEqual(summary["bash"], {"after_compaction": 1, "repeat_visible": 0, "new": 1})
+        self.assertEqual(summary["read"]["repeat_visible"], 1)
+
+    def test_unhide_clears_the_hidden_file_before_a_later_read(self):
+        events = [
+            {"time": 1, "turn": 1, "kind": "host_event",
+             "event": {"type": "tool_execution_start", "toolCallId": "c1", "toolName": "read",
+                       "args": {"path": "audit-01.jsonl"}}},
+            {"time": 2, "turn": 1, "kind": "nav_end", "id": "n1"},
+            {"time": 3, "turn": 2, "kind": "nav_end", "id": "n2"},
+            {"time": 4, "turn": 2, "kind": "host_event",
+             "event": {"type": "tool_execution_start", "toolCallId": "c2", "toolName": "read",
+                       "args": {"path": "audit-01.jsonl"}}},
+        ]
+        operations = [
+            {"id": "n1", "name": "hide_context", "turn": 1, "args": {"tool_call_id": "c1"},
+             "result": {"ok": True, "item_id": "item_1"}},
+            {"id": "n2", "name": "unhide_context", "turn": 2, "args": {"item_id": "item_1"},
+             "result": {"ok": True}},
+        ]
+        summary = session_rereads(events, operations)
+        self.assertEqual((summary["after_compaction"], summary["repeat_visible"]), (0, 1))
+        self.assertEqual(summary["unhide_calls"], 1)
+
     def test_empty_length_answer_has_distinct_failure_kind(self):
         body = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
         self.assertEqual(response_failure_kind(body), "empty_answer_length")
