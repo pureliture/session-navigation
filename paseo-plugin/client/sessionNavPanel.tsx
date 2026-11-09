@@ -700,6 +700,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       },
 
       noticeBar: {
+        flexShrink: 0,
         paddingHorizontal: pad,
         paddingVertical: 4,
         backgroundColor: theme.colors.surface1,
@@ -1543,10 +1544,16 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const isLoading = resolvedScopeKey ? listQuery.isPending : fallbackTimelineQuery.isPending;
+  const noticeBar = notice ? (
+    <View accessibilityRole="alert" style={styles.noticeBar}>
+      <Text style={styles.noticeText}>{notice}</Text>
+    </View>
+  ) : null;
 
   if (!inView) {
     return (
       <View style={styles.screen}>
+        {noticeBar}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Outline</Text>
@@ -1574,6 +1581,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   if (!isLoading && rows.length === 0) {
     return (
       <View style={styles.screen}>
+        {noticeBar}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Outline</Text>
@@ -1649,11 +1657,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         </View>
       ) : null}
 
-      {notice ? (
-        <View style={styles.noticeBar}>
-          <Text style={styles.noticeText}>{notice}</Text>
-        </View>
-      ) : null}
+      {noticeBar}
       {listQuery.isError ? <Text style={styles.errorText}>List failed — retrying.</Text> : null}
 
       {/* 2. Main Timeline Tree List */}

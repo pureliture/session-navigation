@@ -171,6 +171,8 @@ type NavigationOptions = {
   onStart?: () => void;
   onNotFound?: () => void;
   getHistory?: () => Promise<TimelineHistory>;
+  historyTimeoutMs?: number;
+  timeoutMs?: number;
   turnExpanded?: boolean;
 };
 
@@ -286,17 +288,43 @@ export async function scrollToMessageInChat(
   options: NavigationOptions = {},
 ): Promise<boolean> {
   const version = ++navigationVersion;
-  options.onStart?.();
-  let history: TimelineHistory | undefined;
-  try { history = await options.getHistory?.(); } catch { /* An unavailable history cannot prove absence. */ }
-  if (version !== navigationVersion) return false;
-  if (history?.complete && !historyContainsRow(history, row)) {
-    options.onNotFound?.();
+  let found = false;
+  try {
+    options.onStart?.();
+    found = await withTimeout(navigate(row, rows, version, options), options.timeoutMs ?? 60000);
+    return found;
+  } catch {
     return false;
+  } finally {
+    if (!found && version === navigationVersion) {
+      navigationVersion++;
+      options.onNotFound?.();
+    }
   }
+}
+
+async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Chat navigation timed out")), milliseconds);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function navigate(row: Row, rows: Row[], version: number, options: NavigationOptions): Promise<boolean> {
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
   const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row);
-  if (!root) { options.onNotFound?.(); return false; }
+  if (!root) return false;
+  if (findIdentity(root, row) || findText(root, row.summary_line)) {
+    if (await navigateLoaded(row, rows, root, version, options)) return true;
+  }
+  const history = options.getHistory
+    ? await withTimeout(options.getHistory(), options.historyTimeoutMs ?? 3000) : undefined;
+  if (version !== navigationVersion) return false;
+  if (history?.complete && !historyContainsRow(history, row)) return false;
   const now = options.now ?? Date.now;
   const deadline = now() + 60000;
   const wait = options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
@@ -323,7 +351,6 @@ export async function scrollToMessageInChat(
     }
     await wait();
   }
-  if (version === navigationVersion) options.onNotFound?.();
   return false;
 }
 

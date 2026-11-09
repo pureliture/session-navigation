@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
+import { QueryClient, onlineManager } from "@tanstack/react-query";
 import type { Row } from "../shared/sessionNav";
 import { historyContainsRow, identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { readTimelineHistory } from "./timelineHistory";
 
 class Element {
   children: Element[] = [];
@@ -81,6 +83,103 @@ for (const entries of [[], [{ item: { type: "user_message", messageId: "unrelate
     expect(f.root.scrollTop).toBe(0);
   });
 }
+
+test("A's actual empty projected timeline rejects its imported OMP outline immediately", async () => {
+  const page = {
+    agentId: "35a10cb4-b1d9-429e-8cfc-6066416dedf4", direction: "tail", projection: "projected",
+    epoch: "594a7c66-e737-412a-95c3-cd9c3114c003", reset: false, staleCursor: false, gap: false,
+    window: { minSeq: 0, maxSeq: 0, nextSeq: 1 }, startCursor: null, endCursor: null,
+    hasOlder: false, hasNewer: false, entries: [], error: null,
+  };
+  const client = new QueryClient();
+  const root = new Element({ "data-testid": "agent-chat-scroll" }, "Start chatting with this agent...");
+  const doc = new Element().add(root);
+  let notices = 0, waits = 0, requests = 0;
+  const rows = Array.from({ length: 1011 }, (_, i) => row(`usr_${i}`, "user"));
+  try {
+    const getHistory = () => client.fetchQuery({ queryKey: ["paseo-agent-timeline-history", page.agentId],
+      staleTime: 5000, queryFn: () => readTimelineHistory({ refetch: async (): Promise<any> => {
+        requests++;
+        return page;
+      } }) });
+    await getHistory();
+    expect(await scrollToMessageInChat(rows[0], rows, {
+      document: doc, getHistory, afterLoad: async () => { waits++; },
+      onNotFound: () => { notices++; },
+    })).toBe(false);
+    expect([notices, waits, requests]).toEqual([1, 0, 1]);
+    expect(root.scrolled).toBe(false);
+  } finally { client.clear(); }
+});
+
+test("missing chat root reports failure without waiting on history", async () => {
+  let notices = 0, requests = 0;
+  expect(await scrollToMessageInChat(row("absent", "user"), [], {
+    document: new Element(), getHistory: () => { requests++; return new Promise(() => {}); },
+    onNotFound: () => { notices++; },
+  })).toBe(false);
+  expect([notices, requests]).toEqual([1, 0]);
+});
+
+test("an offline-paused history cache is bounded and reports failure", async () => {
+  const client = new QueryClient();
+  const f = fixture();
+  let notices = 0;
+  onlineManager.setOnline(false);
+  try {
+    const getHistory = () => client.fetchQuery({ queryKey: ["offline-history"],
+      queryFn: async () => ({ entries: [], complete: true }) });
+    const pending = getHistory();
+    expect(client.getQueryState(["offline-history"])?.fetchStatus).toBe("paused");
+    expect(await scrollToMessageInChat(row("absent", "user"), f.rows, {
+      document: f.doc, getHistory: () => pending, historyTimeoutMs: 5,
+      onNotFound: () => { notices++; },
+    })).toBe(false);
+    expect(notices).toBe(1);
+    onlineManager.setOnline(true);
+    client.clear();
+    await pending.catch(() => {});
+  } finally {
+    onlineManager.setOnline(true);
+    client.clear();
+  }
+});
+
+test("history errors and unexpected DOM errors report failure once", async () => {
+  const f = fixture();
+  for (const options of [
+    { document: f.doc, getHistory: async (): Promise<never> => { throw new Error("offline"); } },
+    { document: { querySelectorAll: () => { throw new Error("detached document"); } } },
+  ]) {
+    let notices = 0;
+    expect(await scrollToMessageInChat(row("absent", "user"), f.rows, {
+      ...options, onNotFound: () => { notices++; },
+    })).toBe(false);
+    expect(notices).toBe(1);
+  }
+});
+
+test("overall timeout covers a stalled load callback", async () => {
+  const f = fixture();
+  let notices = 0;
+  expect(await scrollToMessageInChat(row("absent", "user"), f.rows, {
+    document: f.doc, timeoutMs: 5, afterLoad: () => new Promise(() => {}),
+    onNotFound: () => { notices++; },
+  })).toBe(false);
+  expect(notices).toBe(1);
+});
+
+test("a superseded history request cannot overwrite a later successful navigation", async () => {
+  const f = fixture();
+  let notices = 0;
+  const pending = scrollToMessageInChat(row("absent", "user"), f.rows, {
+    document: f.doc, getHistory: () => new Promise(() => {}), historyTimeoutMs: 5,
+    onNotFound: () => { notices++; },
+  });
+  expect(await scrollToMessageInChat(f.previous, f.rows, { document: f.doc })).toBe(true);
+  expect(await pending).toBe(false);
+  expect(notices).toBe(0);
+});
 
 test("OMP message text and tool call identity/input/original output match native timeline rows", () => {
   const history = { complete: true, entries: [
