@@ -6,6 +6,14 @@ export function fmtBytes(n: number | undefined): string {
   return `${(n / 1024).toFixed(1)} KiB`;
 }
 
+export function fmtTokenCount(n: number): string {
+  return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}K`;
+}
+
+export function fmtTokens(n: number): string {
+  return `${fmtTokenCount(n)} tok`;
+}
+
 export function truncateString(str: string, maxLen = 120): string {
   if (!str) return "";
   const singleLine = str.replace(/\r?\n/g, " ").trim();
@@ -29,6 +37,7 @@ export type OutlineRow =
       title: string;
       subTitle: string;
       totalBytes: number;
+      totalTokens: number | null;
       children: Row[];
       allHidden: boolean;
       allSummarized: boolean;
@@ -50,6 +59,9 @@ export function buildGroupedRows(
     const first = currentGroupTools[0];
     const groupId = `group:${first.item_id ?? first.tool_call_id}`;
     const totalBytes = currentGroupTools.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0);
+    const totalTokens = currentGroupTools.every((r) => typeof r.tokens === "number")
+      ? currentGroupTools.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
+      : null;
     const hiddenCount = currentGroupTools.filter((r) => r.status === "hidden").length;
     const allHidden = hiddenCount === currentGroupTools.length && currentGroupTools.length > 0;
     const mixed = hiddenCount > 0 && !allHidden;
@@ -81,6 +93,7 @@ export function buildGroupedRows(
       title,
       subTitle,
       totalBytes,
+      totalTokens,
       children: currentGroupTools,
       allHidden,
       allSummarized,

@@ -141,3 +141,13 @@ for (const error of ["db_error", "db_full", "summarizer_unavailable"]) {
     } finally { restorePath(dir); }
   });
 }
+
+test("list carries measured row tokens and the session context", async () => {
+  const dir = fakeCli(`echo '{"ok":true,"context":{"used_tokens":9069,"max_tokens":32768,"source":"omp_session_usage"},"items":[{"item_id":"t","tool_call_id":"call","status":"visible","version":1,"tokens":44,"tokens_display":"44 tok"}]}'`);
+  try {
+    const result: any = await listItems({ scope_key: "token-fields" });
+    expect(result.context).toEqual({ used_tokens: 9069, max_tokens: 32768, source: "omp_session_usage" });
+    expect(result.items[0].tokens).toBe(44);
+    expect(result.items[0].tokens_display).toBe("44 tok");
+  } finally { restorePath(dir); }
+});

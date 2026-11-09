@@ -85,6 +85,7 @@ function asRow(item: unknown): z.infer<typeof RowSchema> {
         : undefined,
     version: num(obj.version) ?? 1,
     tokens_display: str(obj.tokens_display) ?? "—",
+    tokens: num(obj.tokens),
     cost_usd: num(obj.cost_usd) ?? null,
     source: str(obj.source) ?? str(obj.compaction_source),
     bytes_size: num(obj.bytes_size),
@@ -252,7 +253,11 @@ export async function listItems(input: RpcInput<typeof listItemsRpc>) {
     } else {
       dbNoteSuccess(input.scope_key);
     }
-    return { ok: true, items };
+    const ctx = typeof res.context === "object" && res.context !== null ? (res.context as Record<string, unknown>) : null;
+    const used = num(ctx?.used_tokens);
+    const context =
+      used !== undefined ? { used_tokens: used, max_tokens: num(ctx?.max_tokens) ?? null, source: str(ctx?.source) } : undefined;
+    return { ok: true, items, ...(context ? { context } : {}) };
   } catch {
     return { ok: false, items: [], error: "db_error", choices: ["abort_request", "send_original"] };
   }

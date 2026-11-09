@@ -12,6 +12,7 @@ export const RowSchema = z.object({
   visibility: z.enum(["hidden", "visible"]).optional(),
   version: z.number().int(),
   tokens_display: z.string(),
+  tokens: z.number().optional(),
   cost_usd: z.number().nullable().optional(),
   source: z.string().optional(),
   bytes_size: z.number().optional(),
@@ -64,6 +65,11 @@ export const ManageResultSchema = z.object({
 export const ListResultSchema = z.object({
   ok: z.boolean(),
   items: z.array(RowSchema),
+  context: z.object({
+    used_tokens: z.number(),
+    max_tokens: z.number().nullable().optional(),
+    source: z.string().optional(),
+  }).optional(),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });

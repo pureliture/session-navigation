@@ -3,6 +3,8 @@ import type { Row } from "../shared/sessionNav";
 import {
   buildGroupedRows,
   fmtBytes,
+  fmtTokenCount,
+  fmtTokens,
   isSummarizedRow,
   truncateString,
   type OutlineRow,
@@ -194,5 +196,23 @@ describe("groupMutationItems", () => {
     expect(groupMutationItems({ children: rows }, "hide")).toEqual([{ item_id: "a", expected_version: 2 }]);
     expect(groupMutationItems({ children: rows }, "summarize")).toEqual([{ item_id: "a", expected_version: 2 }]);
     expect(groupMutationItems({ children: rows }, "unhide")).toEqual([{ item_id: "b", expected_version: 5 }]);
+  });
+});
+
+describe("token display", () => {
+  const tool = (id: string, tokens?: number): Row => ({
+    item_id: id, tool_call_id: id, kind: "tool", tool_name: "bash", status: "visible", version: 1,
+    tokens_display: tokens === undefined ? "—" : `${tokens} tok`, bytes_size: 100, tokens,
+  });
+  const group = (rows: Row[]) => buildGroupedRows(rows, {}, {}).find((r) => r.type === "group") as any;
+
+  test("formats counts like Paseo's K figure", () => {
+    expect(fmtTokens(44)).toBe("44 tok");
+    expect(fmtTokenCount(9069)).toBe("9.1K");
+  });
+
+  test("group shows summed tokens only when every member is measured", () => {
+    expect(group([tool("a", 30), tool("b", 12)]).totalTokens).toBe(42);
+    expect(group([tool("a", 30), tool("b")]).totalTokens).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from dataclasses import replace
 from typing import Any
@@ -47,19 +48,21 @@ def _tool_preview(arguments: Any, output: str) -> dict[str, str]:
     }
 
 
-def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], dict[str, ToolResultRecord]]:
-    """Load chronological timeline entries (user, assistant, tools) and confirmed ToolResultRecords for an OMP session."""
+def _read_omp_session(scope_key: str) -> tuple[list[dict[str, Any]], list[int], list[tuple[int, int]]] | None:
+    """Read an OMP session: messages, positions where history was compacted/reset, and injected reminders (position, chars)."""
     parts = scope_key.split(":")
     if len(parts) < 3 or parts[0] != "pi":
-        return [], {}
+        return None
     session_id = parts[2]
     sessions_root = os.path.expanduser("~/.omp/agent/sessions")
     pattern = os.path.join(sessions_root, "**", f"*_{session_id}.jsonl")
     matched = glob.glob(pattern, recursive=True)
     if not matched:
-        return [], {}
+        return None
     path = matched[0]
     messages: list[dict[str, Any]] = []
+    boundaries: list[int] = []
+    injected: list[tuple[int, int]] = []
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -73,10 +76,142 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
                 if isinstance(data, dict):
                     if data.get("type") == "message" and isinstance(data.get("message"), dict):
                         messages.append(data["message"])
+                    elif data.get("type") in ("compaction", "branch_summary", "reset_boundary"):
+                        boundaries.append(len(messages))
+                    elif data.get("type") == "custom" and isinstance(data.get("data"), dict) \
+                            and isinstance(data["data"].get("reminder"), str):
+                        injected.append((len(messages), len(data["data"]["reminder"])))
                     elif "role" in data:
                         messages.append(data)
     except Exception:
+        return None
+    return messages, boundaries, injected
+
+
+def _omp_context_window(provider: Any, model: Any) -> int | None:
+    """Look up a model's contextWindow in ~/.omp/agent/models.yml (custom OMP models)."""
+    if not isinstance(provider, str) or not isinstance(model, str):
+        return None
+    try:
+        with open(os.path.expanduser("~/.omp/agent/models.yml"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+    head = re.search(rf"^(\s*){re.escape(provider)}:\s*$", text, re.M)
+    if not head:
+        return None
+    indent = len(head.group(1))
+    block = []
+    for line in text[head.end():].splitlines()[1:]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        block.append(line)
+    for entry in re.split(r"^\s*-\s+", "\n".join(block), flags=re.M):
+        if re.match(rf"""id:\s*["']?{re.escape(model)}["']?\s*$""", entry, re.M):
+            window = re.search(r"^\s*contextWindow:\s*(\d+)", entry, re.M)
+            return int(window.group(1)) if window else None
+    return None
+
+
+def _message_weights(idx: int, msg: dict[str, Any]) -> list[tuple[str | None, int]]:
+    """Character weight of each block, keyed by the outline row it belongs to ("?" = unweighable)."""
+    role = msg.get("role")
+    content = msg.get("content")
+    blocks = content if isinstance(content, list) else [{"type": "text", "text": content}] if isinstance(content, str) else []
+    owner = {"user": f"usr_{idx}", "assistant": f"ast_{idx}", "toolResult": msg.get("toolCallId")}.get(role)
+    out: list[tuple[str | None, int]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text" and isinstance(block.get("text"), str):
+            out.append((owner, len(block["text"])))
+        elif kind == "toolCall":
+            out.append((block.get("id"), len(str(block.get("name", ""))) + len(json.dumps(block.get("arguments"), ensure_ascii=False))))
+        elif kind != "thinking":
+            out.append(("?", 0))
+    return out
+
+
+def _measured_tokens(
+    messages: list[dict[str, Any]], boundaries: list[int], mutation_times: list[float],
+    injected: list[tuple[int, int]] = (),
+) -> tuple[dict[str, int], dict[str, Any] | None]:
+    """Spec D2 "실측 배분": split each request's measured prompt growth over the rows it added, by characters.
+
+    A segment is unmeasured (rows fall back to bytes) when it is the first request, usage is missing, the
+    growth is not positive, history was compacted, a hide/unhide landed between the two requests, or it
+    holds non-text blocks.
+    """
+    anchors = [i for i, m in enumerate(messages)
+               if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("usage"), dict)]
+    if not anchors:
+        return {}, None
+
+    def prompt_of(msg: dict[str, Any]) -> tuple[float, float | None]:
+        snap = msg.get("contextSnapshot") if isinstance(msg.get("contextSnapshot"), dict) else {}
+        usage = msg["usage"]
+        prompt = snap.get("promptTokens")
+        if not isinstance(prompt, (int, float)):
+            prompt = sum(usage.get(k) or 0 for k in ("input", "cacheRead", "cacheWrite"))
+        non_message = snap.get("nonMessageTokens")
+        return prompt, non_message if isinstance(non_message, (int, float)) else None
+
+    totals: dict[str, float] = {}
+    incomplete: set[str] = set()
+    prev_idx: int | None = None
+    prev_tokens: float | None = None
+    prev_ts: Any = None
+    for anchor in anchors:
+        msg = messages[anchor]
+        prompt, non_message = prompt_of(msg)
+        tokens = prompt - non_message if non_message is not None else None
+        start = 0 if prev_idx is None else prev_idx
+        parts = [w for i in range(start, anchor) if isinstance(messages[i], dict) for w in _message_weights(i, messages[i])]
+        lower = -1 if prev_idx is None else prev_idx
+        parts += [(None, chars) for pos, chars in injected if lower < pos <= anchor]
+        weight = sum(w for _, w in parts)
+        delta = tokens - (prev_tokens or 0) if tokens is not None and (prev_idx is None or prev_tokens is not None) else None
+        ts = msg.get("timestamp")
+        changed = (isinstance(prev_ts, (int, float)) and isinstance(ts, (int, float))
+                   and any(prev_ts / 1000 < t <= ts / 1000 for t in mutation_times))
+        # The first request also carries host preamble that never appears as an outline row.
+        measured = (prev_idx is not None and delta is not None and delta > 0 and weight > 0 and not changed
+                    and not any(start < b <= anchor for b in boundaries) and all(k != "?" for k, _ in parts))
+        for key, w in parts:
+            if key in (None, "?"):
+                continue
+            if measured:
+                totals[key] = totals.get(key, 0.0) + delta * w / weight
+            else:
+                incomplete.add(key)
+        prev_idx, prev_tokens, prev_ts = anchor, tokens, ts
+    for i in range(anchors[-1], len(messages)):
+        if isinstance(messages[i], dict):
+            incomplete.update(k for k, _ in _message_weights(i, messages[i]) if k)
+
+    last = messages[anchors[-1]]
+    usage = last["usage"]
+    total = usage.get("totalTokens")
+    used = total if isinstance(total, (int, float)) and total > 0 else prompt_of(last)[0] + (usage.get("output") or 0)
+    context = {"used_tokens": int(used), "max_tokens": _omp_context_window(last.get("provider"), last.get("model")),
+               "source": "omp_session_usage"}
+    return {k: max(1, round(v)) for k, v in totals.items() if k not in incomplete}, context
+
+
+def _token_fields(tokens: int | None) -> dict[str, Any]:
+    if tokens is None:
+        return {}
+    label = f"{tokens} tok" if tokens < 1000 else f"{tokens / 1000:.1f}K tok"
+    return {"tokens": tokens, "tokens_display": label, "tokens_source": "실측 배분"}
+
+
+def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], dict[str, ToolResultRecord]]:
+    """Load chronological timeline entries (user, assistant, tools) and confirmed ToolResultRecords for an OMP session."""
+    session = _read_omp_session(scope_key)
+    if session is None:
         return [], {}
+    messages = session[0]
 
     calls: dict[str, tuple[dict[str, Any], int]] = {}
     duplicates: set[str] = set()
@@ -442,6 +577,11 @@ def main(argv: list[str] | None = None) -> int:
                 db_items_list = store.items(args.scope)
                 db_items = {it.tool_call_id: it for it in db_items_list}
                 timeline, omp_records = _load_omp_session_timeline(args.scope)
+                session = _read_omp_session(args.scope) if timeline else None
+                row_tokens, context = (
+                    _measured_tokens(session[0], session[1], [it.updated_at for it in db_items_list], session[2])
+                    if session else ({}, None)
+                )
                 out = []
 
                 if timeline:
@@ -461,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "compaction_source": entry["compaction_source"],
                                 "summary_line": entry["summary_line"],
                                 "bytes_size": entry["bytes_size"],
+                                **_token_fields(row_tokens.get(entry["item_id"])),
                             })
                         else:
                             cid = entry.get("tool_call_id", "")
@@ -501,6 +642,7 @@ def main(argv: list[str] | None = None) -> int:
                                     "bytes_size": len((it.original or "").encode("utf-8")),
                                     **{key: entry[key] for key in ("tool_input",) if key in entry},
                                     "tool_output": _preview_text(it.original),
+                                    **_token_fields(row_tokens.get(cid)),
                                 })
                             else:
                                 if args.query and args.query.lower() not in (entry.get("summary_line") or "").lower() and args.query.lower() not in entry.get("item_id", "").lower() and args.query.lower() not in cid.lower():
@@ -517,6 +659,7 @@ def main(argv: list[str] | None = None) -> int:
                                     "summary_line": entry["summary_line"],
                                     "bytes_size": entry["bytes_size"],
                                     **{key: entry[key] for key in ("tool_input", "tool_output") if key in entry},
+                                    **_token_fields(row_tokens.get(cid)),
                                 })
                 else:
                     recorded_calls: set[str] = set()
@@ -584,7 +727,7 @@ def main(argv: list[str] | None = None) -> int:
                             "bytes_size": bytes_size,
                         })
 
-                _print({"ok": True, "items": out})
+                _print({"ok": True, "items": out, **({"context": context} if context else {})})
                 return 0
             finally:
                 store.close()

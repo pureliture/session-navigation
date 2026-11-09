@@ -21,6 +21,8 @@ import { fallbackToolPreview } from "./toolPreview";
 import {
   buildGroupedRows,
   fmtBytes,
+  fmtTokenCount,
+  fmtTokens,
   groupMutationItems,
   isSummarizedRow,
   truncateString,
@@ -262,16 +264,28 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) return [];
+      if (!resolvedScopeKey) return { items: [], context: undefined };
       const result = await listRpc({ scope_key: scopeKey, query: query || undefined });
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
       }
-      return result.items;
+      return { items: result.items, context: result.context };
     },
     enabled: !!resolvedScopeKey,
     refetchInterval: isMutating ? 400 : 4000,
+  });
+
+  // Same source as Paseo's own context meter (the `K` figure), for every provider.
+  const usageQuery = useQuery({
+    queryKey: ["paseo-agent-usage", agentId],
+    queryFn: async () => {
+      if (!agentId || !paseo?.agents) return null;
+      const handle = paseo.agents.ref(agentId);
+      await handle.refresh();
+      return handle.lastUsage ?? null;
+    },
+    refetchInterval: 5000,
   });
 
   const fallbackTimelineQuery = useQuery({
@@ -501,7 +515,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
   }, [scopeKey, queryClient]);
 
-  const rawRows = resolvedScopeKey ? (listQuery.data ?? []) : (fallbackTimelineQuery.data ?? []);
+  const rawRows = resolvedScopeKey ? (listQuery.data?.items ?? []) : (fallbackTimelineQuery.data ?? []);
   const rows = useMemo(() => {
     if (!query) return rawRows;
     const q = query.toLowerCase();
@@ -520,14 +534,29 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
 
   const hiddenCount = rows.filter((r) => r.status === "hidden").length;
 
-  const maxContextBytes = 128_000 * 4; // 128K tokens scale (~512KB)
   const totalBytes = useMemo(() => rows.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0), [rows]);
   const visibleBytes = useMemo(
     () => rows.filter((r) => r.status !== "hidden").reduce((sum, r) => sum + (r.bytes_size ?? 0), 0),
     [rows],
   );
   const savedBytes = Math.max(0, totalBytes - visibleBytes);
-  const activeRatio = maxContextBytes > 0 ? Math.min(1, Math.max(0, visibleBytes / maxContextBytes)) : 0;
+  const hiddenRows = rows.filter((r) => r.status === "hidden");
+  const savedTokens =
+    hiddenRows.length > 0 && hiddenRows.every((r) => typeof r.tokens === "number")
+      ? hiddenRows.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
+      : null;
+  const sessionContext = useMemo(() => {
+    const usage = usageQuery.data;
+    if (usage?.contextWindowUsedTokens) {
+      return { used: usage.contextWindowUsedTokens, max: usage.contextWindowMaxTokens ?? null };
+    }
+    const fromLog = listQuery.data?.context;
+    if (fromLog?.used_tokens) return { used: fromLog.used_tokens, max: fromLog.max_tokens ?? null };
+    return null;
+  }, [usageQuery.data, listQuery.data]);
+  const activeRatio = sessionContext?.max
+    ? Math.min(1, Math.max(0, sessionContext.used / sessionContext.max))
+    : 0;
 
   const selectedRow = useMemo(() => {
     if (!selectedId) return rows[0] ?? null;
@@ -1267,7 +1296,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
             ) : null}
 
             <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
-              {fmtBytes(group.totalBytes)}
+              {group.totalTokens != null ? fmtTokens(group.totalTokens) : fmtBytes(group.totalBytes)}
             </Text>
           </View>
         </View>
@@ -1534,12 +1563,16 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         </View>
         <View style={styles.usageLabelRow}>
           <Text style={styles.usageLabel} numberOfLines={1}>
-            {layout.compact
-              ? `~${fmtBytes(visibleBytes)} (${(activeRatio * 100).toFixed(0)}%)`
-              : `~${fmtBytes(visibleBytes)} / ${fmtBytes(maxContextBytes)} (${(activeRatio * 100).toFixed(1)}%) active`}
+            {sessionContext
+              ? `context ${fmtTokenCount(sessionContext.used)}${
+                  sessionContext.max ? ` / ${fmtTokenCount(sessionContext.max)}` : ""
+                } tokens${
+                  sessionContext.max ? ` (${(activeRatio * 100).toFixed(layout.compact ? 0 : 1)}%)` : ""
+                }`
+              : "context — tokens"}
           </Text>
           <Text style={[styles.usageLabel, { textAlign: "right" }]} numberOfLines={1}>
-            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${fmtBytes(savedBytes)}` : `${rows.length} entries`}
+            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : `${rows.length} entries`}
           </Text>
         </View>
       </View>
