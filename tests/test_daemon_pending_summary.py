@@ -45,3 +45,12 @@ def test_summary_failure_falls_back_to_plain_hide(tmp_path, monkeypatch, capsys)
     assert daemon.store.get(daemon._scope("sid"), item_id).compaction_source == "explicit_user_hide"
     again = daemon.handle({"method": "summary_failed", "params": {"session_id": "sid", "item_id": item_id}})
     assert again == {"ok": False, "error": "not_found"}
+
+
+def test_unrelated_or_larger_summary_falls_back_to_plain_hide(tmp_path, monkeypatch, capsys):
+    daemon, reply = setup(tmp_path, monkeypatch, capsys)
+    item_id = reply["pending_summaries"][0]["item_id"]
+    invented = "The user clicked a button and typed into a text box while browsing the interface."
+    done = daemon.handle({"method": "apply_summary", "params": {"session_id": "sid", "item_id": item_id, "summary_text": invented}})
+    assert done["error"] == "verification_failed"
+    assert daemon.store.get(daemon._scope("sid"), item_id).compaction_source == "explicit_user_hide"

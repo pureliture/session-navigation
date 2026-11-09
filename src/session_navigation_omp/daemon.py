@@ -1,5 +1,6 @@
 """OMP daemon."""
 from __future__ import annotations
+import re
 import json, sys
 from collections import OrderedDict
 from typing import Any
@@ -225,9 +226,14 @@ class Daemon:
             if not isinstance(text, str) or not text.strip():
                 return {"ok": False, "error": "summarizer_unavailable"}
             invocation = item.invocation_snapshot if isinstance(item.invocation_snapshot, dict) else None
-            if validate_summary_text(item.original, {"summary": text}, required_evidence_lines(item.original),
-                                     invocation=invocation) is None:
-                return {"ok": False, "error": "verification_failed"}
+            # A summary must be smaller than the result and share its wording; otherwise keep the plain hide.
+            original_words = set(re.findall(r"\w{4,}", item.original.lower()))
+            grounded = bool(original_words & set(re.findall(r"\w{4,}", text.lower())))
+            if len(text) >= len(item.original) or not grounded or validate_summary_text(
+                    item.original, {"summary": text}, required_evidence_lines(item.original), invocation=invocation) is None:
+                res = self.store.put(scope, replace(item, compaction_source="explicit_user_hide", version=item.version + 1),
+                                     expected_version=item.version)
+                return {"ok": False, "error": "verification_failed" if res.ok else res.error, "item_id": item.item_id}
             updated = replace(item, compacted=text, compaction_source="llm_summary", version=item.version + 1)
         res = self.store.put(scope, updated, expected_version=item.version)
         return {"ok": res.ok, "error": res.error, "item_id": item.item_id,
