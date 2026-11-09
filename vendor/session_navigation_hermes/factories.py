@@ -63,6 +63,7 @@ from .handlers import summarize as _engine_summarize
 from .payload import drop_messages, message_keys
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
+from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.transport import Summarizer, SummarizerError
@@ -112,6 +113,7 @@ class PluginState:
     count_middlewares: Callable[[], int] = field(
         default=_default_count_llm_middlewares)
     db_error_pending: bool = False
+    usage: UsageTracker = field(default_factory=UsageTracker)
 
 
 def scope_for(state: PluginState, session_id: Any) -> Scope | None:
@@ -133,6 +135,27 @@ def scope_for(state: PluginState, session_id: Any) -> Scope | None:
 
 def _dump(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _track_mutation(state: PluginState, handler: Callable[..., str]) -> Callable[..., str]:
+    def savings(scope: Scope) -> int | None:
+        try:
+            return sum(estimate_tokens(item.original) - estimate_tokens(item.compacted)
+                       for item in state.engine.store.items(scope) if item.visibility == "hidden")
+        except Exception:
+            return None
+
+    def tracked(args: Any = None, session_id: str = "", **extra: Any) -> str:
+        scope = scope_for(state, session_id)
+        before = savings(scope) if scope is not None and state.is_enabled() else None
+        result = handler(args, session_id=session_id, **extra)
+        if before is not None and json.loads(result).get("ok"):
+            after = savings(scope)
+            if after is not None:
+                state.usage.adjust(session_id, after - before)
+        return result
+
+    return tracked
 
 
 def make_hide_handler(state: PluginState) -> Callable[..., str]:
@@ -167,7 +190,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             "visibility_version": result.plan.visibility_version,
         })
 
-    return hide_context
+    return _track_mutation(state, hide_context)
 
 def make_summarize_handler(state: PluginState) -> Callable[..., str]:
     """Build the `summarize_context` tool handler bound to this registration."""
@@ -204,7 +227,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
             "compaction_source": "llm",
         })
 
-    return summarize_context
+    return _track_mutation(state, summarize_context)
 
 
 def make_list_handler(state: PluginState) -> Callable[..., str]:
@@ -279,7 +302,7 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
             "visibility_version": result.item.version,
         })
 
-    return unhide_context
+    return _track_mutation(state, unhide_context)
 
 
 def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any) -> tuple[bool, str | None, str | None]:
@@ -384,7 +407,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
             "items": results,
         })
 
-    return manage_context
+    return _track_mutation(state, manage_context)
 
 
 def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
@@ -407,6 +430,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             api_mode = kwargs.get("api_mode", "")
             if not isinstance(api_mode, str):
                 api_mode = ""
+            state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
             if state.count_middlewares() > 0:
                 # Another llm_request middleware is installed. The installed
                 # chain composes rewrites in registration order, so OUR
@@ -473,5 +497,4 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 pass
             raise
     return on_llm_request
-
 

@@ -199,6 +199,9 @@ def _toggle_message(state: Any, session_id: str, target: str, hide: bool) -> str
         expected_version=int(unit.get("version") or 1))
     if not result.get("ok"):
         return ("Hide" if hide else "Unhide") + " failed: " + str(result.get("error"))
+    if (unit.get("visibility") == "hidden") != hide:
+        tokens = state.usage.message_tokens(session_id, unit)
+        state.usage.adjust(session_id, tokens if hide else -tokens)
     return ("Hidden " if hide else "Unhidden ") + unit["unit_id"] + " (v" + str(result.get("version")) + ")"
 
 
@@ -222,10 +225,10 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
         return "Session navigation: no state available.\nHints: /nav hide <id> | /nav unhide <id> | /nav manage"
 
     if verb in ("", "list", "ls"):
-        return _list_text(state, session_id)
+        return _list_text(state, session_id) + "\n" + state.usage.footer(session_id)
 
     if verb == "messages":
-        return _messages_text(state, session_id)
+        return _messages_text(state, session_id) + "\n" + state.usage.footer(session_id)
 
     if verb in ("hide-msg", "unhide-msg"):
         if not state.is_enabled():
