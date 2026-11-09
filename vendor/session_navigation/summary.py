@@ -11,7 +11,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from session_navigation.policy import _EXIT_CLAIM, verified_facts
+from session_navigation.policy import (
+    _EXIT_CLAIM,
+    _decode_envelope,
+    selectable_text,
+    strip_consecutive_numbering,
+    verified_facts,
+)
 from session_navigation.transport import OnCall, SummarizerError, SummarizerUnavailable
 
 logger = logging.getLogger(__name__)
@@ -59,7 +65,6 @@ _IDENTIFIER_PATTERN = re.compile(
     r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f-]{27,}|(?:id|uuid|sha256)\s*[:=]\s*[\w.-]+)"
 )
 
-_NUMBERED_LINE = re.compile(r"(\d+)\|(.*)")
 
 
 def _lossless_repeated_source(original: str) -> str | dict[str, Any]:
@@ -110,53 +115,6 @@ def is_lossless_encoded(source: Any) -> bool:
     """Check whether source is dictionary-encoded lossless payload."""
     return isinstance(source, dict) and "lossless_decode" in source
 
-
-def strip_consecutive_numbering(text: str) -> str:
-    """Drop ``N|`` line prefixes when every line is numbered consecutively.
-
-    ``read_file`` prefixes each returned line with its line number; the numbers
-    are transport noise, and the model-summary packet removes them. Rule-based
-    excerpt selection uses the same rule so both paths read the same text.
-    """
-    lines = text.splitlines()
-    numbered = [_NUMBERED_LINE.fullmatch(line) for line in lines]
-    if not numbered or not all(numbered):
-        return text
-    numbers = [int(match[1]) for match in numbered if match]
-    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
-        return text
-    return "\n".join(match[2] for match in numbered if match)
-
-
-def _decode_envelope(content: str) -> dict[str, Any] | None:
-    """Return the decoded JSON object if content is a dict envelope, else None."""
-    try:
-        obj = json.loads(content)
-    except ValueError:
-        return None
-    if not isinstance(obj, dict):
-        return None
-    return obj
-
-
-def selectable_text(content: str) -> str:
-    """The text a reader sees for a tool-result envelope; ``content`` otherwise.
-
-    Hosts deliver tool results as single-line JSON envelopes whose newlines are
-    escaped (read_file: ``{"content": "1|..\\n2|.."}``; terminal:
-    ``{"output": "..", "exit_code": 0}``). Line-based excerpt selection can
-    never succeed on that raw form, so selection runs on this decoded view
-    while identity, hashing, and the payload replacement keep using the raw
-    string. Unrecognized shapes return the content unchanged (fail-open).
-    """
-    obj = _decode_envelope(content)
-    if obj is None:
-        return content
-    for key in ("content", "output"):
-        value = obj.get(key)
-        if isinstance(value, str):
-            return strip_consecutive_numbering(value)
-    return content
 
 def prepare_result_source(original: str) -> str | dict[str, Any]:
     """Decode result envelopes without consulting invocation or selecting facts."""
@@ -267,7 +225,7 @@ def validate_summary_text(
     text = summary["summary"]
     if not isinstance(text, str) or not text.strip() or len(text) > 1600:
         return None
-    if any(line not in original.splitlines() for line in required_evidence):
+    if any(line not in selectable_text(original).splitlines() for line in required_evidence):
         return None
     if not _covers_critical_facts(original, text):
         return None

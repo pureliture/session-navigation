@@ -10,7 +10,10 @@ never be excerpted.
 
 from __future__ import annotations
 
+import asyncio
 import json
+
+import pytest
 
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.model import (
@@ -19,6 +22,7 @@ from session_navigation.model import (
     compute_invocation_digest,
     compute_sha256,
 )
+from session_navigation.policy import excerpts_are_exact, required_evidence_lines
 
 
 def _record(content: str, call_id: str = "call_env") -> ToolResultRecord:
@@ -99,3 +103,61 @@ def test_unknown_json_shape_still_refuses():
     result = engine.compact_sync(scope, _record(raw))
     assert result.ok is False
     assert result.error == "verification_failed"
+
+
+def test_llm_compacts_numbered_hermes_read_envelope_without_retaining_transport_pipes():
+    raw = _read_file_envelope(500)
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", "sess-env-summary")
+
+    class Summarizer:
+        async def summarize(self, original, required_evidence, **kwargs):
+            assert original == raw
+            assert required_evidence == ()
+            return {"summary": "Synthetic rows contain detail lines."}
+
+    result = asyncio.run(engine.summarize(scope, _record(raw), Summarizer()))
+    assert result.ok, result.error
+    assert result.item.compaction_source == "llm"
+    assert "Synthetic rows contain detail lines." in result.plan.replacement_text
+    assert len(result.plan.replacement_text.encode()) < len(raw.encode()) * 0.8
+    assert result.plan.expected_content_sha256 == compute_sha256(raw)
+    assert engine.restore(scope, result.plan.item_id).ok
+    assert engine.project(scope, [_record(raw)]) == []
+
+
+@pytest.mark.parametrize("key", ["content", "output"])
+def test_decoded_envelope_retains_genuine_evidence_and_rejects_invented_lines(key):
+    evidence = ("WARNING: constraints apply", "results/output.json", "10 tests passed; exit_code: 0")
+    body = "\n".join([*(f"Ordinary row {i}" for i in range(80)), *evidence])
+    raw = json.dumps({key: "\n".join(f"{i}|{line}" for i, line in enumerate(body.splitlines(), 1))})
+    assert required_evidence_lines(raw) == evidence
+    assert excerpts_are_exact(raw, evidence)
+    assert not excerpts_are_exact(raw, ["Invented evidence"])
+
+    class Summarizer:
+        async def summarize(self, original, required_evidence, **kwargs):
+            assert required_evidence == evidence
+            return {"summary": "Ordinary rows with constraints. 10 tests passed."}
+
+    result = asyncio.run(SessionNavigationEngine().summarize(Scope("hermes", "test", key), _record(raw), Summarizer()))
+    assert result.ok, result.error
+    assert all(line in result.plan.replacement_text for line in evidence)
+
+
+@pytest.mark.parametrize("original", ["", '{"content":', '{"content": null}', '1|left\n3|right'])
+def test_empty_malformed_and_unrecognized_envelopes_keep_exact_evidence_rules(original):
+    expected = tuple(line for line in original.splitlines() if "|" in line)
+    assert required_evidence_lines(original) == expected
+    assert excerpts_are_exact(original, expected)
+
+
+def test_numbered_envelope_protected_error_keeps_the_original():
+    raw = json.dumps({"content": "1|FAILED verification\n2|" + "detail " * 400})
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", "sess-env-error")
+    record = _record(raw)
+    result = engine.compact_sync(scope, record)
+    assert not result.ok
+    assert result.error == "protected_error"
+    assert engine.project(scope, [record]) == []

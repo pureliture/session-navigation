@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 
 from _adapter_loader import hermes_adapter
@@ -133,6 +134,38 @@ def test_nav_manage_reports_counts(tmp_path, monkeypatch):
     out = ctx.commands["nav"]("manage auto call_1", session_id=sid)
     assert "applied" in out.lower(), out
     assert "[hidden]" in ctx.commands["nav"](sid)
+
+
+def test_nav_summarizes_numbered_read_file_envelope_and_rewrites_only_the_request_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+    adapter = hermes_adapter()
+    ctx = FakeCtx(config={"enabled": True})
+    state = adapter.plugin.register(ctx)
+    body = "\n".join(f"{i}|Synthetic row {i:03d} detail line" for i in range(1, 501))
+    raw = json.dumps({"content": body, "total_lines": 500, "file_size": len(body),
+                      "truncated": False, "is_binary": False, "is_image": False, "not_found": False})
+
+    class Summarizer:
+        async def summarize(self, original, required_evidence, **kwargs):
+            assert original == raw
+            assert required_evidence == ()
+            return {"summary": "Synthetic rows contain detail lines."}
+
+    state.summarizer = Summarizer()
+    request = {"messages": [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_env", "type": "function",
+         "function": {"name": "read_file", "arguments": '{"path":"rows.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "call_env", "content": raw},
+    ]}
+    middleware = ctx.middlewares["llm_request"][0]
+    middleware(request=request, session_id="env-nav", api_mode="chat_completions")
+    out = ctx.commands["nav"]("summarize call_env", session_id="env-nav")
+    assert "summarized" in out.lower(), out
+    rewritten = middleware(request=request, session_id="env-nav", api_mode="chat_completions")
+    assert "Synthetic rows contain detail lines." in rewritten["request"]["messages"][-1]["content"]
+    assert request["messages"][-1]["content"] == raw
+    assert "Unhidden" in ctx.commands["nav"]("unhide 1", session_id="env-nav")
+    assert middleware(request=request, session_id="env-nav", api_mode="chat_completions")["request"] == request
 
 
 def test_registered_nav_accepts_host_session_context_without_environment_fallback(tmp_path, monkeypatch):

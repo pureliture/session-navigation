@@ -19,6 +19,7 @@ TAIL_EXCERPTS = 2
 MAX_EVIDENCE_EXCERPTS = 8
 MAX_EXCERPT_LINE = 240
 MAX_INVOCATION_BYTES = 2048
+_NUMBERED_LINE = re.compile(r"(\d+)\|(.*)")
 
 _ERROR_PATTERNS = (
     re.compile(r"Traceback \(most recent call last\)"),
@@ -136,16 +137,49 @@ def required_evidence_indexes(lines: list[str]) -> list[int]:
 _required_evidence_indexes = required_evidence_indexes
 
 
+def strip_consecutive_numbering(text: str) -> str:
+    """Drop transport line numbers only when every line is numbered consecutively."""
+    lines = text.splitlines()
+    numbered = [_NUMBERED_LINE.fullmatch(line) for line in lines]
+    if not numbered or not all(numbered):
+        return text
+    numbers = [int(match[1]) for match in numbered if match]
+    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return text
+    return "\n".join(match[2] for match in numbered if match)
+
+
+def _decode_envelope(content: str) -> dict[str, Any] | None:
+    """Return the decoded JSON object if content is a dict envelope, else None."""
+    try:
+        obj = json.loads(content)
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def selectable_text(content: str) -> str:
+    """Decode recognized tool output envelopes without changing the stored original."""
+    obj = _decode_envelope(content)
+    if obj is None:
+        return content
+    for key in ("content", "output"):
+        value = obj.get(key)
+        if isinstance(value, str):
+            return strip_consecutive_numbering(value)
+    return content
+
+
 def required_evidence_lines(original: str) -> tuple[str, ...]:
     """Extract all required verbatim evidence lines from text."""
-    lines = original.splitlines()
+    lines = selectable_text(original).splitlines()
     return tuple(lines[i] for i in required_evidence_indexes(lines))
 
 
 def excerpts_are_exact(original: str, lines: tuple[str, ...] | list[str]) -> bool:
-    """Verify that all selected excerpt lines exist verbatim in the original text."""
-    original_lines = original.splitlines()
-    return all(line in original_lines and line in original for line in lines)
+    """Verify that excerpt lines exist verbatim in the decoded original text."""
+    original_lines = selectable_text(original).splitlines()
+    return all(line in original_lines for line in lines)
 
 
 _excerpts_are_exact = excerpts_are_exact
