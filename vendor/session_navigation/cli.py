@@ -512,7 +512,8 @@ def _mutate_item(
             return {"ok": False, "error": res.error}, 3 if res.error in ("db_error", "db_full") else 2
         return {"ok": True, "item_id": res.item.item_id, "visibility": res.item.visibility, "version": res.item.version}, 0
 
-    chosen_source = "rule_summary" if mode == "summarize" else "explicit_user_hide"
+    # Summaries come from the session model: hide with a rule excerpt now, the OMP extension swaps in its summary.
+    chosen_source = "summarize_pending" if mode == "summarize" else "explicit_user_hide"
     item = store.get(scope, item_id)
     if enforce_version and item is not None and expected_version is not None and item.version != expected_version:
         return {"ok": False, "error": "version_conflict", "item": item.__dict__}, 4

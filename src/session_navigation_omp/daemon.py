@@ -68,6 +68,8 @@ class Daemon:
             return {"ok": False, "error": "invalid_session"}
         scope = self._scope(session)
 
+        if method in ("apply_summary", "summary_failed"):
+            return self._finish_summary(method, scope, params)
         if method == "prepare":
             self.snapshots.pop(session, None)
             token = params.get("snapshot_id")
@@ -143,8 +145,15 @@ class Daemon:
                         "sha256": record.content_sha256,
                         "text": item.compacted,
                     })
+            pending = [
+                {"item_id": item.item_id, "call_id": record.call_id, "version": item.version, "content": record.content}
+                for record in selected.values()
+                for item in [items_by_key.get((record.call_id, record.content_sha256, record.invocation_digest or ""))]
+                if item is not None and item.visibility == "hidden" and item.compaction_source == "summarize_pending"
+            ]
             out: dict[str, Any] = {"ok": True, "patches": patches,
-                                   "hidden_messages": self.store.hidden_message_keys(scope)}
+                                   "hidden_messages": self.store.hidden_message_keys(scope),
+                                   "pending_summaries": pending}
             if evicted:
                 out["evicted_snapshots"] = evicted
             return out
@@ -202,6 +211,27 @@ class Daemon:
             return self._manage(scope, session, params)
 
         return {"ok": False, "error": "unknown_method"}
+
+    def _finish_summary(self, method, scope, params):
+        """Swap a pending summarize hide for the session model's summary, or fall back to a plain hide."""
+        from dataclasses import replace
+        item = self.store.get(scope, params.get("item_id"))
+        if item is None or item.compaction_source != "summarize_pending":
+            return {"ok": False, "error": "not_found"}
+        if method == "summary_failed":
+            updated = replace(item, compaction_source="explicit_user_hide", version=item.version + 1)
+        else:
+            text = params.get("summary_text")
+            if not isinstance(text, str) or not text.strip():
+                return {"ok": False, "error": "summarizer_unavailable"}
+            invocation = item.invocation_snapshot if isinstance(item.invocation_snapshot, dict) else None
+            if validate_summary_text(item.original, {"summary": text}, required_evidence_lines(item.original),
+                                     invocation=invocation) is None:
+                return {"ok": False, "error": "verification_failed"}
+            updated = replace(item, compacted=text, compaction_source="llm_summary", version=item.version + 1)
+        res = self.store.put(scope, updated, expected_version=item.version)
+        return {"ok": res.ok, "error": res.error, "item_id": item.item_id,
+                "version": res.item.version if res.item else None}
 
     def _identity_state(self, scope, record, method):
         item_id = _item_id(scope.scope_key(), record.call_id, record.content_sha256, record.invocation_digest, record.result_position)

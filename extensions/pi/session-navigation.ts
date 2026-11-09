@@ -224,6 +224,12 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			messages ??= event.messages.slice();
 			messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
 		}
+		// Paseo/CLI Summarize requests: summarize with the session model off the request path, then swap it in.
+		for (const job of Array.isArray(response.pending_summaries) ? (response.pending_summaries as any[]) : []) {
+			if (typeof job?.item_id !== "string" || typeof job.content !== "string") continue;
+			void summarizeText(ctx, job.content).then((text) => rpc(text ? "apply_summary" : "summary_failed",
+				{ session_id: session, item_id: job.item_id, ...(text ? { summary_text: text } : {}) }, 5000)).catch(() => undefined);
+		}
 		const hidden = new Set<string>(Array.isArray(response.hidden_messages) ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string") : []);
 		messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
 		if (messages) return { messages };

@@ -28,7 +28,7 @@ def invoke(capsys, state, command, items, *extra):
     return code, json.loads(capsys.readouterr().out)
 
 
-@pytest.mark.parametrize("mode,source", [("hide", "explicit_user_hide"), ("summarize", "rule_summary")])
+@pytest.mark.parametrize("mode,source", [("hide", "explicit_user_hide"), ("summarize", "summarize_pending")])
 def test_batch_hide_and_restore(state, capsys, mode, source):
     requests = [{"item_id": name, "expected_version": 1} for name in ("a", "b")]
     code, result = invoke(capsys, state, "hide", requests, "--mode", mode)
