@@ -1,4 +1,7 @@
 """Session Navigation common engine package."""
+import hashlib
+from pathlib import Path
+
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.model import (
     ContextItem,
@@ -86,6 +89,18 @@ __all__ = [
     "verify_exit_claims",
     "__version__",
 ]
+
+
+def _source_fingerprint(package_file: str) -> str:
+    root = Path(package_file).parent
+    source = b"".join(
+        path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0"
+        for path in sorted(root.rglob("*.py"))
+    )
+    return hashlib.sha256(source).hexdigest()
+
+
+__bundle_fingerprint__ = _source_fingerprint(__file__)
 
 
 def __getattr__(name: str):

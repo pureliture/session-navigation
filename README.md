@@ -112,6 +112,12 @@ hermes config set plugins.entries.session-navigation.settings.enabled true
 `vendor/`에는 엔진과 어댑터의 Python 소스가 들어 있습니다.
 `python_runtime: external`이므로 Hermes의 공유 환경에 이 저장소의 `pyproject.toml`을
 설치하지 않습니다. Python wheel 설치만으로 Hermes 플러그인이 등록되지는 않습니다.
+
+플러그인을 업데이트한 뒤에는 CLI를 다시 여는 것뿐 아니라 실행 중인 **Hermes gateway도 완전히
+재시작**해야 합니다. 플러그인 reload는 Python의 전역 `session_navigation` /
+`session_navigation_hermes` 모듈 캐시를 비우지 않습니다. 이미 로드된 엔진·어댑터의 소스
+fingerprint가 배포된 vendor 사본과 다르면 플러그인은 로드를 거부하고 재시작을 안내합니다.
+공유 환경에 설치된 다른 버전도 같은 검사 대상이며, 해당 모듈을 강제로 교체하지 않습니다.
 공식 카탈로그 등록 검증은 아직 통과하지 못했습니다. 아래 배포 항목을 참고하세요.
 
 ## 사용법
