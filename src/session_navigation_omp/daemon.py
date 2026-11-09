@@ -143,7 +143,8 @@ class Daemon:
                         "sha256": record.content_sha256,
                         "text": item.compacted,
                     })
-            out: dict[str, Any] = {"ok": True, "patches": patches}
+            out: dict[str, Any] = {"ok": True, "patches": patches,
+                                   "hidden_messages": self.store.hidden_message_keys(scope)}
             if evicted:
                 out["evicted_snapshots"] = evicted
             return out

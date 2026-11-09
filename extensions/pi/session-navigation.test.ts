@@ -177,3 +177,15 @@ test("collect는 read와 bash 결과를 모두 수집한다", async () => {
     expect(seen).toContain('"command":"ls -la"');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("hidden prompts are dropped and hidden responses keep only their tool calls", async () => {
+  const { messageKey, dropHiddenMessages } = await import("./session-navigation");
+  const user = { role: "user", content: "check", timestamp: 1000 };
+  const withCall = { role: "assistant", timestamp: 2000, content: [{ type: "thinking", thinking: "t" }, { type: "text", text: "Running" }, { type: "toolCall", id: "c1", name: "bash", arguments: {} }] };
+  const result = { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "ok" }], timestamp: 2500 };
+  const textOnly = { role: "assistant", timestamp: 3000, content: [{ type: "text", text: "Done" }] };
+  expect(messageKey(user)).toMatch(/^msg:user:1000:[0-9a-f]{12}$/);
+  expect(dropHiddenMessages([user], new Set())).toBeNull();
+  const kept = dropHiddenMessages([user, withCall, result, textOnly], new Set([messageKey(user)!, messageKey(withCall)!, messageKey(textOnly)!]))!;
+  expect(kept).toEqual([{ ...withCall, content: [withCall.content[0], withCall.content[2]] }, result]);
+});

@@ -975,6 +975,40 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     void scrollToMessageInChat(row, rawRows);
   };
 
+  // Prompts and responses can only be hidden (removed from the outgoing context), never summarized.
+  const renderMessageHideToggle = (row: Row) => {
+    if (!resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
+    const hidden = row.status === "hidden";
+    const iconSize = layout.compact ? 13 : 14;
+    return (
+      <View style={styles.actionsContainer}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={hidden ? "Unhide message" : "Hide message"}
+          style={hidden ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
+          onPress={(e) => {
+            e.stopPropagation();
+            if (hidden) unhideMutation.mutate(row);
+            else hideMutation.mutate({ row, mode: "hide" });
+          }}
+        >
+          <ActionSvgIcon kind="hide" slashed={hidden} size={iconSize} color={theme.colors.foregroundMuted} />
+        </Pressable>
+      </View>
+    );
+  };
+
+  const renderMessageSnippet = (row: Row, empty: string) =>
+    row.status === "hidden" ? (
+      <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
+        {`[hidden] ${(row.summary_line || "").split("\n")[0] || "tap icon to restore"}`}
+      </Text>
+    ) : (
+      <Text style={styles.summarySnippet} numberOfLines={2}>
+        {row.summary_line || empty}
+      </Text>
+    );
+
   const renderRow = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     const isSelected = (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey;
@@ -999,13 +1033,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
-              <Text style={styles.rightMetricsText}>{rowMetric(row)}</Text>
+              {renderMessageHideToggle(row)}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
             </View>
           </View>
           <View style={styles.treeLineContainer}>
-            <Text style={styles.summarySnippet} numberOfLines={2}>
-              {row.summary_line || "(empty prompt)"}
-            </Text>
+            {renderMessageSnippet(row, "(empty prompt)")}
           </View>
         </Pressable>
       );
@@ -1028,13 +1061,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
-              <Text style={styles.rightMetricsText}>{rowMetric(row)}</Text>
+              {renderMessageHideToggle(row)}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
             </View>
           </View>
           <View style={styles.treeLineContainer}>
-            <Text style={styles.summarySnippet} numberOfLines={2}>
-              {row.summary_line || "(empty response)"}
-            </Text>
+            {renderMessageSnippet(row, "(empty response)")}
           </View>
         </Pressable>
       );

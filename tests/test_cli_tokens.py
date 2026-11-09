@@ -26,6 +26,10 @@ def assistant(ts, prompt, content, non_message=1000, output=1):
             "contextSnapshot": {"promptTokens": prompt, "nonMessageTokens": non_message}}
 
 
+def key(idx):
+    return cli._message_key(idx, MESSAGES[idx])
+
+
 MESSAGES = [
     {"role": "user", "content": "hello"},
     assistant(1000, 1100, [{"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "pwd"}}]),
@@ -55,7 +59,7 @@ def test_list_reports_measured_row_tokens_and_session_context(tmp_path, monkeypa
     tokens = {row["item_id"] if row["kind"] != "tool" else row["tool_call_id"]: row.get("tokens")
               for row in payload["items"]}
     # first request carries host preamble; the last assistant output is not yet in any prompt
-    assert tokens == {"usr_0": None, "c1": 200, "ast_3": 5, "usr_4": 5, "ast_5": None}
+    assert tokens == {"usr_0": None, "c1": 200, key(3): 5, "usr_4": 5, key(5): None}
     tool = next(row for row in payload["items"] if row["kind"] == "tool")
     assert tool["tokens_display"] == "200 tok" and tool["tokens_source"] == "실측 배분"
 
@@ -72,7 +76,7 @@ def test_segment_with_hide_compaction_or_shrink_is_unmeasured():
 
 def test_injected_reminder_takes_its_share_without_a_row():
     tokens, _ = cli._measured_tokens(MESSAGES, [], [], injected=[(4, 2)])
-    assert tokens == {"c1": 200, "ast_3": 4, "usr_4": 4}
+    assert tokens == {"c1": 200, key(3): 4, "usr_4": 4}
 
 
 def test_no_usage_means_no_tokens_and_no_context(tmp_path, monkeypatch, capsys):
@@ -94,7 +98,7 @@ def test_zero_weight_row_gets_zero_tokens():
     messages = list(MESSAGES)
     messages[3] = assistant(2000, 1300, [{"type": "text", "text": ""}])
     tokens, _ = cli._measured_tokens(messages, [], [])
-    assert tokens["ast_3"] == 0 and tokens["usr_4"] == 10
+    assert tokens[cli._message_key(3, messages[3])] == 0 and tokens["usr_4"] == 10
 
 
 def test_hide_then_unhide_span_blocks_every_segment_it_covers():

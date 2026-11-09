@@ -113,12 +113,32 @@ def _omp_context_window(provider: Any, model: Any) -> int | None:
     return None
 
 
+def _message_text(msg: dict[str, Any]) -> str:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+
+
+def _message_key(idx: int, msg: dict[str, Any]) -> str | None:
+    """Stable id for a user/assistant message; `msg:` ids are hideable (the OMP extension computes the same id)."""
+    role = msg.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    ts = msg.get("timestamp")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts == int(ts):
+        return f"msg:{role}:{int(ts)}:{compute_sha256(_message_text(msg))[:12]}"
+    return f"usr_{idx}" if role == "user" else f"ast_{idx}"
+
+
 def _message_weights(idx: int, msg: dict[str, Any]) -> list[tuple[str | None, int]]:
     """Character weight of each block, keyed by the outline row it belongs to ("?" = unweighable)."""
     role = msg.get("role")
     content = msg.get("content")
     blocks = content if isinstance(content, list) else [{"type": "text", "text": content}] if isinstance(content, str) else []
-    owner = {"user": f"usr_{idx}", "assistant": f"ast_{idx}", "toolResult": msg.get("toolCallId")}.get(role)
+    owner = msg.get("toolCallId") if role == "toolResult" else _message_key(idx, msg)
     out: list[tuple[str | None, int]] = []
     for block in blocks:
         if not isinstance(block, dict):
@@ -257,7 +277,7 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
             summary = "\n".join(lines[:2])[:220]
             if summary:
                 timeline.append({
-                    "item_id": f"usr_{idx}",
+                    "item_id": _message_key(idx, msg),
                     "tool_call_id": "",
                     "kind": "user",
                     "tool_name": "user",
@@ -279,7 +299,7 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
             summary = "\n".join(lines[:2])[:220]
             if summary:
                 timeline.append({
-                    "item_id": f"ast_{idx}",
+                    "item_id": _message_key(idx, msg),
                     "tool_call_id": "",
                     "kind": "assistant",
                     "tool_name": "assistant",
@@ -421,10 +441,38 @@ def _load_omp_session_records(scope_key: str) -> dict[str, ToolResultRecord]:
     return records
 
 
+def _mutate_message(
+    store: SQLiteContextStore, command: str, scope: str, item_id: str, expected_version: int | None, mode: str,
+) -> tuple[dict[str, Any], int]:
+    """Hide/unhide a user prompt or assistant response. Messages support hide only, never summarize."""
+    if command == "hide" and mode != "hide":
+        return {"ok": False, "error": "summarize_unsupported"}, 2
+    session = _read_omp_session(scope)
+    found = next(((i, m) for i, m in enumerate(session[0] if session else [])
+                  if isinstance(m, dict) and _message_key(i, m) == item_id), None)
+    if found is None:
+        return {"ok": False, "error": "not_found"}, 2
+    text = _message_text(found[1])
+    try:
+        res = store.set_message_visibility(
+            scope, item_id, kind=found[1]["role"], content_sha256=compute_sha256(text), char_count=len(text),
+            visibility="hidden" if command == "hide" else "visible", expected_version=expected_version,
+        )
+    except (DBError, DBFullError) as exc:
+        return {"ok": False, "error": "db_full" if isinstance(exc, DBFullError) else "db_error"}, 3
+    if not res["ok"]:
+        return {"ok": False, "error": res["error"],
+                "item": {"item_id": item_id, "version": res["version"], "visibility": res["visibility"]}}, 4
+    return {"ok": True, "item_id": item_id, "visibility": res["visibility"], "version": res["version"],
+            "source": "explicit_user_hide"}, 0
+
+
 def _mutate_item(
     store: SQLiteContextStore, command: str, scope: str, item_id: str,
     expected_version: int | None = None, mode: str = "hide", *, enforce_version: bool = False,
 ) -> tuple[dict[str, Any], int]:
+    if item_id.startswith("msg:"):
+        return _mutate_message(store, command, scope, item_id, expected_version, mode)
     if command == "unhide":
         res = store.restore(scope, item_id, expected_version=expected_version)
         if not res.ok:
@@ -579,10 +627,15 @@ def main(argv: list[str] | None = None) -> int:
                 db_items = {it.tool_call_id: it for it in db_items_list}
                 timeline, omp_records = _load_omp_session_timeline(args.scope)
                 session = _read_omp_session(args.scope) if timeline else None
+                message_units = {u["unit_id"]: u for u in store.list_units(args.scope)
+                                 if u.get("kind") in ("user", "assistant")} if timeline else {}
+                spans = [(it.created_at, it.updated_at) for it in db_items_list
+                         if it.version > 1 or it.visibility == "hidden"]
+                # A message can only have been hidden after it was written, so its id's timestamp bounds the span.
+                spans += [(int(key.split(":")[2]) / 1000, float(u.get("updated_at") or 0)) for key, u in message_units.items()
+                          if key.startswith("msg:") and (int(u.get("version") or 1) > 1 or u.get("visibility") == "hidden")]
                 row_tokens, context = (
-                    _measured_tokens(session[0], session[1], [(it.created_at, it.updated_at) for it in db_items_list
-                                                               if it.version > 1 or it.visibility == "hidden"], session[2])
-                    if session else ({}, None)
+                    _measured_tokens(session[0], session[1], spans, session[2]) if session else ({}, None)
                 )
                 out = []
 
@@ -592,15 +645,18 @@ def main(argv: list[str] | None = None) -> int:
                         if kind in ("user", "assistant"):
                             if args.query and args.query.lower() not in (entry.get("summary_line") or "").lower():
                                 continue
+                            unit = message_units.get(entry["item_id"])
+                            hidden = bool(unit) and unit.get("visibility") == "hidden"
+                            version = int(unit.get("version") or 1) if unit else 1
                             out.append({
                                 "item_id": entry["item_id"],
                                 "tool_call_id": "",
                                 "kind": kind,
                                 "tool_name": entry["tool_name"],
-                                "status": "visible",
-                                "visibility": "visible",
-                                "version": 1,
-                                "compaction_source": entry["compaction_source"],
+                                "status": "hidden" if hidden else ("unhidden" if version > 1 else "visible"),
+                                "visibility": "hidden" if hidden else "visible",
+                                "version": version,
+                                "compaction_source": "explicit_user_hide" if hidden else entry["compaction_source"],
                                 "summary_line": entry["summary_line"],
                                 "bytes_size": entry["bytes_size"],
                                 **_token_fields(row_tokens.get(entry["item_id"])),

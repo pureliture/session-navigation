@@ -14,6 +14,32 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_RECORDS = 64;
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
+function messageText(message: any): string {
+	if (typeof message?.content === "string") return message.content;
+	if (!Array.isArray(message?.content)) return "";
+	return message.content.filter((b: any) => b?.type === "text" && typeof b.text === "string").map((b: any) => b.text).join("");
+}
+/** Same id as the CLI's `_message_key`, so a prompt/response hidden from Paseo or Hermes is recognised here. */
+export function messageKey(message: any): string | null {
+	if ((message?.role !== "user" && message?.role !== "assistant") || !Number.isInteger(message.timestamp)) return null;
+	return `msg:${message.role}:${message.timestamp}:${hash(messageText(message)).slice(0, 12)}`;
+}
+/** Drop hidden prompts; strip hidden responses' text but keep tool calls (and their thinking) so call/result pairs stay valid. */
+export function dropHiddenMessages(messages: any[], hidden: ReadonlySet<string>): any[] | null {
+	if (hidden.size === 0) return null;
+	let changed = false;
+	const kept: any[] = [];
+	for (const message of messages) {
+		const key = messageKey(message);
+		if (!key || !hidden.has(key)) { kept.push(message); continue; }
+		changed = true;
+		if (message.role === "assistant" && Array.isArray(message.content) && message.content.some((b: any) => b?.type === "toolCall")) {
+			kept.push({ ...message, content: message.content.filter((b: any) => b?.type !== "text") });
+		}
+	}
+	return changed ? kept : null;
+}
+
 export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	const z = pi.zod;
 	let proc: ChildProcessWithoutNullStreams | null = null;
@@ -193,6 +219,8 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			messages ??= event.messages.slice();
 			messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
 		}
+		const hidden = new Set<string>(Array.isArray(response.hidden_messages) ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string") : []);
+		messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
 		if (messages) return { messages };
 	});
 	pi.on("assistant_message", async (event: { message: { role?: string; stopReason?: string } }, ctx: ExtensionContext) => {
