@@ -43,6 +43,7 @@ function invokeCli(args: string[]): CliResult {
         encoding: "utf8",
         env,
         timeout: 30000,
+        maxBuffer: 256 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"],
       });
       const parsed = JSON.parse(String(stdout || "{}"));
