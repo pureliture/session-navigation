@@ -3,8 +3,16 @@
 ## 목적과 비교군
 
 평가 대상은 `cc00609`의 자동 정리 동작이다. 코드 변경 없이 별도 작업공간에서 실제 호스트를 사용한다.
-모든 생성·요약·심판 호출은 **OpenRouter `stealth/crouton-alpha`만** 허용한다.
-이 모델은 무료이며 이름만으로 모델 크기나 Flash급 성능을 입증할 수 없다.
+사용자 변경 요청에 따라 모든 본 평가의 생성·요약·심판 호출은 **OpenRouter `z-ai/glm-5.3-flash`만** 허용한다.
+이전 Crouton smoke는 설치 점검일 뿐 본 평가에서 전부 제외한다. proxy allowlist도 GLM 하나뿐이다.
+이름만으로 실제 모델 크기나 다른 Flash급 모델에 대한 일반화를 입증할 수 없다.
+
+### GLM usage 사전 확인
+
+`eval/probe.py`의 단일 소형 요청(`eval/results/setup-glm/probe.json`)에서 prompt 16, completion 32,
+`usage.cost=0.0000172` USD, `prompt_tokens_details.cached_tokens=0` 및 cache-write 0을 확인했다.
+**cost와 cached-token 필드는 보고되지만 실제 cache hit는 아직 검증하지 않았다.**
+`usage: {include: true}`를 upstream에 요청한다. 작은 출력 한도 때문에 probe는 reasoning 중 length로 종료되었으며 과제 성공 데이터가 아니다.
 
 | 군 | OMP (주 평가) | Hermes (보조 평가) |
 |---|---|---|
@@ -45,7 +53,7 @@ OMP는 6개 사례 × 2군 × **3회 = 36세션**, Hermes는 사례 3·5 × 2군
   summarize로 필요한 출력을 보존하는 선택과 hide로 버리는 선택은 별도 표시하므로 precision만으로 전체 품질을 판단하지 않는다.
 - **정리 품질:** 숨긴 뒤 후속 턴에 필요해진 항목/재읽기 수, 실제 전송 replacement의 필수 사실 포함률,
   replacement UTF-8 byte / 원문 byte, 보호된 출력의 오처리·정리 거부. 요약이 없으면 retention·judge는 N/A다.
-- **LLM 심판:** 동일 Crouton에 원문·replacement·체크리스트만 주고 arm을 가린다.
+- **LLM 심판:** 동일 GLM에 원문·replacement·체크리스트만 주고 arm을 가린다.
   1–5점(1=핵심 손실/환각, 3=부분 보존, 5=핵심과 오류/status 보존)과 이유를 JSON으로 받는다.
   같은 모델의 자기평가 편향이 있으므로 결정적 사실 검사보다 우선하지 않는다. 심판 토큰은 실험 비용과 분리한다.
 - **과제 효과:** 턴별 정답 체크, canonical 테스트 통과, 마지막 회상 정답률,
@@ -56,8 +64,9 @@ OMP는 6개 사례 × 2군 × **3회 = 36세션**, Hermes는 사례 3·5 × 2군
   **캐시 재사용 추정치**로 별도 기록한다. 이는 토크나이저/최소 block/TTL/다중 prefix를 모르는 대용치이지 실제 적중량이 아니다.
   main/summary/judge 요청을 구분하고 요약 overhead도 포함한 전체 비용과 main만의 비용을 함께 비교한다.
 
-실제 Crouton 비용은 $0이다. 유료 가격표를 적용한 비용은 **가정 시뮬레이션**이며 다른 모델에서의 성능 예측이 아니다.
-우선 참조: [GPT-4.1 공식 가격표](https://platform.openai.com/docs/models/gpt-4.1),
+**주 비용 지표는 OpenRouter가 실제 보고한 `usage.cost` 합계**이며 prompt/cached tokens를 요청별로 함께 보고한다.
+cost 누락을 0으로 간주하지 않는다. 아래 유료 가격표를 적용한 값은 보조 **가정 시뮬레이션**이며 다른 모델에서의 성능 예측이 아니다.
+보조 참조: [GPT-4.1 공식 가격표](https://platform.openai.com/docs/models/gpt-4.1),
 입력 $2 / 캐시 입력 $0.50 / 출력 $8 (각 100만 토큰).
 비용 = `(P-C)*2/1e6 + C*0.5/1e6 + O*8/1e6`.
 캐시 미보고이면 LCP 추정 비용과 캐시 0 상한을 둘 다 제시한다. cache-write 비용·도구 과금·추론 성능 차이는 모델링하지 않는다.

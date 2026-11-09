@@ -10,7 +10,7 @@
 # fixture row 0009: component inventory detail value=153
 # fixture row 0010: component inventory detail value=170
 # fixture row 0011: component inventory detail value=187
-# RETRY_JITTER_CAP_MS = 137
+RETRY_JITTER_CAP_MS = 137
 # fixture row 0013: component inventory detail value=221
 # fixture row 0014: component inventory detail value=238
 # fixture row 0015: component inventory detail value=255
@@ -29,7 +29,7 @@
 # fixture row 0028: component inventory detail value=476
 # fixture row 0029: component inventory detail value=493
 # fixture row 0030: component inventory detail value=510
-# ROUTING_MODE = 'sticky'
+ROUTING_MODE = 'sticky'
 # fixture row 0032: component inventory detail value=544
 # fixture row 0033: component inventory detail value=561
 # fixture row 0034: component inventory detail value=578
@@ -418,3 +418,6 @@
 # fixture row 0417: component inventory detail value=110
 # fixture row 0418: component inventory detail value=127
 # fixture row 0419: component inventory detail value=144
+
+def configuration():
+    return {name: value for name, value in globals().items() if name.isupper()}

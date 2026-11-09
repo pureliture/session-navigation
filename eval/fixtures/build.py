@@ -16,7 +16,9 @@ def build():
             prefix = "# " if suffix == ".py" else ""
             lines = [f"{prefix}fixture row {i:04d}: component inventory detail value={i * 17 % 997:03d}" for i in range(420)]
             for index, fact in enumerate(facts):
-                lines[12 + index * 19] = prefix + fact
+                lines[12 + index * 19] = fact
+            if suffix == ".py":
+                lines.extend(["", "def configuration():", "    return {name: value for name, value in globals().items() if name.isupper()}"])
             files[filename] = "\n".join(lines) + "\n"
             results.append({"match": filename, "label": label, "protected": protected, "facts": facts})
         cases.append({"id": name, "turns": turns, "answers": answers, "results": results, "files": files})
