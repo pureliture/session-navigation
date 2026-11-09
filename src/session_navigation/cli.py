@@ -604,7 +604,15 @@ def main(argv: list[str] | None = None) -> int:
                     payload, _ = _mutate_item(store, args.command, args.scope, item_id,
                                              expected, getattr(args, "mode", "hide"), enforce_version=True)
                     if payload.get("error") in ("db_error", "db_full"):
-                        _print({"ok": False, "error": payload["error"]})
+                        if not results:
+                            _print({"ok": False, "error": payload["error"]})
+                            return 3
+                        # Earlier items are already committed; report them so callers see what changed.
+                        applied = sum(result["ok"] for result in results)
+                        results.append({"item_id": item_id, "ok": False, "status": None, "visibility": None,
+                                        "version": None, "error": payload["error"]})
+                        _print({"ok": False, "error": payload["error"], "applied": applied,
+                                "failed": len(results) - applied, "items": results})
                         return 3
                     current = store.get(args.scope, payload.get("item_id", item_id))
                     visibility = payload.get("visibility", current.visibility if current else None)

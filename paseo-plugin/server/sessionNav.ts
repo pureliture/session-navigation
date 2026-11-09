@@ -353,7 +353,7 @@ async function mutateBatch(
     if (!Array.isArray(res.items)) return { ...empty, ...dbErrorResponse(res) };
     const result = BatchMutationResultSchema.parse(res);
     if (result.ok) dbNoteSuccess(input.scope_key);
-    return result;
+    return result.error ? { ...result, ...dbErrorResponse(res) } : result;
   } catch {
     return { ...empty, ...dbErrorResponse(undefined) };
   }

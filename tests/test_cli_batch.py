@@ -140,3 +140,20 @@ def test_batch_materializes_unrecorded_tools_and_restores_timeline_snippets(stat
     assert code == 0 and restored["applied"] == 1
     assert cli.main(["list", "--scope", "scope", "--path", state]) == 0
     assert json.loads(capsys.readouterr().out)["items"][0]["summary_line"] == f"$ {command}"
+
+
+def test_batch_db_error_after_commits_reports_applied_items(state, capsys, monkeypatch):
+    original_put = SQLiteContextStore.put
+    calls = []
+    def flaky_put(self, scope, item, **kwargs):
+        calls.append(item.item_id)
+        if len(calls) > 1:
+            return MutationResult(ok=False, error="db_full")
+        return original_put(self, scope, item, **kwargs)
+    monkeypatch.setattr(SQLiteContextStore, "put", flaky_put)
+    code, payload = invoke(capsys, state, "hide", [{"item_id": "a"}, {"item_id": "b"}])
+    assert code == 3
+    assert payload["ok"] is False and payload["error"] == "db_full"
+    assert payload["applied"] == 1 and payload["failed"] == 1
+    assert [(i["item_id"], i["ok"]) for i in payload["items"]] == [("a", True), ("b", False)]
+    assert payload["items"][1]["error"] == "db_full"
