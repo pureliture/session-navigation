@@ -10,18 +10,31 @@ function normalized(text: string) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+const IDENTITY_ATTRIBUTES = ["data-message-id", "data-history-row-id", "data-call-id", "data-item-id", "data-turn-id", "id"];
+
+export function identityMatches(value: string, id: string): boolean {
+  return value === id || value === `agent_tool_${id}` || value.endsWith(`/${encodeURIComponent(id)}`) ||
+    value === `message-${id}` || value === `call-${id}` || value === `turn-${id}`;
+}
+
+/** Identity attributes rendered in the chat currently on screen; null when no session chat is visible. */
+export function visibleChatValues(doc: any): string[] | null {
+  const roots = (Array.from(doc?.querySelectorAll?.('[data-testid="agent-chat-scroll"]') ?? []) as any[]).filter(visible);
+  if (roots.length === 0) return null;
+  const selector = IDENTITY_ATTRIBUTES.map((attr) => `[${attr}]`).join(", ");
+  return roots.flatMap((root) => (Array.from(root.querySelectorAll(selector)) as any[]).flatMap((node) =>
+    IDENTITY_ATTRIBUTES.map((attr) => node.getAttribute(attr)).filter((v): v is string => !!v)));
+}
+
 function findIdentity(root: any, row: Row): any {
   const ids = [row.tool_call_id, row.item_id,
     row.item_id?.startsWith("user-") ? row.item_id.slice(5) : undefined,
     row.item_id?.startsWith("ast-") ? row.item_id.slice(4) : undefined,
   ].filter(Boolean) as string[];
-  const attributes = ["data-message-id", "data-history-row-id", "data-call-id", "data-item-id", "data-turn-id", "id"];
-  for (const node of Array.from(root.querySelectorAll(attributes.map((attr) => `[${attr}]`).join(", "))) as any[]) {
-    if (attributes.some((attr) => {
+  for (const node of Array.from(root.querySelectorAll(IDENTITY_ATTRIBUTES.map((attr) => `[${attr}]`).join(", "))) as any[]) {
+    if (IDENTITY_ATTRIBUTES.some((attr) => {
       const value = node.getAttribute(attr);
-      return value && ids.some((id) => value === id || value === `agent_tool_${id}` ||
-        value.endsWith(`/${encodeURIComponent(id)}`) || value === `message-${id}` ||
-        value === `call-${id}` || value === `turn-${id}`);
+      return value && ids.some((id) => identityMatches(value, id));
     })) return node;
   }
   return null;

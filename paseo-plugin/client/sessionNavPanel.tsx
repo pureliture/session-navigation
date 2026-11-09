@@ -15,7 +15,7 @@ import {
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
-import { scrollToMessageInChat } from "./chatNavigation";
+import { identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { fallbackToolPreview } from "./toolPreview";
 
 import {
@@ -101,7 +101,10 @@ function ActionSvgIcon({
 export function SessionNavPanel({ theme, layout, params, navigation, tab }: PluginAgentPanelProps) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
-  const agentId = params.agentId;
+  // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
+  const [followedId, setFollowedId] = useState<string | null>(null);
+  const [inView, setInView] = useState(true);
+  const agentId = followedId ?? params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -146,6 +149,36 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   });
 
   const scopes = scopesQuery.data ?? [];
+
+  useEffect(() => {
+    const doc = (globalThis as any).document;
+    if (!doc || !paseo?.agents) return;
+    let cancelled = false;
+    const timelineIds = async (id: string): Promise<string[]> => {
+      const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 200, projection: "canonical" });
+      const entries = (page as { entries?: Array<{ item?: Record<string, unknown> }> })?.entries ?? [];
+      return entries.flatMap((entry) => ["messageId", "callId", "id"].map((key) => entry?.item?.[key]))
+        .filter((v): v is string => typeof v === "string" && v.length > 0);
+    };
+    const tick = async () => {
+      const values = visibleChatValues(doc);
+      if (values === null) return void (cancelled || setInView(false));
+      if (values.length === 0) return void (cancelled || setInView(true));
+      const candidates = [...new Set([params.agentId, ...scopes.map((s) => s.agent_id).filter((id): id is string => !!id)])];
+      let best = { id: "", score: 0 };
+      for (const id of candidates) {
+        const ids = await queryClient.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000, queryFn: () => timelineIds(id) }).catch(() => []);
+        const score = ids.filter((x) => values.some((v) => identityMatches(v, x))).length;
+        if (score > best.score) best = { id, score };
+      }
+      if (cancelled) return;
+      setInView(best.score > 0);
+      if (best.score > 0) setFollowedId(best.id === params.agentId ? null : best.id);
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 1500);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [paseo, params.agentId, scopes, queryClient]);
   const agentScopePi = `pi:default:${agentId}:default`;
   const agentScopePaseo = `paseo:default:${agentId}:default`;
 
@@ -1483,6 +1516,33 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const isLoading = resolvedScopeKey ? listQuery.isPending : fallbackTimelineQuery.isPending;
+
+  if (!inView) {
+    return (
+      <View style={styles.screen}>
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.headerTitle}>Outline</Text>
+          </View>
+        </View>
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 8 }}>
+          <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
+            No session in view
+          </Text>
+          <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}>
+            Open a session to see its outline. The outline follows the session shown in the chat.
+          </Text>
+          {navigation ? (
+            <Pressable accessibilityRole="button" onPress={() => navigation.openAgent({ agentId: params.agentId })}>
+              <Text style={{ fontSize: 11, color: theme.colors.foreground, textDecorationLine: "underline" }}>
+                Open this panel's session
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   if (!isLoading && rows.length === 0) {
     return (

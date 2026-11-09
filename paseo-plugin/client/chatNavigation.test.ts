@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Row } from "../shared/sessionNav";
-import { scrollToMessageInChat } from "./chatNavigation";
+import { identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 
 class Element {
   children: Element[] = [];
@@ -248,4 +248,14 @@ test("a later prompt with the same text doesn't end the folded turn at the curre
   await scrollToMessageInChat(read1, [u1, read1, u2], { document: doc, afterExpand: async () => {} });
   expect(clicks).toBe(1);
   expect(folded.scrolled).toBe(true);
+});
+
+
+test("visibleChatValues reports no session when no chat is on screen", () => {
+  expect(visibleChatValues(new Element())).toBeNull();
+  const doc = new Element().add(new Element({ "data-testid": "agent-chat-scroll" }).add(
+    new Element({ "data-message-id": "m1" }), new Element({ "data-call-id": "agent_tool_c1" })));
+  const values = visibleChatValues(doc)!;
+  expect(values).toEqual(["m1", "agent_tool_c1"]);
+  expect(values.some((v) => identityMatches(v, "c1"))).toBe(true);
 });
