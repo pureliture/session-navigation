@@ -73,7 +73,13 @@ def _call_tool(state: Any, name: str, args: Any, session_id: str) -> dict[str, A
     if handler is None and state is not None:
         try:
             from . import factories as _factories
-            maker = getattr(_factories, "make_" + name + "_handler", None)
+            maker = {
+                "hide_context": _factories.make_hide_handler,
+                "summarize_context": _factories.make_summarize_handler,
+                "list_context_items": _factories.make_list_handler,
+                "unhide_context": _factories.make_unhide_handler,
+                "manage_context": _factories.make_manage_handler,
+            }.get(name)
             if callable(maker):
                 handler = maker(state)
         except Exception:
@@ -339,7 +345,8 @@ def register(ctx: Any, state: Any = None, **kwargs: Any) -> Any:
     register_command = getattr(ctx, "register_command", None)
     if not callable(register_command):
         return None
-    handler = lambda raw_args="": nav_command(state, raw_args)
+    def handler(raw_args="", **session_context):
+        return nav_command(state, raw_args, **session_context)
     if state is not None:
         try:
             state.ctx = ctx
