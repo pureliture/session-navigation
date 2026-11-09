@@ -1119,7 +1119,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
 
           {/* Right inline slot: [Hide/Summarize Icons] + [Bytes/Tokens] */}
           <View style={styles.rowRightWrap}>
-            {resolvedScopeKey ? (
+            {resolvedScopeKey && row.manageable !== false ? (
               <View style={styles.actionsContainer}>
                 {isHidden ? (
                   <Pressable
@@ -1402,7 +1402,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
           </View>
 
           <View style={styles.rowRightWrap}>
-            {resolvedScopeKey ? (
+            {resolvedScopeKey && row.manageable !== false ? (
               <View style={styles.actionsContainer}>
                 {isHidden ? (
                   <Pressable

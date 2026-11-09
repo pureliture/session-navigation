@@ -13,6 +13,7 @@ export const RowSchema = z.object({
   version: z.number().int(),
   tokens_display: z.string(),
   tokens: z.number().optional(),
+  manageable: z.boolean().optional(),
   cost_usd: z.number().nullable().optional(),
   source: z.string().optional(),
   bytes_size: z.number().optional(),

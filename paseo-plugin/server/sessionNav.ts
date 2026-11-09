@@ -86,6 +86,7 @@ function asRow(item: unknown): z.infer<typeof RowSchema> {
     version: num(obj.version) ?? 1,
     tokens_display: str(obj.tokens_display) ?? "—",
     tokens: num(obj.tokens),
+    manageable: typeof obj.manageable === "boolean" ? obj.manageable : undefined,
     cost_usd: num(obj.cost_usd) ?? null,
     source: str(obj.source) ?? str(obj.compaction_source),
     bytes_size: num(obj.bytes_size),

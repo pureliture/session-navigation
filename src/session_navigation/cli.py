@@ -227,6 +227,29 @@ def _token_fields(tokens: int | None) -> dict[str, Any]:
     return {"tokens": tokens, "tokens_display": label, "tokens_source": "실측 배분"}
 
 
+def _display_tool_entry(idx: int, msg: dict[str, Any], calls: dict[str, tuple[dict[str, Any], int]]) -> dict[str, Any]:
+    """Outline row for a tool result the engine does not manage (other tools, errors, multi-part output): shown, never hideable."""
+    cid = msg.get("toolCallId") if isinstance(msg.get("toolCallId"), str) else ""
+    call = calls.get(cid, ({}, -1))[0]
+    content = msg.get("content")
+    text = _message_text({"content": content}) if isinstance(content, (list, str)) else ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return {
+        "item_id": f"view_{cid or idx}",
+        "tool_call_id": cid,
+        "kind": "tool",
+        "tool_name": msg.get("toolName") or call.get("name") or "tool",
+        "status": "visible",
+        "visibility": "visible",
+        "version": 1,
+        "compaction_source": "display_only",
+        "manageable": False,
+        "summary_line": ("[error] " if msg.get("isError") else "") + "\n".join(lines[:2])[:220],
+        "bytes_size": len(text.encode("utf-8")),
+        **_tool_preview(call.get("arguments"), text),
+    }
+
+
 def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], dict[str, ToolResultRecord]]:
     """Load chronological timeline entries (user, assistant, tools) and confirmed ToolResultRecords for an OMP session."""
     session = _read_omp_session(scope_key)
@@ -265,6 +288,84 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
     total_bytes = 0
     MAX_BYTES = 4 * 1024 * 1024
     MAX_RECORDS = 1000
+
+    def record_entry(idx: int, msg: dict[str, Any]) -> dict[str, Any] | bool | None:
+        """A manageable read/bash row, False past the size caps, or None when the result is display-only."""
+        nonlocal total_bytes
+        cid = msg.get("toolCallId")
+        if not isinstance(cid, str) or cid in duplicates or result_counts.get(cid) != 1:
+            return None
+        found = calls.get(cid)
+        if not found:
+            return None
+        call_block, call_idx = found
+        if call_idx >= idx:
+            return None
+        tool_name = call_block.get("name")
+        if tool_name not in ("read", "bash") or msg.get("toolName") != tool_name:
+            return None
+        if msg.get("isError") is not False:
+            return None
+        call_args = call_block.get("arguments")
+        if not isinstance(call_args, dict):
+            return None
+        content_list = msg.get("content")
+        if not isinstance(content_list, list) or len(content_list) != 1:
+            return None
+        block0 = content_list[0]
+        if not isinstance(block0, dict) or block0.get("type") != "text" or not isinstance(block0.get("text"), str):
+            return None
+
+        if tool_name == "read":
+            p = call_args.get("path")
+            if not isinstance(p, str) or not p.strip():
+                return None
+            args = {"path": p}
+        else:
+            cmd = call_args.get("command")
+            if not isinstance(cmd, str) or not cmd.strip():
+                return None
+            args = {"command": cmd}
+            cwd = call_args.get("cwd")
+            if isinstance(cwd, str) and cwd.strip():
+                args["cwd"] = cwd
+
+        text = block0["text"]
+        raw_bytes = len(text.encode("utf-8"))
+        total_bytes += raw_bytes
+        if total_bytes > MAX_BYTES or len(records) >= MAX_RECORDS:
+            return False
+
+        invocation = {"tool_name": tool_name, "arguments": args}
+        inv_digest = compute_invocation_digest(invocation)
+        content_hash = compute_sha256(text)
+        rec = ToolResultRecord(
+            call_id=cid,
+            content=text,
+            content_sha256=content_hash,
+            invocation=invocation,
+            invocation_digest=inv_digest,
+            status="ok",
+            result_position=0,
+        )
+        records[cid] = rec
+        item_id = _item_id(scope_key, cid, content_hash, inv_digest, 0)
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        summary = "\n".join(lines[:2])[:220]
+        return {
+            "item_id": item_id,
+            "tool_call_id": cid,
+            "kind": "tool",
+            "tool_name": tool_name,
+            "status": "visible",
+            "visibility": "visible",
+            "version": 1,
+            "compaction_source": "unrecorded",
+            "summary_line": summary,
+            "bytes_size": raw_bytes,
+            **_tool_preview(call_args, text),
+            "record": rec,
+        }
 
     for idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
@@ -311,80 +412,10 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
                     "bytes_size": len(text.encode("utf-8")),
                 })
         elif role == "toolResult":
-            cid = msg.get("toolCallId")
-            if not isinstance(cid, str) or cid in duplicates or result_counts.get(cid) != 1:
-                continue
-            found = calls.get(cid)
-            if not found:
-                continue
-            call_block, call_idx = found
-            if call_idx >= idx:
-                continue
-            tool_name = call_block.get("name")
-            if tool_name not in ("read", "bash") or msg.get("toolName") != tool_name:
-                continue
-            if msg.get("isError") is not False:
-                continue
-            call_args = call_block.get("arguments")
-            if not isinstance(call_args, dict):
-                continue
-            content_list = msg.get("content")
-            if not isinstance(content_list, list) or len(content_list) != 1:
-                continue
-            block0 = content_list[0]
-            if not isinstance(block0, dict) or block0.get("type") != "text" or not isinstance(block0.get("text"), str):
-                continue
-
-            if tool_name == "read":
-                p = call_args.get("path")
-                if not isinstance(p, str) or not p.strip():
-                    continue
-                args = {"path": p}
-            else:
-                cmd = call_args.get("command")
-                if not isinstance(cmd, str) or not cmd.strip():
-                    continue
-                args = {"command": cmd}
-                cwd = call_args.get("cwd")
-                if isinstance(cwd, str) and cwd.strip():
-                    args["cwd"] = cwd
-
-            text = block0["text"]
-            raw_bytes = len(text.encode("utf-8"))
-            total_bytes += raw_bytes
-            if total_bytes > MAX_BYTES or len(records) >= MAX_RECORDS:
+            entry = record_entry(idx, msg)
+            if entry is False:
                 break
-
-            invocation = {"tool_name": tool_name, "arguments": args}
-            inv_digest = compute_invocation_digest(invocation)
-            content_hash = compute_sha256(text)
-            rec = ToolResultRecord(
-                call_id=cid,
-                content=text,
-                content_sha256=content_hash,
-                invocation=invocation,
-                invocation_digest=inv_digest,
-                status="ok",
-                result_position=0,
-            )
-            records[cid] = rec
-            item_id = _item_id(scope_key, cid, content_hash, inv_digest, 0)
-            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-            summary = "\n".join(lines[:2])[:220]
-            timeline.append({
-                "item_id": item_id,
-                "tool_call_id": cid,
-                "kind": "tool",
-                "tool_name": tool_name,
-                "status": "visible",
-                "visibility": "visible",
-                "version": 1,
-                "compaction_source": "unrecorded",
-                "summary_line": summary,
-                "bytes_size": raw_bytes,
-                **_tool_preview(call_args, text),
-                "record": rec,
-            })
+            timeline.append(entry if isinstance(entry, dict) else _display_tool_entry(idx, msg, calls))
 
     return timeline, records
 
@@ -712,11 +743,11 @@ def main(argv: list[str] | None = None) -> int:
                                     "status": "visible",
                                     "visibility": "visible",
                                     "version": 1,
-                                    "compaction_source": "unrecorded",
+                                    "compaction_source": entry.get("compaction_source", "unrecorded"),
                                     "tool_name": entry["tool_name"],
                                     "summary_line": entry["summary_line"],
                                     "bytes_size": entry["bytes_size"],
-                                    **{key: entry[key] for key in ("tool_input", "tool_output") if key in entry},
+                                    **{key: entry[key] for key in ("tool_input", "tool_output", "manageable") if key in entry},
                                     **_token_fields(row_tokens.get(cid)),
                                 })
                 else:

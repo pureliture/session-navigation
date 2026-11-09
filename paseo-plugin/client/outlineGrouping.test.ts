@@ -5,6 +5,7 @@ import {
   fmtBytes,
   fmtTokenCount,
   fmtTokens,
+  groupMutationItems,
   isSummarizedRow,
   rowMetric,
   truncateString,
@@ -222,4 +223,9 @@ test("user/assistant/tool rows share one metric: measured tokens, else bytes", (
   const base = { item_id: "u", tool_call_id: "", kind: "user" as const, status: "visible" as const, version: 1, bytes_size: 190 };
   expect(rowMetric({ ...base, tokens_display: "42 tok", tokens: 42 })).toBe("42 tok");
   expect(rowMetric({ ...base, tokens_display: "—" })).toBe("190 B");
+});
+
+test("group actions skip display-only tool rows", () => {
+  const row = (id: string, manageable?: boolean): Row => ({ item_id: id, tool_call_id: id, kind: "tool", status: "visible", version: 1, tokens_display: "—", manageable });
+  expect(groupMutationItems({ children: [row("a"), row("b", false)] }, "hide")).toEqual([{ item_id: "a", expected_version: 1 }]);
 });
