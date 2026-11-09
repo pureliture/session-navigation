@@ -191,3 +191,15 @@ test("hidden prompts are dropped and hidden responses keep only their tool calls
   const latest = dropHiddenMessages([user, withCall, result], new Set([messageKey(withCall)!]))!;
   expect(latest[1].content).toEqual([withCall.content[0], withCall.content[2]]);
 });
+
+
+import { fitCaps } from "./session-navigation";
+
+test("fitCaps keeps results with stored hides first, then the newest", () => {
+  const records = Array.from({ length: 70 }, (_, i) => ({ call_id: `c${i}`, tool_name: "bash", arguments: { command: `echo ${i}` }, status: "ok", content: `out ${i}` }));
+  const kept = fitCaps(records as any, new Set(["c0", "c1"])).map((r) => r.call_id);
+  expect(kept.length).toBe(64);
+  expect(kept.slice(0, 2)).toEqual(["c0", "c1"]);
+  expect(kept.at(-1)).toBe("c69");
+  expect(kept).not.toContain("c7");
+});

@@ -45,6 +45,22 @@ export function dropHiddenMessages(messages: any[], hidden: ReadonlySet<string>)
 	return changed ? kept : null;
 }
 
+function overCaps(records: RecordItem[]): boolean {
+	return records.length > MAX_RECORDS || records.reduce((n, r) => n + Buffer.byteLength(r.content, "utf8"), 0) > MAX_BYTES;
+}
+
+/** Long sessions exceed the daemon's snapshot caps: send results with stored hides first, then the newest. */
+export function fitCaps(records: RecordItem[], managed: Set<string>): RecordItem[] {
+	const order = [...records.filter((r) => managed.has(r.call_id)).reverse(), ...records.filter((r) => !managed.has(r.call_id)).reverse()];
+	const kept = new Set<RecordItem>(); let bytes = 0;
+	for (const r of order) {
+		const size = Buffer.byteLength(r.content, "utf8");
+		if (kept.size >= MAX_RECORDS || bytes + size > MAX_BYTES) continue;
+		kept.add(r); bytes += size;
+	}
+	return records.filter((r) => kept.has(r));
+}
+
 export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	const z = pi.zod;
 	let proc: ChildProcessWithoutNullStreams | null = null;
@@ -156,7 +172,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		for (const message of messages) if (message?.role === "toolResult" && typeof message.toolCallId === "string") {
 			resultCounts.set(message.toolCallId, (resultCounts.get(message.toolCallId) ?? 0) + 1);
 		}
-	const records: RecordItem[] = []; const positions = new Map<string, number>(); let bytes = 0;
+	const records: RecordItem[] = []; const positions = new Map<string, number>();
 	for (let i = 0; i < messages.length; i++) {
 		const message = messages[i]; const id = message?.toolCallId; const found = calls.get(id); const call = found?.block;
 		if (message?.role !== "toolResult" || typeof id !== "string" || duplicates.has(id) || resultCounts.get(id) !== 1 ||
@@ -176,8 +192,6 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			if (typeof call.arguments.cwd === "string" && call.arguments.cwd.trim()) args.cwd = call.arguments.cwd;
 		}
 		const content = message.content[0].text;
-		bytes += Buffer.byteLength(content, "utf8");
-		if (bytes > MAX_BYTES || records.length >= MAX_RECORDS) return null;
 		records.push({ call_id: id, tool_name: call.name, arguments: args, status: "ok", content });
 		positions.set(id, i);
 	}
@@ -187,6 +201,10 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		candidate = null;
 		const session = sessionId(ctx); const collected = collect(event.messages);
 		if (!session || !collected) return;
+		if (overCaps(collected.records)) {
+			const managed = await rpc("managed_calls", { session_id: session }, 2000);
+			collected.records = fitCaps(collected.records, new Set(managed.ok && Array.isArray(managed.call_ids) ? managed.call_ids as string[] : []));
+		}
 		const next: Candidate = { session, token: randomUUID(), confirmed: false, records: collected.records };
 		candidate = next;
 		const response = await rpc("prepare", { session_id: session, snapshot_id: next.token, records: collected.records }, 2000);

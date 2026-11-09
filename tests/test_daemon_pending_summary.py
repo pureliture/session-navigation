@@ -54,3 +54,8 @@ def test_unrelated_or_larger_summary_falls_back_to_plain_hide(tmp_path, monkeypa
     done = daemon.handle({"method": "apply_summary", "params": {"session_id": "sid", "item_id": item_id, "summary_text": invented}})
     assert done["error"] == "verification_failed"
     assert daemon.store.get(daemon._scope("sid"), item_id).compaction_source == "explicit_user_hide"
+
+
+def test_managed_calls_lists_results_with_stored_state(tmp_path, monkeypatch, capsys):
+    daemon, _ = setup(tmp_path, monkeypatch, capsys)
+    assert daemon.handle({"method": "managed_calls", "params": {"session_id": "sid"}}) == {"ok": True, "call_ids": ["c1"]}

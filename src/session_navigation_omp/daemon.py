@@ -69,6 +69,8 @@ class Daemon:
             return {"ok": False, "error": "invalid_session"}
         scope = self._scope(session)
 
+        if method == "managed_calls":
+            return {"ok": True, "call_ids": sorted({item.tool_call_id for item in self.store.items(scope)})}
         if method in ("apply_summary", "summary_failed"):
             return self._finish_summary(method, scope, params)
         if method == "prepare":
