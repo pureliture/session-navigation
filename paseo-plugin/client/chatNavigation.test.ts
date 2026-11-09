@@ -231,3 +231,21 @@ test("visible chat with the exact row identity beats a hidden chat with more sni
   expect(await scrollToMessageInChat(u1, [u1, a, b], { document: doc })).toBe(true);
   expect(target.scrolled).toBe(true);
 });
+
+test("a later prompt with the same text doesn't end the folded turn at the current prompt", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc = new Element().add(root);
+  const u1 = row("u1", "user"), u2 = row("u2", "user");
+  u1.summary_line = u2.summary_line = "Repeat the same check";
+  const read1 = row("read-1");
+  read1.tool_input = JSON.stringify({ path: "README.md" });
+  const summary = new Element({ "data-testid": "turn-summary" }, "Read 1 file");
+  root.add(new Element({ "data-history-row-id": "n1" }, "Repeat the same check"), summary,
+    new Element({ "data-history-row-id": "n2" }, "Repeat the same check"));
+  const folded = new Element({ "data-testid": "tool-call-badge" }, "Read README.md");
+  let clicks = 0;
+  summary.onClick = () => { clicks++; root.children.splice(2, 0, folded); folded.parent = root; };
+  await scrollToMessageInChat(read1, [u1, read1, u2], { document: doc, afterExpand: async () => {} });
+  expect(clicks).toBe(1);
+  expect(folded.scrolled).toBe(true);
+});

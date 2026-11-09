@@ -60,8 +60,13 @@ type Turn = { summary: any; boundary: any };
 const before = (node: any, other: any) => !other || (node.compareDocumentPosition(other) & FOLLOWING) !== 0;
 const after = (node: any, other: any) => (other.compareDocumentPosition(node) & FOLLOWING) !== 0;
 
-function anchorOf(root: any, row: Row): any {
-  return findIdentity(root, row) ?? findText(root, row.summary_line);
+function anchorOf(root: any, row: Row, from?: any): any {
+  const direct = findIdentity(root, row);
+  if (direct && (!from || after(direct, from))) return direct;
+  const needle = normalized(row.summary_line ?? "").slice(0, 36);
+  if (needle.length < 4) return null;
+  return (Array.from(root.querySelectorAll(ROW)) as any[]).find((node) =>
+    (!from || after(node, from)) && normalized(node.textContent ?? "").includes(needle)) ?? null;
 }
 
 // Paseo folds finished turns behind a "turn-summary" badge rendered after the user message.
@@ -77,7 +82,7 @@ function findTurn(root: any, rows: Row[], start: number, end: number): Turn | nu
   }
   if (!anchor) return null;
   const nextUser = rows.slice(end).find((candidate) => candidate.kind === "user");
-  const userBoundary = nextUser ? anchorOf(root, nextUser) : null;
+  const userBoundary = nextUser ? anchorOf(root, nextUser, anchor) : null;
   const summary = summaries.find((candidate) => after(candidate, anchor));
   if (!summary || !before(summary, userBoundary)) return null;
   const nextSummary = summaries.find((candidate) => after(candidate, summary));
