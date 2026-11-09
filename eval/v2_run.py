@@ -17,7 +17,7 @@ from v2_fixtures import ROOT as FIXTURES, build, component
 ROOT = Path(__file__).resolve().parents[1]
 STAGES = {"crouton": ("stealth/crouton-alpha", "Stealth"),
           "deepseek": ("deepseek/deepseek-v4.1-flash-1017", "Relace")}
-COMMITS = {"A": "5017b97", "B-old": "b1a524e", "B-new": "5017b97"}
+COMMITS = {"A": "fc07058", "B-old": "5017b97", "B-new": "fc07058"}
 DEEPSEEK_REASONING = {"enabled": False, "exclude": True}
 HERMES = "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
 
