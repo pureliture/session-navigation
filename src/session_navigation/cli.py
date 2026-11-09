@@ -412,9 +412,8 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
                     "bytes_size": len(text.encode("utf-8")),
                 })
         elif role == "toolResult":
+            # Past the size caps rows stay listed (display-only) so the outline still reaches the end of the session.
             entry = record_entry(idx, msg)
-            if entry is False:
-                break
             timeline.append(entry if isinstance(entry, dict) else _display_tool_entry(idx, msg, calls))
 
     return timeline, records

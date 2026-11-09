@@ -340,12 +340,21 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     queryFn: async () => {
       if (!agentId || !paseo?.agents) return [];
       try {
-        // Issue 6: Increased limit to 1000 to cover full session outline
-        const page = await paseo.agents
-          .ref(agentId)
-          .timeline.refetch({ direction: "tail", limit: 1000, projection: "canonical" });
-        const entries =
-          (page as { entries?: Array<{ item?: Record<string, unknown>; seqStart?: number }> })?.entries ?? [];
+        // Page back to the first prompt: the chat may only keep recent history loaded, the outline lists all of it.
+        type Page = {
+          entries?: Array<{ item?: Record<string, unknown>; seqStart?: number }>;
+          hasOlder?: boolean;
+          startCursor?: { epoch: string; seq: number } | null;
+        };
+        const timeline = paseo.agents.ref(agentId).timeline;
+        let page = (await timeline.refetch({ direction: "tail", limit: 1000, projection: "canonical" })) as Page;
+        let entries = page?.entries ?? [];
+        while (page?.hasOlder && page.startCursor) {
+          const cursor = page.startCursor;
+          page = (await timeline.refetch({ direction: "before", cursor, limit: 1000, projection: "canonical" })) as Page;
+          if (!page?.entries?.length || (page.startCursor && page.startCursor.seq >= cursor.seq)) break;
+          entries = [...page.entries, ...entries];
+        }
         const result: Row[] = [];
 
         for (let i = 0; i < entries.length; i++) {
