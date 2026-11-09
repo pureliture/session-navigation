@@ -28,7 +28,7 @@ export function truncateString(str: string, maxLen = 120): string {
 export function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boolean {
   if (localMode) return localMode === "summarize";
   const src = row.source ?? "";
-  return src === "rule_summary" || src === "llm" || src === "llm_summary" || src === "summarize";
+  return src === "rule_summary" || src === "llm" || src === "llm_summary" || src === "summarize" || src === "summarize_pending";
 }
 
 export type OutlineRow =
