@@ -25,6 +25,7 @@ import {
   fmtTokens,
   groupMutationItems,
   isSummarizedRow,
+  rowMetric,
   truncateString,
   type OutlineRow,
 } from "./outlineGrouping";
@@ -998,7 +999,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
-              <Text style={styles.rightMetricsText}>{fmtBytes(row.bytes_size)}</Text>
+              <Text style={styles.rightMetricsText}>{rowMetric(row)}</Text>
             </View>
           </View>
           <View style={styles.treeLineContainer}>
@@ -1027,7 +1028,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
-              <Text style={styles.rightMetricsText}>{fmtBytes(row.bytes_size)}</Text>
+              <Text style={styles.rightMetricsText}>{rowMetric(row)}</Text>
             </View>
           </View>
           <View style={styles.treeLineContainer}>
@@ -1045,7 +1046,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         : row.tool_call_id;
 
     const metricText =
-      row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+      rowMetric(row);
 
     const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
     const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
@@ -1322,7 +1323,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
         : row.tool_call_id;
     const metricText =
-      row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+      rowMetric(row);
     const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
     const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
     const iconSize = layout.compact ? 12 : 13;

@@ -14,6 +14,10 @@ export function fmtTokens(n: number): string {
   return `${fmtTokenCount(n)} tok`;
 }
 
+export function rowMetric(row: Row): string {
+  return row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+}
+
 export function truncateString(str: string, maxLen = 120): string {
   if (!str) return "";
   const singleLine = str.replace(/\r?\n/g, " ").trim();

@@ -6,6 +6,7 @@ import {
   fmtTokenCount,
   fmtTokens,
   isSummarizedRow,
+  rowMetric,
   truncateString,
   type OutlineRow,
 } from "./outlineGrouping";
@@ -215,4 +216,10 @@ describe("token display", () => {
     expect(group([tool("a", 30), tool("b", 12)]).totalTokens).toBe(42);
     expect(group([tool("a", 30), tool("b")]).totalTokens).toBeNull();
   });
+});
+
+test("user/assistant/tool rows share one metric: measured tokens, else bytes", () => {
+  const base = { item_id: "u", tool_call_id: "", kind: "user" as const, status: "visible" as const, version: 1, bytes_size: 190 };
+  expect(rowMetric({ ...base, tokens_display: "42 tok", tokens: 42 })).toBe("42 tok");
+  expect(rowMetric({ ...base, tokens_display: "—" })).toBe("190 B");
 });
