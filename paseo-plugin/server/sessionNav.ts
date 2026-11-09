@@ -131,14 +131,30 @@ function dbNoteSuccess(scopeKey: string): void {
 }
 
 
-function findAgentMappings(): {
+function ompHandleExists(handle: string, home: string): boolean {
+  if (fs.existsSync(handle)) return true;
+  if (!handle || handle.includes("/") || handle.includes("\\")) return false;
+  const suffix = `_${handle}.jsonl`;
+  const search = (directory: string): boolean => {
+    try {
+      return fs.readdirSync(directory, { withFileTypes: true }).some((entry) =>
+        entry.isDirectory() ? search(path.join(directory, entry.name)) :
+          entry.isFile() && entry.name.endsWith(suffix));
+    } catch {
+      return false;
+    }
+  };
+  return search(path.join(home, ".omp", "agent", "sessions"));
+}
+
+export function findAgentMappings(home = os.homedir()): {
   sessionToAgent: Map<string, string>;
   ompScopes: Array<{ scope_key: string; agent_id: string }>;
 } {
   const sessionToAgent = new Map<string, string>(); // sessionId -> agentId
   const ompScopes: Array<{ scope_key: string; agent_id: string }> = [];
   try {
-    const agentsDir = path.join(os.homedir(), ".paseo", "agents");
+    const agentsDir = path.join(home, ".paseo", "agents");
     if (!fs.existsSync(agentsDir)) return { sessionToAgent, ompScopes };
     const dirs = fs.readdirSync(agentsDir);
     for (const d of dirs) {
@@ -177,7 +193,7 @@ function findAgentMappings(): {
               sessionToAgent.set(sessionId, agentId);
               if (
                 (provider === "omp" || provider === "pi") &&
-                (!nativeHandle || fs.existsSync(nativeHandle))
+                (!nativeHandle || ompHandleExists(nativeHandle, home))
               ) {
                 ompScopes.push({
                   scope_key: `pi:default:${sessionId}:default`,

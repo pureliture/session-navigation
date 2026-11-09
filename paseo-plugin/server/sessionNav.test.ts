@@ -1,9 +1,35 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dbChoice, hideBatch, unhideBatch, hideItem, listItems, manageItems } from "./sessionNav";
+import { dbChoice, hideBatch, unhideBatch, hideItem, listItems, manageItems, findAgentMappings } from "./sessionNav";
 import { readFileSync } from "node:fs";
+
+test("imported OMP bare native handles resolve recursively like CLI session filenames", () => {
+  const home = mkdtempSync(join(tmpdir(), "sn-omp-import-"));
+  try {
+    const agents = join(home, ".paseo", "agents", "workspace");
+    const sessions = join(home, ".omp", "agent", "sessions", "workspace", "nested");
+    mkdirSync(agents, { recursive: true });
+    mkdirSync(sessions, { recursive: true });
+    const file = join(sessions, "2026-11-09_session-import.jsonl");
+    writeFileSync(file, "");
+    for (const [id, handle] of [
+      ["import", "session-import"], ["path", file], ["missing", "missing-session"],
+      ["wrong-suffix", "session-imp"], ["bad-path", join(home, "missing.jsonl")],
+    ]) {
+      writeFileSync(join(agents, `${id}.json`), JSON.stringify({
+        id, persistence: { provider: "omp", sessionId: `session-${id}`, nativeHandle: handle },
+      }));
+    }
+    expect(findAgentMappings(home).ompScopes.sort((a, b) => a.agent_id.localeCompare(b.agent_id))).toEqual([
+      { scope_key: "pi:default:session-import:default", agent_id: "import" },
+      { scope_key: "pi:default:session-path:default", agent_id: "path" },
+    ]);
+    rmSync(join(home, ".omp"), { recursive: true });
+    expect(findAgentMappings(home).ompScopes).toEqual([]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 test("list carries original preview fields including empty output through asRow", async () => {
   const dir = fakeCli(`echo '{"ok":true,"items":[{"item_id":"preview","tool_call_id":"call","status":"hidden","version":2,"tool_input":"original path","tool_output":""}]}'`);
