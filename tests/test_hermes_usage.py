@@ -97,6 +97,36 @@ def test_message_hide_estimates_idempotence_and_errors(setup):
     assert "next ≈" not in nav(ctx, session="other")
 
 
+@pytest.mark.parametrize("action", ["hide", "summarize", "auto"])
+def test_partial_manage_tracks_only_applied_savings(setup, monkeypatch, action):
+    ctx, state = setup
+    if action != "hide":
+        state.summarizer = object()
+        monkeypatch.setattr(adapter.factories, "_engine_summarize",
+                            lambda engine, store, scope, call_id, summarizer:
+                            adapter.handlers.compact(engine, store, scope, call_id))
+    observe(ctx)
+    handler = ctx.tools["manage_context"]["handler"]
+    params = {"tool_call_ids": ["c1", "missing"], "action": action}
+    result = json.loads(handler(params, session_id=SESSION))
+    assert result["ok"] is False
+    assert (result["applied"], result["failed"]) == (1, 1)
+    item, = state.engine.store.items(adapter.factories.scope_for(state, SESSION))
+    saved = adapter.usage.estimate_tokens(item.original) - adapter.usage.estimate_tokens(item.compacted)
+    assert saved > 0
+    suffix = "next ≈ −" + adapter.usage.compact_tokens(saved)
+    assert nav(ctx).endswith(suffix)
+    assert nav(ctx, "messages").endswith(suffix)
+    repeated = json.loads(handler(params, session_id=SESSION))
+    assert (repeated["applied"], repeated["failed"]) == (0, 2)
+    assert nav(ctx).endswith(suffix)
+    nav(ctx, "unhide " + item.item_id)
+    assert "next ≈" not in nav(ctx)
+    handler(params, session_id=SESSION)
+    observe(ctx, usage={"prompt_tokens": 5000})
+    assert nav(ctx).endswith("context 5.0K / 65.5K tokens (7.6%)")
+
+
 def test_invalid_or_auxiliary_usage_does_not_reset_pending_estimate(setup):
     ctx, _state = setup
     observe(ctx)

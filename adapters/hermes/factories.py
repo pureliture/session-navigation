@@ -151,7 +151,7 @@ def _track_mutation(state: PluginState, handler: Callable[..., str]) -> Callable
         scope = scope_for(state, session_id)
         before = savings(scope) if scope is not None and state.is_enabled() else None
         result = handler(args, session_id=session_id, **extra)
-        if before is not None and json.loads(result).get("ok"):
+        if before is not None:
             after = savings(scope)
             if after is not None:
                 state.usage.adjust(session_id, after - before)
