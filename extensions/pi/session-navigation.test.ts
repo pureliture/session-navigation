@@ -187,5 +187,7 @@ test("hidden prompts are dropped and hidden responses keep only their tool calls
   expect(messageKey(user)).toMatch(/^msg:user:1000:[0-9a-f]{12}$/);
   expect(dropHiddenMessages([user], new Set())).toBeNull();
   const kept = dropHiddenMessages([user, withCall, result, textOnly], new Set([messageKey(user)!, messageKey(withCall)!, messageKey(textOnly)!]))!;
-  expect(kept).toEqual([{ ...withCall, content: [withCall.content[0], withCall.content[2]] }, result]);
+  expect(kept).toEqual([{ ...withCall, content: [withCall.content[2]] }, result]);
+  const latest = dropHiddenMessages([user, withCall, result], new Set([messageKey(withCall)!]))!;
+  expect(latest[1].content).toEqual([withCall.content[0], withCall.content[2]]);
 });

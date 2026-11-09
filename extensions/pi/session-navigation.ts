@@ -24,17 +24,22 @@ export function messageKey(message: any): string | null {
 	if ((message?.role !== "user" && message?.role !== "assistant") || !Number.isInteger(message.timestamp)) return null;
 	return `msg:${message.role}:${message.timestamp}:${hash(messageText(message)).slice(0, 12)}`;
 }
-/** Drop hidden prompts; strip hidden responses' text but keep tool calls (and their thinking) so call/result pairs stay valid. */
+/**
+ * Drop hidden prompts; a hidden response that made tool calls keeps only those calls so call/result pairs stay valid.
+ * Its thinking survives only on the latest assistant turn, where providers require it alongside the calls.
+ */
 export function dropHiddenMessages(messages: any[], hidden: ReadonlySet<string>): any[] | null {
 	if (hidden.size === 0) return null;
 	let changed = false;
 	const kept: any[] = [];
-	for (const message of messages) {
+	const lastAssistant = messages.reduce((last: number, m: any, i: number) => (m?.role === "assistant" ? i : last), -1);
+	for (const [index, message] of messages.entries()) {
 		const key = messageKey(message);
 		if (!key || !hidden.has(key)) { kept.push(message); continue; }
 		changed = true;
 		if (message.role === "assistant" && Array.isArray(message.content) && message.content.some((b: any) => b?.type === "toolCall")) {
-			kept.push({ ...message, content: message.content.filter((b: any) => b?.type !== "text") });
+			const keep = (b: any) => b?.type === "toolCall" || (index === lastAssistant && (b?.type === "thinking" || b?.type === "redactedThinking"));
+			kept.push({ ...message, content: message.content.filter(keep) });
 		}
 	}
 	return changed ? kept : null;

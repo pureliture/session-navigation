@@ -253,6 +253,6 @@ def drop_messages(api_mode: str, payload: dict[str, Any], hidden: set[str]) -> d
         if index not in targets:
             kept.append(item)
         elif api_mode == "chat_completions" and item.get("role") == "assistant" and item.get("tool_calls"):
-            kept.append({**item, "content": None})
+            kept.append({"role": "assistant", "content": None, "tool_calls": item["tool_calls"]})
     copied[field] = kept
     return copied
