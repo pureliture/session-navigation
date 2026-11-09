@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readSessionTimelineIds, resolveSessionTarget } from "./sessionFollowing";
+import { readSessionTimelineIds, resolveSessionTarget, sessionFollowCandidates } from "./sessionFollowing";
 import { QueryClient } from "@tanstack/react-query";
 import { defaultWorkspaceState, selectWorkspaceAgent, workspaceTabSchema } from "./workspaceState";
 
@@ -46,6 +46,33 @@ test("a failed candidate does not prevent following another candidate", async ()
     if (id === "a") throw new Error("offline");
     return timelineIds(id);
   })).toBe("b");
+});
+
+test("unpinning a workspace panel does not wait for unrelated global scope timelines", async () => {
+  const peer = "b6066745-20f3-4fcd-bffb-fe1a3888bb54";
+  const main = "18a1458f-c28b-4c56-b58d-3749899f0944";
+  const unrelated = "b4ce974f-be72-4364-b0d3-4f7fff0f8088";
+  const ids = ["c852fb19", "gen-1794224260-5CkaaM84iPOsEpqrDZnK"];
+  const state = restored(selectWorkspaceAgent(null));
+  const calls: string[] = [];
+  let release!: (ids: string[]) => void;
+  const blocked = new Promise<string[]>((resolve) => { release = resolve; });
+  let matched: string | null | undefined;
+  const result = resolveSessionTarget({
+    followVisible: !state.agentId, boundAgentId: state.agentId ?? "", visibleValues: ids,
+    candidates: sessionFollowCandidates([peer, main], [unrelated, main, peer]),
+    timelineIds: async (id) => { calls.push(id); return id === unrelated ? blocked : id === peer ? ids : ["main-message"]; },
+  }).then((id) => { matched = id; return id; });
+  try {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(matched).toBe(peer);
+    expect(calls).toEqual([peer, main]);
+  } finally { release([]); await result; }
+});
+
+test("workspace candidate discovery remains authoritative while empty; agent panels retain scope discovery", () => {
+  expect(sessionFollowCandidates([], ["other-workspace"])).toEqual([]);
+  expect(sessionFollowCandidates(undefined, ["a", "b"])).toEqual(["a", "b"]);
 });
 
 test("agent-bound follow mode unbinds for an empty chat rather than guessing its original agent", async () => {

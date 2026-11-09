@@ -9,6 +9,10 @@ export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHa
   return { ids, complete };
 }
 
+export function sessionFollowCandidates(workspaceAgentIds: readonly string[] | undefined, scopeAgentIds: readonly string[]): readonly string[] {
+  return workspaceAgentIds ?? scopeAgentIds;
+}
+
 export async function resolveSessionTarget({
   followVisible, boundAgentId, visibleValues, candidates, timelineIds,
 }: {

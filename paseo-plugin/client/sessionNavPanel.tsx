@@ -16,7 +16,7 @@ import {
   type Row,
 } from "../shared/sessionNav";
 import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
-import { readSessionTimelineIds, resolveSessionTarget } from "./sessionFollowing";
+import { readSessionTimelineIds, resolveSessionTarget, sessionFollowCandidates } from "./sessionFollowing";
 import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
@@ -171,7 +171,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       const values = visibleChatValues(doc);
       const id = await resolveSessionTarget({
         followVisible, boundAgentId: params.agentId, visibleValues: values,
-        candidates: [...candidateAgentIds ?? [], ...scopes.map((s) => s.agent_id).filter((id): id is string => !!id)],
+        candidates: sessionFollowCandidates(candidateAgentIds, scopes.map((s) => s.agent_id).filter((id): id is string => !!id)),
         timelineIds: async (id) => (await queryClient.fetchQuery({
           queryKey: ["session-nav-follow", id],
           staleTime: (query) => query.state.data?.complete ? 10_000 : 0,
