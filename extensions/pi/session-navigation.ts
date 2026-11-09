@@ -103,7 +103,14 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			} catch { invalidate(child, "write_failed"); }
 		});
 	}
-	async function rpc(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
+	// OMP can fire a background request's context hook while the main one is still preparing; queue instead of dropping it.
+	let queue: Promise<unknown> = Promise.resolve();
+	function rpc(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
+		const run = queue.then(() => rpcOnce(method, params, timeout, signal));
+		queue = run.catch(() => undefined);
+		return run;
+	}
+	async function rpcOnce(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
 		if (busy) return { ok: false, error: "busy" };
 		if (!proc && Date.now() < cooldownUntil) return { ok: false, error: "cooldown" };
 		busy = true;
@@ -214,7 +221,8 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			}
 			return;
 		}
-		if (candidate !== next || !response.ok || !Array.isArray(response.patches)) { if (candidate === next) candidate = null; return; }
+		// A newer context hook may have replaced `candidate`; these patches still belong to this request's messages.
+		if (!response.ok || !Array.isArray(response.patches)) { if (candidate === next) candidate = null; return; }
 		let messages: any[] | null = null;
 		for (const patch of response.patches) {
 			if (!patch || typeof patch.call_id !== "string" || typeof patch.sha256 !== "string" || typeof patch.text !== "string") continue;

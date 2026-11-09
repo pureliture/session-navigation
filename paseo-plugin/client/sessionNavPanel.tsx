@@ -222,6 +222,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
+  // The host meter only moves after the next model request; until then show the expected change.
+  const [pendingEstimate, setPendingEstimate] = useState<{ used: number; tokens: number } | null>(null);
+  const notePending = (changed: Row[], sign: 1 | -1) => {
+    const used = usageQuery.data?.contextWindowUsedTokens ?? listQuery.data?.context?.used_tokens;
+    const tokens = changed.reduce((sum, r) => sum + (typeof r.tokens === "number" ? r.tokens : 0), 0) * sign;
+    if (!used || !tokens) return;
+    setPendingEstimate((prev) => ({ used, tokens: (prev?.used === used ? prev.tokens : 0) + tokens }));
+  };
 
   const hideMutation = useMutation({
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
@@ -234,9 +242,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         mode,
       });
     },
-    onSuccess: (r) => {
+    onSuccess: (r, { row }) => {
       if (!onMutationError(r)) {
         setNotice(null);
+        if (row.status !== "hidden") notePending([row], -1);
         void invalidate();
       }
     },
@@ -245,9 +254,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const unhideMutation = useMutation({
     mutationFn: (row: Row) =>
       unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version }),
-    onSuccess: (r) => {
+    onSuccess: (r, row) => {
       if (!onMutationError(r)) {
         setNotice(null);
+        notePending([row], 1);
         void invalidate();
       }
     },
@@ -277,6 +287,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
           ? await unhideBatch({ scope_key: scopeKey, items })
           : await hideBatch({ scope_key: scopeKey, mode: action, items });
       const failures = result.items.filter((item) => !item.ok);
+      const applied = new Set(result.items.filter((item) => item.ok).map((item) => item.item_id));
+      notePending(rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
+        action === "unhide" ? 1 : -1);
       if (result.error) onMutationError(result);
       for (const item of failures) onMutationError(item);
       if (failures.length) {
@@ -588,15 +601,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     if (fromLog?.used_tokens) return { used: fromLog.used_tokens, max: fromLog.max_tokens ?? null };
     return null;
   }, [usageQuery.data, listQuery.data]);
-  // The host meter only moves after the next model request; until then show the expected change from hides since.
-  const measuredHidden = hiddenRows.reduce((sum, r) => sum + (typeof r.tokens === "number" ? r.tokens : 0), 0);
-  const [baseline, setBaseline] = useState<{ used: number; hidden: number } | null>(null);
-  useEffect(() => {
-    if (sessionContext && baseline?.used !== sessionContext.used) {
-      setBaseline({ used: sessionContext.used, hidden: measuredHidden });
-    }
-  }, [sessionContext?.used, measuredHidden, baseline?.used]);
-  const pendingDelta = baseline && baseline.used === sessionContext?.used ? baseline.hidden - measuredHidden : 0;
+  const pendingDelta = pendingEstimate && pendingEstimate.used === sessionContext?.used ? pendingEstimate.tokens : 0;
   const activeRatio = sessionContext?.max
     ? Math.min(1, Math.max(0, sessionContext.used / sessionContext.max))
     : 0;
