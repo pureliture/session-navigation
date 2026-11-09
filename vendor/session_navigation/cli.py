@@ -134,14 +134,15 @@ def _message_weights(idx: int, msg: dict[str, Any]) -> list[tuple[str | None, in
 
 
 def _measured_tokens(
-    messages: list[dict[str, Any]], boundaries: list[int], mutation_times: list[float],
+    messages: list[dict[str, Any]], boundaries: list[int], mutation_spans: list[tuple[float, float]],
     injected: list[tuple[int, int]] = (),
 ) -> tuple[dict[str, int], dict[str, Any] | None]:
     """Spec D2 "실측 배분": split each request's measured prompt growth over the rows it added, by characters.
 
     A segment is unmeasured (rows fall back to bytes) when it is the first request, usage is missing, the
-    growth is not positive, history was compacted, a hide/unhide landed between the two requests, or it
-    holds non-text blocks.
+    growth is not positive, history was compacted, a hide/unhide may have landed between the two requests
+    (only first and last change times are stored, so the whole span between them counts), or it holds
+    non-text blocks.
     """
     anchors = [i for i, m in enumerate(messages)
                if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("usage"), dict)]
@@ -174,7 +175,7 @@ def _measured_tokens(
         delta = tokens - (prev_tokens or 0) if tokens is not None and (prev_idx is None or prev_tokens is not None) else None
         ts = msg.get("timestamp")
         changed = (isinstance(prev_ts, (int, float)) and isinstance(ts, (int, float))
-                   and any(prev_ts / 1000 < t <= ts / 1000 for t in mutation_times))
+                   and any(lo <= ts / 1000 and hi > prev_ts / 1000 for lo, hi in mutation_spans))
         # The first request also carries host preamble that never appears as an outline row.
         measured = (prev_idx is not None and delta is not None and delta > 0 and weight > 0 and not changed
                     and not any(start < b <= anchor for b in boundaries) and all(k != "?" for k, _ in parts))
@@ -579,7 +580,8 @@ def main(argv: list[str] | None = None) -> int:
                 timeline, omp_records = _load_omp_session_timeline(args.scope)
                 session = _read_omp_session(args.scope) if timeline else None
                 row_tokens, context = (
-                    _measured_tokens(session[0], session[1], [it.updated_at for it in db_items_list], session[2])
+                    _measured_tokens(session[0], session[1], [(it.created_at, it.updated_at) for it in db_items_list
+                                                               if it.version > 1 or it.visibility == "hidden"], session[2])
                     if session else ({}, None)
                 )
                 out = []

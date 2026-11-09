@@ -61,7 +61,7 @@ def test_list_reports_measured_row_tokens_and_session_context(tmp_path, monkeypa
 
 
 def test_segment_with_hide_compaction_or_shrink_is_unmeasured():
-    tokens, _ = cli._measured_tokens(MESSAGES, [], [1.5])
+    tokens, _ = cli._measured_tokens(MESSAGES, [], [(1.5, 1.5)])
     assert "c1" not in tokens and tokens["usr_4"] == 5
     tokens, _ = cli._measured_tokens(MESSAGES, [2], [])
     assert "c1" not in tokens
@@ -95,3 +95,8 @@ def test_zero_weight_row_gets_zero_tokens():
     messages[3] = assistant(2000, 1300, [{"type": "text", "text": ""}])
     tokens, _ = cli._measured_tokens(messages, [], [])
     assert tokens["ast_3"] == 0 and tokens["usr_4"] == 10
+
+
+def test_hide_then_unhide_span_blocks_every_segment_it_covers():
+    tokens, _ = cli._measured_tokens(MESSAGES, [], [(1.5, 2.5)])
+    assert "c1" not in tokens and "usr_4" not in tokens
