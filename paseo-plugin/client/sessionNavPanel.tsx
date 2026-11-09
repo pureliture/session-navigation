@@ -15,7 +15,8 @@ import {
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
-import { identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { resolveSessionTarget } from "./sessionFollowing";
 import { fallbackToolPreview } from "./toolPreview";
 import { readTimelineHistory } from "./timelineHistory";
 
@@ -100,13 +101,16 @@ function ActionSvgIcon({
   );
 }
 
-export function SessionNavPanel({ theme, layout, params, navigation, tab }: PluginAgentPanelProps) {
+export function SessionNavPanel({ theme, layout, params, navigation, tab, followVisible = true, candidateAgentIds }: PluginAgentPanelProps & {
+  followVisible?: boolean;
+  candidateAgentIds?: readonly string[];
+}) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
   // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
   const [followedId, setFollowedId] = useState<string | null>(null);
-  const [inView, setInView] = useState(true);
-  const agentId = followedId ?? params.agentId;
+  const [inView, setInView] = useState(!!params.agentId);
+  const agentId = followVisible ? followedId ?? params.agentId : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -158,6 +162,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const scopes = scopesQuery.data ?? [];
 
   useEffect(() => {
+    if (!followVisible) return;
     const doc = (globalThis as any).document;
     if (!doc || !paseo?.agents) return;
     let cancelled = false;
@@ -169,23 +174,19 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     };
     const tick = async () => {
       const values = visibleChatValues(doc);
-      if (values === null) return void (cancelled || setInView(false));
-      if (values.length === 0) return void (cancelled || setInView(true));
-      const candidates = [...new Set([params.agentId, ...scopes.map((s) => s.agent_id).filter((id): id is string => !!id)])];
-      let best = { id: "", score: 0 };
-      for (const id of candidates) {
-        const ids = await queryClient.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000, queryFn: () => timelineIds(id) }).catch(() => []);
-        const score = ids.filter((x) => values.some((v) => identityMatches(v, x))).length;
-        if (score > best.score) best = { id, score };
-      }
+      const id = await resolveSessionTarget({
+        followVisible, boundAgentId: params.agentId, visibleValues: values,
+        candidates: [...candidateAgentIds ?? [], ...scopes.map((s) => s.agent_id).filter((id): id is string => !!id)],
+        timelineIds: (id) => queryClient.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000, queryFn: () => timelineIds(id) }),
+      });
       if (cancelled) return;
-      setInView(best.score > 0);
-      if (best.score > 0) setFollowedId(best.id === params.agentId ? null : best.id);
+      setInView(!!id);
+      setFollowedId(id === params.agentId ? null : id);
     };
     void tick();
     const timer = setInterval(() => void tick(), 1500);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [paseo, params.agentId, scopes, queryClient]);
+  }, [paseo, params.agentId, scopes, queryClient, followVisible, candidateAgentIds]);
   const agentScopePi = `pi:default:${agentId}:default`;
   const agentScopePaseo = `paseo:default:${agentId}:default`;
 
@@ -1550,7 +1551,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     </View>
   ) : null;
 
-  if (!inView) {
+  if (followVisible && !inView) {
     return (
       <View style={styles.screen}>
         {noticeBar}
@@ -1566,7 +1567,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
           <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}>
             Open a session to see its outline. The outline follows the session shown in the chat.
           </Text>
-          {navigation ? (
+          {navigation && params.agentId ? (
             <Pressable accessibilityRole="button" onPress={() => navigation.openAgent({ agentId: params.agentId })}>
               <Text style={{ fontSize: 11, color: theme.colors.foreground, textDecorationLine: "underline" }}>
                 Open this panel's session

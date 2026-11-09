@@ -1,7 +1,10 @@
 Session navigation panel for Paseo Explorer.
 
-Open Explorer's **+ → Session navigation**, then choose an agent from this workspace.
-The workspace panel remembers its selected agent and outline filter in the host's
+Open Explorer's **+ → Session navigation**. By default the outline follows the visible
+session using the same 1.5-second chat/timeline identity matching as the agent panel.
+When no session is visible or matches, it shows **No session in view**. The optional
+picker can pin a workspace agent; **Follow visible session** clears the pin.
+The workspace panel remembers its follow/pin mode and outline filter in the host's
 persisted tab state. Paseo restores open Explorer tabs on reload and workspace
 return: leave the tab open to keep the navigator available. Closing it stays closed.
 For a panel bound directly to the current agent, **Cmd/Ctrl+K → Open session navigation**
