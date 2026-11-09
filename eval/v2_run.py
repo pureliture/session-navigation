@@ -36,6 +36,7 @@ def child_environment(home, source, work, workspace):
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "SHELL", "LANG", "LC_ALL", "TERM", "TZ", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR")}
     env.update(HOME=str(home), HERMES_HOME=str(home), PYTHONPATH=str(source / "src"),
                OMP_PACKAGE=os.environ.get("OMP_PACKAGE", "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent"),
+               NODE_PATH=str(Path(os.environ.get("OMP_PACKAGE", "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent")) / "node_modules"),
                SESSION_NAVIGATION_DAEMON=str(ROOT / ".venv/bin/session-navigation-daemon"),
                SESSION_NAVIGATION_STATE_PATH=str(work / "navigation.sqlite3"), TERMINAL_CWD=str(workspace), HERMES_YOLO="1")
     return env
@@ -51,10 +52,22 @@ def main():
     parser.add_argument("--repetitions", type=int, default=2)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--components", action="store_true")
+    parser.add_argument("--component-actions", default="hide,summarize")
     parser.add_argument("--label", default="v2-")
+    parser.add_argument("--adoption-report", type=Path)
+    parser.add_argument("--pilot-report", type=Path)
+    parser.add_argument("--pilot", action="store_true")
     args = parser.parse_args()
     if args.stage == "deepseek" and ("B-old" in args.arms or args.components):
         parser.error("DeepSeek is A/B-new cost only")
+    if args.stage == "deepseek":
+        if not args.adoption_report or (args.adoption_report.parent / "non-qualifying.json").exists() or not json.loads(args.adoption_report.read_text())["deepseek_gate"]["pass"]:
+            parser.error("DeepSeek requires a passing Crouton adoption report")
+        if args.pilot:
+            if args.hosts != "omp" or len(args.cases.split(",")) != 1 or args.repetitions != 1 or set(args.arms.split(",")) != {"A", "B-new"}:
+                parser.error("Pilot is exactly one OMP session per arm")
+        elif not args.pilot_report or (args.pilot_report.parent / "non-qualifying.json").exists() or not json.loads(args.pilot_report.read_text())["continue"]:
+            parser.error("Full DeepSeek run requires a passing <=$3 pilot budget")
     model, provider = STAGES[args.stage]
     args.output.mkdir(parents=True, exist_ok=True)
     before = hashes()
@@ -63,7 +76,7 @@ def main():
     sources = {arm: source_snapshot(base, COMMITS[arm]) for arm in args.arms.split(",")}
     cases = build()
     if args.components:
-        cases = [component(action) for action in ("hide", "summarize")]
+        cases = [component(action) for action in args.component_actions.split(",")]
     cases = [case for case in cases if args.components or case["id"] in args.cases.split(",")]
     server = serve(args.output, model=model, provider=provider)
     (args.output / "stage.json").write_text(json.dumps({"model": model, "provider": {"order": [provider], "allow_fallbacks": False},

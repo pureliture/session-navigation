@@ -1,0 +1,11 @@
+{
+  "omp_version": "18.18.3",
+  "hermes_revision": "unverified; use source fingerprints, not the historical README revision",
+  "sha256": {
+    "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent/package.json": "267ebbfcd7084d8b441ce3161dbac9237e1160665ec9a158b21711f4fee74fad",
+    "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent/src/sdk.ts": "26f62244828b5ff6af61dccbf694ae18be7aadfb9e481c78cbc81a1a12232999",
+    "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent/src/session/agent-session.ts": "05b104412a87ed0d1a30c90dd98a82ef6add0560da8113a467fe3e5f9c79036d",
+    "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent/src/extensibility/extensions/runner.ts": "2f1f09e2c62e121334b41e77a5be917547fb84a526b6d17c1ec9416881407ad8",
+    "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/run_agent.py": "633c968343fe4c54f8f81a07a67bbc753deb0e3cc64ef87c1aa49d053a76ebc9"
+  }
+}

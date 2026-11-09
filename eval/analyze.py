@@ -2,6 +2,7 @@
 import collections
 import gzip
 import json
+import lzma
 import re
 import sqlite3
 import sys
@@ -91,11 +92,56 @@ def operation(call):
     return (name, args) if name in NAV else (None, {})
 
 
-def analyze(directory):
-    with gzip.open(directory / "wire.jsonl.gz", "rt") as handle:
-        wire = [json.loads(line) for line in handle]
+def native_operations(calls, records):
+    result = []
+    for identity, call in calls.items():
+        try:
+            response = json.loads(records.get(identity, {}).get("original", "{}"))
+        except (ValueError, TypeError):
+            response = {"unparsed": True}
+        batch = call.get("args", {}).get("calls") if call.get("name") == "tool_call" else None
+        entries = batch if isinstance(batch, list) else [call]
+        for index, entry in enumerate(entries):
+            name, args = operation({"name": entry.get("name"), "args": entry.get("arguments", {})} if batch else entry)
+            if not name:
+                continue
+            item = response
+            if batch and len(batch) > 1:
+                children = response.get("results", []) if isinstance(response, dict) else []
+                item = children[index].get("result", {}) if index < len(children) and isinstance(children[index], dict) else {"unparsed_batch": True}
+                if isinstance(item, str):
+                    try:
+                        item = json.loads(item)
+                    except ValueError:
+                        item = {"unparsed": True}
+            result.append({"id": identity, "name": name, "args": args, "turn": call["turn"], "result": item})
+    return result
+
+
+def is_work_call(call):
+    if call.get("name") in ("tool_search", "tool_describe"):
+        return False
+    batch = call.get("args", {}).get("calls") if call.get("name") == "tool_call" else None
+    if isinstance(batch, list):
+        return any(entry.get("name") not in NAV for entry in batch)
+    return operation(call)[0] is None
+
+
+def read_wire(directory):
+    path = directory / "wire.jsonl.xz"
+    if path.exists():
+        assert not (directory / "wire.jsonl.gz").exists(), "Ambiguous archived and active wire"
+        handle = lzma.open(path, "rt")
+    else:
+        handle = gzip.open(directory / "wire.jsonl.gz", "rt")
+    with handle:
+        return [json.loads(line) for line in handle]
+
+
+def analyze(directory, *, model=MODEL):
+    wire = read_wire(directory)
     requests = {row["id"]: row for row in wire if row["kind"] == "request"}
-    assert all(row["body"].get("model") == MODEL for row in requests.values()), "Mixed models cannot be scored"
+    assert all(row["body"].get("model") == model for row in requests.values()), "Mixed models cannot be scored"
     responses = {row["id"]: row for row in wire if row["kind"] == "response"}
     reports, replacements = [], []
     for folder in sorted(directory.iterdir()):
@@ -113,15 +159,8 @@ def analyze(directory):
                 if row["kind"] == "nav_end":
                     result = row["result"].get("details", {})
                     operations.append({"id": row["id"], "name": row["name"], "args": row["args"], "turn": row["turn"], "result": result})
-        else:
-            for identity, call in calls.items():
-                name, args = operation(call)
-                if name:
-                    try:
-                        result = json.loads(records.get(identity, {}).get("original", "{}"))
-                    except ValueError:
-                        result = {"unparsed": True}
-                    operations.append({"id": identity, "name": name, "args": args, "turn": call["turn"], "result": result})
+        if not operations:
+            operations = native_operations(calls, records)
         items = []
         db = Path(spec["workspace"]).parent / "navigation.sqlite3"
         snapshot_path = folder / "store.json.gz"
@@ -228,7 +267,7 @@ def analyze(directory):
         order = {identity: i for i, identity in enumerate(calls)}
         for op in operations:
             op["at_subtask_boundary"] = None if op["id"] not in order else not any(
-                call["turn"] == op["turn"] and order[identity] > order[op["id"]] and not operation(call)[0]
+                call["turn"] == op["turn"] and order[identity] > order[op["id"]] and is_work_call(call)
                 for identity, call in calls.items())
         first_seen = {}
         later_reads = 0

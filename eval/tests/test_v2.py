@@ -1,6 +1,8 @@
 import http.client
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -11,9 +13,108 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy import serve
 from v2_fixtures import build, component, document
 from v2_run import child_environment
+from v2_analyze import adoption_gate, boundary_index, eligible, match_fact
+from analyze import native_operations
+from v2_cost import projection
+from v2_archive import archive
+from analyze import read_wire
+from v2_cache import transitions
+import gzip
 
 
 class V2Tests(unittest.TestCase):
+    def test_cache_transitions_deduplicate_batches_and_preserve_missing_usage(self):
+        def request(identity, content):
+            return {"id": identity, "kind": "request", "path": "/run/v1", "body": {"tools": ["read"], "messages": [{"role": "tool", "content": content}]}}
+        wire = [request("old", "original"), request("new", "[hidden:item1] [hidden:item2]")]
+        replacements = [{"run": "run", "actually_sent": True, "item_id": identity, "replacement": f"[hidden:{identity}]"} for identity in ["item1", "item2"]]
+        usage = [{"id": "old", "prompt": 100, "cached": 90, "cost": .001}, {"id": "new", "prompt": 60, "cached": 20, "cost": .0008}]
+        report = {"id": "run", "arm": "B-new", "usage": usage}
+        result = transitions(wire, replacements, [report])
+        self.assertEqual(len(result["events"]), 1)
+        self.assertEqual(result["events"][0]["uncached_growth"], 30)
+        self.assertAlmostEqual(result["groups"]["B-new"]["native_growth_sensitivity_usd"], .00000003)
+        self.assertEqual(transitions([], [], [report])["events"], [])
+        usage[1]["cached"] = None
+        self.assertIsNone(transitions(wire, replacements, [report])["groups"]["B-new"]["reference_growth_sensitivity_usd"])
+
+    @unittest.skipUnless(shutil.which("bun") and Path("/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent").exists(), "Installed OMP SDK required")
+    def test_empty_sdk_session_binds_model_and_loads_native_dependency_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = Path(__file__).resolve().parents[2]
+            for name in ("home", "workspace", "output"):
+                (root / name).mkdir()
+            spec = {"id": "offline-binding", "arm": "B-new", "repo": str(repo), "model": "stealth/crouton-alpha",
+                    "window": 65536, "proxy": "http://127.0.0.1:1", "turns": [],
+                    **{name: str(root / name) for name in ("home", "workspace", "output")}}
+            (root / "spec.json").write_text(json.dumps(spec))
+            result = subprocess.run(["bun", str(repo / "eval/v2_omp.ts"), str(root / "spec.json")],
+                env=child_environment(root / "home", repo, root, root / "workspace"), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            events = [json.loads(line) for line in (root / "output/events.jsonl").read_text().splitlines()]
+            self.assertTrue(next(row for row in events if row["kind"] == "host_dependency")["native_loaded"])
+            bound = next(row for row in events if row["kind"] == "extension_binding")
+            self.assertEqual((bound["model"], bound["window"]), (spec["model"], spec["window"]))
+
+    def test_numeric_budget_accepts_attached_unit_not_other_numbers(self):
+        self.assertTrue(match_fact("Latency budget: `151ms`", "151"))
+        self.assertTrue(match_fact("151 ms", "151"))
+        self.assertTrue(match_fact("Exit code: 23.", "23"))
+        self.assertFalse(match_fact("1151ms", "151"))
+        self.assertFalse(match_fact("151foo", "151"))
+        self.assertFalse(match_fact("151.2ms", "151"))
+
+    def test_both_sides_of_one_boundary_are_not_two_boundaries(self):
+        calls = {"read1": {"name": "read", "turn": 1}, "clean1": {"name": "manage_context", "turn": 1},
+                 "clean2": {"name": "manage_context", "turn": 2}, "read2": {"name": "read", "turn": 2},
+                 "middle": {"name": "manage_context", "turn": 2}, "read3": {"name": "read", "turn": 2}}
+        self.assertEqual(boundary_index({"id": "clean1", "turn": 1}, calls), 1)
+        self.assertEqual(boundary_index({"id": "clean2", "turn": 2}, calls), 1)
+        self.assertIsNone(boundary_index({"id": "middle", "turn": 2}, calls))
+
+    def test_wire_archive_preserves_all_bytes_and_model_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = [{"kind": "request", "body": {"model": "approved", "messages": ["large" * 1000]}}]
+            with gzip.open(root / "wire.jsonl.gz", "wt") as packed:
+                packed.write(json.dumps(rows[0]) + "\n")
+            archive(root)
+            self.assertEqual(read_wire(root), rows)
+            self.assertFalse((root / "wire.jsonl.gz").exists())
+
+    def test_pilot_cost_gate_rejects_missing_cost_and_over_budget(self):
+        groups = {f"omp/{arm}": {"n": 1, "complete": 1, "cost": .2, "output_tokens": 1000, "prompt_tokens": 10000, "cached_tokens": 100, "missing_cost": 0} for arm in ("A", "B-new")}
+        self.assertTrue(projection({"groups": groups})["continue"])
+        self.assertAlmostEqual(projection({"groups": groups})["projected_total_usd"], 2.4)
+        self.assertAlmostEqual(projection({"groups": groups}, prior_cost=.4)["projected_total_usd"], 2.8)
+        groups["omp/A"]["missing_cost"] = 1
+        self.assertFalse(projection({"groups": groups})["continue"])
+        groups["omp/A"].update(missing_cost=0, cost=1)
+        self.assertFalse(projection({"groups": groups})["continue"])
+        self.assertFalse(projection({"groups": {}})["continue"])
+
+    def test_deferred_singleton_is_not_misreported_as_zero_navigation(self):
+        calls = {"bridge": {"name": "tool_call", "turn": 3, "args": {"calls": [
+            {"name": "manage_context", "arguments": {"tool_call_ids": ["real-id"], "action": "hide"}}]}}}
+        records = {"bridge": {"original": '{"ok":true,"applied":1}'}}
+        operations = native_operations(calls, records)
+        self.assertEqual(len(operations), 1)
+        self.assertEqual(operations[0]["args"]["tool_call_ids"], ["real-id"])
+        self.assertEqual(operations[0]["result"]["applied"], 1)
+
+    def test_eligibility_and_predeclared_adoption_gate(self):
+        record = {"id": "r", "original": "\n".join(f"measured observation {i}" for i in range(100)),
+                  "label_info": {"protected": False}, "name": "read", "args": {"path": "audit.jsonl"}}
+        self.assertTrue(eligible(record))
+        self.assertFalse(eligible({**record, "label_info": {"protected": True}}))
+        self.assertFalse(eligible({**record, "original": "tiny"}))
+        rows = [{"arm": "B-new", "component": None, "literal_ids_valid": 10, "literal_ids_selected": 10,
+                 "successful_cleanup_boundaries": [1, 3]}]
+        self.assertTrue(adoption_gate(rows)["pass"])
+        self.assertFalse(adoption_gate([{**rows[0], "literal_ids_valid": 1}])["pass"])
+        self.assertFalse(adoption_gate([{**rows[0], "component": "hide"}])["pass"])
+
     def test_distinct_long_fixtures_and_separate_obligations(self):
         with tempfile.TemporaryDirectory() as tmp:
             cases = build(Path(tmp))
@@ -33,6 +134,7 @@ class V2Tests(unittest.TestCase):
             self.assertNotIn("OPENROUTER_API_KEY", env)
             self.assertNotIn("OTHER_KEY", env)
             self.assertEqual(env["PYTHONPATH"], "versioned/src")
+            self.assertTrue(env["NODE_PATH"].endswith("pi-coding-agent/node_modules"))
 
     def test_one_model_and_forced_provider_no_fallback(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-secret"}):

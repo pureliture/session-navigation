@@ -1,0 +1,6 @@
+{
+  "reason": "OMP SDK extensionRunner.initialize was omitted; model/context-usage callbacks remained undefined. Replaced by bound runs, without changing product snapshots.",
+  "evidence": "extensions runner.ts defaults getModel/getContextUsage to undefined until initialize. Captured OMP notes show tokens/?; summarize_context returns summarizer_unavailable before any LLM request.",
+  "scope": "These complete first-attempt batches, including Hermes, are excluded from final paired statistics. Retained for transparency.",
+  "paid_preflight_cost_usd": 0
+}

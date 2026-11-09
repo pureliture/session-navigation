@@ -7,6 +7,10 @@ const sdk = await import(pathToFileURL(join(process.env.OMP_PACKAGE!, "src/index
 const nav = (await import(pathToFileURL(join(spec.repo, "extensions/pi/session-navigation.ts")).href)).default;
 let turn = 0;
 const record = (value: any) => appendFileSync(join(spec.output, "events.jsonl"), JSON.stringify({ time: Date.now() / 1000, turn, ...value }) + "\n");
+const aiPath = Bun.resolveSync("@oh-my-pi/pi-ai", join(spec.repo, "extensions/pi"));
+const sessionAi = await import(aiPath);
+if (typeof sessionAi.completeSimple !== "function") throw new Error("Session LLM dependency unavailable");
+record({ kind: "host_dependency", name: "@oh-my-pi/pi-ai", path: aiPath, native_loaded: true });
 const authStorage = await sdk.AuthStorage.create(join(spec.home, "agent.db"));
 authStorage.keys.setRuntime("evaluation", "local-eval");
 const modelRegistry = new sdk.ModelRegistry(authStorage, join(spec.home, "models.yml"));
@@ -30,6 +34,27 @@ const { session } = await sdk.createAgentSession({ cwd: spec.workspace, agentDir
   skills: [], rules: [], contextFiles: [], noContextFiles: true, promptTemplates: [], enableMCP: false, enableLsp: false,
   toolNames: ["read", "bash", "edit", "write", ...(enabled ? ["list_context_items", "manage_context", "hide_context", "summarize_context", "unhide_context"] : [])],
   hasUI: false, thinkingLevel: "off" });
+session.extensionRunner?.initialize({
+  sendMessage: (message: any, options: any) => session.sendCustomMessage(message, options),
+  sendUserMessage: (content: any, options: any) => session.sendUserMessage(content, options),
+  appendEntry: (type: string, data: any) => session.sessionManager.appendCustomEntry(type, data),
+  setLabel: (id: string, label: any) => session.sessionManager.appendLabelChange(id, label),
+  getActiveTools: () => session.getEnabledToolNames(), getAllTools: () => session.getAllToolInfos(),
+  setActiveTools: (names: string[]) => session.setActiveToolsByName(names), getCommands: () => [],
+  setModel: async (next: any) => { if (next.id !== spec.model) throw new Error("Model is pinned"); await session.setModel(next); return true; },
+  getThinkingLevel: () => session.thinkingLevel, setThinkingLevel: (level: any) => session.setThinkingLevel(level),
+  getSessionName: () => session.sessionManager.getSessionName(), setSessionName: (name: string) => session.sessionManager.setSessionName(name, "user"),
+}, {
+  getModel: () => session.model, isIdle: () => !session.isStreaming, abort: () => session.abort(),
+  hasPendingMessages: () => session.queuedMessageCount > 0, shutdown: () => session.abort(),
+  getContextUsage: () => session.getContextUsage(), compact: (options: any) => session.compact(options),
+  getSystemPrompt: () => session.systemPrompt, runEphemeralTurn: (args: any) => session.runEphemeralTurn(args),
+});
+const extensionContext = session.extensionRunner?.createContext();
+if (enabled && (extensionContext?.model?.id !== spec.model || extensionContext.model.contextWindow !== spec.window)) {
+  throw new Error("Extension session model/window is not bound");
+}
+record({ kind: "extension_binding", enabled, model: extensionContext?.model?.id, window: extensionContext?.model?.contextWindow });
 session.subscribe((event: any) => { if (["tool_execution_start", "tool_execution_end", "turn_start", "turn_end"].includes(event.type) || event.type.includes("compaction")) record({ kind: "host_event", event }); });
 const turns: any[] = [];
 try {
@@ -46,4 +71,9 @@ try {
     record({ kind: "context_usage", usage: session.getContextUsage() });
     console.log(spec.id, "turn", turn, "complete");
   }
-} finally { await session.dispose(); }
+} finally {
+  record({ kind: "cleanup_start" });
+  const cleanupTimer = setTimeout(() => { record({ kind: "cleanup_timeout", seconds: 30 }); process.exit(124); }, 30_000);
+  try { await session.dispose(); record({ kind: "cleanup_end" }); }
+  finally { clearTimeout(cleanupTimer); }
+}

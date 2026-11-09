@@ -1,5 +1,49 @@
 # A/B 실행기
 
+## v2 (Crouton 품질 → 조건부 DeepSeek 비용)
+
+[설계](../docs/evaluation/design.md). 제품은 `git archive`로 B-old=`b1a524e`,
+B-new=`5017b97`를 격리한다. 설치본은 바꾸지 않는다. `v2_run.py`는 모델과 provider를
+한 쌍으로 고정하고 65,536 effective window에서 실제 OMP SDK/Hermes를 실행한다.
+명령형 trial은 자율 실행과 다른 디렉터리에 둔다.
+
+OMP headless host는 `extensionRunner.initialize`로 실제 세션 callback을 연결한다.
+격리 HOME의 Bun fallback 다운로드 대신 기존 SDK `node_modules`를 `NODE_PATH`로 읽는다.
+시작 시 model/window/native import를 assert하며, 빈 세션 offline 회귀 테스트가 이를 검사한다.
+`non-qualifying.json`이 있는 첫 시도 디렉터리는 gate/pilot으로 사용할 수 없다.
+최종 적격 데이터는 `2026-11-09-v2-crouton-final`, `-crouton-quality`, `-deepseek-final`이다.
+pilot 분석/stage/safety는 본 실행 전에 `pilot-*`로 복사해 보존한다. 사전 부적격 유료 지출이
+있으면 `v2_cost.py DIR PRIOR_COST`로 예산 예상에 더한다. [최종 결과](../docs/evaluation/results-v2.md).
+
+```bash
+uv run --no-sync python eval/v2_run.py --stage crouton --output eval/results/DATE-crouton
+uv run --no-sync python eval/v2_run.py --stage crouton --components --arms B-old,B-new --output eval/results/DATE-components
+uv run --no-sync python eval/v2_analyze.py eval/results/DATE-crouton
+uv run --no-sync python eval/v2_run.py --stage deepseek --hosts omp --arms A,B-new --cases atlas --repetitions 1 --pilot --adoption-report eval/results/DATE-crouton/summary-v2.json --output eval/results/DATE-deepseek
+uv run --no-sync python eval/v2_analyze.py eval/results/DATE-deepseek
+uv run --no-sync python eval/v2_cost.py eval/results/DATE-deepseek
+uv run --no-sync python eval/v2_cache.py eval/results/DATE-deepseek
+# pilot-budget.json의 출력 토큰과 예상 비용을 보고한 뒤 continue=true일 때만:
+uv run --no-sync python eval/v2_run.py --stage deepseek --hosts omp --arms A,B-new --adoption-report eval/results/DATE-crouton/summary-v2.json --pilot-report eval/results/DATE-deepseek/pilot-budget.json --output eval/results/DATE-deepseek
+```
+
+판정·심판은 stage 모델/provider를 명시한다. Crouton judge는
+`judge(directory, model="stealth/crouton-alpha", provider="Stealth")`다.
+모든 writer가 종료한 **뒤에만** `v2_archive.py DIR`로 wire를 lossless XZ로 바꿀 수 있다.
+decompressed SHA-256을 대조하며 원본/요청을 버리지 않는다. 이어서 `v2_audit.py DIR`로
+key를 검사한다. archiving 이후 같은 디렉터리에서 실행을 재개하지 않는다.
+계속 실행/재시도는 새 label을 쓰고 최초 실패도 결과에 남긴다.
+경계 양쪽(전 턴 종료/다음 턴 시작)의 정리는 같은 boundary index로 센다.
+중간에 업무 호출이 양쪽으로 끼는 정리는 경계로 세지 않는다.
+Hermes deferred `tool_call(calls=[...])`도 계수한다. native 이벤트가 있다고 이를 건너뛰지 않는다.
+보호/짧은/정책 거절 출력은 denominator에서 제외한다. 명시 Hide precision과 전체
+disposable 선택 비중을 구분하며, 필요한 정보를 Summarize한 것을 오선택으로 단정하지 않는다.
+`v2_cache.py`는 실제 전송된 마지막 저장 replacement의 최초 outgoing transition만 짝짓는다.
+uncached 증가분 × input/cache 가격 차이는 가격 민감도이며, 출력·native 압축·TTL 등을
+통제한 인과적 cache-break 비용이 아니다. 캐시/비용 누락은 N/A로 남긴다.
+
+## v1 (보관된 GLM 실행)
+
 모델 호출 없는 개선 단계의 고정 overhead 비교는 [개선 문서](../docs/evaluation/improvements.md)와
 `capture_overhead.ts` / `measure_overhead.py`를 사용한다. 기존 결과와 새 offline 추정값을 섞지 않는다.
 
@@ -48,4 +92,4 @@ proxy가 429/5xx를 2·4·8·16·32·64초(또는 Retry-After, 최대 120초) �
 judge는 실제 전송된 rule replacement도 채점하지만 LLM summary 점수와 구분해야 한다.
 JSON 실패는 동일 입력에 한 번만 4,096-token 한도로 재시도하고 모든 시도의 비용을 wire에 남긴다.
 
-설계/평가 한계는 [design](../docs/evaluation/design.md), 수치는 [results](../docs/evaluation/results.md)를 참고한다.
+v1 설계/평가 한계는 [design-v1](../docs/evaluation/design-v1.md), 수치는 [results](../docs/evaluation/results.md)를 참고한다.

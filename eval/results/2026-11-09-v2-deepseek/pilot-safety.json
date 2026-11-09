@@ -1,0 +1,17 @@
+{
+  "configs_before": {
+    "/Users/devin/.omp/agent/models.yml": "de6f6d03f9f7bd6c6e04e79ce4c61934893852e3da451284ce0c75773ea57248",
+    "/Users/devin/.omp/agent/models.json": null,
+    "/Users/devin/hermes-nav-live/config.yaml": "4b0064ff234ec5592a8273da5c6d4ec231564b26f875da2edf3cdf3347af1b16",
+    "/Users/devin/hermes-nav-live/auth.json": "f550a565dad67f5f4dcfa0dc03f3fa7f6b04bf4a35e1e347a61d5d6c4a92c3ab"
+  },
+  "configs_after": {
+    "/Users/devin/.omp/agent/models.yml": "de6f6d03f9f7bd6c6e04e79ce4c61934893852e3da451284ce0c75773ea57248",
+    "/Users/devin/.omp/agent/models.json": null,
+    "/Users/devin/hermes-nav-live/config.yaml": "4b0064ff234ec5592a8273da5c6d4ec231564b26f875da2edf3cdf3347af1b16",
+    "/Users/devin/hermes-nav-live/auth.json": "f550a565dad67f5f4dcfa0dc03f3fa7f6b04bf4a35e1e347a61d5d6c4a92c3ab"
+  },
+  "configs_byte_exact": true,
+  "secret_matches": [],
+  "children_received_real_key": false
+}

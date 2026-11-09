@@ -280,10 +280,17 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 
 ## Evaluation
 
-실제 OMP/Hermes에서 **GLM 5.3 Flash**로 A/B 48세션(셀별 3회)을 실행했다.
+**v2:** Crouton Alpha의 장기 자율 24세션과 별도 명령형 16세션을 평가했다.
+B-new는 8/8세션 경계 정리·96.6% literal ID로 사용성 gate를 통과했고,
+Hide는 체크리스트 12/12를 보존했다(B-old 0/12). 다만 strict 과제는 A 8/8 vs B-new 6/8,
+OMP summary는 입력 12K 제한으로 일부 사실을 놓쳤다. 별도 DeepSeek 4vs4세션 비용은
+A $0.114316 / B-new $0.202723(**+77.3%**)로 절감은 입증하지 못했다.
+[v2 설계](docs/evaluation/design.md) · [v2 결과·실패·비용](docs/evaluation/results-v2.md)
+
+**v1:** 실제 OMP/Hermes에서 **GLM 5.3 Flash**로 A/B 48세션(셀별 3회)을 실행했다.
 양 군 모두 과제·회상 24/24 성공했지만, 자발적 hide는 OMP B 한 세션뿐이고 LLM summary는 없어 요약 품질은 미평가다.
 보고 비용은 B가 OMP +10.91%, Hermes +5.53%였으며, 정리의 독립적인 인과 효과로 단정하지 않는다.
-[설계](docs/evaluation/design.md) · [결과·한계](docs/evaluation/results.md) · [재현 harness](eval/README.md)
+[v1 설계](docs/evaluation/design-v1.md) · [v1 결과·한계](docs/evaluation/results.md) · [재현 harness](eval/README.md)
 [내비게이터 단일 사용성 평가](docs/evaluation/navigator-usability.md): 실제 OMP 기록의 6쌍 찾기 과업, 기본 틱과 아웃라인의 정보 단서·검색 한계·279px 폭을 확인했다.
 
 ## 기여
