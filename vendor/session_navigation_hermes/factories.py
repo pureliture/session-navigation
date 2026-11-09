@@ -49,6 +49,7 @@ Decisions recorded here (first-version scope):
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -59,6 +60,7 @@ from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
 from .handlers import restore as _engine_restore
 from .handlers import summarize as _engine_summarize
+from .payload import drop_messages, message_keys
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
 from session_navigation.model import Scope
@@ -448,8 +450,18 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             logger.debug(
                 "session-navigation middleware: %s (found %s)",
                 reason, step["trace"].get("found", 0))
+            request_out = step["request"]
+            if isinstance(request_out, dict):
+                found = message_keys(api_mode, request_out)
+                store = state.engine.store
+                store.ensure_message_units(scope, [
+                    (key, role, hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text))
+                    for key, role, _index, text in found])
+                hidden = set(store.hidden_message_keys(scope))
+                if hidden:
+                    request_out = drop_messages(api_mode, request_out, hidden)
             return {
-                "request": step["request"],
+                "request": request_out,
                 "source": SOURCE,
                 "reason": reason,
             }

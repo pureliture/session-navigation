@@ -54,7 +54,7 @@ def _session_id(state: Any, raw_args: str, kwargs: dict[str, Any]) -> str:
     if isinstance(env, str) and env.strip():
         return env.strip()
     parts = str(raw_args or "").split()
-    if parts and parts[0] not in {"list", "hide", "unhide", "restore", "rehide", "manage", "summarize"}:
+    if parts and parts[0] not in {"list", "hide", "unhide", "restore", "rehide", "manage", "summarize", "messages", "hide-msg", "unhide-msg"}:
         return parts[0]
     return ""
 
@@ -149,6 +149,53 @@ def _list_text(state: Any, session_id: str) -> str:
     return "\n".join(lines)
 
 
+def _message_rows(state: Any, session_id: str) -> tuple[Any, list[dict[str, Any]]]:
+    from .factories import scope_for
+
+    scope = scope_for(state, session_id) if session_id else None
+    if scope is None:
+        return None, []
+
+    def order(unit: dict[str, Any]) -> tuple[int, bool]:
+        parts = str(unit["unit_id"]).split(":")
+        ordinal = parts[2][1:] if len(parts) > 2 else ""
+        return (int(ordinal) if ordinal.isdigit() else 0, parts[1] != "user" if len(parts) > 1 else True)
+
+    units = [u for u in state.engine.store.list_units(scope) if u.get("kind") in ("user", "assistant")]
+    return scope, sorted(units, key=order)
+
+
+def _messages_text(state: Any, session_id: str) -> str:
+    _scope, rows = _message_rows(state, session_id)
+    lines = ["Prompts/responses (" + str(len(rows)) + ") [session=" + (session_id or "—") + "]:"]
+    for num, unit in enumerate(rows, 1):
+        status = "hidden" if unit.get("visibility") == "hidden" else "visible"
+        lines.append(f"{num:>3} [{status:<7}] {unit.get('kind', ''):<9} {unit.get('char_count', 0)} chars "
+                     f"v{unit.get('version', 1)} {unit['unit_id']}")
+    if not rows:
+        lines.append("(none)")
+    lines.append("Hints: /nav hide-msg <N> | /nav unhide-msg <N>  (prompts/responses support hide only)")
+    return "\n".join(lines)
+
+
+def _toggle_message(state: Any, session_id: str, target: str, hide: bool) -> str:
+    scope, rows = _message_rows(state, session_id)
+    unit = None
+    if target.isdigit() and 0 < int(target) <= len(rows):
+        unit = rows[int(target) - 1]
+    else:
+        unit = next((u for u in rows if u["unit_id"] == target), None)
+    if scope is None or unit is None:
+        return ("Hide" if hide else "Unhide") + " failed: not_found"
+    result = state.engine.store.set_message_visibility(
+        scope, unit["unit_id"], kind=unit["kind"], content_sha256=unit.get("content_sha256") or "",
+        char_count=int(unit.get("char_count") or 0), visibility="hidden" if hide else "visible",
+        expected_version=int(unit.get("version") or 1))
+    if not result.get("ok"):
+        return ("Hide" if hide else "Unhide") + " failed: " + str(result.get("error"))
+    return ("Hidden " if hide else "Unhidden ") + unit["unit_id"] + " (v" + str(result.get("version")) + ")"
+
+
 def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any) -> str:
     if isinstance(first, str) and raw_args in ("", None) and "state" not in kwargs and not hasattr(first, "store"):
         raw_args = first
@@ -161,7 +208,7 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
     session_id = _session_id(state, text, kwargs)
 
     verb = parts[0].lower() if parts else "list"
-    if verb not in {"list", "hide", "unhide", "restore", "rehide", "manage", "summarize"} and session_id == verb:
+    if verb not in {"list", "hide", "unhide", "restore", "rehide", "manage", "summarize", "messages", "hide-msg", "unhide-msg"} and session_id == verb:
         parts = parts[1:]
         verb = parts[0].lower() if parts else "list"
 
@@ -170,6 +217,15 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
 
     if verb in ("", "list", "ls"):
         return _list_text(state, session_id)
+
+    if verb == "messages":
+        return _messages_text(state, session_id)
+
+    if verb in ("hide-msg", "unhide-msg"):
+        target = parts[1] if len(parts) > 1 else ""
+        if not target:
+            return "Usage: /nav " + verb + " <N|message id>"
+        return _toggle_message(state, session_id, target, verb == "hide-msg")
 
     if verb == "hide":
         target = parts[1] if len(parts) > 1 else ""

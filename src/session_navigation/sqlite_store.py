@@ -728,6 +728,27 @@ class SQLiteContextStore:
                     pass
                 raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
 
+    def ensure_message_units(self, scope: Any, units: list[tuple[str, str, str, int]]) -> None:
+        """Record (unit_id, kind, content_sha256, char_count) message units without touching existing visibility."""
+        if not units:
+            return
+        sk = _scope_key(scope)
+        now_ts = time.time()
+        with self._lock:
+            try:
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO units (scope_key,unit_id,message_uid,kind,content_sha256,char_count,visibility,version,updated_at)"
+                    " VALUES (?,?,?,?,?,?,'visible',1,?)",
+                    [(sk, uid, uid, kind, sha, int(chars), now_ts) for uid, kind, sha, chars in units],
+                )
+                self._conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
+
     def hidden_message_keys(self, scope: Any) -> list[str]:
         sk = _scope_key(scope)
         with self._lock:
