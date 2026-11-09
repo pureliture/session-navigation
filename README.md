@@ -284,6 +284,7 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 양 군 모두 과제·회상 24/24 성공했지만, 자발적 hide는 OMP B 한 세션뿐이고 LLM summary는 없어 요약 품질은 미평가다.
 보고 비용은 B가 OMP +10.91%, Hermes +5.53%였으며, 정리의 독립적인 인과 효과로 단정하지 않는다.
 [설계](docs/evaluation/design.md) · [결과·한계](docs/evaluation/results.md) · [재현 harness](eval/README.md)
+[내비게이터 단일 사용성 평가](docs/evaluation/navigator-usability.md): 실제 OMP 기록의 6쌍 찾기 과업, 기본 틱과 아웃라인의 정보 단서·검색 한계·279px 폭을 확인했다.
 
 ## 기여
 
@@ -291,7 +292,7 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 코드 PR에는 관련 테스트를 추가하고 Python 어댑터 변경 시 vendor 사본도 동기화하세요.
 다른 호스트의 원본 기록을 변경하거나 영구 삭제하는 기능은 프로젝트의 안전 경계 밖입니다.
 UI 스크린샷 기여는 샘플 데이터만 사용하고, 공개해도 되는 이미지인지 확인해 주세요.
-현재 저장소에는 UI 스크린샷이 없어 이 README에도 외부 검증용 이미지를 연결하지 않습니다.
+샘플 데이터의 UI 스크린샷은 [내비게이터 사용성 평가](docs/evaluation/navigator-usability.md)에 포함되어 있습니다.
 
 ## 라이선스
 
