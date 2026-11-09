@@ -88,3 +88,10 @@ def test_context_window_lookup(tmp_path, monkeypatch):
     assert cli._omp_context_window("other", "local-small") == 1000
     assert cli._omp_context_window("llamacpp", "missing") is None
     assert cli._omp_context_window("nope", "local-small") is None
+
+
+def test_zero_weight_row_gets_zero_tokens():
+    messages = list(MESSAGES)
+    messages[3] = assistant(2000, 1300, [{"type": "text", "text": ""}])
+    tokens, _ = cli._measured_tokens(messages, [], [])
+    assert tokens["ast_3"] == 0 and tokens["usr_4"] == 10

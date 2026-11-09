@@ -196,7 +196,7 @@ def _measured_tokens(
     used = total if isinstance(total, (int, float)) and total > 0 else prompt_of(last)[0] + (usage.get("output") or 0)
     context = {"used_tokens": int(used), "max_tokens": _omp_context_window(last.get("provider"), last.get("model")),
                "source": "omp_session_usage"}
-    return {k: max(1, round(v)) for k, v in totals.items() if k not in incomplete}, context
+    return {k: max(1, round(v)) if v > 0 else 0 for k, v in totals.items() if k not in incomplete}, context
 
 
 def _token_fields(tokens: int | None) -> dict[str, Any]:
