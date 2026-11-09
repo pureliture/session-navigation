@@ -65,6 +65,32 @@ def test_summary_accepts_check_result_paraphrase():
     assert validate_summary_text(original, summary, ()) == summary
 
 
+@pytest.mark.parametrize("shorthand", ["binary/image", "input/output", "read/write", "pass/fail"])
+def test_plain_word_slash_shorthand_is_not_an_invented_path(shorthand):
+    original = "The data is text, not binary and not an image. Input and output support read and write."
+    summary = {"summary": f"Text data; {shorthand} classification."}
+    assert validate_summary_text(original, summary, ()) == summary
+
+
+@pytest.mark.parametrize("path", [
+    "/invented", "./invented", "../invented", "~/invented", r"C:\invented",
+    r"C:/invented", r"\\server\invented", "new/dir/result", r"new\dir\result",
+    "new/report.json", "report.json", ".gitignore",
+])
+def test_invented_paths_with_real_path_signals_are_rejected(path):
+    assert validate_summary_text("Read /known/data/result.json.", {"summary": f"Read {path}."}, ()) is None
+
+
+@pytest.mark.parametrize("path", [
+    "/known", "./known", "../known", "~/known", r"C:\known", r"C:/known",
+    r"\\server\known", "known/dir/result", r"known\dir\result",
+    "known/report.json", "report.json", ".gitignore",
+])
+def test_paths_with_real_path_signals_remain_valid_when_grounded(path):
+    summary = {"summary": f"Read {path}."}
+    assert validate_summary_text(f"Read {path}", summary, ()) == summary
+
+
 @pytest.mark.parametrize("subject,topic,state", [
     ("cobalt-plugin", "signatures", "unavailable"),
     ("silver-addon", "attachments", "missing"),

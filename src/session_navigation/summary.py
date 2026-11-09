@@ -64,6 +64,25 @@ _GENERIC_SUMMARY_PATTERNS = (
 _IDENTIFIER_PATTERN = re.compile(
     r"(?i)\b(?:[0-9a-f]{8}-[0-9a-f-]{27,}|(?:id|uuid|sha256)\s*[:=]\s*[\w.-]+)"
 )
+_PATH_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_./\\:~-])"
+    r"(?:(?:[A-Za-z]:|~|\.\.?)[/\\]+|[/\\]+)?"
+    r"[A-Za-z0-9_.-]+(?:[/\\]+[A-Za-z0-9_.-]+)*"
+)
+
+
+def _path_claims(text: str) -> set[str]:
+    claims = set()
+    for match in _PATH_TOKEN_PATTERN.finditer(text):
+        token = match[0].removesuffix(".")
+        if (
+            token.startswith(("/", "\\", "./", "../", "~/", ".\\", "..\\", "~\\"))
+            or re.match(r"^[A-Za-z]:[/\\]", token)
+            or len(re.findall(r"[/\\]", token)) >= 2
+            or re.search(r"\.[A-Za-z][A-Za-z0-9_-]*$", token)
+        ):
+            claims.add(token)
+    return claims
 
 
 
@@ -248,20 +267,19 @@ def validate_summary_text(
 
     pairs = [(text, factual_source)]
     number = re.compile(r"(?<![0-9A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|ms|s)?(?![0-9A-Za-z_])")
-    path = re.compile(r"(?<![A-Za-z0-9_./-])(?:/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+|(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+)")
 
     for t, s in pairs:
         if any(p.search(t) for p in _INJECTION_OUTPUT_PATTERNS):
             return None
         if any(p.search(t) for p in _GENERIC_SUMMARY_PATTERNS) and t.casefold() not in s.casefold():
             return None
-        for pattern in (path, _IDENTIFIER_PATTERN, number):
+        if not _path_claims(t).issubset(_path_claims(s)):
+            return None
+        for pattern in (_IDENTIFIER_PATTERN, number):
             facts = {m.group(0).strip() for m in pattern.finditer(s)}
             for match in pattern.finditer(t):
                 token = match.group(0).strip()
                 if token in facts:
-                    continue
-                if pattern is path and token.endswith(".") and token[:-1] in facts:
                     continue
                 return None
 

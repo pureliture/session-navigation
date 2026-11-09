@@ -9,6 +9,7 @@ import pytest
 
 from _adapter_loader import hermes_adapter
 from session_navigation.policy import required_evidence_lines
+from session_navigation.summary import validate_summary_text
 from session_navigation.transport import SummarizerUnavailable
 from test_hermes_nav import FakeCtx
 
@@ -84,4 +85,30 @@ def test_request_normalization_keeps_summary_factual_validation():
     summarizer = hermes_adapter().llm.CtxLlmSummarizer(SimpleNamespace(llm=llm))
     with pytest.raises(SummarizerUnavailable, match="verification_failed"):
         asyncio.run(summarizer.summarize(raw, [raw]))
+    assert json.loads(llm.requests[0]["messages"][1]["content"])["required_evidence"] == []
+
+
+def test_captured_inventory_summary_passes_real_request_builder_unchanged():
+    lines = ["Inventory alpha; owner=Cedar; region=west; cutoff=2026-11-12. All entries are test data."]
+    lines.extend(
+        f"alpha-{i:03d}: owner Cedar, region west, color amber, cutoff 2026-11-12, "
+        f"quantity {i % 17 + 1}, retention routine."
+        for i in range(160)
+    )
+    raw = json.dumps({
+        "content": "\n".join(f"{i}|{line}" for i, line in enumerate(lines, 1)),
+        "total_lines": 161, "file_size": 16161, "truncated": False,
+        "is_binary": False, "is_image": False, "not_found": False,
+    })
+    assert len(raw) == 16990
+    summary = (
+        "Inventory alpha test data: 160 entries alpha-000 to alpha-159, all owner Cedar, "
+        "region west, color amber, cutoff 2026-11-12, retention routine, quantities cycling "
+        "1-17; 161 lines, 16161 bytes, not truncated, not binary/image, found."
+    )
+    expected = {"summary": summary}
+    assert validate_summary_text(raw, expected, required_evidence_lines(raw)) == expected
+    llm = CapturingLlm(summary)
+    summarizer = hermes_adapter().llm.CtxLlmSummarizer(SimpleNamespace(llm=llm))
+    assert asyncio.run(summarizer.summarize(raw, [raw])) == expected
     assert json.loads(llm.requests[0]["messages"][1]["content"])["required_evidence"] == []
