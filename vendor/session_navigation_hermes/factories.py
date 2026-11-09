@@ -64,7 +64,9 @@ from .payload import drop_messages, message_keys
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
 from .usage import UsageTracker, estimate_tokens
-from session_navigation.model import Scope
+from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
+from session_navigation.policy import refusal_reason, is_destructive_command
+from .allowlist import AdapterRejected, filter_invocation
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.transport import Summarizer, SummarizerError
 from .llm import CtxLlmSummarizer
@@ -242,6 +244,21 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        if isinstance(args, dict) and args.get("view") == "candidates":
+            limit = args.get("limit", 30)
+            if type(limit) is not int or not 1 <= limit <= 200:
+                return _dump({"ok": False, "error": "invalid_limit"})
+            candidates = []
+            for entry in reversed(state.store.entries(scope.scope_key())):
+                if _cleanup_error(state, scope, entry) is not None:
+                    continue
+                hints = entry.raw_arguments
+                candidates.append({"tool_call_id": entry.call_id, "tool_name": entry.tool_name,
+                                   "hint": str(hints.get("command") or hints.get("path") or hints.get("pattern") or "")[:160],
+                                   "bytes_size": len(entry.content.encode("utf-8")), "tokens_display": "—"})
+                if len(candidates) >= limit:
+                    break
+            return _dump({"ok": True, "items": candidates})
         items = _engine_list(state.engine, scope, query)
         scope_key = scope.scope_key()
         live_ids = {
@@ -335,6 +352,31 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any) -> tupl
     return True, None, result.plan.item_id
 
 
+def _cleanup_error(state: PluginState, scope: Scope, entry: Any) -> str | None:
+    if len(state.store.lookup(scope.scope_key(), entry.call_id)) != 1:
+        return "ambiguous"
+    if entry.arguments_parse_error or not entry.tool_name:
+        return "invalid_invocation"
+    try:
+        invocation, omitted = filter_invocation(entry.tool_name, entry.raw_arguments)
+    except AdapterRejected as exc:
+        return exc.code
+    record = ToolResultRecord(call_id=entry.call_id, content=entry.content,
+                              content_sha256=entry.content_sha256, invocation=invocation,
+                              invocation_digest=compute_invocation_digest(invocation, omitted if omitted else None),
+                              result_position=entry.result_position, status="ok")
+    item = state.engine.store.get(scope, _item_id(scope.scope_key(), record.call_id, record.content_sha256,
+                                               record.invocation_digest, record.result_position))
+    if item is not None and item.visibility == "hidden":
+        return "already_hidden"
+    try:
+        if is_destructive_command(entry.tool_name, entry.raw_arguments):
+            return "destructive_command"
+    except Exception:
+        return "destructive_check_failed"
+    return refusal_reason(record, state.engine.config)
+
+
 def make_manage_handler(state: PluginState) -> Callable[..., str]:
     """Build the `manage_context` orchestrator tool handler."""
 
@@ -345,36 +387,24 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
         params = args if isinstance(args, dict) else {}
+        want = params.get("tool_call_ids")
+        if want is None or want == []:
+            return _dump({"ok": False, "error": "tool_call_ids_required"})
+        if not isinstance(want, list) or not all(isinstance(x, str) and x.strip() for x in want):
+            return _dump({"ok": False, "error": "invalid_tool_call_ids"})
         action = params.get("action", "auto")
         if action not in ("auto", "hide", "summarize"):
             return _dump({"ok": False, "error": "invalid_action"})
-        max_items = params.get("max_items", 20)
-        if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1 or max_items > 64:
-            return _dump({"ok": False, "error": "invalid_max_items"})
         if action == "summarize" and state.summarizer is None:
             return _dump({"ok": False, "error": "summarizer_unavailable"})
-        want = params.get("tool_call_ids")
-        entries = state.store.entries(scope.scope_key())
-        if want is not None:
-            if not isinstance(want, list) or not all(isinstance(x, str) for x in want):
-                return _dump({"ok": False, "error": "invalid_tool_call_ids"})
-            wanted = {x.strip() for x in want if x.strip()}
-            entries = [e for e in entries if e.call_id in wanted]
         results: list[dict[str, Any]] = []
-        for entry in entries[:max_items]:
-            # D8: manage_context IS auto-manage regardless of action value; destructive
-            # commands are excluded here and allowed only via manual hide_context.
-            # Gate errors fail closed (skip the item, report) — never auto-hide blind.
-            try:
-                from session_navigation.policy import is_destructive_command
-                destructive = is_destructive_command(entry.tool_name, entry.raw_arguments)
-            except Exception:
-                logger.warning("session-navigation D8 gate error; skipping auto-hide")
-                results.append({"tool_call_id": entry.call_id, "ok": False, "error": "destructive_check_failed"})
+        for call_id in dict.fromkeys(want):
+            matches = state.store.lookup(scope.scope_key(), call_id)
+            error = _cleanup_error(state, scope, matches[0]) if matches else "not_found"
+            if error is not None:
+                results.append({"tool_call_id": call_id, "ok": False, "error": error})
                 continue
-            if destructive:
-                results.append({"tool_call_id": entry.call_id, "ok": False, "error": "destructive_command"})
-                continue
+            entry = matches[0]
             use_summarizer = action == "summarize" or (action == "auto" and state.summarizer is not None)
             item_id: str | None = None
             if use_summarizer:
@@ -497,4 +527,3 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 pass
             raise
     return on_llm_request
-

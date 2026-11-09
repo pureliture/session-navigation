@@ -313,9 +313,9 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
         return "Summarize failed: " + str(err)
 
     if verb == "manage":
-        params = {"action": "auto", "max_items": 20}
-        if len(parts) > 1 and parts[1].isdigit():
-            params["max_items"] = int(parts[1])
+        action = parts[1] if len(parts) > 1 and parts[1] in ("auto", "hide", "summarize") else "auto"
+        start = 2 if len(parts) > 1 and parts[1] == action else 1
+        params = {"action": action, "tool_call_ids": parts[start:]}
         result = _call_tool(state, "manage_context", params, session_id)
         err = result.get("error")
         if err:
@@ -327,7 +327,7 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
         return "Managed: applied=" + str(applied) + " failed=" + str(failed)
 
     return (
-        "Usage: /nav [list|hide <id>|unhide <id>|rehide <id>|summarize <id>|manage [max]]\n"
+        "Usage: /nav [list|hide <id>|unhide <id>|rehide <id>|summarize <id>|manage [auto|hide|summarize] <ids...>]\n"
         "Hints: /nav hide <id> | /nav unhide <id> | /nav manage"
     )
 

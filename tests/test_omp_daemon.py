@@ -12,6 +12,46 @@ def call(daemon, method, **params):
     return daemon.handle({"method": method, "params": {"session_id": "a", **params}})
 
 
+def test_manage_requires_explicit_ids_and_reports_unknown_ids():
+    daemon = Daemon()
+    for params in ({}, {"tool_call_ids": []}):
+        assert call(daemon, "manage", **params)["error"] == "tool_call_ids_required"
+    assert call(daemon, "manage", tool_call_ids="all")["error"] == "invalid_tool_call_ids"
+    call(daemon, "prepare", snapshot_id="one", records=[record()])
+    result = call(daemon, "manage", snapshot_id="one", tool_call_ids=["missing"], action="hide")
+    assert result["items"] == [{"tool_call_id": "missing", "ok": False, "error": "not_found"}]
+
+
+def test_cleanup_candidates_are_visible_eligible_newest_first_with_metadata():
+    daemon = Daemon()
+    records = [record(f"r{i}") for i in range(40)]
+    records += [record("short", "tiny"), {**record("danger"), "tool_name": "bash", "arguments": {"command": "rm -rf demo"}}]
+    assert call(daemon, "prepare", snapshot_id="one", records=records)["ok"]
+    assert call(daemon, "manage", snapshot_id="one", tool_call_ids=["r39"], action="hide")["applied"] == 1
+    items = call(daemon, "list_candidates", snapshot_id="one")["items"]
+    assert [i["tool_call_id"] for i in items] == [f"r{i}" for i in range(38, 8, -1)]
+    assert items[0] == {"tool_call_id": "r38", "tool_name": "read", "hint": "sample.txt",
+                        "bytes_size": len(records[0]["content"].encode()), "tokens_display": "—"}
+    assert len(call(daemon, "list_candidates", snapshot_id="one", limit=2)["items"]) == 2
+    assert call(daemon, "list_candidates", snapshot_id="one", limit=0)["error"] == "invalid_limit"
+    result = call(daemon, "manage", snapshot_id="one", tool_call_ids=["r39", "short", "danger"], action="summarize")
+    assert [i["error"] for i in result["items"]] == ["already_hidden", "not_long", "destructive_command"]
+
+
+def test_manage_has_no_id_cap_or_discovery_requirement_and_repeats_across_snapshots():
+    daemon = Daemon()
+    records = [record(f"r{i}") for i in range(80)]
+    call(daemon, "prepare", snapshot_id="one", records=records[:64])
+    call(daemon, "prepare", snapshot_id="one", append=True, records=records[64:])
+    result = call(daemon, "manage", snapshot_id="one", tool_call_ids=[r["call_id"] for r in records], action="hide")
+    assert result["ok"] and result["applied"] == 80
+    assert call(daemon, "list_candidates", snapshot_id="one")["items"] == []
+    response = call(daemon, "prepare", snapshot_id="two", records=records[:2] + [record("next-turn")])
+    assert len(response["patches"]) == 2
+    result = call(daemon, "manage", snapshot_id="two", tool_call_ids=["next-turn"], action="hide")
+    assert result["applied"] == 1
+
+
 def test_snapshot_requires_matching_token_and_preserves_session_isolation():
     daemon = Daemon()
     assert call(daemon, "prepare", snapshot_id="one", records=[record()])["ok"]

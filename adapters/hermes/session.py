@@ -4,8 +4,8 @@ The plugin tool handlers only receive identifiers, never the conversation
 messages. The `llm_request` middleware fills this record on every outbound
 request and the compact/list/restore handlers read it by scope + tool call ID.
 
-Bounds: at most `max_sessions` scopes, at most `max_results_per_session`
-results per scope, entries older than `ttl_seconds` expire on access.
+Bounds: at most `max_sessions` scopes; an optional `max_results_per_session`
+limits results per scope. Entries older than `ttl_seconds` expire on access.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class SessionTranscriptStore:
         self,
         *,
         max_sessions: int = 128,
-        max_results_per_session: int = 64,
+        max_results_per_session: int | None = None,
         ttl_seconds: int = 86400,
         time_func: TimeFunc | None = None,
     ) -> None:
@@ -114,7 +114,7 @@ class SessionTranscriptStore:
             {"host_handle": dict(item.host_handle), "reason": item.reason}
             for item in skipped
         ]
-        kept = stored[-self.max_results_per_session:]
+        kept = stored if self.max_results_per_session is None else stored[-self.max_results_per_session:]
         self._sessions[scope_key] = _SessionEntry(
             api_mode=api_mode, updated_at=self._now(), results=kept)
         while len(self._sessions) > self.max_sessions:

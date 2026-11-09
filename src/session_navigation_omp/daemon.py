@@ -7,7 +7,7 @@ from typing import Any
 from session_navigation.db import DBError, DBFullError
 from session_navigation.engine import SessionNavigationEngine, _run_sync
 from session_navigation.model import Scope, ToolResultRecord, _item_id, compute_invocation_digest, compute_sha256, pair_unit_id
-from session_navigation.policy import is_destructive_command, required_evidence_lines
+from session_navigation.policy import is_destructive_command, required_evidence_lines, refusal_reason
 from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.summary import validate_summary_text
 
@@ -217,6 +217,8 @@ class Daemon:
 
         if method == "manage":
             return self._manage(scope, session, params)
+        if method == "list_candidates":
+            return self._list_candidates(scope, session, params)
 
         return {"ok": False, "error": "unknown_method"}
 
@@ -331,16 +333,58 @@ class Daemon:
             "version": result.item.version if result.item else None,
         }
 
+    def _cleanup_error(self, scope, record):
+        error = self._identity_state(scope, record, "compact")
+        if error:
+            return error
+        item = self.store.get(scope, _item_id(scope.scope_key(), record.call_id, record.content_sha256,
+                                             record.invocation_digest, record.result_position))
+        if item is not None and item.visibility == "hidden":
+            return "already_hidden"
+        try:
+            if is_destructive_command(record.invocation.get("tool_name"), record.invocation.get("arguments")):
+                return "destructive_command"
+        except Exception:
+            return "destructive_check_failed"
+        return refusal_reason(record, self.engine.config)
+
+    def _list_candidates(self, scope, session, params):
+        snapshot = self.snapshots.get(session)
+        if not snapshot or params.get("snapshot_id") != snapshot[0]:
+            return {"ok": False, "error": "unconfirmed_snapshot"}
+        limit = params.get("limit", 30)
+        if type(limit) is not int or not 1 <= limit <= 200:
+            return {"ok": False, "error": "invalid_limit"}
+        wanted = params.get("tool_call_ids")
+        if wanted is not None and (not isinstance(wanted, list) or not all(isinstance(x, str) for x in wanted)):
+            return {"ok": False, "error": "invalid_tool_call_ids"}
+        wanted = set(wanted) if wanted is not None else None
+        items = []
+        for record in reversed(list(snapshot[1].values())):
+            if wanted is not None and record.call_id not in wanted:
+                continue
+            if self._cleanup_error(scope, record) is not None:
+                continue
+            args = record.invocation.get("arguments", {})
+            items.append({"tool_call_id": record.call_id, "tool_name": record.invocation.get("tool_name"),
+                          "hint": str(args.get("command") or args.get("path") or "")[:160],
+                          "bytes_size": len(record.content.encode("utf-8")), "tokens_display": "—"})
+            if len(items) >= limit:
+                break
+        return {"ok": True, "items": items}
+
     def _manage(self, scope, session, params):
+        want = params.get("tool_call_ids")
+        if want is None or want == []:
+            return {"ok": False, "error": "tool_call_ids_required"}
+        if not isinstance(want, list) or not all(isinstance(x, str) and x.strip() for x in want):
+            return {"ok": False, "error": "invalid_tool_call_ids"}
         snapshot = self.snapshots.get(session)
         if not snapshot or params.get("snapshot_id") != snapshot[0]:
             return {"ok": False, "error": "unconfirmed_snapshot"}
         action = params.get("action", "auto")
         if action not in ("auto", "hide", "summarize"):
             return {"ok": False, "error": "invalid_action"}
-        max_items = params.get("max_items", 20)
-        if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1 or max_items > 64:
-            return {"ok": False, "error": "invalid_max_items"}
         summaries = params.get("summaries")
         if summaries is not None and not isinstance(summaries, dict):
             return {"ok": False, "error": "invalid_summaries"}
@@ -349,27 +393,15 @@ class Daemon:
                 if not isinstance(k, str) or not isinstance(v, str):
                     return {"ok": False, "error": "invalid_summaries"}
 
-        want = params.get("tool_call_ids")
-        records = list(snapshot[1].values())
-        if want is not None:
-            if not isinstance(want, list) or not all(isinstance(x, str) for x in want):
-                return {"ok": False, "error": "invalid_tool_call_ids"}
-            wanted = {x for x in want if x}
-            records = [r for r in records if r.call_id in wanted]
-
         items = []
-        for record in records[:max_items]:
-            err = self._identity_state(scope, record, "summarize" if action == "summarize" else "compact")
+        for call_id in dict.fromkeys(want):
+            record = snapshot[1].get(call_id)
+            if record is None:
+                items.append({"tool_call_id": call_id, "ok": False, "error": "not_found"})
+                continue
+            err = self._cleanup_error(scope, record)
             if err is not None:
                 items.append({"tool_call_id": record.call_id, "ok": False, "error": err})
-                continue
-            try:
-                destructive = is_destructive_command(record.invocation.get("tool_name"), record.invocation.get("arguments"))
-            except Exception:
-                items.append({"tool_call_id": record.call_id, "ok": False, "error": "destructive_check_failed"})
-                continue
-            if destructive:
-                items.append({"tool_call_id": record.call_id, "ok": False, "error": "destructive_command"})
                 continue
 
             summary_text = None

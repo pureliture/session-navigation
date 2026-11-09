@@ -108,7 +108,10 @@ SUPERVISION_SECTION_TEXT = (
     "분명하지 않으면 unhide_context를 호출하지 않고 '어느 항목을 복원할까요?'라고 먼저 묻는다. "
     "목록의 1번을 임의로 고르지 않는다. '전부 되돌려'는 필터 없는 목록에서 숨김 item_id 집합을 고정해 한 건씩 "
     "복원한 뒤 전체 목록으로 성공·실패·남은 건수를 보고한다. 숨김이 0건이면 '현재 숨겨진 항목 없음'이라고만 "
-    "말한다. 오래된 큰 도구 결과가 쌓이면 manage_context로 자동 정리할 수 있다. "
+    "말한다. 하위 작업을 마칠 때마다 이후 작업에 필요 없는 해당 작업의 결과를 판단해 "
+    "manage_context에 tool_call_ids를 지정하고 세션 중 반복 호출한다. "
+    "list_context_items(view=candidates)는 ID 발견용이며 대상을 제한하지 않는다. "
+    "hide는 규칙 기반, summarize는 세션 모델 요약, auto는 모델 요약 우선·규칙 대체다. "
     "숨김 상태는 SQLite에 영속화되어 재시작·fork 이후에도 유지된다. "
     "재시작 여부를 모를 때 원인을 단정하지 않는다."
 )
@@ -144,7 +147,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "보여준다. 항목 본문과 명령 원문은 반환하지 않는다. "
             "표시 번호는 목록 호출마다 새로 부여된다. 복원이 필요하면 사용자가 본 표의 "
             "번호에 해당하는 정확한 item_id를 먼저 고정하고, 복원 직전 목록으로 현재 상태를 "
-            "확인한 뒤 고정한 item_id로 복원한다. 새 목록의 번호로 바꾸지 않는다."
+            "확인한 뒤 고정한 item_id로 복원한다. 새 목록의 번호로 바꾸지 않는다. "
+            "view=candidates discovers visible eligible cleanup results, newest first, with "
+            "tool_call_id, tool, command/path hint and bytes (default limit 30). Discovery does not restrict manage_context targets."
         ),
         "parameters": {
             "type": "object",
@@ -152,7 +157,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "query": {
                     "type": "string",
                     "description": "Optional filter over item IDs and summaries.",
-                }
+                },
+                "view": {"type": "string", "enum": ["items", "candidates"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             },
             "required": [],
             "additionalProperties": False,
@@ -214,33 +221,30 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     MANAGE_TOOL: {
         "name": MANAGE_TOOL,
         "description": (
-            "Automatically hide already-transmitted tool results: inspects the given "
-            "tool_call_ids (or all recorded results when omitted) and applies hide or "
-            "summarize directly. action=auto uses a model summary when a summarizer is "
-            "configured, else rule-based hide. User and assistant messages are never "
-            "auto-managed. Returns per-item results; partial failures never report full success."
+            "After completing a unit of work, choose the tool results from that work that later steps "
+            "will not need and pass their tool_call_ids. Scope cleanup by your judgment to the work "
+            "just finished and call repeatedly throughout the session, not once for the entire session. "
+            "Requires non-empty IDs; accepts any eligible transmitted ID, not only listed candidates. "
+            "hide uses rules only; summarize uses the session model; auto prefers model summary with "
+            "rule fallback. Hidden, ineligible and destructive results are skipped before model calls. "
+            "Returns per-item results; partial failures never report full success."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "tool_call_ids": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {"type": "string"},
-                    "description": "Tool call IDs to manage. When omitted, all recorded results are considered.",
+                    "description": "Agent-chosen tool call IDs from the completed work; no per-call count limit.",
                 },
                 "action": {
                     "type": "string",
                     "enum": ["auto", "hide", "summarize"],
                     "description": "hide uses rules only; summarize requires a configured model; auto prefers summarize with rule fallback.",
                 },
-                "max_items": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 64,
-                    "description": "Maximum items to process (default 20).",
-                },
             },
-            "required": [],
+            "required": ["tool_call_ids"],
             "additionalProperties": False,
         },
     },
@@ -262,5 +266,4 @@ def bridge_should_yield(tool_names: Any) -> bool:
         except TypeError:
             return False
     return bool(BRIDGE_COLLISION_TOOLS & {str(name) for name in names})
-
 

@@ -130,7 +130,7 @@ def test_nav_manage_reports_counts(tmp_path, monkeypatch):
     sid = _seeded_session_id()
     # Unhide first so manage has a visible row to re-hide.
     ctx.commands["nav"](f"unhide 1 {sid}")
-    out = ctx.commands["nav"](f"manage auto {sid}")
+    out = ctx.commands["nav"]("manage auto call_1", session_id=sid)
     assert "applied" in out.lower(), out
     assert "[hidden]" in ctx.commands["nav"](sid)
 

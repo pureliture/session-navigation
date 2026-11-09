@@ -34,10 +34,21 @@ Three paths kept separate (agent-observatory design):
 
 - No system-prompt row in outline (Palantir parity dropped for system).
 
-## D4. manage_context defaults
+## D4. manage_context: repeated, agent-scoped cleanup
 
-- `action=auto` (model summary when summarizer configured, else rule hide),
-  `max_items=20`, candidates = all recorded results of the confirmed snapshot.
+- After completing a unit of work, the agent judges which results from that work
+  later steps will not need and supplies their `tool_call_ids`. Repeat throughout
+  the session, not as a one-shot whole-session summary.
+- Non-empty IDs are required (`tool_call_ids_required`); there is no per-call ID
+  cap or deterministic subtask/time boundary. No implicit all-results fallback.
+- `action=auto` prefers session-model summaries with rule fallback; `hide` is
+  rule-only and `summarize` requires the session model. Hidden/ineligible IDs are
+  skipped before model invocation. OMP uses four model workers and batches IPC
+  internally; Hermes processes chosen IDs sequentially.
+- `list_context_items(view=candidates, limit=30)` discovers visible eligible
+  results newest first, with ID, tool, command/path hint, and byte size (hosts
+  currently provide no measured per-result tokens). Limit is 1–200 for discovery
+  only: any eligible confirmed/transmitted ID can be managed without listing it.
 - Returns per-item results; partial failure never reports full success.
 
 ## D5. Summarizer — session model only

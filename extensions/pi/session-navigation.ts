@@ -9,9 +9,10 @@ import * as readline from "node:readline";
 type Reply = { id?: number; ok: boolean; error?: string; protocol?: number; patches?: Patch[]; [key: string]: unknown };
 type Patch = { call_id: string; sha256: string; text: string };
 type RecordItem = { call_id: string; tool_name: string; arguments: Record<string, unknown>; status: string; content: string };
-type Candidate = { session: string; token: string; confirmed: boolean };
+type Candidate = { session: string; token: string; confirmed: boolean; records: RecordItem[] };
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_CHUNK_RECORDS = 64;
+export const CLEANUP_GUIDANCE = "After completing a unit of work, pick the tool results from that work that later steps will not need. Call list_context_items with view=candidates to discover IDs, then manage_context with your chosen tool_call_ids. Scope cleanup by your judgment to the work just finished, and call it repeatedly throughout the session; do not summarize the entire session at once. action=hide uses rules only; action=summarize uses the session model; auto prefers a model summary with rule fallback. Discovery limits do not restrict which eligible IDs you may choose.";
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 function messageText(message: any): string {
@@ -80,6 +81,7 @@ export async function prepareSnapshot(records: RecordItem[], session: string, to
 
 export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	const z = pi.zod;
+	pi.on("before_agent_start", async (event) => ({ systemPrompt: [...event.systemPrompt, CLEANUP_GUIDANCE] }));
 	let proc: ChildProcessWithoutNullStreams | null = null;
 	let ready = false;
 	let busy = false;
@@ -218,7 +220,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		candidate = null;
 		const session = sessionId(ctx); const collected = collect(event.messages);
 		if (!session || !collected) return;
-		const next: Candidate = { session, token: randomUUID(), confirmed: false };
+		const next: Candidate = { session, token: randomUUID(), confirmed: false, records: collected.records };
 		candidate = next;
 		const prepared = queue.then(() => prepareSnapshot(collected.records, session, next.token, rpcOnce));
 		queue = prepared.catch(() => undefined);
@@ -284,7 +286,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	async function tool(method: string, params: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal) {
 		const session = sessionId(ctx);
 		if (!session) return { ok: false, error: "invalid_session" };
-		if ((method === "compact" || method === "summarize" || method === "manage") && (!candidate?.confirmed || candidate.session !== session)) return { ok: false, error: "unconfirmed_snapshot" };
+		if ((method === "compact" || method === "summarize" || method === "manage" || method === "list_candidates") && (!candidate?.confirmed || candidate.session !== session)) return { ok: false, error: "unconfirmed_snapshot" };
 		return rpc(method, { ...params, session_id: session, snapshot_id: candidate?.token }, method === "summarize" || method === "manage" ? 25_000 : 5000, signal);
 	}
 	function result(value: Reply) { return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value }; }
@@ -316,7 +318,11 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			const prompt = `Summarize this tool result in one paragraph. State only facts present in the result.\n\n${content.slice(0, 12000)}`;
 			const params = { messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] };
 			// 25s end-to-end: the RPC timeout after this covers transport, this covers the model call.
-			const msg: unknown = await withTimeout(25_000, (complete as (m: unknown, cc: unknown, o?: unknown) => Promise<unknown>)(model, params, { apiKey, disableReasoning: true }));
+			const controller = new AbortController();
+			let msg: unknown;
+			try {
+				msg = await withTimeout(25_000, (complete as (m: unknown, cc: unknown, o?: unknown) => Promise<unknown>)(model, params, { apiKey, disableReasoning: true, signal: controller.signal }));
+			} finally { controller.abort(); }
 			if (!msg || typeof msg !== "object" || !("content" in msg)) return null;
 			const blocks: unknown = (msg as { content: unknown }).content;
 			if (!Array.isArray(blocks)) return null;
@@ -357,25 +363,47 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		} });
 	pi.registerTool({ name: "unhide_context", label: "Unhide Context", description: "Unhide a hidden result; the stored summary is kept for re-hiding.", parameters: z.object({ item_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("restore", params, ctx, signal)); } });
-	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "List hidden results in this session.", parameters: z.object({ query: z.string().optional() }),
-		async execute(_id, params, signal, _update, ctx) { return result(await tool("list_items", params, ctx, signal)); } });
-	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Automatically hide confirmed, eligible read and bash results. action=auto prefers a session-model summary with rule fallback.", parameters: z.object({ tool_call_ids: z.array(z.string()).optional(), action: z.enum(["auto", "hide", "summarize"]).optional(), max_items: z.number().int().min(1).max(64).optional() }),
-		async execute(_id, params, signal, _update, ctx) {
-			const session = sessionId(ctx);
-			const action = (params as { action?: string }).action ?? "auto";
-			if (session && candidate?.confirmed && candidate.session === session && (action === "auto" || action === "summarize")) {
-				const want = (params as { tool_call_ids?: string[] }).tool_call_ids;
-				const wanted = Array.isArray(want) ? new Set(want) : null;
-				const summaries: Record<string, string> = {};
-				await Promise.all(candidate.records.filter((r) => !wanted || wanted.has(r.call_id)).map(async (r) => {
-					const text = await summarizeText(ctx, r.content);
-					if (text) summaries[r.call_id] = text;
+	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "List stored results. view=candidates discovers visible eligible cleanup results, newest first, with tool_call_id, tool, command/path hint and bytes. Default limit 30; discovery does not restrict manage_context targets.", parameters: z.object({ query: z.string().optional(), view: z.enum(["items", "candidates"]).optional(), limit: z.number().int().min(1).max(200).optional() }),
+		async execute(_id, params, signal, _update, ctx) { return result(await tool(params.view === "candidates" ? "list_candidates" : "list_items", params, ctx, signal)); } });
+	async function manageChosen(params: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal): Promise<Reply> {
+		const ids = params.tool_call_ids;
+		if (ids === undefined || (Array.isArray(ids) && ids.length === 0)) return { ok: false, error: "tool_call_ids_required" };
+		if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string" && id.trim())) return { ok: false, error: "invalid_tool_call_ids" };
+		const snapshot = candidate;
+		const session = sessionId(ctx);
+		if (!session || !snapshot?.confirmed || snapshot.session !== session) return { ok: false, error: "unconfirmed_snapshot" };
+		const action = params.action ?? "auto";
+		if (!["auto", "hide", "summarize"].includes(String(action))) return { ok: false, error: "invalid_action" };
+		const wanted = [...new Set(ids as string[])];
+		const records = new Map(snapshot.records.map((record) => [record.call_id, record]));
+		const items: any[] = [];
+		for (let offset = 0; offset < wanted.length; offset += MAX_CHUNK_RECORDS) {
+			if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
+			if (signal?.aborted) return { ok: false, error: "cancelled", items };
+			const batch = wanted.slice(offset, offset + MAX_CHUNK_RECORDS);
+			const summaries: Record<string, string> = {};
+			if (action !== "hide") {
+				const eligible = await tool("list_candidates", { tool_call_ids: batch, limit: batch.length }, ctx, signal);
+				if (!eligible.ok) return eligible;
+				const queue = (eligible.items as { tool_call_id: string }[]).map((item) => records.get(item.tool_call_id)).filter((record): record is RecordItem => !!record);
+				await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+					while (queue.length && !signal?.aborted && candidate === snapshot) {
+						const record = queue.shift()!;
+						const text = await summarizeText(ctx, record.content);
+						if (text) summaries[record.call_id] = text;
+					}
 				}));
-				if (action === "summarize" && Object.keys(summaries).length === 0) return result({ ok: false, error: "summarizer_unavailable" });
-				return result(await tool("manage", { ...(params as Record<string, unknown>), summaries: Object.keys(summaries).length ? summaries : undefined }, ctx, signal));
 			}
-			return result(await tool("manage", params, ctx, signal));
-		} });
+			if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
+			const response = await tool("manage", { tool_call_ids: batch, action, summaries }, ctx, signal);
+			if (!Array.isArray(response.items)) return response;
+			items.push(...response.items);
+		}
+		const applied = items.filter((item) => item.ok).length;
+		return { ok: applied === items.length, applied, failed: items.length - applied, items };
+	}
+	pi.registerTool({ name: "manage_context", label: "Manage Context", description: CLEANUP_GUIDANCE + " Requires a non-empty tool_call_ids list; accepts any eligible confirmed ID, not only listed ones. Already hidden/ineligible results are skipped before model calls.", parameters: z.object({ tool_call_ids: z.array(z.string()), action: z.enum(["auto", "hide", "summarize"]).optional() }),
+		async execute(_id, params, signal, _update, ctx) { return result(await manageChosen(params, ctx, signal)); } });
 	if (typeof pi.registerCommand === "function") {
 	pi.registerCommand("session-navigation", {
   description: "Open the session navigation panel",
@@ -469,15 +497,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
         await finishMutation(await rpc("restore", { item_id: row.item_id, expected_version: row.version, session_id: session, snapshot_id: snapshotId() }, 5000));
       };
       const rehideSelected = async () => { await hideSelected(); };
-      const manageAll = async () => {
-        const summaries: Record<string, string> = {};
-        if (candidate?.confirmed && Array.isArray(candidate?.records)) {
-          await Promise.all(candidate.records.map(async (r: any) => {
-            const text = await summarizeText(ctx, r.content);
-            if (text) summaries[r.call_id] = text;
-          }));
-        }
-        const res = await rpc("manage", { action: "auto", max_items: 20, session_id: session, snapshot_id: snapshotId(), summaries: Object.keys(summaries).length ? summaries : undefined }, 25000);
+      const manageSelected = async () => {
+        const id = rows[selected]?.tool_call_id ?? rows[selected]?.call_id;
+        const res = await manageChosen({ action: "auto", tool_call_ids: id ? [id] : [] }, ctx);
         await finishMutation(res);
       };
       await reload();
@@ -491,7 +513,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
             const prefix = idx === selected ? "> " : "  ";
             lines.push(prefix + String(r?.status ?? "") + " " + String(r?.tool_call_id ?? r?.call_id ?? "") + " tokens:" + String(r?.tokens_display ?? "—") + " v" + String(r?.version ?? ""));
           });
-          lines.push("[h]ide [s]ummarize [u]nhide [r]e-hide [m]anage [Esc] close");
+          lines.push("[h]ide [s]ummarize [u]nhide [r]e-hide [m]anage selected [Esc] close");
           return lines;
         },
         handleInput: async (data: string) => {
@@ -508,7 +530,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
           if (key === "s") { void summarizeSelected(); return; }
           if (key === "u") { void unhideSelected(); return; }
           if (key === "r") { void rehideSelected(); return; }
-          if (key === "m") { void manageAll(); return; }
+          if (key === "m") { void manageSelected(); return; }
           if (selectList && typeof selectList.handleInput === "function") {
             try { selectList.handleInput(data); } catch { /* ignore */ }
           }
