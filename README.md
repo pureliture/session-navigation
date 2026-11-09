@@ -274,6 +274,13 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 [제출 절차](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/catalog-submission.md),
 [플러그인 API/의존성](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/index.md).
 
+## Evaluation
+
+실제 OMP/Hermes에서 **GLM 5.3 Flash**로 A/B 48세션(셀별 3회)을 실행했다.
+양 군 모두 과제·회상 24/24 성공했지만, 자발적 hide는 OMP B 한 세션뿐이고 LLM summary는 없어 요약 품질은 미평가다.
+보고 비용은 B가 OMP +10.91%, Hermes +5.53%였으며, 정리의 독립적인 인과 효과로 단정하지 않는다.
+[설계](docs/evaluation/design.md) · [결과·한계](docs/evaluation/results.md) · [재현 harness](eval/README.md)
+
 ## 기여
 
 버그 제보에는 호스트/버전, 재현 절차, 기대 동작, 민감정보를 지운 로그를 포함해 주세요.

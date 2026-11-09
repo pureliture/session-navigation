@@ -42,9 +42,9 @@ try {
         session.abort(); reject(new Error("turn deadline 300s"));
       }, 300_000); })]);
     } finally { clearTimeout(timer!); }
-    const messages = session.messages;
+    const messages = JSON.parse(JSON.stringify(session.messages));
     const last = [...messages].reverse().find((message: any) => message.role === "assistant");
-    turns.push({ turn, answer: last?.content?.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n") || "", messages });
+    turns.push({ turn, prompt, answer: last?.content?.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n") || "", messages });
     writeFileSync(join(spec.output, "turns.json"), JSON.stringify(turns));
     console.log(spec.id, "turn", turn, "complete");
   }

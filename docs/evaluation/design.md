@@ -13,6 +13,8 @@
 `usage.cost=0.0000172` USD, `prompt_tokens_details.cached_tokens=0` 및 cache-write 0을 확인했다.
 **cost와 cached-token 필드는 보고되지만 실제 cache hit는 아직 검증하지 않았다.**
 `usage: {include: true}`를 upstream에 요청한다. 작은 출력 한도 때문에 probe는 reasoning 중 length로 종료되었으며 과제 성공 데이터가 아니다.
+현재 [OpenRouter Usage Accounting](https://openrouter.ai/docs/guides/guides/usage-accounting)는
+해당 include 옵션이 deprecated/no-op이며 usage가 자동 보고된다고 명시한다. 옵션 유무가 비용 보고의 원인은 아니다.
 
 | 군 | OMP (주 평가) | Hermes (보조 평가) |
 |---|---|---|

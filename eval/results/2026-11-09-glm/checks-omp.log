@@ -1,0 +1,55 @@
+bun test v1.4.4 (5d9cc0f4f)
+
+extensions/pi/session-navigation-cleanup.test.ts:
+(pass) the actual context hook sends the LLM summary on its first pending turn (success) [146.85ms]
+(pass) the actual context hook sends the rule fallback on its first pending turn (invalid) [162.48ms]
+(pass) the actual context hook sends the rule fallback on its first pending turn (unavailable) [143.72ms]
+(pass) the actual context hook sends the rule fallback on its first pending turn (timeout) [142.12ms]
+(pass) cleanup discovers IDs, requires explicit choices, limits model concurrency and repeats across turns without an ID cap [708.09ms]
+
+extensions/pi/session-navigation.test.ts:
+(pass) pending summaries settle before the first request selects patches [0.23ms]
+(pass) pending generation uses four workers, deduplicates IDs and serializes writes [19.09ms]
+(pass) pending unavailable falls back to refreshed rule patches [0.22ms]
+(pass) pending rejected falls back to refreshed rule patches [0.02ms]
+(pass) pending invalid falls back to refreshed rule patches [0.01ms]
+(pass) no pending IDs means no model call or second prepare; DB write errors propagate [0.09ms]
+(pass) the shared model deadline prevents starting remaining pending jobs [0.09ms]
+(pass) queue wait consumes the model budget instead of starting another full timeout [0.05ms]
+(pass) 실제 데몬으로 확인된 read 결과의 압축과 복원을 수행한다 [63.64ms]
+(pass) 실패, 이미지, 중복 ID와 확인되지 않은 세션은 원본을 보존한다 [56.28ms]
+session-navigation: spawn_error
+session-navigation: spawn_error
+(pass) 데몬이 없으면 headless는 abort하고 interactive는 선택한다 (D9) [1.55ms]
+session-navigation: timeout
+(pass) 응답이 멈춘 데몬을 폐기하고 이전 snapshot을 승인하지 않는다 [107.82ms]
+session-navigation: cancelled
+(pass) 실행 중 취소하면 데몬과 snapshot을 함께 폐기한다 [4.03ms]
+session-navigation: write_failed
+(pass) 닫힌 데몬 stdin(EPIPE)은 구조적 사망으로 D9 abort한다 [5.46ms]
+(pass) prepare DB 오류 시 headless는 abort하고 조용히 원본을 보내지 않는다 [10.58ms]
+(pass) prepare DB 오류 시 interactive는 선택지를 묻고 abort 선택 시 중단한다 [9.19ms]
+(pass) collect는 read와 bash 결과를 모두 수집한다 [4.04ms]
+(pass) hidden prompts are dropped and hidden responses keep only their tool calls [0.53ms]
+(pass) prepare sends all 2000 records in bounded chunks and collects every response [1.15ms]
+(pass) prepare chunks escaped UTF-8 by wire bytes, skips oversized records, and sends empty snapshots [12.98ms]
+(pass) a later failed chunk discards partial patches and stops sending [0.26ms]
+(pass) real daemon patches hides across chunks and confirms the whole snapshot for tools [90.58ms]
+
+extensions/pi/session-navigation-3ui.test.ts:
+(pass) OMP overlay factory renders rows and unhides via daemon [207.02ms]
+(pass) Paseo RPC handlers operate the same rows [326.94ms]
+(pass) OMP tool hide/unhide roundtrip via daemon RPC [117.03ms]
+
+extensions/pi/session-navigation-ui.test.ts:
+(pass) registers /session-navigation command [0.10ms]
+(pass) headless mode aborts without custom UI [0.08ms]
+(pass) tui mode opens custom overlay [0.06ms]
+
+extensions/pi/session-navigation.omp.test.ts:
+(pass) 실제 OMP에서 read 결과를 압축하고 다음 요청에서 복원한다 [1275.74ms]
+
+ 34 pass
+ 0 fail
+ 273 expect() calls
+Ran 34 tests across 5 files. [3.65s]

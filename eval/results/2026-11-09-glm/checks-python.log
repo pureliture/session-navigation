@@ -1,0 +1,44 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.15, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/devin/repos/session-navigation
+configfile: pyproject.toml
+testpaths: tests
+collected 374 items
+
+tests/test_cli_all_tools.py .                                            [  0%]
+tests/test_cli_batch.py .................                                [  4%]
+tests/test_cli_long_session.py .                                         [  5%]
+tests/test_cli_message_hide.py ....                                      [  6%]
+tests/test_cli_preview.py .....................                          [ 11%]
+tests/test_cli_tokens.py .......                                         [ 13%]
+tests/test_daemon_pending_summary.py ....                                [ 14%]
+tests/test_e2e_persistence.py ..........                                 [ 17%]
+tests/test_engine.py ............                                        [ 20%]
+tests/test_envelope_rule_selection.py ...........                        [ 23%]
+tests/test_exit_claims.py ...........................                    [ 30%]
+tests/test_hermes_cleanup.py .                                           [ 31%]
+tests/test_hermes_edges.py ......                                        [ 32%]
+tests/test_hermes_human_supervision.py .............                     [ 36%]
+tests/test_hermes_llm.py .........                                       [ 38%]
+tests/test_hermes_message_hide.py ...                                    [ 39%]
+tests/test_hermes_nav.py .......                                         [ 41%]
+tests/test_hermes_package.py sss......s..                                [ 44%]
+tests/test_hermes_payload.py ........                                    [ 46%]
+tests/test_hermes_plugin.py ...............                              [ 50%]
+tests/test_hermes_runtime_integration.py sssssss                         [ 52%]
+tests/test_hermes_session.py ......                                      [ 54%]
+tests/test_hermes_usage.py ...........                                   [ 56%]
+tests/test_lossless_source.py ............                               [ 60%]
+tests/test_model.py ...........                                          [ 63%]
+tests/test_omp_daemon.py ..........                                      [ 65%]
+tests/test_omp_sqlite_e2e.py .....                                       [ 67%]
+tests/test_perf.py ...                                                   [ 67%]
+tests/test_policy_protection.py ........................................ [ 78%]
+..........                                                               [ 81%]
+tests/test_result_envelopes.py ........                                  [ 83%]
+tests/test_short_summary.py .                                            [ 83%]
+tests/test_sqlite_store.py ...........                                   [ 86%]
+tests/test_summary_validation.py ....................................... [ 97%]
+...........                                                              [100%]
+
+======================= 363 passed, 11 skipped in 30.03s =======================

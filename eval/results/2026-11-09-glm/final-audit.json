@@ -1,0 +1,13 @@
+{
+  "files_checked": 72901,
+  "actual_key_matches": [],
+  "secret_pattern_matches": [],
+  "source_sha256": {
+    "extensions/pi/session-navigation.ts": "3c1cefc66bfd2c2c6c7175a743e68bb2a2a97a5ccd024af47b10492f67fcddbe",
+    "docs/evaluation/design.md": "c575708f89ab69ddb567b8c72362d04a50e6b1a80549d48d342e02fc94787806",
+    "eval/fixtures/cases.json": "ef826fada3152983eec688cf5504c96fd3d2122b918a6174df335e21442f620f",
+    "eval/run.py": "97073c8333765c5b8226159a71898226f1e78ba15de40131e19820fb4b8d7405",
+    "eval/proxy.py": "4e7ca98c4978d8942548dfab84c5889d6b6fdfcdfe633776b02d49b23037ea94"
+  },
+  "model": "z-ai/glm-5.3-flash"
+}

@@ -1,0 +1,89 @@
+{
+  "id": "omp-04-distractors-B-3",
+  "turns": [
+    "Inspect truth.txt. Report the archive retention and active product family.",
+    "Inspect inventory-a.txt, inventory-b.txt and inventory-c.txt in full. Determine which contains a feature-switch implementation; list any matches.",
+    "Inspect inventory-d.txt, inventory-e.txt and inventory-f.txt in full. Determine which contains a feature-switch implementation; list any matches.",
+    "What is the exact archive retention from the initial product configuration, and what product family is active?"
+  ],
+  "answers": [
+    [
+      "43",
+      "alpine"
+    ],
+    [],
+    [],
+    [
+      "43",
+      "alpine"
+    ]
+  ],
+  "results": [
+    {
+      "match": "truth.txt",
+      "label": "needed-later",
+      "protected": false,
+      "facts": [
+        "ARCHIVE_RETENTION_DAYS=43",
+        "PRODUCT_FAMILY=alpine"
+      ]
+    },
+    {
+      "match": "inventory-a.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "TYPE=warehouse inventory only; no executable code"
+      ]
+    },
+    {
+      "match": "inventory-b.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "TYPE=warehouse inventory only; no executable code"
+      ]
+    },
+    {
+      "match": "inventory-c.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "TYPE=warehouse inventory only; no executable code"
+      ]
+    },
+    {
+      "match": "inventory-d.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "TYPE=warehouse inventory only; no executable code"
+      ]
+    },
+    {
+      "match": "inventory-e.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "TYPE=warehouse inventory only; no executable code"
+      ]
+    },
+    {
+      "match": "inventory-f.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "TYPE=warehouse inventory only; no executable code"
+      ]
+    }
+  ],
+  "host": "omp",
+  "arm": "B",
+  "repetition": 3,
+  "repo": "/Users/devin/repos/session-navigation",
+  "home": "/Users/devin/.session-navigation-eval/omp-04-distractors-B-3/home",
+  "workspace": "/Users/devin/.session-navigation-eval/omp-04-distractors-B-3/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-09-glm/omp-04-distractors-B-3",
+  "proxy": "http://127.0.0.1:51600",
+  "hermes_source": "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+}

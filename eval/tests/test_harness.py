@@ -35,6 +35,16 @@ class HarnessTests(unittest.TestCase):
             result = json.loads((root / "metrics.json").read_text())[0]
             self.assertEqual((result["task_success"], result["missing_cost"], result["usage"][0]["cost"]), (False, 1, None))
 
+    def test_shared_history_uses_user_boundaries_not_snapshot_index(self):
+        messages = [{"role": "user", "content": "first"},
+            {"role": "assistant", "content": [{"type": "toolCall", "id": "a", "name": "read", "arguments": {}}]},
+            {"role": "toolResult", "toolCallId": "a", "content": "one"},
+            {"role": "user", "content": [{"type": "text", "text": "second"}]},
+            {"role": "assistant", "content": [{"type": "toolCall", "id": "b", "name": "read", "arguments": {}}]},
+            {"role": "toolResult", "toolCallId": "b", "content": "two"}]
+        calls, records = analyze.native_records([{"turn": 1, "messages": messages}, {"turn": 2, "messages": messages}], ["first", "second"])
+        self.assertEqual((calls["a"]["turn"], calls["b"]["turn"], records["b"]["first_turn"]), (1, 2, 2))
+
     def test_guard_usage_streaming_and_secret_audit(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-secret-not-a-real-key"}):
             directory = Path(temp)

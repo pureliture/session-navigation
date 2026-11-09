@@ -38,8 +38,8 @@ def fact_value(fact):
     return re.split(r"[=:]", fact, maxsplit=1)[-1].strip().strip("'\"")
 
 
-def label(args, original, spec):
-    if len(original) < 1000:
+def label(args, original, spec, min_chars=1000):
+    if len(original) < min_chars:
         return None
     matching = [entry for entry in spec["results"] if entry["match"] in json.dumps(args)]
     if not matching:
@@ -49,27 +49,32 @@ def label(args, original, spec):
         "matches": [e["match"] for e in matching]}
 
 
-def native_records(turns):
+def native_records(turns, user_prompts=None):
     calls, records = {}, {}
+    prompts = {text(prompt): i + 1 for i, prompt in enumerate(user_prompts or [])}
+    prompts.update({text(t["prompt"]): t["turn"] for t in turns if t.get("prompt")})
     for turn in turns:
+        current_turn = turn["turn"]
         for message in turn.get("messages", []):
+            if message.get("role") == "user":
+                current_turn = prompts.get(text(message.get("content")), current_turn)
             if message.get("role") == "assistant":
                 blocks = message.get("content", [])
                 if isinstance(blocks, list):
                     for block in blocks:
                         if block.get("type") == "toolCall":
-                            calls.setdefault(block["id"], {"name": block["name"], "args": block.get("arguments", {}), "turn": turn["turn"]})
+                            calls.setdefault(block["id"], {"name": block["name"], "args": block.get("arguments", {}), "turn": current_turn})
                 for call in message.get("tool_calls") or []:
                     function = call["function"]
                     try:
                         args = json.loads(function.get("arguments") or "{}")
                     except ValueError:
                         args = {"unparsed": function.get("arguments")}
-                    calls.setdefault(call["id"], {"name": function["name"], "args": args, "turn": turn["turn"]})
+                    calls.setdefault(call["id"], {"name": function["name"], "args": args, "turn": current_turn})
             if message.get("role") in ["tool", "toolResult"]:
                 identity = message.get("toolCallId", message.get("tool_call_id"))
                 records.setdefault(identity, {**calls.get(identity, {}), "id": identity,
-                    "original": text(message.get("content")), "first_turn": turn["turn"]})
+                    "original": text(message.get("content")), "first_turn": current_turn})
     return calls, records
 
 
@@ -94,11 +99,11 @@ def analyze(directory):
     responses = {row["id"]: row for row in wire if row["kind"] == "response"}
     reports, replacements = [], []
     for folder in sorted(directory.iterdir()):
-        if not folder.is_dir() or not (folder / "status.json").exists():
+        if not folder.is_dir() or not (folder / "status.json").exists() or not (folder / "spec.json").exists():
             continue
         spec, status = read(folder / "spec.json"), read(folder / "status.json")
         turns = read(folder / "turns.json.gz") if (folder / "turns.json.gz").exists() else []
-        calls, records = native_records(turns)
+        calls, records = native_records(turns, spec["turns"])
         for record in records.values():
             record["label_info"] = label(record.get("args", {}), record["original"], spec)
         operations = []
@@ -119,13 +124,23 @@ def analyze(directory):
                     operations.append({"id": identity, "name": name, "args": args, "turn": call["turn"], "result": result})
         items = []
         db = Path(spec["workspace"]).parent / "navigation.sqlite3"
-        if db.exists():
+        snapshot_path = folder / "store.json.gz"
+        if snapshot_path.exists():
+            snapshot = read(snapshot_path)
+            items = snapshot["items"]
+        elif db.exists():
             connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
             connection.row_factory = sqlite3.Row
             try:
                 items = [dict(row) for row in connection.execute("SELECT * FROM items")]
+                units = [dict(row) for row in connection.execute("SELECT * FROM units")]
             finally:
                 connection.close()
+            snapshot = {"available": True, "items": items, "units": units}
+            with gzip.open(snapshot_path, "wt") as handle:
+                json.dump(snapshot, handle)
+        else:
+            snapshot = {"available": False, "items": [], "units": []}
         item_ids = {row["item_id"]: row["tool_call_id"] for row in items}
         chosen = []
         for op in operations:
@@ -200,7 +215,8 @@ def analyze(directory):
                     "source": item["compaction_source"], "original": item["original"], "replacement": item["compacted"],
                     "label": info, "actually_sent": actual_sent, "original_bytes": len(item["original"].encode()),
                     "replacement_bytes": len(item["compacted"].encode()),
-                    "facts_retained": [contains(item["compacted"], fact_value(f)) for f in info["facts"]]})
+                    "facts_present": [f for f in info["facts"] if contains(item["original"], fact_value(f))],
+                    "facts_retained": [contains(item["compacted"], fact_value(f)) for f in info["facts"] if contains(item["original"], fact_value(f))]})
         errors = collections.Counter()
         for op in operations:
             result = op["result"]
@@ -217,12 +233,14 @@ def analyze(directory):
         first_seen = {}
         later_reads = 0
         for record in records.values():
-            if record.get("label_info"):
-                for match in record["label_info"]["matches"]:
+            reread_info = label(record.get("args", {}), record["original"], spec, min_chars=1)
+            if reread_info:
+                for match in reread_info["matches"]:
                     if match in first_seen and record["first_turn"] > first_seen[match]:
                         later_reads += 1
                     first_seen.setdefault(match, record["first_turn"])
         reports.append({"id": spec["id"], "host": spec["host"], "arm": spec["arm"], "status": status,
+            "state_snapshot_available": snapshot["available"], "recorded_units": len(snapshot["units"]),
             "task_success": successful, "answer_checks": checks, "recall_correct": all(recall["matched"]),
             "user_turns": len(turns), "operations": operations, "chosen": chosen, "disposable_observed": len(disposable),
             "selected_disposable_unique": len(selected_disposable), "labelled_selections": len(labelled),
