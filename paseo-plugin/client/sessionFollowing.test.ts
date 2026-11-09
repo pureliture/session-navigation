@@ -48,8 +48,20 @@ test("a failed candidate does not prevent following another candidate", async ()
   })).toBe("b");
 });
 
-test("existing agent-bound panel still supports an empty chat", async () => {
-  expect(await resolveSessionTarget({ followVisible: true, boundAgentId: "a", visibleValues: [], candidates, timelineIds })).toBe("a");
+test("agent-bound follow mode unbinds for an empty chat rather than guessing its original agent", async () => {
+  expect(await resolveSessionTarget({ followVisible: true, boundAgentId: "a", visibleValues: [], candidates, timelineIds })).toBeNull();
+});
+
+test.each(["", "a"])("a navigator opened with agent %s clears its previous match on an empty chat", async (boundAgentId) => {
+  const resolve = (visibleValues: string[] | null) => resolveSessionTarget({
+    followVisible: true, boundAgentId, visibleValues, candidates, timelineIds,
+  });
+  expect(await resolve(["message-a-message"])).toBe("a");
+  expect(await resolve([])).toBeNull();
+  expect(await resolve(["agent_tool_b-call"])).toBe("b");
+  expect(await resolve([])).toBeNull();
+  expect(await resolve(null)).toBeNull();
+  expect(await resolve(["message-a-message"])).toBe("a");
 });
 
 test("follow matches older visible messages outside the last 200 events and caches all identities", async () => {
