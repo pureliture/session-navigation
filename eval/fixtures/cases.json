@@ -1,0 +1,373 @@
+[
+  {
+    "id": "01-explore",
+    "turns": [
+      "Inspect router.py in full. Explain its retry settings and report the jitter cap and routing mode.",
+      "Inspect storage.py in full. Report its flush interval and consistency mode.",
+      "Inspect worker.py in full. Report its concurrency and batch limit.",
+      "Recall the exact retry jitter cap from the first subtask, in milliseconds. What was the routing mode?"
+    ],
+    "answers": [
+      [
+        "137",
+        "sticky"
+      ],
+      [
+        "240",
+        "quorum"
+      ],
+      [
+        "6",
+        "48"
+      ],
+      [
+        "137",
+        "sticky"
+      ]
+    ],
+    "results": [
+      {
+        "match": "router.py",
+        "label": "needed-later",
+        "protected": false,
+        "facts": [
+          "RETRY_JITTER_CAP_MS = 137",
+          "ROUTING_MODE = 'sticky'"
+        ]
+      },
+      {
+        "match": "storage.py",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "FLUSH_INTERVAL_MS = 240",
+          "CONSISTENCY_MODE = 'quorum'"
+        ]
+      },
+      {
+        "match": "worker.py",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "CONCURRENCY = 6",
+          "BATCH_LIMIT = 48"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "02-bugfix",
+    "turns": [
+      "Run python3 -m unittest -v and inspect ledger.py. Diagnose the discount calculation bug; do not edit yet. Do not modify tests.",
+      "Fix the diagnosed bug in ledger.py. Check at least one non-divisible example. Do not modify tests.",
+      "Run python3 -m unittest -v again. Report whether every test passes and explain the rounding rule."
+    ],
+    "answers": [
+      [],
+      [],
+      [
+        "pass"
+      ]
+    ],
+    "results": [
+      {
+        "match": "unittest",
+        "label": "disposable",
+        "protected": true,
+        "facts": [
+          "FAILED",
+          "80"
+        ]
+      },
+      {
+        "match": "ledger.py",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "// 100"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "03-logs",
+    "turns": [
+      "Use bash/terminal to print bootstrap.log in full. Identify the recovery marker and the shard that required recovery.",
+      "Print traffic.log in full using bash/terminal. Report the measured p99 latency and total requests.",
+      "Print rollout.log in full using bash/terminal. Report the deployed release and whether rollout completed.",
+      "Without changing files, report the exact recovery marker and affected shard from the initial bootstrap analysis."
+    ],
+    "answers": [
+      [
+        "violet-27",
+        "7"
+      ],
+      [
+        "182",
+        "9100"
+      ],
+      [
+        "r18",
+        "complete"
+      ],
+      [
+        "violet-27",
+        "7"
+      ]
+    ],
+    "results": [
+      {
+        "match": "bootstrap.log",
+        "label": "needed-later",
+        "protected": false,
+        "facts": [
+          "RECOVERY_MARKER=violet-27",
+          "recovered sequence mismatch on shard 7"
+        ]
+      },
+      {
+        "match": "traffic.log",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "p99_latency_ms=182",
+          "total_requests=9100"
+        ]
+      },
+      {
+        "match": "rollout.log",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "deployed_release=r18",
+          "rollout=complete"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "04-distractors",
+    "turns": [
+      "Inspect truth.txt. Report the archive retention and active product family.",
+      "Inspect inventory-a.txt, inventory-b.txt and inventory-c.txt in full. Determine which contains a feature-switch implementation; list any matches.",
+      "Inspect inventory-d.txt, inventory-e.txt and inventory-f.txt in full. Determine which contains a feature-switch implementation; list any matches.",
+      "What is the exact archive retention from the initial product configuration, and what product family is active?"
+    ],
+    "answers": [
+      [
+        "43",
+        "alpine"
+      ],
+      [],
+      [],
+      [
+        "43",
+        "alpine"
+      ]
+    ],
+    "results": [
+      {
+        "match": "truth.txt",
+        "label": "needed-later",
+        "protected": false,
+        "facts": [
+          "ARCHIVE_RETENTION_DAYS=43",
+          "PRODUCT_FAMILY=alpine"
+        ]
+      },
+      {
+        "match": "inventory-a.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "TYPE=warehouse inventory only; no executable code"
+        ]
+      },
+      {
+        "match": "inventory-b.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "TYPE=warehouse inventory only; no executable code"
+        ]
+      },
+      {
+        "match": "inventory-c.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "TYPE=warehouse inventory only; no executable code"
+        ]
+      },
+      {
+        "match": "inventory-d.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "TYPE=warehouse inventory only; no executable code"
+        ]
+      },
+      {
+        "match": "inventory-e.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "TYPE=warehouse inventory only; no executable code"
+        ]
+      },
+      {
+        "match": "inventory-f.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "TYPE=warehouse inventory only; no executable code"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "05-protected",
+    "turns": [
+      "Inspect incident.log and report the error, status, exit code and whether retry is safe.",
+      "Inspect metrics.txt and catalog.txt in full. Report the metrics region and catalog owner.",
+      "Is the incident resolved? Repeat its exact error phrase, status, exit code and retry instruction from the first analysis."
+    ],
+    "answers": [
+      [
+        "checksum mismatch",
+        "blocked",
+        "23",
+        "do not retry"
+      ],
+      [
+        "west-2",
+        "Mira"
+      ],
+      [
+        "checksum mismatch",
+        "blocked",
+        "23",
+        "do not retry"
+      ]
+    ],
+    "results": [
+      {
+        "match": "incident.log",
+        "label": "needed-later",
+        "protected": true,
+        "facts": [
+          "ERROR: checksum mismatch",
+          "status=blocked",
+          "exit_code: 23",
+          "DO NOT RETRY"
+        ]
+      },
+      {
+        "match": "metrics.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "metrics_region=west-2"
+        ]
+      },
+      {
+        "match": "catalog.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "catalog_owner=Mira"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "06-long",
+    "turns": [
+      "Subtask 1: inspect phase-1.txt in full and report its owner and completion code.",
+      "Subtask 2: inspect phase-2.txt in full and report its owner and completion code.",
+      "Subtask 3: inspect phase-3.txt in full and report its owner and completion code.",
+      "Subtask 4: inspect phase-4.txt in full and report its owner and completion code.",
+      "Subtask 5: inspect phase-5.txt in full and report its owner and completion code.",
+      "Recall the owner and exact seal of phase 1. Also report how many phases were inspected."
+    ],
+    "answers": [
+      [
+        "Orchid",
+        "done-1"
+      ],
+      [
+        "Maple",
+        "done-2"
+      ],
+      [
+        "Birch",
+        "done-3"
+      ],
+      [
+        "Cedar",
+        "done-4"
+      ],
+      [
+        "Aspen",
+        "done-5"
+      ],
+      [
+        "Orchid",
+        "harbor-91",
+        "5"
+      ]
+    ],
+    "results": [
+      {
+        "match": "phase-1.txt",
+        "label": "needed-later",
+        "protected": false,
+        "facts": [
+          "owner=Orchid",
+          "completion_code=done-1",
+          "seal=harbor-91"
+        ]
+      },
+      {
+        "match": "phase-2.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "owner=Maple",
+          "completion_code=done-2",
+          "seal=canal-2"
+        ]
+      },
+      {
+        "match": "phase-3.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "owner=Birch",
+          "completion_code=done-3",
+          "seal=canal-3"
+        ]
+      },
+      {
+        "match": "phase-4.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "owner=Cedar",
+          "completion_code=done-4",
+          "seal=canal-4"
+        ]
+      },
+      {
+        "match": "phase-5.txt",
+        "label": "disposable",
+        "protected": false,
+        "facts": [
+          "owner=Aspen",
+          "completion_code=done-5",
+          "seal=canal-5"
+        ]
+      }
+    ]
+  }
+]
