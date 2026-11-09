@@ -16,7 +16,7 @@ import {
   type Row,
 } from "../shared/sessionNav";
 import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
-import { resolveSessionTarget } from "./sessionFollowing";
+import { readSessionTimelineIds, resolveSessionTarget } from "./sessionFollowing";
 import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
@@ -167,18 +167,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     const doc = (globalThis as any).document;
     if (!doc || !paseo?.agents) return;
     let cancelled = false;
-    const timelineIds = async (id: string): Promise<string[]> => {
-      const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 200, projection: "canonical" });
-      const entries = (page as { entries?: Array<{ item?: Record<string, unknown> }> })?.entries ?? [];
-      return entries.flatMap((entry) => ["messageId", "callId", "id"].map((key) => entry?.item?.[key]))
-        .filter((v): v is string => typeof v === "string" && v.length > 0);
-    };
     const tick = async () => {
       const values = visibleChatValues(doc);
       const id = await resolveSessionTarget({
         followVisible, boundAgentId: params.agentId, visibleValues: values,
         candidates: [...candidateAgentIds ?? [], ...scopes.map((s) => s.agent_id).filter((id): id is string => !!id)],
-        timelineIds: (id) => queryClient.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000, queryFn: () => timelineIds(id) }),
+        timelineIds: (id) => queryClient.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000, queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline) }),
       });
       if (cancelled) return;
       setInView(!!id);

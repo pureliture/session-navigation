@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { resolveSessionTarget } from "./sessionFollowing";
+import { readSessionTimelineIds, resolveSessionTarget } from "./sessionFollowing";
+import { QueryClient } from "@tanstack/react-query";
 import { defaultWorkspaceState, selectWorkspaceAgent, workspaceTabSchema } from "./workspaceState";
 
 const candidates = ["a", "b"];
@@ -49,4 +50,36 @@ test("a failed candidate does not prevent following another candidate", async ()
 
 test("existing agent-bound panel still supports an empty chat", async () => {
   expect(await resolveSessionTarget({ followVisible: true, boundAgentId: "a", visibleValues: [], candidates, timelineIds })).toBe("a");
+});
+
+test("follow matches older visible messages outside the last 200 events and caches all identities", async () => {
+  const all = Array.from({ length: 1400 }, (_, i) => ({ item: { type: "user_message", messageId: `a-message-${i}` } }));
+  const calls: any[] = [];
+  const timeline = { refetch: async (input: any): Promise<any> => {
+    calls.push(input);
+    const end = input.direction === "tail" ? all.length : input.cursor.seq;
+    const start = Math.max(0, end - input.limit);
+    return { entries: all.slice(start, end), hasOlder: start > 0, startCursor: { epoch: "e", seq: start } };
+  } };
+  const client = new QueryClient();
+  const load = (id: string) => client.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000,
+    queryFn: () => id === "a" ? readSessionTimelineIds(timeline) : Promise.resolve(["b-call"]) });
+  try {
+    expect(await follow(defaultWorkspaceState, ["message-a-message-1399"], load)).toBe("a");
+    const fetched = calls.length;
+    expect(await follow(defaultWorkspaceState, ["message-a-message-0"], load)).toBe("a");
+    expect(calls.length).toBe(fetched);
+    expect(calls.map((call) => call.direction)).toEqual(["tail", "before"]);
+    expect(await follow(defaultWorkspaceState, ["agent_tool_b-call"], load)).toBe("b");
+    expect(await follow(defaultWorkspaceState, null, load)).toBeNull();
+    expect(await follow(defaultWorkspaceState, ["unknown"], load)).toBeNull();
+  } finally { client.clear(); }
+});
+
+test("session identity history handles empty timelines, canonical identity kinds and fetch errors", async () => {
+  const read = (page: any) => readSessionTimelineIds({ refetch: async (): Promise<any> => page });
+  expect(await read({ entries: [], hasOlder: false })).toEqual([]);
+  expect(await read({ entries: [{ item: { messageId: "message" } }, { item: { callId: "call" } },
+    { item: { id: "row", messageId: 0 } }], hasOlder: false })).toEqual(["message", "call", "row"]);
+  await expect(read({ error: "offline" })).rejects.toThrow("offline");
 });
