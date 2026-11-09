@@ -16,6 +16,8 @@ export const RowSchema = z.object({
   source: z.string().optional(),
   bytes_size: z.number().optional(),
   summary_line: z.string().optional(),
+  tool_input: z.string().optional(),
+  tool_output: z.string().optional(),
 });
 
 export const DbErrorChoicesSchema = z.array(z.enum(["abort_request", "send_original"]));
@@ -125,6 +127,46 @@ export const unhideItemRpc = defineRpc({
     expected_version: z.number().int().optional(),
   }),
   output: MutationResultSchema,
+});
+
+export const BatchItemSchema = z.object({
+  item_id: z.string().min(1),
+  expected_version: z.number().int().optional(),
+});
+
+export const BatchMutationResultSchema = z.object({
+  ok: z.boolean(),
+  applied: z.number().int(),
+  failed: z.number().int(),
+  items: z.array(z.object({
+    item_id: z.string(),
+    ok: z.boolean(),
+    status: StatusSchema.nullable(),
+    visibility: z.enum(["hidden", "visible"]).nullable(),
+    version: z.number().int().nullable(),
+    error: z.string().optional(),
+  })),
+  error: z.string().optional(),
+  choices: z.array(z.string()).optional(),
+});
+
+export const hideBatchRpc = defineRpc({
+  name: "session-nav.hide-batch",
+  input: z.object({
+    scope_key: z.string(),
+    mode: z.enum(["hide", "summarize"]).optional(),
+    items: z.array(BatchItemSchema),
+  }),
+  output: BatchMutationResultSchema,
+});
+
+export const unhideBatchRpc = defineRpc({
+  name: "session-nav.unhide-batch",
+  input: z.object({
+    scope_key: z.string(),
+    items: z.array(BatchItemSchema),
+  }),
+  output: BatchMutationResultSchema,
 });
 
 export const summarizeItemRpc = defineRpc({

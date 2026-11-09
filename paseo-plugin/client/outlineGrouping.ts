@@ -129,3 +129,13 @@ export function buildGroupedRows(
   flushGroup();
   return result;
 }
+
+export function groupMutationItems(
+  group: { children: Row[] },
+  action: "hide" | "summarize" | "unhide",
+): { item_id: string; expected_version: number }[] {
+  const members = group.children.filter((row) =>
+    action === "unhide" ? row.status === "hidden" : row.status !== "hidden",
+  );
+  return members.map((row) => ({ item_id: row.item_id ?? row.tool_call_id, expected_version: row.version }));
+}

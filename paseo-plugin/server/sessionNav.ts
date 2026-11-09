@@ -5,6 +5,9 @@ import * as path from "node:path";
 import type { RpcInput } from "@getpaseo/plugin";
 import { z } from "zod";
 import {
+  BatchMutationResultSchema,
+  hideBatchRpc,
+  unhideBatchRpc,
   dbChoiceRpc,
   forkScopeRpc,
   hideItemRpc,
@@ -85,6 +88,8 @@ function asRow(item: unknown): z.infer<typeof RowSchema> {
     source: str(obj.source) ?? str(obj.compaction_source),
     bytes_size: num(obj.bytes_size),
     summary_line: str(obj.summary_line),
+    tool_input: str(obj.tool_input),
+    tool_output: str(obj.tool_output),
   };
 }
 
@@ -329,6 +334,36 @@ export async function unhideItem(input: RpcInput<typeof unhideItemRpc>) {
 export async function summarizeItem(_input: RpcInput<typeof summarizeItemRpc>) {
   // D5: Paseo has no session model. Never report a rule hide as a summary.
   return { ok: false, error: "summarizer_unavailable" };
+}
+
+async function mutateBatch(
+  command: "hide" | "unhide",
+  input: RpcInput<typeof hideBatchRpc>,
+) {
+  const empty = { applied: 0, failed: 0, items: [] };
+  const gate = dbGate(input.scope_key);
+  if (gate) return { ...empty, ...gate };
+  try {
+    const res = invokeCli([
+      command, "--scope", input.scope_key,
+      "--items-json", JSON.stringify(input.items),
+      ...(command === "hide" ? ["--mode", input.mode ?? "hide"] : []),
+    ]);
+    if (!Array.isArray(res.items)) return { ...empty, ...dbErrorResponse(res) };
+    const result = BatchMutationResultSchema.parse(res);
+    if (result.ok) dbNoteSuccess(input.scope_key);
+    return result;
+  } catch {
+    return { ...empty, ...dbErrorResponse(undefined) };
+  }
+}
+
+export async function hideBatch(input: RpcInput<typeof hideBatchRpc>) {
+  return mutateBatch("hide", input);
+}
+
+export async function unhideBatch(input: RpcInput<typeof unhideBatchRpc>) {
+  return mutateBatch("unhide", input);
 }
 
 export async function manageItems(input: RpcInput<typeof manageItemsRpc>) {

@@ -183,3 +183,16 @@ describe("outlineGrouping", () => {
     });
   });
 });
+
+describe("groupMutationItems", () => {
+  const rows = [
+    { item_id: "a", tool_call_id: "a", status: "visible", version: 2 },
+    { item_id: "b", tool_call_id: "b", status: "hidden", version: 5 },
+  ] as Row[];
+  test("hide/summarize target visible members, unhide targets hidden ones, with CAS versions", async () => {
+    const { groupMutationItems } = await import("./outlineGrouping");
+    expect(groupMutationItems({ children: rows }, "hide")).toEqual([{ item_id: "a", expected_version: 2 }]);
+    expect(groupMutationItems({ children: rows }, "summarize")).toEqual([{ item_id: "a", expected_version: 2 }]);
+    expect(groupMutationItems({ children: rows }, "unhide")).toEqual([{ item_id: "b", expected_version: 5 }]);
+  });
+});

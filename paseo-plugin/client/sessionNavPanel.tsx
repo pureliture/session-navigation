@@ -7,16 +7,21 @@ import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-na
 import { z } from "zod";
 import {
   dbChoiceRpc,
+  hideBatchRpc,
   hideItemRpc,
   listItemsRpc,
   listScopesRpc,
+  unhideBatchRpc,
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
+import { scrollToMessageInChat } from "./chatNavigation";
+import { fallbackToolPreview } from "./toolPreview";
 
 import {
   buildGroupedRows,
   fmtBytes,
+  groupMutationItems,
   isSummarizedRow,
   truncateString,
   type OutlineRow,
@@ -90,95 +95,6 @@ function ActionSvgIcon({
   );
 }
 
-/**
- * Scroll the main Paseo chat view to the message/tool matching the item
- */
-function scrollToMessageInChat(
-  itemId?: string | null,
-  toolCallId?: string | null,
-  summarySnippet?: string,
-): boolean {
-  const doc = (
-    globalThis as unknown as {
-      document?: {
-        querySelector: (sel: string) => any;
-        querySelectorAll: (sel: string) => ArrayLike<any>;
-      };
-    }
-  ).document;
-  if (!doc) return false;
-
-  const highlightAndScroll = (el: any): boolean => {
-    if (!el) return false;
-    if (typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-    if (el.style) {
-      const originalBg = el.style.backgroundColor;
-      el.style.transition = "background-color 0.3s ease";
-      el.style.backgroundColor = "rgba(59, 130, 246, 0.22)";
-      setTimeout(() => {
-        el.style.backgroundColor = originalBg || "";
-      }, 1200);
-    }
-    return true;
-  };
-
-  const idsToTry = [
-    toolCallId,
-    itemId,
-    itemId?.startsWith("user-") ? itemId.replace("user-", "") : undefined,
-    itemId?.startsWith("ast-") ? itemId.replace("ast-", "") : undefined,
-  ].filter((id): id is string => typeof id === "string" && id.length > 0);
-
-  for (const id of idsToTry) {
-    const encoded = encodeURIComponent(id);
-    const selectors = [
-      `[data-message-id="${id}"]`,
-      `[data-message-id="agent_tool_${id}"]`,
-      `[data-message-id$="/${encoded}"]`,
-      `[data-history-row-id="${id}"]`,
-      `[data-history-row-id="agent_tool_${id}"]`,
-      `[data-history-row-id$="/${encoded}"]`,
-      `[data-call-id="${id}"]`,
-      `[data-turn-id="${id}"]`,
-      `[data-item-id="${id}"]`,
-      `#message-${id}`,
-      `#call-${id}`,
-      `#turn-${id}`,
-    ];
-    for (const sel of selectors) {
-      try {
-        const el = doc.querySelector(sel);
-        if (el) return highlightAndScroll(el);
-      } catch {
-        // ignore selector error
-      }
-    }
-  }
-
-  // Fallback text match inside Paseo's agent-chat-scroll container for user/assistant messages
-  if (summarySnippet && typeof doc.querySelectorAll === "function") {
-    const needle = summarySnippet.replace(/\r?\n/g, " ").trim().slice(0, 36);
-    if (needle.length >= 4) {
-      try {
-        const candidates = doc.querySelectorAll('[data-testid="agent-chat-scroll"] [data-message-id]');
-        for (let i = 0; i < candidates.length; i++) {
-          const node = candidates[i];
-          const text = typeof node?.textContent === "string" ? node.textContent.replace(/\s+/g, " ") : "";
-          if (text.includes(needle)) {
-            return highlightAndScroll(node);
-          }
-        }
-      } catch {
-        // ignore fallback error
-      }
-    }
-  }
-
-  return false;
-}
-
 export function SessionNavPanel({ theme, layout, params, navigation, tab }: PluginAgentPanelProps) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
@@ -193,6 +109,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const scopesRpc = useRpc(listScopesRpc);
   const hideRpc = useRpc(hideItemRpc);
   const unhideRpc = useRpc(unhideItemRpc);
+  const hideBatch = useRpc(hideBatchRpc);
+  const unhideBatch = useRpc(unhideBatchRpc);
   const dbChoice = useRpc(dbChoiceRpc);
 
   const [tabState, setTabState] = useTabState(tab, panelTabStateSchema, DEFAULT_TAB_STATE);
@@ -211,6 +129,16 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       const result = await scopesRpc({});
       if (!result.ok) throw new Error(result.error ?? "scopes_failed");
       return result.scopes;
+    },
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const bound = data?.some(
+        (s) =>
+          s.agent_id === agentId ||
+          s.scope_key === `pi:default:${agentId}:default` ||
+          s.scope_key === `paseo:default:${agentId}:default`,
+      );
+      return bound ? false : 3000;
     },
   });
 
@@ -242,7 +170,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
       return true;
     }
-    if (!result.ok && result.error === "db_error") {
+    if (!result.ok && (result.error === "db_error" || result.error === "db_full")) {
       setDbErrorOpen(true);
       return true;
     }
@@ -291,70 +219,41 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
 
   const isMutating = hideMutation.isPending || unhideMutation.isPending || !!pendingGroupId;
 
-  const handleGroupHide = async (group: OutlineRow & { type: "group" }, mode: "hide" | "summarize") => {
+  const runGroupBatch = async (
+    group: OutlineRow & { type: "group" },
+    action: "hide" | "summarize" | "unhide",
+  ) => {
     if (pendingGroupId || !resolvedScopeKey) return;
+    const items = groupMutationItems(group, action);
+    if (items.length === 0) return;
     setPendingGroupId(group.groupId);
+    setLastActionByItem((prev) => {
+      const next = { ...prev };
+      for (const item of items) {
+        if (action === "unhide") delete next[item.item_id];
+        else next[item.item_id] = action;
+      }
+      return next;
+    });
     try {
-      const updates: Record<string, "hide" | "summarize"> = {};
-      for (const child of group.children) {
-        const k = child.item_id ?? child.tool_call_id;
-        updates[k] = mode;
+      const result =
+        action === "unhide"
+          ? await unhideBatch({ scope_key: scopeKey, items })
+          : await hideBatch({ scope_key: scopeKey, mode: action, items });
+      const failures = result.items.filter((item) => !item.ok);
+      if (result.error) onMutationError(result);
+      for (const item of failures) onMutationError(item);
+      if (failures.length) {
+        const reasons = [...new Set(failures.map((item) => item.error ?? "failed"))].join(", ");
+        setNotice(`${result.applied} applied, ${result.failed} failed — ${reasons}. List refreshed.`);
+      } else if (result.ok) {
+        setNotice(null);
       }
-      setLastActionByItem((prev) => ({ ...prev, ...updates }));
-
-      const chunkSize = 5;
-      for (let i = 0; i < group.children.length; i += chunkSize) {
-        const chunk = group.children.slice(i, i + chunkSize);
-        await Promise.allSettled(
-          chunk.map((child) =>
-            hideRpc({
-              scope_key: scopeKey,
-              item_id: child.item_id ?? "",
-              expected_version: child.version,
-              mode,
-            }),
-          ),
-        );
-      }
-      void invalidate();
     } catch {
-      setNotice("Failed to update tool group");
+      onMutationError({ ok: false, error: "db_error" });
     } finally {
       setPendingGroupId(null);
-    }
-  };
-
-  const handleGroupUnhide = async (group: OutlineRow & { type: "group" }) => {
-    if (pendingGroupId || !resolvedScopeKey) return;
-    setPendingGroupId(group.groupId);
-    try {
-      setLastActionByItem((prev) => {
-        const next = { ...prev };
-        for (const child of group.children) {
-          const k = child.item_id ?? child.tool_call_id;
-          delete next[k];
-        }
-        return next;
-      });
-
-      const chunkSize = 5;
-      for (let i = 0; i < group.children.length; i += chunkSize) {
-        const chunk = group.children.slice(i, i + chunkSize);
-        await Promise.allSettled(
-          chunk.map((child) =>
-            unhideRpc({
-              scope_key: scopeKey,
-              item_id: child.item_id ?? "",
-              expected_version: child.version,
-            }),
-          ),
-        );
-      }
       void invalidate();
-    } catch {
-      setNotice("Failed to restore tool group");
-    } finally {
-      setPendingGroupId(null);
     }
   };
 
@@ -585,6 +484,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               tokens_display: "—",
               bytes_size: totalBytes,
               summary_line: summary,
+              ...fallbackToolPreview(item, detail),
             });
           }
         }
@@ -1042,7 +942,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const handleRowPress = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
-    scrollToMessageInChat(row.item_id, row.tool_call_id, row.summary_line);
+    void scrollToMessageInChat(row, rawRows);
   };
 
   const renderRow = (row: Row) => {
@@ -1315,7 +1215,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                     disabled={isPending}
                     onPress={(e) => {
                       e.stopPropagation();
-                      void handleGroupUnhide(group);
+                      void runGroupBatch(group, "unhide");
                     }}
                   >
                     <ActionSvgIcon
@@ -1334,7 +1234,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                       disabled={isPending}
                       onPress={(e) => {
                         e.stopPropagation();
-                        void handleGroupHide(group, "hide");
+                        void runGroupBatch(group, "hide");
                       }}
                     >
                       <ActionSvgIcon
@@ -1351,7 +1251,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                       disabled={isPending}
                       onPress={(e) => {
                         e.stopPropagation();
-                        void handleGroupHide(group, "summarize");
+                        void runGroupBatch(group, "summarize");
                       }}
                     >
                       <ActionSvgIcon
@@ -1668,9 +1568,22 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         {previewOpen && selectedRow ? (
           <View style={styles.previewBody}>
             <ScrollView style={styles.previewCodeBox}>
-              <Text style={styles.previewCodeText}>
-                {selectedRow.summary_line || "(no details available)"}
-              </Text>
+              {selectedRow.tool_input !== undefined || selectedRow.tool_output !== undefined ? (
+                <>
+                  <Text style={styles.previewMetaLine}>
+                    {selectedRow.status === "hidden" ? "Input (original)" : "Input"}
+                  </Text>
+                  <Text style={styles.previewCodeText}>{selectedRow.tool_input ?? "(input unavailable)"}</Text>
+                  <Text style={styles.previewMetaLine}>
+                    {selectedRow.status === "hidden" ? "Output (original, hidden from model)" : "Output (original)"}
+                  </Text>
+                  <Text style={styles.previewCodeText}>{selectedRow.tool_output ?? "(output unavailable)"}</Text>
+                </>
+              ) : (
+                <Text style={styles.previewCodeText}>
+                  {selectedRow.summary_line || "(no details available)"}
+                </Text>
+              )}
             </ScrollView>
             <Text style={styles.previewMetaLine}>
               ID: {selectedRow.item_id ?? "none"} · {selectedRow.source ?? "timeline"} · v{selectedRow.version}

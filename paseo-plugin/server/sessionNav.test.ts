@@ -2,7 +2,18 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dbChoice, hideItem, listItems, manageItems } from "./sessionNav";
+import { dbChoice, hideBatch, unhideBatch, hideItem, listItems, manageItems } from "./sessionNav";
+import { readFileSync } from "node:fs";
+
+test("list carries original preview fields including empty output through asRow", async () => {
+  const dir = fakeCli(`echo '{"ok":true,"items":[{"item_id":"preview","tool_call_id":"call","status":"hidden","version":2,"tool_input":"original path","tool_output":""}]}'`);
+  try {
+    const result: any = await listItems({ scope_key: "preview-fields" });
+    expect(result.ok).toBe(true);
+    expect(result.items[0].tool_input).toBe("original path");
+    expect(result.items[0].tool_output).toBe("");
+  } finally { restorePath(dir); }
+});
 function fakeCli(script: string): string {
   const dir = mkdtempSync(join(tmpdir(), "sn-paseo-"));
   const cmd = join(dir, "session-navigation");
@@ -84,3 +95,49 @@ test("hideItem passes --mode hide or summarize to CLI", async () => {
     expect(args).toContain("--mode summarize");
   } finally { restorePath(dir); }
 });
+
+for (const command of ["hide", "unhide"] as const) {
+  test(`batch ${command} invokes the CLI once with items and versions`, async () => {
+    const dir = fakeCli(`echo "$*" >> "$0.args"
+echo '{"ok":false,"applied":1,"failed":1,"items":[{"item_id":"a","ok":true,"status":"hidden","visibility":"hidden","version":2},{"item_id":"b","ok":false,"status":"visible","visibility":"visible","version":4,"error":"version_conflict"}]}'
+exit 2`);
+    try {
+      const input = { scope_key: `batch-${command}`, mode: "summarize" as const,
+        items: [{ item_id: "a", expected_version: 1 }, { item_id: "b", expected_version: 3 }] };
+      const result = await (command === "hide" ? hideBatch(input) : unhideBatch(input));
+      expect(result.ok).toBe(false);
+      expect(result.applied).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.items[1].error).toBe("version_conflict");
+      const lines = readFileSync(join(dir, "session-navigation.args"), "utf8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain(`${command} --scope batch-${command} --items-json ${JSON.stringify(input.items)}`);
+      if (command === "hide") expect(lines[0]).toContain("--mode summarize");
+      else expect(lines[0]).not.toContain("--mode");
+    } finally { restorePath(dir); }
+  });
+
+  test(`batch ${command} observes the D9 gate and recovers after a probe`, async () => {
+    const dir = fakeCli(`echo '{"ok":true,"applied":0,"failed":0,"items":[]}'`);
+    try {
+      const scope = `batch-gate-${command}`;
+      await dbChoice({ scope_key: scope, choice: "abort_request" });
+      const mutate = command === "hide" ? hideBatch : unhideBatch;
+      expect((await mutate({ scope_key: scope, items: [] })).error).toBe("db_error");
+      await listItems({ scope_key: scope });
+      expect((await mutate({ scope_key: scope, items: [] })).ok).toBe(true);
+    } finally { restorePath(dir); }
+  });
+}
+
+for (const error of ["db_error", "db_full", "summarizer_unavailable"]) {
+  test(`batch errors preserve ${error}`, async () => {
+    const dir = fakeCli(`echo '{"ok":false,"error":"${error}"}'; exit 3`);
+    try {
+      const result = await hideBatch({ scope_key: "batch-errors", items: [{ item_id: "a" }] });
+      expect(result.error).toBe(error);
+      expect(result.items).toEqual([]);
+      if (error !== "summarizer_unavailable") expect(result.choices).toEqual(["abort_request", "send_original"]);
+    } finally { restorePath(dir); }
+  });
+}

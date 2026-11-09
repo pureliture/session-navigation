@@ -6,9 +6,11 @@ import glob
 import json
 import os
 import sys
+from dataclasses import replace
 from typing import Any
 
 from session_navigation.db import DBError, DBFullError, db_info, resolve_path
+from session_navigation.engine import SessionNavigationEngine
 from session_navigation.model import (
     ToolResultRecord,
     _item_id,
@@ -28,6 +30,21 @@ def _store(path: str | None) -> SQLiteContextStore:
 
 def _scope_arg(value: str) -> str:
     return value
+
+
+def _preview_text(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    encoded = text.encode("utf-8")
+    if len(encoded) <= 8192:
+        return text
+    return encoded[:8192].decode("utf-8", errors="ignore") + "\n… [truncated]"
+
+
+def _tool_preview(arguments: Any, output: str) -> dict[str, str]:
+    return {
+        **({"tool_input": _preview_text(arguments)} if arguments is not None else {}),
+        "tool_output": _preview_text(output),
+    }
 
 
 def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], dict[str, ToolResultRecord]]:
@@ -209,6 +226,7 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
                 "compaction_source": "unrecorded",
                 "summary_line": summary,
                 "bytes_size": raw_bytes,
+                **_tool_preview(call_args, text),
                 "record": rec,
             })
 
@@ -267,6 +285,73 @@ def _load_omp_session_records(scope_key: str) -> dict[str, ToolResultRecord]:
     return records
 
 
+def _mutate_item(
+    store: SQLiteContextStore, command: str, scope: str, item_id: str,
+    expected_version: int | None = None, mode: str = "hide", *, enforce_version: bool = False,
+) -> tuple[dict[str, Any], int]:
+    if command == "unhide":
+        res = store.restore(scope, item_id, expected_version=expected_version)
+        if not res.ok:
+            if res.error == "version_conflict":
+                return {"ok": False, "error": "version_conflict", "item": res.item.__dict__ if res.item else None}, 4
+            return {"ok": False, "error": res.error}, 3 if res.error in ("db_error", "db_full") else 2
+        return {"ok": True, "item_id": res.item.item_id, "visibility": res.item.visibility, "version": res.item.version}, 0
+
+    chosen_source = "rule_summary" if mode == "summarize" else "explicit_user_hide"
+    item = store.get(scope, item_id)
+    if enforce_version and item is not None and expected_version is not None and item.version != expected_version:
+        return {"ok": False, "error": "version_conflict", "item": item.__dict__}, 4
+    if item is None:
+        _, omp_records = _load_omp_session_timeline(scope)
+        target_rec = None
+        for rec in omp_records.values():
+            iid = _item_id(scope, rec.call_id, rec.content_sha256, rec.invocation_digest or "", 0)
+            if iid == item_id or rec.call_id == item_id:
+                target_rec = rec
+                break
+        if target_rec is not None:
+            engine = SessionNavigationEngine(store=store)
+            c_res = engine.compact_sync(scope, target_rec)
+            if c_res.ok and c_res.item is not None:
+                final_item = c_res.item
+                if final_item.compaction_source != chosen_source:
+                    updated_src = replace(final_item, compaction_source=chosen_source, version=final_item.version + 1)
+                    put_src = store.put(scope, updated_src, expected_version=final_item.version)
+                    if not put_src.ok:
+                        return {"ok": False, "error": put_src.error}, 3 if put_src.error in ("db_error", "db_full") else 2
+                    if put_src.ok and put_src.item is not None:
+                        final_item = put_src.item
+                store.fence_set(
+                    scope,
+                    tool_call_id=target_rec.call_id,
+                    content_sha256=target_rec.content_sha256,
+                    invocation_digest=target_rec.invocation_digest or "",
+                    result_position=target_rec.result_position,
+                    item_id=final_item.item_id,
+                    version=final_item.version,
+                )
+                return {"ok": True, "item_id": final_item.item_id, "visibility": "hidden", "version": final_item.version, "source": final_item.compaction_source}, 0
+            else:
+                if c_res.error in ("db_error", "db_full"):
+                    return {"ok": False, "error": c_res.error}, 3
+                fallback_res = _explicit_hide_fallback(store, scope, target_rec, compaction_source=chosen_source)
+                if fallback_res.ok and fallback_res.item is not None:
+                    return {"ok": True, "item_id": fallback_res.item.item_id, "visibility": "hidden", "version": fallback_res.item.version, "source": fallback_res.item.compaction_source}, 0
+                else:
+                    return {"ok": False, "error": fallback_res.error or "hide_failed"}, 2
+        return {"ok": False, "error": "not_found"}, 2
+    if item.visibility == "hidden" and item.compaction_source == chosen_source:
+        return {"ok": True, "item_id": item.item_id, "visibility": "hidden", "version": item.version, "source": item.compaction_source}, 0
+    # mark hidden by updating visibility/version and compaction_source
+    updated = replace(item, visibility="hidden", compaction_source=chosen_source, version=item.version + 1)
+    res = store.put(scope, updated, expected_version=expected_version if expected_version is not None else item.version)
+    if not res.ok:
+        if res.error == "version_conflict":
+            return {"ok": False, "error": "version_conflict", "item": res.item.__dict__ if res.item else None}, 4
+        return {"ok": False, "error": res.error}, 3 if res.error in ("db_error", "db_full") else 2
+    return {"ok": True, "item_id": res.item.item_id, "visibility": "hidden", "version": res.item.version, "source": res.item.compaction_source}, 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="session-navigation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -284,14 +369,18 @@ def main(argv: list[str] | None = None) -> int:
 
     p_hide = sub.add_parser("hide")
     p_hide.add_argument("--scope", required=True)
-    p_hide.add_argument("--item-id", required=True)
+    hide_target = p_hide.add_mutually_exclusive_group(required=True)
+    hide_target.add_argument("--item-id")
+    hide_target.add_argument("--items-json")
     p_hide.add_argument("--expected-version", type=int, default=None)
     p_hide.add_argument("--mode", default="hide", choices=["hide", "summarize"])
     p_hide.add_argument("--path", default=None)
 
     p_unhide = sub.add_parser("unhide")
     p_unhide.add_argument("--scope", required=True)
-    p_unhide.add_argument("--item-id", required=True)
+    unhide_target = p_unhide.add_mutually_exclusive_group(required=True)
+    unhide_target.add_argument("--item-id")
+    unhide_target.add_argument("--items-json")
     p_unhide.add_argument("--expected-version", type=int, default=None)
     p_unhide.add_argument("--path", default=None)
 
@@ -316,6 +405,22 @@ def main(argv: list[str] | None = None) -> int:
     p_rec.add_argument("--path", default=None)
 
     args = parser.parse_args(argv)
+
+    batch_items = []
+    if args.command in ("hide", "unhide") and args.items_json is not None:
+        if args.expected_version is not None:
+            parser.error("--expected-version requires --item-id")
+        try:
+            batch_items = json.loads(args.items_json)
+            if not isinstance(batch_items, list) or any(
+                not isinstance(item, dict) or not isinstance(item.get("item_id"), str)
+                or not item["item_id"] or (
+                    "expected_version" in item and type(item["expected_version"]) is not int
+                ) for item in batch_items
+            ):
+                raise ValueError("expected a list of item_id and optional integer expected_version")
+        except (ValueError, TypeError) as exc:
+            parser.error(f"invalid --items-json: {exc}")
 
     try:
         if args.command == "db-info":
@@ -394,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
                                     "compaction_source": it.compaction_source,
                                     "summary_line": summary_line,
                                     "bytes_size": len((it.original or "").encode("utf-8")),
+                                    **{key: entry[key] for key in ("tool_input",) if key in entry},
+                                    "tool_output": _preview_text(it.original),
                                 })
                             else:
                                 if args.query and args.query.lower() not in (entry.get("summary_line") or "").lower() and args.query.lower() not in entry.get("item_id", "").lower() and args.query.lower() not in cid.lower():
@@ -409,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
                                     "tool_name": entry["tool_name"],
                                     "summary_line": entry["summary_line"],
                                     "bytes_size": entry["bytes_size"],
+                                    **{key: entry[key] for key in ("tool_input", "tool_output") if key in entry},
                                 })
                 else:
                     recorded_calls: set[str] = set()
@@ -444,6 +552,11 @@ def main(argv: list[str] | None = None) -> int:
                             "compaction_source": it.compaction_source,
                             "summary_line": summary_line,
                             "bytes_size": len((it.original or "").encode("utf-8")),
+                            **_tool_preview(
+                                it.invocation_snapshot.get("arguments", it.invocation_snapshot)
+                                if isinstance(it.invocation_snapshot, dict) else None,
+                                it.original,
+                            ),
                         })
 
                     unrecorded_units = [u for u in store.list_units(args.scope) if u.get("kind") == "tool_result" and u.get("tool_call_id") not in recorded_calls]
@@ -476,81 +589,34 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 store.close()
 
-        if args.command == "hide":
+        if args.command in ("hide", "unhide"):
             store = _store(args.path)
             try:
-                from dataclasses import replace
-                chosen_source = "rule_summary" if getattr(args, "mode", "hide") == "summarize" else "explicit_user_hide"
-                item = store.get(args.scope, args.item_id)
-                if item is None:
-                    _, omp_records = _load_omp_session_timeline(args.scope)
-                    target_rec = None
-                    for rec in omp_records.values():
-                        iid = _item_id(args.scope, rec.call_id, rec.content_sha256, rec.invocation_digest or "", 0)
-                        if iid == args.item_id or rec.call_id == args.item_id:
-                            target_rec = rec
-                            break
-                    if target_rec is not None:
-                        from session_navigation.engine import SessionNavigationEngine
-                        engine = SessionNavigationEngine(store=store)
-                        c_res = engine.compact_sync(args.scope, target_rec)
-                        if c_res.ok and c_res.item is not None:
-                            final_item = c_res.item
-                            if final_item.compaction_source != chosen_source:
-                                updated_src = replace(final_item, compaction_source=chosen_source, version=final_item.version + 1)
-                                put_src = store.put(args.scope, updated_src, expected_version=final_item.version)
-                                if put_src.ok and put_src.item is not None:
-                                    final_item = put_src.item
-                            store.fence_set(
-                                args.scope,
-                                tool_call_id=target_rec.call_id,
-                                content_sha256=target_rec.content_sha256,
-                                invocation_digest=target_rec.invocation_digest or "",
-                                result_position=target_rec.result_position,
-                                item_id=final_item.item_id,
-                                version=final_item.version,
-                            )
-                            _print({"ok": True, "item_id": final_item.item_id, "visibility": "hidden", "version": final_item.version, "source": final_item.compaction_source})
-                            return 0
-                        else:
-                            fallback_res = _explicit_hide_fallback(store, args.scope, target_rec, compaction_source=chosen_source)
-                            if fallback_res.ok and fallback_res.item is not None:
-                                _print({"ok": True, "item_id": fallback_res.item.item_id, "visibility": "hidden", "version": fallback_res.item.version, "source": fallback_res.item.compaction_source})
-                                return 0
-                            else:
-                                _print({"ok": False, "error": fallback_res.error or "hide_failed"})
-                                return 2
-                    _print({"ok": False, "error": "not_found"})
-                    return 2
-                if item.visibility == "hidden" and item.compaction_source == chosen_source:
-                    _print({"ok": True, "item_id": item.item_id, "visibility": "hidden", "version": item.version, "source": item.compaction_source})
-                    return 0
-                # mark hidden by updating visibility/version and compaction_source
-                updated = replace(item, visibility="hidden", compaction_source=chosen_source, version=item.version + 1)
-                res = store.put(args.scope, updated, expected_version=args.expected_version if args.expected_version is not None else item.version)
-                if not res.ok:
-                    if res.error == "version_conflict":
-                        _print({"ok": False, "error": "version_conflict", "item": res.item.__dict__ if res.item else None})
-                        return 4
-                    _print({"ok": False, "error": res.error})
-                    return 3 if res.error in ("db_error", "db_full") else 2
-                _print({"ok": True, "item_id": res.item.item_id, "visibility": "hidden", "version": res.item.version, "source": res.item.compaction_source})
-                return 0
-            finally:
-                store.close()
-
-        if args.command == "unhide":
-            store = _store(args.path)
-            try:
-                res = store.restore(args.scope, args.item_id, expected_version=args.expected_version)
-                if not res.ok:
-                    if res.error == "version_conflict":
-                        _print({"ok": False, "error": "version_conflict", "item": res.item.__dict__ if res.item else None})
-                        return 4
-                    _print({"ok": False, "error": res.error})
-                    return 3 if res.error in ("db_error", "db_full") else 2
-                _print({"ok": True, "item_id": res.item.item_id, "visibility": res.item.visibility, "version": res.item.version})
-                return 0
+                if args.items_json is None:
+                    payload, code = _mutate_item(store, args.command, args.scope, args.item_id,
+                                                 args.expected_version, getattr(args, "mode", "hide"))
+                    _print(payload)
+                    return code
+                results = []
+                for request in batch_items:
+                    item_id = request["item_id"]
+                    expected = request.get("expected_version")
+                    payload, _ = _mutate_item(store, args.command, args.scope, item_id,
+                                             expected, getattr(args, "mode", "hide"), enforce_version=True)
+                    if payload.get("error") in ("db_error", "db_full"):
+                        _print({"ok": False, "error": payload["error"]})
+                        return 3
+                    current = store.get(args.scope, payload.get("item_id", item_id))
+                    visibility = payload.get("visibility", current.visibility if current else None)
+                    results.append({"item_id": payload.get("item_id", item_id),
+                                    "ok": payload["ok"], "status": visibility,
+                                    "visibility": visibility,
+                                    "version": payload.get("version", current.version if current else None),
+                                    **({"error": payload["error"]} if "error" in payload else {})})
+                applied = sum(result["ok"] for result in results)
+                failed = len(results) - applied
+                _print({"ok": failed == 0, "applied": applied, "failed": failed, "items": results})
+                return 0 if failed == 0 else 2
             finally:
                 store.close()
 
