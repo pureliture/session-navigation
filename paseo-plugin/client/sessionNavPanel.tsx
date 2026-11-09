@@ -172,7 +172,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       const id = await resolveSessionTarget({
         followVisible, boundAgentId: params.agentId, visibleValues: values,
         candidates: [...candidateAgentIds ?? [], ...scopes.map((s) => s.agent_id).filter((id): id is string => !!id)],
-        timelineIds: (id) => queryClient.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000, queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline) }),
+        timelineIds: async (id) => (await queryClient.fetchQuery({
+          queryKey: ["session-nav-follow", id],
+          staleTime: (query) => query.state.data?.complete ? 10_000 : 0,
+          queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
+        })).ids,
       });
       if (cancelled) return;
       setInView(!!id);

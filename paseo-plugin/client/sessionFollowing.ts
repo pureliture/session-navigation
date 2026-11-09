@@ -2,10 +2,11 @@ import type { PaseoAgentTimelineHandle } from "@getpaseo/client";
 import { identityMatches } from "./chatNavigation";
 import { readTimelineHistory } from "./timelineHistory";
 
-export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHandle, "refetch">): Promise<string[]> {
-  const { entries } = await readTimelineHistory(timeline);
-  return entries.flatMap((entry) => ["messageId", "callId", "id"].map((key) => entry.item?.[key]))
+export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHandle, "refetch">) {
+  const { entries, complete } = await readTimelineHistory(timeline, { allowPartial: true });
+  const ids = entries.flatMap((entry) => ["messageId", "callId", "id"].map((key) => entry.item?.[key]))
     .filter((value): value is string => typeof value === "string" && value.length > 0);
+  return { ids, complete };
 }
 
 export async function resolveSessionTarget({

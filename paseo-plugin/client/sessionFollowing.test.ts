@@ -62,8 +62,9 @@ test("follow matches older visible messages outside the last 200 events and cach
     return { entries: all.slice(start, end), hasOlder: start > 0, startCursor: { epoch: "e", seq: start } };
   } };
   const client = new QueryClient();
-  const load = (id: string) => client.fetchQuery({ queryKey: ["session-nav-follow", id], staleTime: 10_000,
-    queryFn: () => id === "a" ? readSessionTimelineIds(timeline) : Promise.resolve(["b-call"]) });
+  const load = async (id: string) => (await client.fetchQuery({ queryKey: ["session-nav-follow", id],
+    staleTime: (query) => query.state.data?.complete ? 10_000 : 0,
+    queryFn: () => id === "a" ? readSessionTimelineIds(timeline) : Promise.resolve({ ids: ["b-call"], complete: true }) })).ids;
   try {
     expect(await follow(defaultWorkspaceState, ["message-a-message-1399"], load)).toBe("a");
     const fetched = calls.length;
@@ -78,8 +79,44 @@ test("follow matches older visible messages outside the last 200 events and cach
 
 test("session identity history handles empty timelines, canonical identity kinds and fetch errors", async () => {
   const read = (page: any) => readSessionTimelineIds({ refetch: async (): Promise<any> => page });
-  expect(await read({ entries: [], hasOlder: false })).toEqual([]);
+  expect(await read({ entries: [], hasOlder: false })).toEqual({ ids: [], complete: true });
   expect(await read({ entries: [{ item: { messageId: "message" } }, { item: { callId: "call" } },
-    { item: { id: "row", messageId: 0 } }], hasOlder: false })).toEqual(["message", "call", "row"]);
+    { item: { id: "row", messageId: 0 } }], hasOlder: false })).toEqual({ ids: ["message", "call", "row"], complete: true });
   await expect(read({ error: "offline" })).rejects.toThrow("offline");
+  await expect(readSessionTimelineIds({ refetch: async () => { throw new Error("offline"); } })).rejects.toThrow("offline");
+});
+
+test.each(["payload", "rejection"])("an older-page %s failure keeps the recent chat matched", async (failure) => {
+  const timeline = { refetch: async (input: any): Promise<any> => {
+    if (input.direction === "tail") return { entries: [{ item: { messageId: "a-message" } }],
+      hasOlder: true, startCursor: { epoch: "e", seq: 10 } };
+    if (failure === "rejection") throw new Error("older page offline");
+    return { error: "older page offline" };
+  } };
+  expect(await follow(defaultWorkspaceState, ["message-a-message"], async (id) =>
+    id === "a" ? (await readSessionTimelineIds(timeline)).ids : ["b-call"])).toBe("a");
+});
+
+test("incomplete identity history retries immediately, then caches the recovered full history", async () => {
+  let calls = 0;
+  let failOlder = true;
+  const timeline = { refetch: async (input: any): Promise<any> => {
+    calls++;
+    if (input.direction === "tail") return { entries: [{ item: { messageId: "a-message" } }],
+      hasOlder: true, startCursor: { epoch: "e", seq: 10 } };
+    if (failOlder) { failOlder = false; return { error: "older page offline" }; }
+    return { entries: [{ item: { messageId: "old-message" } }], hasOlder: false };
+  } };
+  const client = new QueryClient();
+  const options = { queryKey: ["session-nav-follow", "a"],
+    staleTime: (query: { state: { data?: { complete: boolean } } }) => query.state.data?.complete ? 10_000 : 0,
+    queryFn: () => readSessionTimelineIds(timeline) };
+  try {
+    expect(await client.fetchQuery(options)).toEqual({ ids: ["a-message"], complete: false });
+    expect(calls).toBe(2);
+    expect(await client.fetchQuery(options)).toEqual({ ids: ["old-message", "a-message"], complete: true });
+    expect(calls).toBe(4);
+    await client.fetchQuery(options);
+    expect(calls).toBe(4);
+  } finally { client.clear(); }
 });
