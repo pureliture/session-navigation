@@ -55,31 +55,46 @@ function highlightAndScroll(node: any): boolean {
   return true;
 }
 
+type Turn = { summary: any; boundary: any };
+
+const before = (node: any, other: any) => !other || (node.compareDocumentPosition(other) & FOLLOWING) !== 0;
+const after = (node: any, other: any) => (other.compareDocumentPosition(node) & FOLLOWING) !== 0;
+
+function anchorOf(root: any, row: Row): any {
+  return findIdentity(root, row) ?? findText(root, row.summary_line);
+}
+
 // Paseo folds finished turns behind a "turn-summary" badge rendered after the user message.
-function findTurnSummary(root: any, rows: Row[], start: number): any {
+// The turn ends at the next summary or the next user message, whichever comes first.
+function findTurn(root: any, rows: Row[], start: number, end: number): Turn | null {
   const summaries = Array.from(root.querySelectorAll(TURN_SUMMARY)) as any[];
   if (summaries.length === 0) return null;
-  for (let i = start - 1; i >= 0; i--) {
+  let anchor: any = null;
+  for (let i = start - 1; i >= 0 && !anchor; i--) {
     if (rows[i].kind !== "user") continue;
-    const anchor = findIdentity(root, rows[i]) ?? findText(root, rows[i].summary_line);
+    anchor = anchorOf(root, rows[i]);
     if (!anchor) return null;
-    return summaries.find((candidate) => (anchor.compareDocumentPosition(candidate) & FOLLOWING) !== 0) ?? null;
   }
-  return null;
+  if (!anchor) return null;
+  const nextUser = rows.slice(end).find((candidate) => candidate.kind === "user");
+  const userBoundary = nextUser ? anchorOf(root, nextUser) : null;
+  const summary = summaries.find((candidate) => after(candidate, anchor));
+  if (!summary || !before(summary, userBoundary)) return null;
+  const nextSummary = summaries.find((candidate) => after(candidate, summary));
+  const boundary = [nextSummary, userBoundary].filter(Boolean)
+    .sort((x, y) => (before(x, y) ? -1 : 1))[0] ?? null;
+  return { summary, boundary };
 }
 
-function turnNodes(root: any, summary: any, selector: string): any[] {
-  const summaries = Array.from(root.querySelectorAll(TURN_SUMMARY)) as any[];
-  const next = summaries.find((candidate) => (summary.compareDocumentPosition(candidate) & FOLLOWING) !== 0);
+function turnNodes(root: any, turn: Turn, selector: string): any[] {
   return (Array.from(root.querySelectorAll(selector)) as any[]).filter((node) =>
-    (summary.compareDocumentPosition(node) & FOLLOWING) !== 0 &&
-    (!next || (node.compareDocumentPosition(next) & FOLLOWING) !== 0));
+    after(node, turn.summary) && before(node, turn.boundary));
 }
 
-function turnCollapsed(root: any, summary: any): boolean {
-  const state = summary.getAttribute?.("aria-expanded");
+function turnCollapsed(root: any, turn: Turn): boolean {
+  const state = turn.summary.getAttribute?.("aria-expanded");
   if (state != null) return state === "false";
-  return turnNodes(root, summary, `${BADGE}, ${GROUP}`).length === 0;
+  return turnNodes(root, turn, `${BADGE}, ${GROUP}`).length === 0;
 }
 
 function visible(node: any): boolean {
@@ -88,14 +103,19 @@ function visible(node: any): boolean {
 }
 
 // Paseo keeps other agents' chats mounted (hidden); bind to the one showing this session.
-function pickChatRoot(doc: any, rows: Row[]): any {
+// Exact identities outrank visibility, which outranks loose snippet matches.
+function pickChatRoot(doc: any, rows: Row[], target: Row): any {
   const roots = (Array.from(doc?.querySelectorAll?.('[data-testid="agent-chat-scroll"]') ?? []) as any[]);
   if (roots.length <= 1) return roots[0] ?? null;
-  const score = (root: any) => rows.filter((candidate) => candidate.kind !== "tool" &&
-    (findIdentity(root, candidate) ?? findText(root, candidate.summary_line))).length;
-  const ranked = roots.map((root) => ({ root, score: score(root), shown: visible(root) }))
-    .sort((a, b) => (b.score - a.score) || (Number(b.shown) - Number(a.shown)));
-  return ranked[0].root;
+  const messages = rows.filter((candidate) => candidate.kind !== "tool");
+  const ranked = roots.map((root) => [
+    root,
+    findIdentity(root, target) ? 1 : 0,
+    messages.filter((candidate) => findIdentity(root, candidate)).length,
+    visible(root) ? 1 : 0,
+    messages.filter((candidate) => findText(root, candidate.summary_line)).length,
+  ] as const).sort((x, y) => (y[1] - x[1]) || (y[2] - x[2]) || (y[3] - x[3]) || (y[4] - x[4]));
+  return ranked[0][0];
 }
 
 let navigationVersion = 0;
@@ -107,7 +127,7 @@ export async function scrollToMessageInChat(
 ): Promise<boolean> {
   const version = ++navigationVersion;
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
-  const root = pickChatRoot(doc, rows.length > 0 ? rows : [row]);
+  const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row);
   if (!root) return false;
   const direct = findIdentity(root, row);
   if (row.kind !== "tool") return highlightAndScroll(direct ?? findText(root, row.summary_line));
@@ -135,24 +155,25 @@ export async function scrollToMessageInChat(
       (anchor.compareDocumentPosition(candidate) & FOLLOWING) !== 0);
   }
   if (!group && !direct && !options.turnExpanded) {
-    const summary = findTurnSummary(root, rows, start);
-    if (summary) {
-      if (turnCollapsed(root, summary)) {
+    const turn = findTurn(root, rows, start, end);
+    if (turn) {
+      const { summary } = turn;
+      if (turnCollapsed(root, turn)) {
         const button = summary.querySelector?.('button, [role="button"]') ?? summary;
         try { button.click(); } catch { return highlightAndScroll(summary); }
         const wait = options.afterExpand ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
         for (let attempt = 0; attempt < 4; attempt++) {
           await wait();
           if (version !== navigationVersion) return false;
-          if (!turnCollapsed(root, summary)) break;
+          if (!turnCollapsed(root, turn)) break;
         }
       }
-      const nested = turnNodes(root, summary, GROUP);
+      const nested = turnNodes(root, turn, GROUP);
       if (nested.length > 0) {
         navigationVersion--;
         return scrollToMessageInChat(row, rows, { ...options, turnExpanded: true });
       }
-      const badges = turnNodes(root, summary, BADGE);
+      const badges = turnNodes(root, turn, BADGE);
       const needle = (text?: string) => normalized(text ?? "").slice(0, 36);
       const hint = [toolHint(row), row.summary_line].map(needle).find((text) => text.length >= 4);
       const match = hint ? badges.find((node) => normalized(node.textContent ?? "").includes(hint)) : undefined;

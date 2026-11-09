@@ -188,3 +188,46 @@ test("uses the chat root that contains this session and clicks the turn-summary'
   expect(await scrollToMessageInChat(read, [user, read], { document: doc, afterExpand: async () => {} })).toBe(true);
   expect(badge.scrolled).toBe(true);
 });
+
+test("folded turn ends at the next user message, so a later live badge doesn't count as expanded", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc = new Element().add(root);
+  const u1 = row("u1", "user"), u2 = row("u2", "user");
+  u1.summary_line = "First prompt here";
+  u2.summary_line = "Second prompt here";
+  const read1 = row("read-1"), read2 = row("read-2");
+  for (const r of [read1, read2]) r.tool_input = JSON.stringify({ path: "README.md" });
+  const summary = new Element({ "data-testid": "turn-summary" }, "Read 1 file");
+  const liveBadge = new Element({ "data-testid": "tool-call-badge" }, "Read README.md");
+  root.add(new Element({ "data-history-row-id": "n1" }, "First prompt here"), summary,
+    new Element({ "data-history-row-id": "n2" }, "Second prompt here"), liveBadge);
+  const folded = new Element({ "data-testid": "tool-call-badge" }, "Read README.md");
+  let clicks = 0;
+  summary.onClick = () => {
+    clicks++;
+    root.children.splice(2, 0, folded);
+    folded.parent = root;
+  };
+  await scrollToMessageInChat(read1, [u1, read1, u2, read2], { document: doc, afterExpand: async () => {} });
+  expect(clicks).toBe(1);
+  expect(folded.scrolled).toBe(true);
+  expect(liveBadge.scrolled).toBe(false);
+});
+
+test("visible chat with the exact row identity beats a hidden chat with more snippet matches", async () => {
+  const doc = new Element();
+  const hidden = new Element({ "data-testid": "agent-chat-scroll" });
+  hidden.add(new Element({ "data-history-row-id": "h1" }, "shared prompt one"),
+    new Element({ "data-history-row-id": "h2" }, "shared prompt two"));
+  (hidden as any).getClientRects = () => [];
+  const active = new Element({ "data-testid": "agent-chat-scroll" });
+  const target = new Element({ "data-history-row-id": "u1" }, "something else");
+  active.add(target);
+  (active as any).getClientRects = () => [{}];
+  doc.add(hidden, active);
+  const u1 = row("u1", "user"), a = row("a1", "assistant"), b = row("a2", "assistant");
+  a.summary_line = "shared prompt one";
+  b.summary_line = "shared prompt two";
+  expect(await scrollToMessageInChat(u1, [u1, a, b], { document: doc })).toBe(true);
+  expect(target.scrolled).toBe(true);
+});
