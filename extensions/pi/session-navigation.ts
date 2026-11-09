@@ -12,6 +12,8 @@ type RecordItem = { call_id: string; tool_name: string; arguments: Record<string
 type Candidate = { session: string; token: string; confirmed: boolean; records: RecordItem[] };
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_CHUNK_RECORDS = 64;
+const MAX_SUMMARY_CONCURRENCY = 4;
+const SUMMARY_TIMEOUT_MS = 25_000;
 export const CLEANUP_GUIDANCE = "After completing a unit of work, pick the tool results from that work that later steps will not need. Call list_context_items with view=candidates to discover IDs, then manage_context with your chosen tool_call_ids. Scope cleanup by your judgment to the work just finished, and call it repeatedly throughout the session; do not summarize the entire session at once. action=hide uses rules only; action=summarize uses the session model; auto prefers a model summary with rule fallback. Discovery limits do not restrict which eligible IDs you may choose.";
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
@@ -77,6 +79,37 @@ export async function prepareSnapshot(records: RecordItem[], session: string, to
 	}
 	return { ...response, patches, pending_summaries: pending, hidden_messages: [...hidden],
 		...(evicted.size ? { evicted_snapshots: [...evicted] } : {}) };
+}
+
+export async function prepareRequest(records: RecordItem[], session: string, token: string,
+	send: (method: string, params: object, timeout: number) => Promise<Reply>,
+	summarize: (content: string, timeout: number) => Promise<string | null>,
+	deadline = Date.now() + SUMMARY_TIMEOUT_MS): Promise<Reply> {
+	const response = await prepareSnapshot(records, session, token, send);
+	if (!response.ok || !Array.isArray(response.pending_summaries)) return response;
+	const jobs = new Map<string, { item_id: string; content: string }>();
+	for (const job of response.pending_summaries as any[]) {
+		if (typeof job?.item_id === "string" && typeof job.content === "string") jobs.set(job.item_id, job);
+	}
+	if (jobs.size === 0) return response;
+	const waiting = [...jobs.values()];
+	const summaries = new Map<string, string>();
+	await Promise.all(Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, waiting.length) }, async () => {
+		while (waiting.length && Date.now() < deadline) {
+			const job = waiting.shift()!;
+			try {
+				const text = await summarize(job.content, Math.max(1, deadline - Date.now()));
+				if (text) summaries.set(job.item_id, text);
+			} catch { /* retain the rule excerpt */ }
+		}
+	}));
+	for (const job of jobs.values()) {
+		const text = summaries.get(job.item_id);
+		const finished = await send(text ? "apply_summary" : "summary_failed",
+			{ session_id: session, item_id: job.item_id, ...(text ? { summary_text: text } : {}) }, 5000);
+		if (!finished.ok && finished.error !== "verification_failed" && finished.error !== "not_found") return finished;
+	}
+	return prepareSnapshot(records, session, token, send);
 }
 
 export default function sessionNavigationExtension(pi: ExtensionAPI) {
@@ -222,7 +255,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		if (!session || !collected) return;
 		const next: Candidate = { session, token: randomUUID(), confirmed: false, records: collected.records };
 		candidate = next;
-		const prepared = queue.then(() => prepareSnapshot(collected.records, session, next.token, rpcOnce));
+		const deadline = Date.now() + SUMMARY_TIMEOUT_MS;
+		const prepared = queue.then(() => prepareRequest(collected.records, session, next.token, rpcOnce,
+			(content, timeout) => summarizeText(ctx, content, timeout), deadline));
 		queue = prepared.catch(() => undefined);
 		const response = await prepared;
 		// Structural daemon death (spawn/exit/protocol) means persistence is
@@ -267,12 +302,6 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			messages ??= event.messages.slice();
 			messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
 		}
-		// Paseo/CLI Summarize requests: summarize with the session model off the request path, then swap it in.
-		for (const job of Array.isArray(response.pending_summaries) ? (response.pending_summaries as any[]) : []) {
-			if (typeof job?.item_id !== "string" || typeof job.content !== "string") continue;
-			void summarizeText(ctx, job.content).then((text) => rpc(text ? "apply_summary" : "summary_failed",
-				{ session_id: session, item_id: job.item_id, ...(text ? { summary_text: text } : {}) }, 5000)).catch(() => undefined);
-		}
 		const hidden = new Set<string>(Array.isArray(response.hidden_messages) ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string") : []);
 		messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
 		if (messages) return { messages };
@@ -292,7 +321,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	function result(value: Reply) { return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value }; }
 	// D5: session-model-only summary. Returns target text or null when no session
 	// model is available. Never throws; callers map null to summarizer_unavailable.
-	async function summarizeText(ctx: unknown, content: string): Promise<string | null> {
+	async function summarizeText(ctx: unknown, content: string, timeout = SUMMARY_TIMEOUT_MS): Promise<string | null> {
 		try {
 			if (!ctx || typeof ctx !== "object") return null;
 			const c: Record<string, unknown> = ctx as Record<string, unknown>;
@@ -321,7 +350,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			const controller = new AbortController();
 			let msg: unknown;
 			try {
-				msg = await withTimeout(25_000, (complete as (m: unknown, cc: unknown, o?: unknown) => Promise<unknown>)(model, params, { apiKey, disableReasoning: true, signal: controller.signal }));
+				msg = await withTimeout(timeout, (complete as (m: unknown, cc: unknown, o?: unknown) => Promise<unknown>)(model, params, { apiKey, disableReasoning: true, signal: controller.signal }));
 			} finally { controller.abort(); }
 			if (!msg || typeof msg !== "object" || !("content" in msg)) return null;
 			const blocks: unknown = (msg as { content: unknown }).content;
@@ -386,7 +415,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 				const eligible = await tool("list_candidates", { tool_call_ids: batch, limit: batch.length }, ctx, signal);
 				if (!eligible.ok) return eligible;
 				const queue = (eligible.items as { tool_call_id: string }[]).map((item) => records.get(item.tool_call_id)).filter((record): record is RecordItem => !!record);
-				await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+				await Promise.all(Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, queue.length) }, async () => {
 					while (queue.length && !signal?.aborted && candidate === snapshot) {
 						const record = queue.shift()!;
 						const text = await summarizeText(ctx, record.content);

@@ -26,6 +26,11 @@ cp extensions/pi/session-navigation.ts ~/.omp/agent/extensions/session-navigatio
 
 세션 모델만 사용합니다. 확장이 `completeSimple` + `modelRegistry.resolver`로 대상 텍스트 요약을 얻어 데몬에 전달합니다(25초 타임아웃). 데몬 자체는 모델을 호출하지 않습니다. 세션 모델이 없으면 `summarize_context`는 `summarizer_unavailable`을 반환하며 `hide_context`(규칙 기반)는 사용할 수 있습니다.
 
+Paseo/CLI에서 요청한 pending 요약은 다음 context 훅에서 기다립니다. 준비 시점에 pending인 항목만
+최대 4개씩 생성하며, 큐 대기를 포함한 모델 대기 단계 전체에 25초 예산을 적용합니다. 검증·저장 후 패치를 다시
+조회하므로 성공한 요약은 **그 요청부터** 전송됩니다. 시간 초과·모델 부재·검증 실패 시에는 규칙
+발췌를 사용합니다. 원본 세션 기록은 바꾸지 않습니다.
+
 ## DB 오류 처리
 
 DB 오류 시 대화형에서는 중단/원본 전송을 선택하고, 비대화형(pipe/background, `rpc`/`json`/`print` 모드)에서는 중단합니다. 원본을 조용히 전송하지 않습니다.

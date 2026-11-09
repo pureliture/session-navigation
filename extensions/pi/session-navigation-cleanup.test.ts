@@ -1,5 +1,5 @@
 import { test, expect, mock } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import extension, { CLEANUP_GUIDANCE } from "./session-navigation";
@@ -8,15 +8,70 @@ let calls: string[] = [];
 let active = 0;
 let peak = 0;
 let unavailable = false;
-mock.module("@oh-my-pi/pi-ai", () => ({ completeSimple: async (_model: any, request: any) => {
+let invalid = false;
+let hanging = false;
+mock.module("@oh-my-pi/pi-ai", () => ({ completeSimple: async (_model: any, request: any, options: any) => {
   const text = request.messages[0].content[0].text.split("\n\n")[1];
   calls.push(text.split("\n")[0]);
   peak = Math.max(peak, ++active);
+  if (hanging) return new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => { --active; reject(new Error("aborted")); }, { once: true });
+  });
   await new Promise((resolve) => setTimeout(resolve, 5));
   --active;
   if (unavailable) throw new Error("model unavailable");
+  if (invalid) return { content: [{ type: "text", text: "Invented 999999 observations." }] };
   return { content: [{ type: "text", text: text.split("\n")[0] }] };
 } }));
+
+for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
+  test(`the actual context hook sends the ${mode === "success" ? "LLM summary" : "rule fallback"} on its first pending turn (${mode})`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-pending-"));
+    const state = join(dir, "state.sqlite3");
+    process.env.SESSION_NAVIGATION_STATE_PATH = state;
+    process.env.SESSION_NAVIGATION_DAEMON = resolve(".venv/bin/session-navigation-daemon");
+    const events: Record<string, Function> = {};
+    const optional = () => ({ optional: () => ({}) });
+    extension({ zod: { object: () => ({}), string: optional, array: () => ({}), enum: optional,
+      number: () => ({ int: () => ({ min: () => ({ max: optional }) }) }) },
+      on: (name: string, fn: Function) => { events[name] = fn; }, registerTool: () => {} } as any);
+    const content = Array.from({ length: 100 }, (_, i) => `Output row ${i.toString().padStart(3, "0")} details`).join("\n");
+    const messages = [
+      { role: "assistant", content: [{ type: "toolCall", id: "pending-read", name: "read", arguments: { path: "sample.txt" } }] },
+      { role: "toolResult", toolCallId: "pending-read", toolName: "read", isError: false, content: [{ type: "text", text: content }] },
+    ];
+    const sessions = join(dir, ".omp/agent/sessions/project");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, "2026_pending-check.jsonl"), messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"));
+    const seeded = Bun.spawnSync([resolve(".venv/bin/session-navigation"), "hide", "--scope", "pi:default:pending-check:default",
+      "--path", state, "--item-id", "pending-read", "--mode", "summarize"], { env: { ...process.env, HOME: dir } });
+    expect(seeded.exitCode).toBe(0);
+    const ctx = { sessionManager: { getSessionId: () => "pending-check" }, model: { id: "test" }, modelRegistry: { resolver: () => "local-test" } };
+    const originalTimeout = globalThis.setTimeout;
+    if (mode === "timeout") globalThis.setTimeout = ((callback: any, delay?: number, ...args: any[]) =>
+      originalTimeout(callback, delay && delay > 20_000 ? 10 : delay, ...args)) as typeof setTimeout;
+    calls = []; active = 0; peak = 0;
+    invalid = mode === "invalid"; unavailable = mode === "unavailable"; hanging = mode === "timeout";
+    try {
+      const first = await events.context({ messages }, ctx);
+      const sent = first.messages.find((message: any) => message.role === "toolResult").content[0].text;
+      expect(calls).toHaveLength(1);
+      expect(active).toBe(0);
+      expect(sent).not.toBe(content);
+      if (mode === "success") expect(sent).toBe(content.split("\n")[0]);
+      else expect(sent).toContain("[hidden:");
+      expect(messages[1].content[0]).toEqual({ type: "text", text: content });
+      const second = await events.context({ messages }, ctx);
+      expect(second.messages.find((message: any) => message.role === "toolResult").content[0].text).toBe(sent);
+      expect(calls).toHaveLength(1);
+    } finally {
+      globalThis.setTimeout = originalTimeout;
+      unavailable = false; invalid = false; hanging = false;
+      calls = []; active = 0; peak = 0;
+      await events.session_shutdown(); rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("cleanup discovers IDs, requires explicit choices, limits model concurrency and repeats across turns without an ID cap", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sn-cleanup-"));

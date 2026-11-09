@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import extension from "./session-navigation";
+import extension, { prepareRequest } from "./session-navigation";
 
 const testDb = join(mkdtempSync(join(tmpdir(), "sn-test-")), "state.sqlite3");
 process.env.SESSION_NAVIGATION_STATE_PATH = testDb;
@@ -20,6 +20,98 @@ function setup(command = resolve(".venv/bin/session-navigation-daemon")) {
   return { events, tools };
 }
 const ctx = { sessionManager: { getSessionId: () => "test-session" } };
+
+test("pending summaries settle before the first request selects patches", async () => {
+  let stored = "rule excerpt";
+  const sent: string[] = [];
+  let start!: () => void, finish!: (value: string) => void;
+  const started = new Promise<void>((resolve) => { start = resolve; });
+  const completion = new Promise<string>((resolve) => { finish = resolve; });
+  let returned = false;
+  const request = prepareRequest([], "s", "t", async (method, params: any) => {
+    sent.push(method);
+    if (method === "apply_summary") { stored = params.summary_text; return { ok: true }; }
+    return { ok: true, patches: [{ call_id: "c", sha256: "digest", text: stored }],
+      pending_summaries: stored === "rule excerpt" ? [{ item_id: "item", content: "original" }] : [] };
+  }, async (content, timeout) => {
+    expect(content).toBe("original");
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(25_000);
+    start(); return completion;
+  }).then((reply) => { returned = true; return reply; });
+  await started;
+  expect(returned).toBe(false);
+  finish("session LLM summary");
+  expect((await request).patches?.[0].text).toBe("session LLM summary");
+  expect(sent).toEqual(["prepare", "apply_summary", "prepare"]);
+});
+
+test("pending generation uses four workers, deduplicates IDs and serializes writes", async () => {
+  const jobs = Array.from({ length: 11 }, (_, i) => ({ item_id: `i${i}`, content: `original ${i}` }));
+  let prepares = 0, active = 0, peak = 0, writes = 0, writeActive = false;
+  const calls: string[] = [];
+  const reply = await prepareRequest([], "s", "t", async (method) => {
+    if (method === "prepare") return { ok: true, patches: [], pending_summaries: ++prepares === 1 ? [...jobs, jobs[0]] : [] };
+    expect(writeActive).toBe(false); writeActive = true;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    writeActive = false; writes++; return { ok: true };
+  }, async (content) => {
+    calls.push(content); peak = Math.max(peak, ++active);
+    await new Promise((resolve) => setTimeout(resolve, 1)); --active; return "summary";
+  });
+  expect(reply.ok).toBe(true);
+  expect(peak).toBe(4);
+  expect(calls).toHaveLength(11);
+  expect(writes).toBe(11);
+});
+
+for (const failure of ["unavailable", "rejected", "invalid"] as const) {
+  test(`pending ${failure} falls back to refreshed rule patches`, async () => {
+    const methods: string[] = [];
+    const reply = await prepareRequest([], "s", "t", async (method) => {
+      methods.push(method);
+      if (method === "apply_summary") return { ok: false, error: "verification_failed" };
+      return { ok: true, patches: [{ call_id: "c", sha256: "digest", text: "rule excerpt" }],
+        pending_summaries: [{ item_id: "i", content: "original" }] };
+    }, async () => { if (failure === "rejected") throw new Error("model failed"); return failure === "invalid" ? "invented" : null; });
+    expect(reply.patches?.[0].text).toBe("rule excerpt");
+    expect(methods).toEqual(["prepare", failure === "invalid" ? "apply_summary" : "summary_failed", "prepare"]);
+  });
+}
+
+test("no pending IDs means no model call or second prepare; DB write errors propagate", async () => {
+  let calls = 0;
+  const initial = { ok: true, patches: [], pending_summaries: [] };
+  expect(await prepareRequest([], "s", "t", async () => { calls++; return initial; }, async () => { throw new Error("unexpected model"); })).toEqual({ ...initial, hidden_messages: [] });
+  expect(calls).toBe(1);
+  expect(await prepareRequest([], "s", "t", async (method) => method === "prepare"
+    ? { ok: true, patches: [], pending_summaries: [{ item_id: "i", content: "original" }] }
+    : { ok: false, error: "db_error" }, async () => "summary")).toEqual({ ok: false, error: "db_error" });
+});
+
+test("the shared model deadline prevents starting remaining pending jobs", async () => {
+  const originalNow = Date.now;
+  let now = 0, generated = 0, failed = 0, prepares = 0;
+  Date.now = () => now;
+  try {
+    await prepareRequest([], "s", "t", async (method) => {
+      if (method === "prepare") return { ok: true, patches: [], pending_summaries: ++prepares === 1
+        ? Array.from({ length: 9 }, (_, i) => ({ item_id: `i${i}`, content: "original" })) : [] };
+      failed++; return { ok: true };
+    }, async () => { generated++; now = 25_001; return null; });
+    expect(generated).toBe(1);
+    expect(failed).toBe(9);
+  } finally { Date.now = originalNow; }
+});
+
+test("queue wait consumes the model budget instead of starting another full timeout", async () => {
+  const methods: string[] = [];
+  await prepareRequest([], "s", "t", async (method) => {
+    methods.push(method);
+    return { ok: true, patches: [], pending_summaries: [{ item_id: "i", content: "original" }] };
+  }, async () => { throw new Error("expired job must not call a model"); }, Date.now() - 1);
+  expect(methods).toEqual(["prepare", "summary_failed", "prepare"]);
+});
 const longText = Array.from({ length: 100 }, (_, i) => `Output row ${i.toString().padStart(3, "0")} details`).join("\n");
 function messages(content: any[] = [{ type: "text", text: longText }], isError = false) {
   return [{ role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "sample.txt" } }] },
