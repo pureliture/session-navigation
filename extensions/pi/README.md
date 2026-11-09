@@ -20,7 +20,7 @@ cp extensions/pi/session-navigation.ts ~/.omp/agent/extensions/session-navigatio
 
 ## 영속화
 
-숨김 상태는 `~/.local/share/session-navigation/state.sqlite3` 단일 파일에 저장되며 프로세스 재시작과 세션 fork 이후에도 유지됩니다. 저장 범위: 스냅샷 확인은 프로세스별(재시작 후 다음 context 이벤트에서 재확인), 숨김 항목·identity fence는 영속. 세션 파일의 원본은 유지됩니다. 세션별 후보는 최대 64개, 합계 4 MiB이며, 범위를 넘으면 해당 요청 전체를 원본으로 유지합니다.
+숨김 상태는 `~/.local/share/session-navigation/state.sqlite3` 단일 파일에 저장되며 프로세스 재시작과 세션 fork 이후에도 유지됩니다. 저장 범위: 스냅샷 확인은 프로세스별(재시작 후 다음 context 이벤트에서 재확인), 숨김 항목·identity fence는 영속. 세션 파일의 원본은 유지됩니다. 요청 전체의 후보 수·합계 크기에는 제한이 없습니다. 전송은 최대 64개·4 MiB JSON 메시지로 나누며, 첫 `prepare` 이후 같은 `snapshot_id`에 `append: true`로 누적합니다. 각 응답은 해당 청크의 패치와 요약 작업만 반환합니다. 단일 레코드가 메시지 한도를 넘으면 원본을 유지합니다. 데몬은 세션별 최신 스냅샷 하나와 최대 32개 세션만 메모리에 보관합니다.
 
 ## 요약기
 

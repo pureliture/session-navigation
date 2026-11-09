@@ -56,6 +56,13 @@ def test_unrelated_or_larger_summary_falls_back_to_plain_hide(tmp_path, monkeypa
     assert daemon.store.get(daemon._scope("sid"), item_id).compaction_source == "explicit_user_hide"
 
 
-def test_managed_calls_lists_results_with_stored_state(tmp_path, monkeypatch, capsys):
-    daemon, _ = setup(tmp_path, monkeypatch, capsys)
-    assert daemon.handle({"method": "managed_calls", "params": {"session_id": "sid"}}) == {"ok": True, "call_ids": ["c1"]}
+def test_append_does_not_replay_earlier_pending_summaries(tmp_path, monkeypatch, capsys):
+    daemon, first = setup(tmp_path, monkeypatch, capsys)
+    assert len(first["pending_summaries"]) == 1
+    response = daemon.handle({"method": "prepare", "params": {
+        "session_id": "sid", "snapshot_id": "t", "append": True, "records": [{
+            "call_id": "c2", "tool_name": "read", "arguments": {"path": "other"},
+            "content": OUTPUT, "status": "ok",
+        }]}})
+    assert response["ok"] and response["pending_summaries"] == []
+    assert set(daemon.snapshots["sid"][1]) == {"c1", "c2"}

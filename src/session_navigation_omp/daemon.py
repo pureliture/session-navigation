@@ -13,8 +13,8 @@ from session_navigation.summary import validate_summary_text
 
 PROTOCOL = 3
 MAX_SCOPES = 32
-MAX_RECORDS = 64
-MAX_BYTES = 4 * 1024 * 1024
+MAX_CHUNK_RECORDS = 64
+MAX_CHUNK_BYTES = 4 * 1024 * 1024
 _MISSING = object()
 
 
@@ -69,16 +69,20 @@ class Daemon:
             return {"ok": False, "error": "invalid_session"}
         scope = self._scope(session)
 
-        if method == "managed_calls":
-            return {"ok": True, "call_ids": sorted({item.tool_call_id for item in self.store.items(scope)})}
         if method in ("apply_summary", "summary_failed"):
             return self._finish_summary(method, scope, params)
         if method == "prepare":
-            self.snapshots.pop(session, None)
             token = params.get("snapshot_id")
+            append = params.get("append", False)
+            snapshot = self.snapshots.get(session)
+            if append is True and (snapshot is None or snapshot[0] != token):
+                return {"ok": False, "error": "unconfirmed_snapshot"}
+            self.snapshots.pop(session, None)
             records = params.get("records")
-            if not isinstance(token, str) or not isinstance(records, list) or len(records) > MAX_RECORDS:
+            if (not isinstance(append, bool) or not isinstance(token, str)
+                    or not isinstance(records, list) or len(records) > MAX_CHUNK_RECORDS):
                 return {"ok": False, "error": "invalid_snapshot"}
+            previous = snapshot[1] if append else {}
             selected = {}
             total = 0
             for raw in records:
@@ -90,7 +94,7 @@ class Daemon:
                 tool_name = raw.get("tool_name")
                 status = raw.get("status", "ok")
                 result_position = raw.get("result_position", 0)
-                if (not isinstance(call_id, str) or not call_id or call_id in selected
+                if (not isinstance(call_id, str) or not call_id or call_id in selected or call_id in previous
                         or not isinstance(content, str)
                         or not isinstance(args, dict)
                         or tool_name not in ("read", "bash")
@@ -108,7 +112,7 @@ class Daemon:
                             or not str(args.get("command")).strip()):
                         return {"ok": False, "error": "invalid_record"}
                 total += len(content.encode("utf-8"))
-                if total > MAX_BYTES:
+                if total > MAX_CHUNK_BYTES:
                     return {"ok": False, "error": "snapshot_too_large"}
                 invocation = {"tool_name": tool_name, "arguments": args}
                 selected[call_id] = ToolResultRecord(
@@ -120,7 +124,6 @@ class Daemon:
                     status="ok",
                     result_position=result_position,
                 )
-            self.snapshots[session] = (token, selected)
             # Pair-atomic units: one pair_ row per confirmed record (call+result).
             try:
                 for record in selected.values():
@@ -132,6 +135,8 @@ class Daemon:
                 raise
             except Exception:
                 pass
+            previous.update(selected)
+            self.snapshots[session] = (token, previous)
             evicted: list[str] = []
             while len(self.snapshots) > MAX_SCOPES:
                 key, _ = self.snapshots.popitem(last=False)

@@ -193,13 +193,84 @@ test("hidden prompts are dropped and hidden responses keep only their tool calls
 });
 
 
-import { fitCaps } from "./session-navigation";
+import { prepareSnapshot } from "./session-navigation";
 
-test("fitCaps keeps results with stored hides first, then the newest", () => {
-  const records = Array.from({ length: 70 }, (_, i) => ({ call_id: `c${i}`, tool_name: "bash", arguments: { command: `echo ${i}` }, status: "ok", content: `out ${i}` }));
-  const kept = fitCaps(records as any, new Set(["c0", "c1"])).map((r) => r.call_id);
-  expect(kept.length).toBe(64);
-  expect(kept.slice(0, 2)).toEqual(["c0", "c1"]);
-  expect(kept.at(-1)).toBe("c69");
-  expect(kept).not.toContain("c7");
+test("prepare sends all 2000 records in bounded chunks and collects every response", async () => {
+  const records = Array.from({ length: 2000 }, (_, i) => ({ call_id: `c${i}`, tool_name: "bash",
+    arguments: { command: `echo ${i}` }, status: "ok", content: `out ${i}` }));
+  const sent: any[] = [];
+  const response = await prepareSnapshot(records, "session", "token", async (method, params: any) => {
+    sent.push(params);
+    expect(method).toBe("prepare");
+    expect(params.records.length).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(JSON.stringify({ id: 1, method, params }) + "\n")).toBeLessThanOrEqual(4 * 1024 * 1024);
+    return { ok: true, patches: params.records.map((r: any) => ({ call_id: r.call_id, sha256: "h", text: "hidden" })),
+      pending_summaries: [{ call_id: params.records[0].call_id }], hidden_messages: ["message"],
+      ...(sent.length === 1 ? { evicted_snapshots: ["old"] } : {}) };
+  });
+  expect(sent.flatMap((p) => p.records)).toEqual(records);
+  expect(sent[0]).toEqual({ session_id: "session", snapshot_id: "token", records: records.slice(0, 64) });
+  expect(sent.slice(1).every((p) => p.append === true && p.snapshot_id === "token")).toBe(true);
+  expect(response.patches?.length).toBe(2000);
+  expect((response.pending_summaries as any[]).length).toBe(sent.length);
+  expect(response.hidden_messages).toEqual(["message"]);
+  expect(response.evicted_snapshots).toEqual(["old"]);
+});
+
+test("prepare chunks escaped UTF-8 by wire bytes, skips oversized records, and sends empty snapshots", async () => {
+  const record = (id: string, content: string) => ({ call_id: id, tool_name: "read", arguments: { path: "file" }, status: "ok", content });
+  const eligible = Array.from({ length: 10 }, (_, i) => record(String(i), "\u0000한".repeat(100_000)));
+  const oversized = record("oversized", "x".repeat(4 * 1024 * 1024 + 1));
+  const chunks: any[][] = [];
+  const send = async (method: string, params: any) => {
+    expect(Buffer.byteLength(JSON.stringify({ id: Number.MAX_SAFE_INTEGER, method, params }) + "\n")).toBeLessThanOrEqual(4 * 1024 * 1024);
+    chunks.push(params.records);
+    return { ok: true, patches: [] };
+  };
+  expect((await prepareSnapshot([oversized, ...eligible], "s", "t", send)).ok).toBe(true);
+  expect(chunks.flat()).toEqual(eligible);
+  expect(chunks.length).toBeGreaterThan(1);
+  chunks.length = 0;
+  await prepareSnapshot([], "s", "empty", send);
+  expect(chunks).toEqual([[]]);
+});
+
+test("a later failed chunk discards partial patches and stops sending", async () => {
+  const records = Array.from({ length: 200 }, (_, i) => ({ call_id: String(i), tool_name: "read",
+    arguments: { path: "file" }, status: "ok", content: "text" }));
+  let calls = 0;
+  const failure = { ok: false, error: "db_error", choices: ["abort_request", "send_original"] };
+  const response = await prepareSnapshot(records, "s", "t", async () =>
+    ++calls === 1 ? { ok: true, patches: [{ call_id: "0", sha256: "h", text: "hidden" }] } : failure);
+  expect(calls).toBe(2);
+  expect(response).toEqual(failure);
+});
+
+test("real daemon patches hides across chunks and confirms the whole snapshot for tools", async () => {
+  const { events, tools } = setup();
+  const context = { sessionManager: { getSessionId: () => "chunked-session" } };
+  const input = Array.from({ length: 130 }, (_, i) => [
+    { role: "assistant", content: [{ type: "toolCall", id: `chunk-${i}`, name: "read", arguments: { path: `file-${i}` } }] },
+    { role: "toolResult", toolCallId: `chunk-${i}`, toolName: "read",
+      content: [{ type: "text", text: longText }], isError: false },
+  ]).flat();
+  try {
+    expect(await events.context({ messages: input }, context)).toBeUndefined();
+    expect((await execute(tools.hide_context, { tool_call_id: "chunk-0" }, context)).error).toBe("unconfirmed_snapshot");
+    await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, context);
+    for (const id of ["chunk-0", "chunk-70"]) {
+      expect((await execute(tools.hide_context, { tool_call_id: id }, context)).ok).toBe(true);
+    }
+    const transformed = await events.context({ messages: input }, context);
+    expect(transformed.messages[1].content[0].text).not.toBe(longText);
+    expect(transformed.messages[141].content[0].text).not.toBe(longText);
+    expect(input[1].content[0].text).toBe(longText);
+    const concurrent = await Promise.all([
+      events.context({ messages: input }, context), events.context({ messages: input }, context),
+    ]);
+    expect(concurrent.every((result) => result?.messages[1].content[0].text !== longText &&
+      result?.messages[141].content[0].text !== longText && result?.messages)).toBe(true);
+    await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, context);
+    expect((await execute(tools.hide_context, { tool_call_id: "chunk-129" }, context)).ok).toBe(true);
+  } finally { await events.session_shutdown(); }
 });

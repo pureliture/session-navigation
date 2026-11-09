@@ -9,9 +9,9 @@ import * as readline from "node:readline";
 type Reply = { id?: number; ok: boolean; error?: string; protocol?: number; patches?: Patch[]; [key: string]: unknown };
 type Patch = { call_id: string; sha256: string; text: string };
 type RecordItem = { call_id: string; tool_name: string; arguments: Record<string, unknown>; status: string; content: string };
-type Candidate = { session: string; token: string; confirmed: boolean; records: RecordItem[] };
-const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_RECORDS = 64;
+type Candidate = { session: string; token: string; confirmed: boolean };
+const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+const MAX_CHUNK_RECORDS = 64;
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 function messageText(message: any): string {
@@ -45,20 +45,37 @@ export function dropHiddenMessages(messages: any[], hidden: ReadonlySet<string>)
 	return changed ? kept : null;
 }
 
-function overCaps(records: RecordItem[]): boolean {
-	return records.length > MAX_RECORDS || records.reduce((n, r) => n + Buffer.byteLength(r.content, "utf8"), 0) > MAX_BYTES;
+function* prepareChunks(records: RecordItem[], session: string, token: string): Generator<RecordItem[]> {
+	const envelope = Buffer.byteLength(JSON.stringify({ id: Number.MAX_SAFE_INTEGER, method: "prepare",
+		params: { session_id: session, snapshot_id: token, records: [], append: true } }), "utf8") + 1;
+	let chunk: RecordItem[] = [], bytes = envelope;
+	for (const record of records) {
+		const size = Buffer.byteLength(JSON.stringify(record), "utf8") + 1;
+		if (envelope + size > MAX_CHUNK_BYTES) continue;
+		if (chunk.length === MAX_CHUNK_RECORDS || bytes + size > MAX_CHUNK_BYTES) {
+			yield chunk; chunk = []; bytes = envelope;
+		}
+		chunk.push(record); bytes += size;
+	}
+	yield chunk;
 }
 
-/** Long sessions exceed the daemon's snapshot caps: send results with stored hides first, then the newest. */
-export function fitCaps(records: RecordItem[], managed: Set<string>): RecordItem[] {
-	const order = [...records.filter((r) => managed.has(r.call_id)).reverse(), ...records.filter((r) => !managed.has(r.call_id)).reverse()];
-	const kept = new Set<RecordItem>(); let bytes = 0;
-	for (const r of order) {
-		const size = Buffer.byteLength(r.content, "utf8");
-		if (kept.size >= MAX_RECORDS || bytes + size > MAX_BYTES) continue;
-		kept.add(r); bytes += size;
+/** Each reply covers its chunk; the daemon retains all chunks under the same snapshot token. */
+export async function prepareSnapshot(records: RecordItem[], session: string, token: string,
+	send: (method: string, params: object, timeout: number) => Promise<Reply>): Promise<Reply> {
+	const patches: Patch[] = [], pending: unknown[] = [], hidden = new Set<string>(), evicted = new Set<string>();
+	let append = false, response: Reply = { ok: true };
+	for (const chunk of prepareChunks(records, session, token)) {
+		response = await send("prepare", { session_id: session, snapshot_id: token, records: chunk, ...(append ? { append: true } : {}) }, 2000);
+		if (!response.ok || !Array.isArray(response.patches)) return response;
+		for (const patch of response.patches) patches.push(patch);
+		if (Array.isArray(response.pending_summaries)) for (const job of response.pending_summaries) pending.push(job);
+		if (Array.isArray(response.hidden_messages)) for (const key of response.hidden_messages) if (typeof key === "string") hidden.add(key);
+		if (Array.isArray(response.evicted_snapshots)) for (const key of response.evicted_snapshots) if (typeof key === "string") evicted.add(key);
+		append = true;
 	}
-	return records.filter((r) => kept.has(r));
+	return { ...response, patches, pending_summaries: pending, hidden_messages: [...hidden],
+		...(evicted.size ? { evicted_snapshots: [...evicted] } : {}) };
 }
 
 export default function sessionNavigationExtension(pi: ExtensionAPI) {
@@ -201,13 +218,11 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		candidate = null;
 		const session = sessionId(ctx); const collected = collect(event.messages);
 		if (!session || !collected) return;
-		if (overCaps(collected.records)) {
-			const managed = await rpc("managed_calls", { session_id: session }, 2000);
-			collected.records = fitCaps(collected.records, new Set(managed.ok && Array.isArray(managed.call_ids) ? managed.call_ids as string[] : []));
-		}
-		const next: Candidate = { session, token: randomUUID(), confirmed: false, records: collected.records };
+		const next: Candidate = { session, token: randomUUID(), confirmed: false };
 		candidate = next;
-		const response = await rpc("prepare", { session_id: session, snapshot_id: next.token, records: collected.records }, 2000);
+		const prepared = queue.then(() => prepareSnapshot(collected.records, session, next.token, rpcOnce));
+		queue = prepared.catch(() => undefined);
+		const response = await prepared;
 		// Structural daemon death (spawn/exit/protocol) means persistence is
 		// unverifiable: D9 treats it like a DB failure, never a silent
 		// pass-through. Transient timeout/cancel/busy/cooldown keep the
