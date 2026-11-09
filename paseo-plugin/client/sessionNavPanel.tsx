@@ -24,6 +24,7 @@ import {
   fmtTokenCount,
   fmtTokens,
   groupMutationItems,
+  groupEyeAction,
   isSummarizedRow,
   rowMetric,
   truncateString,
@@ -1256,6 +1257,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const renderGroupRow = (group: OutlineRow & { type: "group" }) => {
+    const eyeAction = groupEyeAction(group);
     const isExpanded = !!expandedGroups[group.groupId];
     const isPending = pendingGroupId === group.groupId;
     const isSelected =
@@ -1347,17 +1349,17 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                   <>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={`Hide all in ${group.groupId}`}
-                      style={styles.inlineIconBtn}
+                      accessibilityLabel={`${eyeAction === "unhide" ? "Unhide hidden" : "Hide all"} in ${group.groupId}`}
+                      style={eyeAction === "unhide" ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
                       disabled={isPending}
                       onPress={(e) => {
                         e.stopPropagation();
-                        void runGroupBatch(group, "hide");
+                        void runGroupBatch(group, eyeAction);
                       }}
                     >
                       <ActionSvgIcon
                         kind="hide"
-                        slashed={false}
+                        slashed={eyeAction === "unhide"}
                         size={iconSize}
                         color={theme.colors.foregroundMuted}
                       />

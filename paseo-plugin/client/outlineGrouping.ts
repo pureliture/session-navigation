@@ -147,6 +147,10 @@ export function buildGroupedRows(
   return result;
 }
 
+export function groupEyeAction(group: { hiddenCount: number }): "hide" | "unhide" {
+  return group.hiddenCount > 0 ? "unhide" : "hide";
+}
+
 export function groupMutationItems(
   group: { children: Row[] },
   action: "hide" | "summarize" | "unhide",

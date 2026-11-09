@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Row } from "../shared/sessionNav";
 import {
+  groupEyeAction,
   buildGroupedRows,
   fmtBytes,
   fmtTokenCount,
@@ -199,6 +200,21 @@ describe("groupMutationItems", () => {
     expect(groupMutationItems({ children: rows }, "summarize")).toEqual([{ item_id: "a", expected_version: 2 }]);
     expect(groupMutationItems({ children: rows }, "unhide")).toEqual([{ item_id: "b", expected_version: 5 }]);
   });
+});
+
+test("group eye restores hidden members of partial groups and preserves visible/hidden behavior", () => {
+  const visible: Row = { item_id: "visible", tool_call_id: "visible", kind: "tool",
+    status: "visible", version: 2, tokens_display: "—" };
+  const hidden: Row = { ...visible, item_id: "hidden", tool_call_id: "hidden", status: "hidden", version: 5 };
+  for (const children of [[visible], [visible, hidden], [hidden]]) {
+    const group = buildGroupedRows(children, {}, {})[0];
+    if (group.type !== "group") throw new Error("expected group");
+    const action = groupEyeAction(group);
+    expect(action).toBe(children.includes(hidden) ? "unhide" : "hide");
+    expect(groupMutationItems(group, action)).toEqual(children.includes(hidden)
+      ? [{ item_id: "hidden", expected_version: 5 }]
+      : [{ item_id: "visible", expected_version: 2 }]);
+  }
 });
 
 describe("token display", () => {
