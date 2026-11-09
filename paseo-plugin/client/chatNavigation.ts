@@ -1,4 +1,6 @@
 import type { Row } from "../shared/sessionNav";
+import type { TimelineHistory } from "./timelineHistory";
+import { fallbackToolPreview } from "./toolPreview";
 
 const GROUP = '[data-testid="tool-call-group"]';
 const BADGE = '[data-testid="tool-call-badge"]';
@@ -47,13 +49,36 @@ function findText(root: any, snippet?: string, selector = ROW): any {
     normalized(node.textContent ?? "").includes(needle)) ?? null;
 }
 
-function toolHint(row: Row): string | undefined {
+function toolHint(row: Pick<Row, "tool_input">): string | undefined {
   try {
     const input = JSON.parse(row.tool_input ?? "null");
     return input?.command ?? input?.path ?? input?.CommandLine ?? input?.Path ?? row.tool_input;
   } catch {
     return row.tool_input;
   }
+}
+
+export function historyContainsRow(history: TimelineHistory, row: Row): boolean {
+  const kind = row.kind ?? "tool";
+  return history.entries.some(({ item }) => {
+    if (!item) return false;
+    const type = item.type;
+    if (kind === "user" ? type !== "user_message" : kind === "assistant" ? type !== "assistant_message" :
+      !["tool_call", "command", "terminal", "bash", "shell"].includes(String(type))) return false;
+    const detail = typeof item.detail === "object" && item.detail !== null
+      ? item.detail as Record<string, unknown> : {};
+    const ids = [item.messageId, item.clientMessageId, item.id, item.callId, detail.call_id];
+    if (ids.some((value) => typeof value === "string" &&
+      [row.item_id, row.tool_call_id].some((id) => id && identityMatches(value, id)))) return true;
+    const preview = fallbackToolPreview(item, detail);
+    const texts = kind === "tool" ? [preview.tool_input, toolHint(preview), preview.tool_output, detail.text, detail.label] : [item.text];
+    const hints = kind === "tool" ? [row.summary_line, row.tool_output, toolHint(row)] : [row.summary_line];
+    return hints.some((hint) => {
+      if (typeof hint !== "string") return false;
+      const needle = normalized(hint).slice(0, 36);
+      return needle.length >= 4 && texts.some((text) => typeof text === "string" && normalized(text).includes(needle));
+    });
+  });
 }
 
 function highlightAndScroll(node: any): boolean {
@@ -145,6 +170,7 @@ type NavigationOptions = {
   now?: () => number;
   onStart?: () => void;
   onNotFound?: () => void;
+  getHistory?: () => Promise<TimelineHistory>;
   turnExpanded?: boolean;
 };
 
@@ -261,6 +287,13 @@ export async function scrollToMessageInChat(
 ): Promise<boolean> {
   const version = ++navigationVersion;
   options.onStart?.();
+  let history: TimelineHistory | undefined;
+  try { history = await options.getHistory?.(); } catch { /* An unavailable history cannot prove absence. */ }
+  if (version !== navigationVersion) return false;
+  if (history?.complete && !historyContainsRow(history, row)) {
+    options.onNotFound?.();
+    return false;
+  }
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
   const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row);
   if (!root) { options.onNotFound?.(); return false; }
@@ -269,10 +302,17 @@ export async function scrollToMessageInChat(
   const wait = options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
   let lastAttempt = -Infinity;
   const bounds: SearchBounds = {};
+  const signature = () => JSON.stringify((Array.from(root.querySelectorAll(ROW)) as any[]).map((node) =>
+    [node.getAttribute("data-history-row-id"), node.getAttribute("data-message-id"), node.getAttribute("data-index")]));
+  let previousSignature = signature(), lastProgress = now();
   while (version === navigationVersion) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
     if (version !== navigationVersion) return false;
     if (now() >= deadline) break;
+    const currentSignature = signature();
+    if (currentSignature !== previousSignature) { previousSignature = currentSignature; lastProgress = now(); }
+    if (history?.complete && now() - lastProgress >= 4000 &&
+      !root.querySelector('[data-testid="load-older-history-spinner"]')) break;
     if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 100) {
       if (seekMountedWindow(root, doc, rows, row, bounds)) {
         lastAttempt = now();

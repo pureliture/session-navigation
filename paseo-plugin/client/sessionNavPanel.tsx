@@ -17,6 +17,7 @@ import {
 } from "../shared/sessionNav";
 import { identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { fallbackToolPreview } from "./toolPreview";
+import { readTimelineHistory } from "./timelineHistory";
 
 import {
   buildGroupedRows,
@@ -341,26 +342,18 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     refetchInterval: 5000,
   });
 
+  const historyQueryOptions = {
+    queryKey: ["paseo-agent-timeline-history", agentId],
+    queryFn: () => readTimelineHistory(paseo.agents.ref(agentId).timeline),
+    staleTime: 5000,
+  };
+
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
       if (!agentId || !paseo?.agents) return [];
       try {
-        // Page back to the first prompt: the chat may only keep recent history loaded, the outline lists all of it.
-        type Page = {
-          entries?: Array<{ item?: Record<string, unknown>; seqStart?: number }>;
-          hasOlder?: boolean;
-          startCursor?: { epoch: string; seq: number } | null;
-        };
-        const timeline = paseo.agents.ref(agentId).timeline;
-        let page = (await timeline.refetch({ direction: "tail", limit: 1000, projection: "canonical" })) as Page;
-        let entries = page?.entries ?? [];
-        while (page?.hasOlder && page.startCursor) {
-          const cursor = page.startCursor;
-          page = (await timeline.refetch({ direction: "before", cursor, limit: 1000, projection: "canonical" })) as Page;
-          if (!page?.entries?.length || (page.startCursor && page.startCursor.seq >= cursor.seq)) break;
-          entries = [...page.entries, ...entries];
-        }
+        const { entries } = await queryClient.fetchQuery(historyQueryOptions);
         const result: Row[] = [];
 
         for (let i = 0; i < entries.length; i++) {
@@ -1037,6 +1030,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     void scrollToMessageInChat(row, rawRows, {
       onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
       onNotFound: () => setNotice("Not loaded in chat"),
+      getHistory: () => queryClient.fetchQuery(historyQueryOptions),
     });
   };
 

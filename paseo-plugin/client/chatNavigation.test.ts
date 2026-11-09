@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Row } from "../shared/sessionNav";
-import { identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { historyContainsRow, identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 
 class Element {
   children: Element[] = [];
@@ -66,6 +66,71 @@ test("loads older history over multiple rounds in the chosen chat root", async (
   expect(notice).toBe(false);
 });
 
+for (const entries of [[], [{ item: { type: "user_message", messageId: "unrelated", text: "Different prompt" } }]]) {
+  test(`complete ${entries.length ? "unrelated" : "empty"} history rejects absent target without scrolling`, async () => {
+    const f = fixture();
+    let notice = false, waits = 0;
+    expect(await scrollToMessageInChat(row("archived", "user"), f.rows, {
+      document: f.doc, getHistory: async () => ({ entries, complete: true }),
+      afterLoad: async () => { waits++; },
+      onNotFound: () => { notice = true; },
+    })).toBe(false);
+    expect(notice).toBe(true);
+    expect(waits).toBe(0);
+    expect(f.anchor.scrolled).toBe(false);
+    expect(f.root.scrollTop).toBe(0);
+  });
+}
+
+test("OMP message text and tool call identity/input/original output match native timeline rows", () => {
+  const history = { complete: true, entries: [
+    { item: { type: "user_message", messageId: "native-user", text: "Original user\n prompt here" } },
+    { item: { type: "assistant_message", messageId: "native-assistant", text: "Assistant response here" } },
+    { item: { type: "tool_call", callId: "native-call", detail: {
+      type: "read", filePath: "/work/file.txt", content: "Full original output of read",
+    } } },
+    { item: { type: "tool_call", callId: "bash-native", args: { command: "echo one\necho two" } } },
+  ] };
+  expect(historyContainsRow(history, { ...row("usr_0", "user"), summary_line: "Original user prompt here" })).toBe(true);
+  expect(historyContainsRow(history, { ...row("ast_1", "assistant"), summary_line: "Assistant response here" })).toBe(true);
+  expect(historyContainsRow(history, { ...row("item-hash"), tool_call_id: "native-call" })).toBe(true);
+  expect(historyContainsRow(history, { ...row("different-call"), tool_input: '{"path":"/work/file.txt"}' })).toBe(true);
+  expect(historyContainsRow(history, { ...row("bash-cli"), tool_input: JSON.stringify({ command: "echo one\necho two" }) })).toBe(true);
+  expect(historyContainsRow(history, { ...row("hidden-call"), summary_line: "Hidden summary",
+    tool_output: "Full original output of read" })).toBe(true);
+  expect(historyContainsRow(history, { ...row("missing"), tool_input: '{"path":"/work/missing.txt"}' })).toBe(false);
+  expect(historyContainsRow(history, { ...row("usr_0", "user"), summary_line: "Assistant response here" })).toBe(false);
+});
+
+test("present target still navigates; incomplete or failed fetch cannot establish absence", async () => {
+  const f = fixture();
+  for (const getHistory of [
+    async () => ({ entries: [{ item: { type: "assistant_message", messageId: "previous" } }], complete: true }),
+    async () => ({ entries: [], complete: false }),
+    async (): Promise<never> => { throw new Error("timeline offline"); },
+  ]) {
+    let notice = false;
+    expect(await scrollToMessageInChat(f.previous, f.rows, {
+      document: f.doc, getHistory, onNotFound: () => { notice = true; },
+    })).toBe(true);
+    expect(notice).toBe(false);
+  }
+});
+
+test("complete history bounds stalled DOM paging to a few seconds", async () => {
+  const f = fixture();
+  let clock = 0, notice = false;
+  const target = row("known-but-unmounted", "user");
+  expect(await scrollToMessageInChat(target, [target, ...f.rows], {
+    document: f.doc, now: () => clock,
+    getHistory: async () => ({ entries: [{ item: { type: "user_message", messageId: target.item_id } }], complete: true }),
+    afterLoad: async () => { clock += 100; },
+    onNotFound: () => { notice = true; },
+  })).toBe(false);
+  expect(clock).toBe(4000);
+  expect(notice).toBe(true);
+});
+
 for (const [start, targetIndex, inverted] of [[590, 300, false], [0, 300, false], [300, 500, false],
   [590, 300, true], [300, 500, true]] as const) {
   test(`virtualized window seeks ${start} -> ${targetIndex}, inverted=${inverted}, without paging`, async () => {
@@ -94,6 +159,8 @@ for (const [start, targetIndex, inverted] of [[590, 300, false], [0, 300, false]
     render();
     expect(await scrollToMessageInChat(rows[targetIndex], rows, {
       document: doc, now: () => clock,
+      getHistory: async () => ({ complete: true,
+        entries: rows.map((row) => ({ item: { type: "user_message", messageId: row.item_id } })) }),
       afterLoad: async () => { clock += 100; steps++; render(); },
     })).toBe(true);
     expect(root.querySelector(`[data-history-row-id="C_user_${targetIndex}"]`)?.scrolled).toBe(true);
