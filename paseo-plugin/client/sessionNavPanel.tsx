@@ -1028,7 +1028,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const handleRowPress = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
-    void scrollToMessageInChat(row, rawRows);
+    void scrollToMessageInChat(row, rawRows, { onNotFound: () => setNotice("Not loaded in chat") });
   };
 
   // Prompts and responses can only be hidden (removed from the outgoing context), never summarized.

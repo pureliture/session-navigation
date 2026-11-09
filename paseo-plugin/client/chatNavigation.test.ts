@@ -38,6 +38,54 @@ class Element {
   scrollIntoView() { this.scrolled = true; }
 }
 
+test("loads older history over multiple rounds in the chosen chat root", async () => {
+  const f = fixture();
+  const target = row("old-message", "user");
+  let rounds = 0;
+  const olderSlot = new Element({ "data-testid": "older-history-slot" });
+  f.root.add(olderSlot);
+  let notice = false;
+  const targetNode = new Element({ "data-message-id": "old-message" });
+  expect(await scrollToMessageInChat(target, [target, ...f.rows], {
+    document: f.doc,
+    afterLoad: async () => {
+      rounds++;
+      f.root.add(rounds === 3 ? targetNode : new Element({ "data-message-id": `older-${rounds}` }));
+    },
+    onNotFound: () => { notice = true; },
+  })).toBe(true);
+  expect(rounds).toBe(3);
+  expect(olderSlot.scrolled).toBe(true);
+  expect(targetNode.scrolled).toBe(true);
+  expect(notice).toBe(false);
+});
+
+test("no history progress gives up with the panel notice callback", async () => {
+  const f = fixture();
+  let waits = 0;
+  let notice = "";
+  expect(await scrollToMessageInChat(row("not-loaded", "user"), f.rows, {
+    document: f.doc,
+    afterLoad: async () => { waits++; },
+    onNotFound: () => { notice = "Not loaded in chat"; },
+  })).toBe(false);
+  expect(waits).toBe(8);
+  expect(notice).toBe("Not loaded in chat");
+});
+
+test("scroll fallback handles a reversed scrollable descendant", async () => {
+  const f = fixture();
+  const scroller: any = new Element();
+  scroller.scrollHeight = 1000;
+  scroller.clientHeight = 100;
+  scroller.scrollTop = -200;
+  f.root.add(scroller);
+  await scrollToMessageInChat(row("missing", "user"), [], {
+    document: f.doc, afterLoad: async () => {},
+  });
+  expect(scroller.scrollTop).toBe(-900);
+});
+
 function row(id: string, kind: Row["kind"] = "tool"): Row {
   return { item_id: id, tool_call_id: kind === "tool" ? id : "", kind,
     status: "visible", version: 1, tokens_display: "—" };
