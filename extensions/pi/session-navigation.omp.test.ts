@@ -40,7 +40,7 @@ test.skipIf(!omp)("실제 OMP에서 read 결과를 압축하고 다음 요청에
     const readResult = (request: any) => request.messages.find((m: any) => m.role === "tool" && m.tool_call_id === "read1")?.content;
     const original = readResult(requests[1]); const compacted = readResult(requests[2]); const restored = readResult(requests[3]);
     expect(typeof original).toBe("string");
-    expect(compacted).toContain("원문 발췌");
+    expect(compacted).toContain("Original excerpt");
     expect(compacted.length).toBeLessThan(original.length);
     expect(restored).toBe(original);
     expect(stdout).toContain('"ok\\":true');

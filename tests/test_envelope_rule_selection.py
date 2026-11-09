@@ -71,7 +71,7 @@ def test_rule_path_compacts_read_file_envelope_and_restores():
 
     rendered = result.plan.replacement_text
     assert "[hidden:" in rendered
-    assert "원문 발췌:" in rendered
+    assert "Original excerpt:" in rendered
     assert len(rendered) < len(raw)
     # The line-number noise the read_file tool adds must not ride along.
     assert "1|Synthetic row" not in rendered

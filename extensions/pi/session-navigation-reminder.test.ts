@@ -3,6 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import extension, { BoundaryReminder } from "./session-navigation";
+import { CLEANUP_GUIDANCE } from "./session-navigation";
+
+test("model-facing guidance and notes are English and batch-cleanup oriented", () => {
+  const items = [{ tool_call_id: "chatcmpl-tool-0000000000000001", tool_name: "read", hint: "audit-01.jsonl", bytes_size: 4000, turn: 1 }];
+  const note = new BoundaryReminder().note("1", 10, 100, 1, items)!;
+  for (const text of [CLEANUP_GUIDANCE, note]) {
+    expect(text).not.toMatch(/[\uac00-\ud7a3]/);
+    expect(text).toContain("batch cleanup in one call");
+    expect(text).toContain("avoid re-verifying unchanged files");
+  }
+});
 
 test("boundary/threshold notes are bounded, optional and preserve literal IDs", () => {
   const reminder = new BoundaryReminder();

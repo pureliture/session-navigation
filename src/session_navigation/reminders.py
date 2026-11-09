@@ -26,9 +26,10 @@ class BoundaryReminders:
             return None
         usage = f"~{tokens}/{window} tokens ({percent:.0f}%)" if percent is not None else f"~{tokens}/? tokens (?%)"
         header = (f"[context-navigation] {usage}; eligible={len(candidates)}. "
-                  "You decide when/what/how: after a work unit, hide unneeded results (rules), "
-                  "summarize facts still needed (session LLM). Display only; any valid ID accepted. "
-                  "More: list_context_items(view=candidates). Rows: [id,tool,path/command,bytes,turn].")
+                  "Finish the work unit and answer first; then, if useful, batch cleanup in one call. "
+                  "You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). "
+                  "Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. "
+                  "Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].")
         rows = []
         for item in candidates:
             row = json.dumps([item["tool_call_id"], str(item.get("tool_name", ""))[:24],

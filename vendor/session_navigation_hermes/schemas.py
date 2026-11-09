@@ -94,11 +94,13 @@ MANAGE_TOOL = "manage_context"
 SUPERVISION_SECTION_ID = "session-navigation.human-supervision"
 SUPERVISION_SECTION_MAX_CHARS = 1200
 SUPERVISION_SECTION_TEXT = (
-    "At work-unit boundaries you decide when/what/how to clean: hide unneeded results (rules), "
-    "summarize facts still needed (session LLM); auto prefers summary with rule fallback. "
-    "Use literal IDs from context notes or list_context_items(view=candidates); display limits never restrict targets. "
+    "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. "
+    "You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); "
+    "auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use "
+    "list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. "
+    "Display limits never restrict targets. "
     "Deferred tools: exact names via tool_describe, then tool_call. Originals remain restorable. "
-    "For user '숨김 목록'/restore requests, show numbered hidden items with tool, size, time and summary; numbers belong to that list. "
+    "For user list/restore requests, show numbered hidden items with tool, size, time and summary; numbers belong to that list. "
     "Bind N to its shown item_id BEFORE refreshing; unhide_context that same ID and verify visible. "
     "Ask on ambiguous references; never pick the first item. Restore-all fixes the unfiltered hidden ID set first, "
     "then verifies and reports successes/failures/remaining. State persists; do not infer restart causes."
@@ -126,7 +128,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "name": LIST_TOOL,
         "description": (
             "Discover visible cleanup IDs with view=candidates; limit is display-only (default 30). "
-            "Default items: 사용자가 숨김 목록을 보여달라면 번호·도구·크기·시각·요약 표로 표시."
+            "For a user list request, display hidden items as a numbered table with tool, size, time and summary."
         ),
         "parameters": {
             "type": "object",
@@ -145,8 +147,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     UNHIDE_TOOL: {
         "name": UNHIDE_TOOL,
         "description": (
-            "Restore original by item_id, without re-execution. N번: shown item_id 고정; 복원 직전 목록으로 확인, "
-            "같은 ID 복원 후 visible 확인. 모호하면 묻고 임의로 선택하지 않는다. Missing/stale ID: report, never substitute."
+            "Restore original by item_id without re-execution. For item N, bind the displayed item_id before refreshing, "
+            "confirm it against the list immediately before restore, restore that same ID, and verify it is visible. "
+            "Ask about ambiguous references; never guess. Report missing or stale IDs without substitution."
         ),
         "parameters": {
             "type": "object",

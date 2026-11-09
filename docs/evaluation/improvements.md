@@ -24,6 +24,16 @@
 - 규칙 Hide는 기존 head/tail·필수 증거에 더해 독립적인 `key=value` / `Key: value`와
   경고/실패 표식을 남긴다. 추가 주요 줄 예산은 768바이트, 전체 발췌 예산은 3,072바이트다.
   기존 error/status 보호를 완화하지 않는다.
+- (v3) 호스트가 줄번호를 붙여 보여주는 줄(OMP `20:owner=...`, Hermes `47|audit_seal=...`)도
+  주요 줄로 인식한다. 선택된 줄은 원문 그대로 유지하며 번호를 떼어내지 않는다.
+  Hermes처럼 전체 줄이 연속 번호인 경우는 기존 `strip_consecutive_numbering` 경로가 처리한다.
+  v2에서 Crouton B-new 2건의 오답 원인이었던 `audit_seal` 손실에 대한 회귀 테스트를 추가했다.
+- (v3) 안내·도구 설명·시스템 가이드는 "작업 단위를 끝내고 먼저 답한 뒤, 유용하면 한 번의 호출로
+  묶어서 정리"를 권한다. 이미 보여준 literal ID를 먼저 쓰고 바뀌지 않은 파일을 다시 확인하지
+  말라고 안내한다. 시점·대상·행동 선택은 여전히 agent가 한다.
+- (v3) **모델이 보는 모든 문자열은 영어**다. 대체문 wrapper(`Original excerpt:`,
+  `The remaining result is preserved. ...`), 요약 wrapper, Hermes 도구 설명·supervision section,
+  `list_context_items` 메시지, 경계 안내가 포함된다. 사용자용 문서/UI 문구는 그대로 둔다.
 - `manage_context(action=hide, keep_lines=[...])`는 agent가 고른 exact 한 줄 부분문자열을
   포함하는 원문 줄을 그대로 남긴다. envelope/연속 줄번호를 제거한 본문 기준이며 합계
   1,024바이트 이내다. 같은 목록을 각 대상에 적용한다. 없는 값·잘못된 형식은
@@ -39,8 +49,11 @@ GLM tokenizer나 청구량으로 오인하면 안 된다.
 
 | 고정 overhead: A 대비 B | 기존 | 개선 후 |
 |---|---:|---:|
-| OMP | 804 | 651 |
-| Hermes | 699 | 309 |
+| OMP | 804 | 651 (v3: 679) |
+| Hermes | 699 | 309 (v3: 333) |
+
+v3의 영어·배치 정리 안내가 약간 길어져 offline overhead가 OMP +28, Hermes +24 tokens 늘었다.
+v3 대표 안내(후보 20개 중 3행)는 **651바이트 / 185 offline tokens**다.
 
 대표적인 3행 안내는 **494바이트 / 153 offline tokens**였다(전체 후보 20개, ID 전체 표시).
 OMP는 실제 SDK를 loopback stub에 연결해 A/B 요청을 수집했다. Hermes는 저장된 요청의

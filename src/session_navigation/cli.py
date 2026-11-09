@@ -233,7 +233,7 @@ def _token_fields(tokens: int | None) -> dict[str, Any]:
     if tokens is None:
         return {}
     label = f"{tokens} tok" if tokens < 1000 else f"{tokens / 1000:.1f}K tok"
-    return {"tokens": tokens, "tokens_display": label, "tokens_source": "실측 배분"}
+    return {"tokens": tokens, "tokens_display": label, "tokens_source": "measured allocation"}
 
 
 def _display_tool_entry(idx: int, msg: dict[str, Any], calls: dict[str, tuple[dict[str, Any], int]]) -> dict[str, Any]:
@@ -716,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
                                     source_text = (it.compacted or "") if it.visibility == "hidden" else (it.original or "")
                                     for ln in source_text.splitlines():
                                         collapsed = " ".join(ln.split())
-                                        if collapsed and not collapsed.startswith("[hidden:") and not collapsed.startswith("나머지 결과는 보관됨"):
+                                        if collapsed and not collapsed.startswith("[hidden:") and not collapsed.startswith(("The remaining result is preserved", "나머지 결과는 보관됨")):
                                             summary_lines.append(collapsed)
                                             if len(summary_lines) >= 2:
                                                 break
@@ -774,7 +774,7 @@ def main(argv: list[str] | None = None) -> int:
                         source_text = (it.compacted or "") if it.visibility == "hidden" else (it.original or "")
                         for ln in source_text.splitlines():
                             collapsed = " ".join(ln.split())
-                            if collapsed and not collapsed.startswith("[hidden:") and not collapsed.startswith("나머지 결과는 보관됨"):
+                            if collapsed and not collapsed.startswith("[hidden:") and not collapsed.startswith(("The remaining result is preserved", "나머지 결과는 보관됨")):
                                 summary_lines.append(collapsed)
                                 if len(summary_lines) >= 2:
                                     break

@@ -14,7 +14,7 @@ from proxy import serve
 from v2_fixtures import build, component, document
 from v2_run import child_environment
 from v2_analyze import adoption_gate, boundary_index, eligible, match_fact
-from analyze import native_operations
+from analyze import native_operations, response_failure_kind
 from v2_cost import projection
 from v2_archive import archive
 from analyze import read_wire
@@ -23,6 +23,12 @@ import gzip
 
 
 class V2Tests(unittest.TestCase):
+    def test_empty_length_answer_has_distinct_failure_kind(self):
+        body = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+        self.assertEqual(response_failure_kind(body), "empty_answer_length")
+        self.assertIsNone(response_failure_kind({"choices": [{"finish_reason": "length", "message": {"content": "partial"}}]}))
+        self.assertIsNone(response_failure_kind({"choices": [{"finish_reason": "stop", "message": {"content": ""}}]}))
+
     def test_cache_transitions_deduplicate_batches_and_preserve_missing_usage(self):
         def request(identity, content):
             return {"id": identity, "kind": "request", "path": "/run/v1", "body": {"tools": ["read"], "messages": [{"role": "tool", "content": content}]}}
@@ -138,7 +144,7 @@ class V2Tests(unittest.TestCase):
 
     def test_one_model_and_forced_provider_no_fallback(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-secret"}):
-            server = serve(Path(tmp), model="stealth/crouton-alpha", provider="Stealth")
+            server = serve(Path(tmp), model="stealth/crouton-alpha", provider="Stealth", reasoning={"enabled": False, "exclude": True})
             try:
                 def post(body):
                     connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
@@ -154,7 +160,9 @@ class V2Tests(unittest.TestCase):
                     code, value = post({"model": "stealth/crouton-alpha", "provider": {"order": ["wrong"]}, "stream": True})
                     self.assertEqual(code, 200)
                     self.assertIn(b"opaque", value)
-                    self.assertEqual(json.loads(upstream.call_args.args[0].data)["provider"], {"order": ["Stealth"], "allow_fallbacks": False})
+                    upstream_body = json.loads(upstream.call_args.args[0].data)
+                    self.assertEqual(upstream_body["provider"], {"order": ["Stealth"], "allow_fallbacks": False})
+                    self.assertEqual(upstream_body["reasoning"], {"enabled": False, "exclude": True})
             finally:
                 server.shutdown()
                 server.server_close()

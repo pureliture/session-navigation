@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STAGES = {"crouton": ("stealth/crouton-alpha", "Stealth"),
           "deepseek": ("deepseek/deepseek-v4.1-flash-1017", "Relace")}
 COMMITS = {"A": "5017b97", "B-old": "b1a524e", "B-new": "5017b97"}
+DEEPSEEK_REASONING = {"enabled": False, "exclude": True}
 HERMES = "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
 
 
@@ -78,9 +79,11 @@ def main():
     if args.components:
         cases = [component(action) for action in args.component_actions.split(",")]
     cases = [case for case in cases if args.components or case["id"] in args.cases.split(",")]
-    server = serve(args.output, model=model, provider=provider)
+    reasoning = DEEPSEEK_REASONING if args.stage == "deepseek" else None
+    server = serve(args.output, model=model, provider=provider, reasoning=reasoning)
     (args.output / "stage.json").write_text(json.dumps({"model": model, "provider": {"order": [provider], "allow_fallbacks": False},
-        "product_commits": COMMITS, "window": 65536, "repetitions": args.repetitions, "components": args.components}, indent=2))
+        "reasoning": reasoning, "product_commits": COMMITS, "window": 65536, "repetitions": args.repetitions,
+        "components": args.components}, indent=2))
 
     def run(host, case, arm, rep):
         identity = f"{args.label}{host}-{case['id']}-{arm}-{rep}"

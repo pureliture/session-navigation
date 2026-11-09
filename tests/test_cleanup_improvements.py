@@ -6,7 +6,7 @@ import pytest
 
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.model import Scope
-from session_navigation.policy import HIGH_SIGNAL_BYTES, RuleSpanSelector
+from session_navigation.policy import HIGH_SIGNAL_BYTES, RuleSpanSelector, strip_consecutive_numbering
 from session_navigation.reminders import BoundaryReminders, NOTE_BYTES
 from test_engine import _make_record
 from test_omp_daemon import Daemon, call, record
@@ -59,6 +59,47 @@ def test_signal_budget_skips_filler_and_retains_warning():
     assert len(choice.lines) < 25
     warning = RuleSpanSelector().select(body().replace("owner=Orchid", "WARN retry budget low"))
     assert "WARN retry budget low" in warning.lines
+
+
+def test_rule_keeps_numbered_metadata_from_captured_audit_outputs():
+    owner_line = "20:owner=atlas-team-7"
+    seal_line = "47:audit_seal=atlas-82ca4eacc8"
+    lines = [f"{index}:2026-10-07T00:{index:02d}:00Z region us-east service atlas-svc-{index % 7}"
+             for index in range(1, 61)]
+    lines[19] = owner_line
+    lines[46] = seal_line
+    choice = RuleSpanSelector().select("\n".join(lines))
+    assert owner_line in choice.lines
+    assert seal_line in choice.lines
+
+
+def test_rule_keeps_metadata_from_consecutively_numbered_hermes_read_output():
+    lines = [f"{index}|2026-10-07T00:{index:02d}:00Z region us-east service atlas-svc-{index % 7}"
+             for index in range(1, 61)]
+    lines[19] = "20|owner=atlas-team-7"
+    lines[46] = "47|audit_seal=atlas-82ca4eacc8"
+    choice = RuleSpanSelector().select(strip_consecutive_numbering("\n".join(lines)))
+    assert "owner=atlas-team-7" in choice.lines
+    assert "audit_seal=atlas-82ca4eacc8" in choice.lines
+
+
+def test_all_model_facing_text_is_english():
+    from session_navigation.policy import render_compaction
+    from hermes_navigation_adapter.schemas import SUPERVISION_SECTION_TEXT
+
+    items = [{"tool_call_id": "chatcmpl-tool-0000000000000001", "tool_name": "read",
+              "hint": "audit-01.jsonl", "bytes_size": 4000, "turn": 1}]
+    surfaces = [
+        render_compaction("item_1", ["owner=Orchid"]),
+        render_compaction("item_1", ["owner=Orchid"], summary_text={"summary": "text"},
+                          facts={"exit_code": 0}, options_omitted=True),
+        BoundaryReminders().note("s", "1", 100, 1000, items),
+        SUPERVISION_SECTION_TEXT,
+        json.dumps(hermes_adapter().plugin.TOOL_SCHEMAS, ensure_ascii=False),
+    ]
+    for surface in surfaces:
+        assert surface
+        assert not any("\uac00" <= char <= "\ud7a3" for char in surface), surface
 
 
 def test_reminder_boundaries_thresholds_empty_sessions_and_literal_ids():
@@ -140,8 +181,11 @@ def test_hermes_action_first_guidance_and_discovery_description():
     schemas = hermes_adapter().plugin.TOOL_SCHEMAS
     assert schemas["list_context_items"]["description"].startswith("Discover visible cleanup IDs")
     from hermes_navigation_adapter.schemas import SUPERVISION_SECTION_TEXT
-    assert SUPERVISION_SECTION_TEXT.startswith("At work-unit boundaries")
+    assert SUPERVISION_SECTION_TEXT.startswith("Finish each work unit and answer first")
     assert "tool_describe, then tool_call" in SUPERVISION_SECTION_TEXT
+    assert "Prefer literal IDs already shown" in SUPERVISION_SECTION_TEXT
+    assert "avoid re-verifying unchanged files" in SUPERVISION_SECTION_TEXT
+    assert not any("\uac00" <= char <= "\ud7a3" for char in json.dumps(schemas) + SUPERVISION_SECTION_TEXT)
 
 
 @pytest.mark.parametrize("content", ["tiny", "ERROR do not discard\n" + body()])

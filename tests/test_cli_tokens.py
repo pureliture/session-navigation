@@ -61,7 +61,7 @@ def test_list_reports_measured_row_tokens_and_session_context(tmp_path, monkeypa
     # first request carries host preamble; the last assistant output is not yet in any prompt
     assert tokens == {"usr_0": None, "c1": 200, key(3): 5, "usr_4": 5, key(5): None}
     tool = next(row for row in payload["items"] if row["kind"] == "tool")
-    assert tool["tokens_display"] == "200 tok" and tool["tokens_source"] == "실측 배분"
+    assert tool["tokens_display"] == "200 tok" and tool["tokens_source"] == "measured allocation"
 
 
 def test_segment_with_hide_compaction_or_shrink_is_unmeasured():

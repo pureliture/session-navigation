@@ -273,8 +273,8 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
             for item in items if item["display_number"] is not None
         ])
         compacted_count = sum(item["visibility"] == "hidden" for item in items)
-        prefix = "검색 조건에 맞는" if query else "현재"
-        message = f"{prefix} 숨겨진 항목 {compacted_count}건" if compacted_count else f"{prefix} 숨겨진 항목 없음"
+        prefix = "Matching" if query else "Current"
+        message = f"{prefix} hidden items: {compacted_count}" if compacted_count else f"{prefix} hidden items: none"
         payload: dict[str, Any] = {
             "ok": True, "count": len(items), "items": items,
             "compacted_count": compacted_count, "message": message,

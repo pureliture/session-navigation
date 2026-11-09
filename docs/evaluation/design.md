@@ -28,6 +28,11 @@ Crouton이 불가능하면 다른 모델로 대체하지 않는다.
 2,048-token 한도는 `OK`, prompt 2/completion 1/cost 0/cached 0을 보고했다.
 둘 다 설치 점검이며 본 통계에서 제외한다. 작은 한도도 출력 전 reasoning으로 소진될 수 있다.
 
+DeepSeek 단계는 동일한 tiny prompt로 OpenRouter 파라미터를 사전 검증한다. 2026-11-09 probe에서
+기본 설정은 completion 12 / reasoning 9 tokens였고 `reasoning:{enabled:false,exclude:true}`는
+completion 2 / reasoning 0 tokens였다(Relace 고정). 따라서 proxy가 이 설정을 A/B-new 모두에 강제한다.
+빈 답변이면서 `finish_reason=length`인 응답은 `empty_answer_length`로 별도 집계한다.
+
 ## 작업과 압력
 
 `eval/v2_fixtures.py`의 Atlas/Boreal은 각 **25 사용자 하위 작업**이다.

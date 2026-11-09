@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODEL = "z-ai/glm-5.3-flash"
 
 
-def serve(directory, *, model=MODEL, provider=None):
+def serve(directory, *, model=MODEL, provider=None, reasoning=None):
     key = os.environ["OPENROUTER_API_KEY"]
     lock = threading.Lock()
 
@@ -39,6 +39,8 @@ def serve(directory, *, model=MODEL, provider=None):
             upstream_body = {**body, "stream": False, "usage": {"include": True}}
             if provider:
                 upstream_body["provider"] = {"order": [provider], "allow_fallbacks": False}
+            if reasoning is not None:
+                upstream_body["reasoning"] = reasoning
             upstream_body.pop("stream_options", None)
             for attempt in range(7):
                 event(kind="upstream_request", id=identity, path=self.path, attempt=attempt, body=upstream_body)

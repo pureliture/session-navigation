@@ -132,7 +132,7 @@ def _format_row(num: int, item: dict[str, Any]) -> str:
 def _list_text(state: Any, session_id: str) -> str:
     if not session_id:
         lines = ["Session navigation items (0) [session=—]:"]
-        lines.append("status      tool/call id            tokens (실측 배분) cost  version")
+        lines.append("status      tool/call id            tokens (measured allocation) cost  version")
         lines.append("(none)")
         lines.append("Hints: /nav hide <id> | /nav unhide <id> | /nav manage | /nav summarize <id>")
         return "\n".join(lines)

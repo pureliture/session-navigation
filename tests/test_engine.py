@@ -58,7 +58,7 @@ def test_engine_compact_with_rule_fallback():
     assert result.plan is not None
     assert result.plan.item_id.startswith("item_")
     assert result.plan.expected_content_sha256 == record.content_sha256
-    assert "원문 발췌:" in result.plan.replacement_text
+    assert "Original excerpt:" in result.plan.replacement_text
 
 
 def test_engine_compact_with_summarizer():
@@ -73,7 +73,7 @@ def test_engine_compact_with_summarizer():
     result = asyncio.run(engine.summarize(scope, record, MockSummarizer()))
     assert result.ok is True
     assert result.plan is not None
-    assert "생성 요약" in result.plan.replacement_text
+    assert "Generated summary" in result.plan.replacement_text
     assert result.item is not None
     assert result.item.compaction_source == "llm"
 

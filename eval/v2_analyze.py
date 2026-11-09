@@ -107,6 +107,9 @@ def score(directory):
             pressure={"window": spec["window"], "reported_peak": peak, "host_peak": host_peak,
                       "reported_tiers": [tier for tier in (50, 75, 90) if peak >= tier * spec["window"] / 100]},
             response_providers=dict(collections.Counter(body.get("provider", "unreported") for body in reported)))
+        report["failure_kinds"] = dict(collections.Counter(
+            row["failure_kind"] for row in report["usage"] if row.get("failure_kind")
+        ))
         if spec.get("canonical_test"):
             report["task_success"] = report["task_success"] and report["status"].get("canonical_tests_pass", False)
     (directory / "metrics-v2.json").write_text(json.dumps(reports, indent=2))
@@ -127,6 +130,7 @@ def score(directory):
                 "eligible_selections": sum(r["eligible_selected"] for r in runs), "disposable_selections": sum(r["selected_eligible_disposable"] for r in runs),
                 "explicit_hide_eligible": sum(r["explicit_hide_eligible"] for r in runs), "explicit_hide_disposable": sum(r["explicit_hide_disposable"] for r in runs),
                 "keep_lines_calls": sum(r["keep_lines_calls"] for r in runs), "native_compactions": sum(len(r["native_compactions"]) for r in runs),
+                "failure_kinds": dict(collections.Counter(kind for r in runs for kind, count in r["failure_kinds"].items() for _ in range(count))),
                 "prompt_tokens": sum(u["prompt"] for u in usage), "output_tokens": sum(u["completion"] for u in usage),
                 "cached_tokens": sum(u["cached"] or 0 for u in usage), "missing_cached": sum(u["cached"] is None for u in usage),
                 "cost": sum(u["cost"] or 0 for u in usage), "missing_cost": sum(u["cost"] is None for u in usage),

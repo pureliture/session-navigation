@@ -13,6 +13,18 @@ from proxy import MODEL
 NAV = {"manage_context", "hide_context", "summarize_context", "unhide_context", "list_context_items"}
 
 
+def response_failure_kind(body):
+    choices = body.get("choices") or []
+    if not choices:
+        return None
+    choice = choices[0]
+    message = choice.get("message") or {}
+    content = text(message.get("content")).strip()
+    if choice.get("finish_reason") == "length" and not content and not message.get("tool_calls"):
+        return "empty_answer_length"
+    return None
+
+
 def read(path):
     return json.loads(gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes())
 
@@ -215,7 +227,8 @@ def analyze(directory, *, model=MODEL):
             system = " ".join(text(m.get("content")) for m in messages if m.get("role") in ["system", "developer"])
             summary = "Summarize this tool result" in text(messages[0].get("content")) if messages else False
             summary = summary or system.startswith("Summarize the tool result.")
-            usage = responses.get(request["id"], {}).get("body", {}).get("usage", {})
+            response_body = responses.get(request["id"], {}).get("body", {})
+            usage = response_body.get("usage", {})
             canonical = json.dumps({"messages": messages, "tools": body.get("tools", [])}, sort_keys=True, ensure_ascii=False).encode()
             common = 0
             for a, b in zip(previous, canonical):
@@ -228,6 +241,8 @@ def analyze(directory, *, model=MODEL):
             output = usage.get("completion_tokens", 0)
             usage_rows.append({"id": request["id"], "summary": summary, "prompt": prompt, "completion": output,
                 "cached": cached, "cost": usage.get("cost"), "lcp_estimated_tokens": round(estimate),
+                "finish_reason": (response_body.get("choices") or [{}])[0].get("finish_reason"),
+                "failure_kind": response_failure_kind(response_body),
                 "gpt41_reference_usd": ((prompt - (cached if cached is not None else estimate)) * 2 + (cached if cached is not None else estimate) * .5 + output * 8) / 1e6,
                 "gpt41_uncached_upper_usd": (prompt * 2 + output * 8) / 1e6})
             previous = canonical
