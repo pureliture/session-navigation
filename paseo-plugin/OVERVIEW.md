@@ -1,53 +1,48 @@
-Session navigation panel for Paseo Explorer.
+Session navigation adds a reversible context outline to Paseo's right-hand Explorer.
+Browse user messages, assistant messages and tool results; hide or summarize supported
+items, then restore them when needed. Original host history is not deleted: the host
+adapter changes only the outgoing request copy. Hide is not a secret-erasure feature.
 
-Open Explorer's **+ → Session navigation**. By default the outline follows the visible
-session using the same 1.5-second chat/timeline identity matching as the agent panel.
-When no session is visible or matches, it shows **No session in view**. The optional
-picker can pin a workspace agent; **Follow visible session** clears the pin.
-The workspace panel remembers its follow/pin mode and outline filter in the host's
-persisted tab state. Paseo restores open Explorer tabs on reload and workspace
-return: leave the tab open to keep the navigator available. Closing it stays closed.
-For a panel bound directly to the current agent, **Cmd/Ctrl+K → Open session navigation**
-and **/nav** remain available.
+## Setup
 
-The bottom **Preview** drawer is a read-only inspector. Select a row to inspect its
-input/output or message text. Hidden tools show **Sent to model** from the stored
-replacement alongside **Original input/output**, including pending-summary state;
-hidden messages show **Removed from context** alongside their original text.
-Previews are bounded to 8 KiB per payload with an explicit truncation marker.
-The footer keeps the selectable full ID, version, source and token reading on one
-horizontally scrollable line; section contents scroll independently.
+The session-navigation Python package and CLI must already be installed on the machine
+running the Paseo daemon, with the CLI available to that daemon's environment. Python
+3.11 or later is required. See the [project README](https://github.com/pureliture/session-navigation#설치)
+for installation; the plugin does not download or install Python software for you.
 
-Paseo 0.15.3's + menu lists only workspace-context plugin panels, not agent panels.
-This plugin registers both kinds; adding manifest name/icon alone does not affect
-menu eligibility. There is no public default-open flag or agent-screen mount/focus
-hook in this SDK. The plugin does not force-open tabs, modify host layout storage,
-or use timeline transformations as navigation side effects. On a new workspace,
-add the tab once; subsequent automatic restoration is Paseo's saved-layout behavior.
+The manifest allows Paseo 0.15.0 or later; the tested SDK and host are 0.15.3.
+Compatibility with earlier 0.15.x releases has not been separately verified.
+For OMP request rewriting, install the matching OMP extension as described in the README.
+Other providers can supply display-only timeline rows; a visible row does not imply
+that its provider supports context mutation. Summarization needs a compatible session
+model; without one, it reports summarizer_unavailable.
 
-The Side Chat reference (`Moyf/paseo-sidechat`, e1ce602) registers an Explorer agent
-panel in `client/ui-registration.ts:17–24`, opens it via slash commands and Command
-Center (`:38,55,106`), and documents Ctrl+K in `README.md:10`. It has no auto-open hook
-or workspace-panel registration, so it is also excluded from this host's + menu.
-Its manifest adds display name/icon/media and Chinese translations; persistent UI
-labels use `client/messages.ts` message references, and its clickable panel header
-opens the associated agent (`client/panel.tsx:414–430`). Our existing outline header
-already offers an Open agent chat button; labels currently remain English. The
-new manifest supplies name/icon; promotional media and localization are not needed
-to register panels.
+## Explorer and preview
 
-Host evidence (installed `index-6d081709f695773992be027100d988c7.js`): line 18388
-filters `workspacePanels` with `if("workspace"!==n.context)continue`, checks server
-and location, and uses each contribution's title/icon. Line 16603 persists and
-restores `layoutByWorkspace` and the Explorer pane ID under `workspace-layout-state`.
-SDK evidence: `@getpaseo/plugin/dist/client/contracts.d.ts:79–89,142–180` defines
-locations (`workspace`/`explorer`), panel metadata, and explicit `openPanel`; no
-default-open option. `addSurface`/`addSidebarItem` are deprecated screen/sidebar
-aliases, not always-mounted agent hooks. Timeline transformers (`:207–217`) receive
-only an item and phase, not an agent/workspace screen lifecycle.
+Use Explorer's **+ → Session navigation**. The workspace panel follows the visible
+session using chat/timeline identity matching every 1.5 seconds. Empty or unmatched
+chats and non-session screens show **No session in view**. An optional picker pins an
+agent; **Follow visible session** clears the pin. Paseo remembers open tabs and the
+follow/pin choice. Closing the tab stays closed; there is no forced first-time opening.
+Command Center's **Open session navigation** and **/nav** also open the agent panel.
 
-This plugin adds a workspace panel that lists recorded context items from the session-navigation SQLite store and lets you hide, summarize, unhide, re-hide, and manage them. Rows show status, tool or call id, measured token distribution, cost passthrough, and version. Actions use the shared SQLite store at ~/.local/share/session-navigation/state.sqlite3, or SESSION_NAVIGATION_STATE_PATH when set for tests.
+Hide and Unhide retain rows in the outline. The read-only **Preview** drawer shows
+original input/output or message text. Hidden tools show the stored **Sent to model**
+replacement beside the originals, including pending-summary state; hidden messages
+show **Removed from context**. Text previews are bounded to 8 KiB per payload with a
+truncation marker. IDs and metadata remain selectable.
 
-Setup requires the session-navigation Python package and its CLI module on the daemon machine, plus a compatible Paseo daemon (0.15.0 or newer). The plugin invokes the session-navigation command line; if it is unavailable, handlers fall back to python -m session_navigation.cli. CAS conflicts return the current item so the list can refresh. Database errors surface a choice between aborting the request or sending originals.
+## Data access and limitations
 
-Capabilities: list, hide, summarize, unhide, manage, and fork scope operations; per-item manage results; destructive commands are excluded from automatic manage. Summarization requires a session model and returns summarizer_unavailable when none is configured.
+The server launches the session-navigation CLI as a local child process. It reads
+local session history and writes originals, replacements and hide state to
+`~/.local/share/session-navigation/state.sqlite3`, or the XDG data location or
+`SESSION_NAVIGATION_STATE_PATH` override. The adapter doing request rewriting must
+use the same local state file; there is no cross-machine state synchronization.
+
+The panel itself does not require an account or separate API key. Session-model
+summarization may send the selected original tool output to the model provider
+configured in the host. Local state storage does not mean all content stays local.
+Measured tokens are shown only when available; missing measurements show a dash.
+Destructive commands are excluded from automatic cleanup. Display-only rows remain
+read-only, and unavailable chat history may prevent jumping to an outline item.

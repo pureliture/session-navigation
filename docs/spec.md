@@ -93,10 +93,10 @@ Three paths kept separate (agent-observatory design):
 ## D10. UI order — Paseo → OMP TUI → Hermes TUI
 
 - Paseo Explorer panel first (row-unit verification platform).
-- Panel location (verified 2026-11-08, user requirement): Paseo 패널은 우측 워크스페이스 탭 영역(파일/변경사항 옆, Explorer 영역, AI FDE / sidechat 스타일)에 렌더링되어야 하며, `addAgentPanel` + `locations: ["explorer"]` (context: `"agent"`)로 등록하고 ⌘K (`open-session-nav`) 및 `/nav` 슬래시 커맨드로 `openPanel("session-nav", { location: "explorer" })`를 호출해 연다. 좌측 사이드바 항목(`addSidebarHeaderItem`/`addSidebarItem`)이나 전체 화면(`addScreen`)으로 등록해서는 안 된다 (`+` 탭 메뉴는 플러그인 패널 탐색 경로가 아님).
+- Panel location (updated 2026-11-09): Paseo 패널은 우측 Explorer 영역에 `addAgentPanel`과 `addWorkspacePanel`, `locations: ["explorer"]`로 등록한다. `+` 탭 메뉴는 workspace 패널을 나열하며, ⌘K (`open-session-nav`) 및 `/nav`는 기존 agent 패널을 연다. 좌측 사이드바나 전체 화면으로 등록하지 않는다. 기본 열림을 강제하지 않고 Paseo의 저장된 탭 레이아웃을 사용한다.
 - Panel session binding (verified 2026-11-09, user requirement):
-  - 우측 사이드 패널은 활성화된 에이전트(`agentId`)의 세션 스코프와만 1:1로 직접 바인딩된다.
-  - 임의의 다른 세션을 고르는 드롭다운/모달(스코프 피커)을 두지 않으며, 세션이 없는 곳에서는 `No active session` 빈 화면을 표시한다.
+  - 기본값은 1.5초 간격의 채팅 DOM/타임라인 ID 매칭으로 보이는 세션을 추적한다. 빈 채팅·식별 불가·비세션 화면에서는 `No session in view`를 표시하고 이전 세션의 조작 UI를 숨긴다.
+  - workspace 패널은 선택적으로 에이전트를 고정할 수 있다. `Follow visible session`으로 고정을 해제하며 모드는 탭 상태에 저장된다. agent 패널의 원래 `agentId`만으로 빈 채팅의 대상을 추측하지 않는다.
   - Palantir AI FDE 스타일의 단일 연속 스크롤 목록으로 세션 전체 타임라인(User 질문/프롬프트 ◈, Assistant 모델 답변 ✦, Tool 도구 실행 결과 ◇)을 시간순으로 연속 렌더링한다.
   - 도구 결과 숨김(`Hide`) 시 행은 목록에서 사라지지 않고 그대로 유지되며, 취소선(`line-through`), 낮은 투명도, `[hidden · v{version}]` 뱃지 및 `Unhide` 버튼으로 전환된다. 사용자의 명시적 `Hide` 명령은 정책 거절(`sensitive_invocation`, `not_long`, `protected_error`) 없이 즉시 `hidden` 상태로 저장된다.
   - 하단 진행률 게이지 바는 모델의 실제 컨텍스트 윈도우(128k 토큰 ~ 512KB) 스케일 기준으로 활성 비율과 절감량을 시각화한다.
