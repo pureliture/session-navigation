@@ -14,18 +14,13 @@ import {
   type Row,
 } from "../shared/sessionNav";
 
-function fmtBytes(n: number | undefined): string {
-  if (n == null) return "0 B";
-  if (n < 1024) return `${n} B`;
-  return `${(n / 1024).toFixed(1)} KiB`;
-}
-
-function truncateString(str: string, maxLen = 120): string {
-  if (!str) return "";
-  const singleLine = str.replace(/\r?\n/g, " ").trim();
-  if (singleLine.length <= maxLen) return singleLine;
-  return `${singleLine.slice(0, maxLen - 1)}…`;
-}
+import {
+  buildGroupedRows,
+  fmtBytes,
+  isSummarizedRow,
+  truncateString,
+  type OutlineRow,
+} from "./outlineGrouping";
 
 const panelTabStateSchema = z.object({
   query: z.string().default(""),
@@ -184,12 +179,6 @@ function scrollToMessageInChat(
   return false;
 }
 
-function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boolean {
-  if (localMode) return localMode === "summarize";
-  const src = row.source ?? "";
-  return src === "rule_summary" || src === "llm" || src === "llm_summary" || src === "summarize";
-}
-
 export function SessionNavPanel({ theme, layout, params, navigation, tab }: PluginAgentPanelProps) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
@@ -213,6 +202,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const [searchOpen, setSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [lastActionByItem, setLastActionByItem] = useState<Record<string, "hide" | "summarize">>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [pendingGroupId, setPendingGroupId] = useState<string | null>(null);
 
   const scopesQuery = useQuery({
     queryKey: ["session-nav", "scopes"],
@@ -298,7 +289,74 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     },
   });
 
-  const isMutating = hideMutation.isPending || unhideMutation.isPending;
+  const isMutating = hideMutation.isPending || unhideMutation.isPending || !!pendingGroupId;
+
+  const handleGroupHide = async (group: OutlineRow & { type: "group" }, mode: "hide" | "summarize") => {
+    if (pendingGroupId || !resolvedScopeKey) return;
+    setPendingGroupId(group.groupId);
+    try {
+      const updates: Record<string, "hide" | "summarize"> = {};
+      for (const child of group.children) {
+        const k = child.item_id ?? child.tool_call_id;
+        updates[k] = mode;
+      }
+      setLastActionByItem((prev) => ({ ...prev, ...updates }));
+
+      const chunkSize = 5;
+      for (let i = 0; i < group.children.length; i += chunkSize) {
+        const chunk = group.children.slice(i, i + chunkSize);
+        await Promise.allSettled(
+          chunk.map((child) =>
+            hideRpc({
+              scope_key: scopeKey,
+              item_id: child.item_id ?? "",
+              expected_version: child.version,
+              mode,
+            }),
+          ),
+        );
+      }
+      void invalidate();
+    } catch {
+      setNotice("Failed to update tool group");
+    } finally {
+      setPendingGroupId(null);
+    }
+  };
+
+  const handleGroupUnhide = async (group: OutlineRow & { type: "group" }) => {
+    if (pendingGroupId || !resolvedScopeKey) return;
+    setPendingGroupId(group.groupId);
+    try {
+      setLastActionByItem((prev) => {
+        const next = { ...prev };
+        for (const child of group.children) {
+          const k = child.item_id ?? child.tool_call_id;
+          delete next[k];
+        }
+        return next;
+      });
+
+      const chunkSize = 5;
+      for (let i = 0; i < group.children.length; i += chunkSize) {
+        const chunk = group.children.slice(i, i + chunkSize);
+        await Promise.allSettled(
+          chunk.map((child) =>
+            unhideRpc({
+              scope_key: scopeKey,
+              item_id: child.item_id ?? "",
+              expected_version: child.version,
+            }),
+          ),
+        );
+      }
+      void invalidate();
+    } catch {
+      setNotice("Failed to restore tool group");
+    } finally {
+      setPendingGroupId(null);
+    }
+  };
 
   const queryKey = useMemo(() => ["session-nav", "list", scopeKey, query], [scopeKey, query]);
 
@@ -555,6 +613,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     );
   }, [rawRows, query]);
 
+  const groupedRows = useMemo(
+    () => buildGroupedRows(rows, expandedGroups, lastActionByItem),
+    [rows, expandedGroups, lastActionByItem],
+  );
+
   const hiddenCount = rows.filter((r) => r.status === "hidden").length;
 
   const maxContextBytes = 128_000 * 4; // 128K tokens scale (~512KB)
@@ -685,6 +748,37 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       },
       rowItemHidden: {
         opacity: 0.65,
+      },
+      groupRowItem: {
+        backgroundColor: theme.colors.surface0,
+      },
+      childRowItem: {
+        paddingLeft: pad + (layout.compact ? 12 : 16),
+        backgroundColor: theme.colors.surface1 + "18",
+      },
+      expandToggleBtn: {
+        width: 14,
+        height: 14,
+        alignItems: "center" as const,
+        justifyContent: "center" as const,
+        marginRight: 2,
+      },
+      expandToggleText: {
+        fontSize: layout.compact ? 10 : 11,
+        color: theme.colors.foregroundMuted,
+        fontWeight: "700" as const,
+      },
+      mixedBadge: {
+        paddingHorizontal: 4,
+        paddingVertical: 1,
+        borderRadius: 3,
+        backgroundColor: theme.colors.surface1,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+      },
+      mixedBadgeText: {
+        fontSize: 9,
+        color: theme.colors.foregroundMuted,
       },
       rowMainLine: {
         flexDirection: "row" as const,
@@ -1143,6 +1237,289 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     );
   };
 
+  const renderGroupRow = (group: OutlineRow & { type: "group" }) => {
+    const isExpanded = !!expandedGroups[group.groupId];
+    const isPending = pendingGroupId === group.groupId;
+    const isSelected =
+      selectedRow &&
+      group.children.some(
+        (c) => (c.item_id ?? c.tool_call_id) === (selectedRow.item_id ?? selectedRow.tool_call_id),
+      );
+    const iconSize = layout.compact ? 13 : 14;
+
+    return (
+      <Pressable
+        key={group.key}
+        accessibilityRole="button"
+        accessibilityLabel={`Tool group: ${group.title}`}
+        style={[
+          styles.rowItem,
+          styles.groupRowItem,
+          isSelected ? styles.rowItemSelected : null,
+          group.allHidden ? styles.rowItemHidden : null,
+        ]}
+        onPress={() => {
+          setExpandedGroups((prev) => ({ ...prev, [group.groupId]: !isExpanded }));
+          if (group.children.length > 0) {
+            handleRowPress(group.children[0]);
+          }
+        }}
+      >
+        <View style={styles.rowMainLine}>
+          <View style={styles.rowLeftWrap}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isExpanded ? "Collapse group" : "Expand group"}
+              style={styles.expandToggleBtn}
+              hitSlop={8}
+              onPress={(e) => {
+                e.stopPropagation();
+                setExpandedGroups((prev) => ({ ...prev, [group.groupId]: !isExpanded }));
+              }}
+            >
+              <Text style={styles.expandToggleText}>{isExpanded ? "▾" : "▸"}</Text>
+            </Pressable>
+
+            <Text style={[styles.itemIcon, group.allHidden ? { color: theme.colors.foregroundMuted } : null]}>
+              {group.allHidden ? "⊘" : "⚡"}
+            </Text>
+
+            <Text
+              style={[
+                styles.toolNameText,
+                group.allHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
+              ]}
+              numberOfLines={1}
+            >
+              {group.title}
+            </Text>
+
+            {group.mixed ? (
+              <View style={styles.mixedBadge}>
+                <Text style={styles.mixedBadgeText}>
+                  {group.hiddenCount}/{group.children.length} hidden
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Right inline slot: [Group Hide/Summarize Action Icons] + [Total Bytes] */}
+          <View style={styles.rowRightWrap}>
+            {resolvedScopeKey ? (
+              <View style={[styles.actionsContainer, isPending ? { opacity: 0.5 } : null]}>
+                {group.allHidden ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Unhide all in ${group.groupId}`}
+                    style={styles.inlineIconBtnSlashed}
+                    disabled={isPending}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      void handleGroupUnhide(group);
+                    }}
+                  >
+                    <ActionSvgIcon
+                      kind={group.allSummarized ? "summarize" : "hide"}
+                      slashed={true}
+                      size={iconSize}
+                      color={theme.colors.foregroundMuted}
+                    />
+                  </Pressable>
+                ) : (
+                  <>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Hide all in ${group.groupId}`}
+                      style={styles.inlineIconBtn}
+                      disabled={isPending}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        void handleGroupHide(group, "hide");
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind="hide"
+                        slashed={false}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Summarize all in ${group.groupId}`}
+                      style={styles.inlineIconBtn}
+                      disabled={isPending}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        void handleGroupHide(group, "summarize");
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind="summarize"
+                        slashed={false}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                  </>
+                )}
+              </View>
+            ) : null}
+
+            <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
+              {fmtBytes(group.totalBytes)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.treeLineContainer}>
+          <Text style={group.allHidden ? styles.summaryHiddenSnippet : styles.summarySnippet} numberOfLines={1}>
+            {group.allHidden
+              ? `[all ${group.allSummarized ? "summarized" : "hidden"}] tap slashed icon to restore (${group.subTitle})`
+              : group.subTitle || "tools"}
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
+
+  const renderChildRow = (child: OutlineRow & { type: "child" }) => {
+    const row = child.row;
+    const rowKey = row.item_id ?? row.tool_call_id;
+    const isSelected = (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey;
+    const isHidden = row.status === "hidden";
+    const shortCallId =
+      row.tool_call_id.length > 12
+        ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
+        : row.tool_call_id;
+    const metricText =
+      row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+    const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
+    const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
+    const iconSize = layout.compact ? 12 : 13;
+
+    return (
+      <Pressable
+        key={child.key}
+        accessibilityRole="button"
+        accessibilityLabel={`Select tool ${row.tool_call_id}`}
+        style={[
+          styles.rowItem,
+          styles.childRowItem,
+          isSelected ? styles.rowItemSelected : null,
+          isHidden ? styles.rowItemHidden : null,
+        ]}
+        onPress={() => handleRowPress(row)}
+      >
+        <View style={styles.rowMainLine}>
+          <View style={styles.rowLeftWrap}>
+            <Text
+              style={[
+                styles.itemIcon,
+                isHidden ? { color: theme.colors.foregroundMuted } : null,
+                { fontSize: 9 },
+              ]}
+            >
+              {isHidden ? "⊘" : "↳"}
+            </Text>
+            <Text
+              style={[
+                styles.toolNameText,
+                { fontSize: layout.compact ? 10 : 11 },
+                isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
+              ]}
+              numberOfLines={1}
+            >
+              {row.tool_name ?? "tool"}
+            </Text>
+            {shortCallId ? (
+              <Text style={styles.callIdText} numberOfLines={1}>
+                {shortCallId}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.rowRightWrap}>
+            {resolvedScopeKey ? (
+              <View style={styles.actionsContainer}>
+                {isHidden ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Unhide ${row.tool_call_id}`}
+                    style={styles.inlineIconBtnSlashed}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      unhideMutation.mutate(row);
+                    }}
+                  >
+                    <ActionSvgIcon
+                      kind={summarized ? "summarize" : "hide"}
+                      slashed={true}
+                      size={iconSize}
+                      color={theme.colors.foregroundMuted}
+                    />
+                  </Pressable>
+                ) : (
+                  <>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Hide ${row.tool_call_id}`}
+                      style={styles.inlineIconBtn}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        hideMutation.mutate({ row, mode: "hide" });
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind="hide"
+                        slashed={false}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Summarize ${row.tool_call_id}`}
+                      style={styles.inlineIconBtn}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        hideMutation.mutate({ row, mode: "summarize" });
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind="summarize"
+                        slashed={false}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                  </>
+                )}
+              </View>
+            ) : null}
+            <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
+              {metricText}
+            </Text>
+          </View>
+        </View>
+
+        <View style={[styles.treeLineContainer, { marginLeft: layout.compact ? 8 : 12 }]}>
+          {isHidden ? (
+            <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
+              {summarized
+                ? `[summarized] ${firstSummaryLine || "tap icon to restore"}`
+                : `[hidden] ${firstSummaryLine || "tap icon to restore"}`}
+            </Text>
+          ) : (
+            <Text style={styles.summarySnippet} numberOfLines={1}>
+              {firstSummaryLine || "(no summary)"}
+            </Text>
+          )}
+        </View>
+      </Pressable>
+    );
+  };
+
   const isLoading = resolvedScopeKey ? listQuery.isPending : fallbackTimelineQuery.isPending;
 
   if (!isLoading && rows.length === 0) {
@@ -1233,8 +1610,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       {/* 2. Main Timeline Tree List */}
       <FlatList
         style={styles.list}
-        data={rows}
-        keyExtractor={(item, index) => item.item_id ?? `${item.tool_call_id}-${index}`}
+        data={groupedRows}
+        keyExtractor={(item) => item.key}
+        extraData={{ expandedGroups, lastActionByItem, pendingGroupId, selectedId }}
         ListEmptyComponent={
           listQuery.isPending ? (
             <Text style={styles.emptyText}>Loading outline…</Text>
@@ -1242,7 +1620,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
             <Text style={styles.emptyText}>No activity recorded in this session yet.</Text>
           )
         }
-        renderItem={({ item }) => renderRow(item)}
+        renderItem={({ item }) => {
+          if (item.type === "group") return renderGroupRow(item);
+          if (item.type === "child") return renderChildRow(item);
+          return renderRow(item.row);
+        }}
       />
 
       {/* 3. Context Window Gauge Bar */}
