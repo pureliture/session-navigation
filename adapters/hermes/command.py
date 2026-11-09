@@ -156,10 +156,10 @@ def _message_rows(state: Any, session_id: str) -> tuple[Any, list[dict[str, Any]
     if scope is None:
         return None, []
 
-    def order(unit: dict[str, Any]) -> tuple[int, bool]:
+    def order(unit: dict[str, Any]) -> int:
         parts = str(unit["unit_id"]).split(":")
-        ordinal = parts[2][1:] if len(parts) > 2 else ""
-        return (int(ordinal) if ordinal.isdigit() else 0, parts[1] != "user" if len(parts) > 1 else True)
+        position = parts[2][1:] if len(parts) > 2 else ""
+        return int(position) if position.isdigit() else 0
 
     units = [u for u in state.engine.store.list_units(scope) if u.get("kind") in ("user", "assistant")]
     return scope, sorted(units, key=order)
@@ -222,6 +222,8 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
         return _messages_text(state, session_id)
 
     if verb in ("hide-msg", "unhide-msg"):
+        if not state.is_enabled():
+            return "Session navigation: disabled"
         target = parts[1] if len(parts) > 1 else ""
         if not target:
             return "Usage: /nav " + verb + " <N|message id>"

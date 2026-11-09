@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -211,9 +212,10 @@ def _text_of(content: Any) -> str:
 def message_keys(api_mode: str, payload: dict[str, Any]) -> list[tuple[str, str, int, str]]:
     """User/assistant messages in a request copy as (key, role, index, text).
 
-    Hermes payloads carry no timestamps, so the key is the role's ordinal plus a
-    content hash: stable while history only grows, and a changed message never
-    matches an old hide.
+    Hermes payloads carry no timestamps, so the key is the message's position
+    among prompts/responses plus a hash of its full content (images included):
+    stable while history only grows, and a changed message never matches an
+    old hide.
     """
     if api_mode == "codex_responses":
         items = payload.get("input") if isinstance(payload, dict) else None
@@ -224,16 +226,15 @@ def message_keys(api_mode: str, payload: dict[str, Any]) -> list[tuple[str, str,
         entries = list(enumerate(items or []))
     else:
         return []
-    counts: dict[str, int] = {}
     out: list[tuple[str, str, int, str]] = []
     for index, item in entries:
         role = item.get("role") if isinstance(item, dict) else None
         if role not in ("user", "assistant"):
             continue
-        ordinal = counts.get(role, 0)
-        counts[role] = ordinal + 1
-        text = _text_of(item.get("content"))
-        out.append((f"msg:{role}:n{ordinal}:{_sha256(text)[:12]}", role, index, text))
+        content = item.get("content")
+        text = _text_of(content)
+        digest = _sha256(content if isinstance(content, str) else json.dumps(content, sort_keys=True, ensure_ascii=False))
+        out.append((f"msg:{role}:p{len(out)}:{digest[:12]}", role, index, text))
     return out
 
 
