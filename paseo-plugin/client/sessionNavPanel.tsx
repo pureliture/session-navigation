@@ -588,6 +588,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     if (fromLog?.used_tokens) return { used: fromLog.used_tokens, max: fromLog.max_tokens ?? null };
     return null;
   }, [usageQuery.data, listQuery.data]);
+  // The host meter only moves after the next model request; until then show the expected change from hides since.
+  const measuredHidden = hiddenRows.reduce((sum, r) => sum + (typeof r.tokens === "number" ? r.tokens : 0), 0);
+  const [baseline, setBaseline] = useState<{ used: number; hidden: number } | null>(null);
+  useEffect(() => {
+    if (sessionContext && baseline?.used !== sessionContext.used) {
+      setBaseline({ used: sessionContext.used, hidden: measuredHidden });
+    }
+  }, [sessionContext?.used, measuredHidden, baseline?.used]);
+  const pendingDelta = baseline && baseline.used === sessionContext?.used ? baseline.hidden - measuredHidden : 0;
   const activeRatio = sessionContext?.max
     ? Math.min(1, Math.max(0, sessionContext.used / sessionContext.max))
     : 0;
@@ -1661,7 +1670,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                   sessionContext.max ? ` / ${fmtTokenCount(sessionContext.max)}` : ""
                 } tokens${
                   sessionContext.max ? ` (${(activeRatio * 100).toFixed(layout.compact ? 0 : 1)}%)` : ""
-                }`
+                }${pendingDelta ? ` · next ≈ ${pendingDelta < 0 ? "−" : "+"}${fmtTokenCount(Math.abs(pendingDelta))}` : ""}`
               : "context — tokens"}
           </Text>
           <Text style={[styles.usageLabel, { textAlign: "right" }]} numberOfLines={1}>
