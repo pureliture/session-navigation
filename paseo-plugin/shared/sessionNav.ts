@@ -20,6 +20,9 @@ export const RowSchema = z.object({
   summary_line: z.string().optional(),
   tool_input: z.string().optional(),
   tool_output: z.string().optional(),
+  message_text: z.string().optional(),
+  replacement_text: z.string().optional(),
+  summary_pending: z.boolean().optional(),
 });
 
 export const DbErrorChoicesSchema = z.array(z.enum(["abort_request", "send_original"]));

@@ -10,6 +10,14 @@ return: leave the tab open to keep the navigator available. Closing it stays clo
 For a panel bound directly to the current agent, **Cmd/Ctrl+K → Open session navigation**
 and **/nav** remain available.
 
+The bottom **Preview** drawer is a read-only inspector. Select a row to inspect its
+input/output or message text. Hidden tools show **Sent to model** from the stored
+replacement alongside **Original input/output**, including pending-summary state;
+hidden messages show **Removed from context** alongside their original text.
+Previews are bounded to 8 KiB per payload with an explicit truncation marker.
+The footer keeps the selectable full ID, version, source and token reading on one
+horizontally scrollable line; section contents scroll independently.
+
 Paseo 0.15.3's + menu lists only workspace-context plugin panels, not agent panels.
 This plugin registers both kinds; adding manifest name/icon alone does not affect
 menu eligibility. There is no public default-open flag or agent-screen mount/focus

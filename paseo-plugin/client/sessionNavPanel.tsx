@@ -18,6 +18,7 @@ import {
 import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { resolveSessionTarget } from "./sessionFollowing";
 import { fallbackToolPreview } from "./toolPreview";
+import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 
 import {
@@ -383,6 +384,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               tokens_display: "—",
               bytes_size: text.length,
               summary_line: text,
+              message_text: text,
             });
           } else if (itemType === "assistant_message") {
             const text = typeof item.text === "string" ? item.text : "";
@@ -396,6 +398,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               tokens_display: "—",
               bytes_size: text.length,
               summary_line: text,
+              message_text: text,
             });
           } else if (
             itemType === "tool_call" ||
@@ -616,8 +619,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     : 0;
 
   const selectedRow = useMemo(() => {
-    if (!selectedId) return rows[0] ?? null;
-    return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? rows[0] ?? null;
+    if (!selectedId) return null;
+    return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? null;
   }, [rows, selectedId]);
 
   const styles = useMemo(() => {
@@ -914,59 +917,6 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         flexShrink: 1,
       },
 
-      // 4. Preview Drawer (Read-only inspector; actions unified inline on rows)
-      previewDrawer: {
-        borderTopWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface0,
-      },
-      previewHeader: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        justifyContent: "space-between" as const,
-        gap: 6,
-        paddingHorizontal: pad,
-        paddingVertical: layout.compact ? 4 : 6,
-        backgroundColor: theme.colors.surface1 + "44",
-        minWidth: 0,
-      },
-      previewHeaderTitle: {
-        fontSize: layout.compact ? 10 : 11,
-        fontWeight: "600" as const,
-        color: theme.colors.foreground,
-        flex: 1,
-        flexShrink: 1,
-        minWidth: 0,
-      },
-      previewHeaderSub: {
-        fontSize: layout.compact ? 9 : 10,
-        color: theme.colors.foregroundMuted,
-        flexShrink: 0,
-      },
-      previewBody: {
-        paddingHorizontal: pad,
-        paddingVertical: 8,
-        gap: 6,
-        maxHeight: 180,
-      },
-      previewCodeBox: {
-        backgroundColor: theme.colors.surface1,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        padding: 8,
-        maxHeight: 110,
-      },
-      previewCodeText: {
-        fontFamily: "monospace",
-        fontSize: 11,
-        color: theme.colors.foreground,
-        lineHeight: 15,
-      },
-      previewMetaLine: {
-        fontSize: 10,
-        color: theme.colors.foregroundMuted,
-      },
       actionBtnPrimary: {
         paddingHorizontal: 8,
         paddingVertical: 4,
@@ -1702,56 +1652,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         </View>
       </View>
 
-      {/* 4. Bottom Preview Drawer (Read-only payload/metadata inspector) */}
-      <View style={styles.previewDrawer}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Toggle preview drawer"
-          style={styles.previewHeader}
-          onPress={() => setPreviewOpen(!previewOpen)}
-        >
-          <Text style={styles.previewHeaderTitle} numberOfLines={1}>
-            Preview {previewOpen ? "︾" : "︽"}
-            {selectedRow
-              ? ` · ${selectedRow.tool_name ?? "item"} (${selectedRow.tool_call_id ? selectedRow.tool_call_id.slice(0, 10) : selectedRow.item_id?.slice(0, 10)})`
-              : ""}
-          </Text>
-          {selectedRow ? (
-            <Text style={styles.previewHeaderSub}>
-              {selectedRow.status} · {fmtBytes(selectedRow.bytes_size)}
-            </Text>
-          ) : null}
-        </Pressable>
-
-        {previewOpen && selectedRow ? (
-          <View style={styles.previewBody}>
-            <ScrollView style={styles.previewCodeBox}>
-              {selectedRow.tool_input !== undefined || selectedRow.tool_output !== undefined ? (
-                <>
-                  <Text style={styles.previewMetaLine}>
-                    {selectedRow.status === "hidden" ? "Input (original)" : "Input"}
-                  </Text>
-                  <Text style={styles.previewCodeText}>{selectedRow.tool_input ?? "(input unavailable)"}</Text>
-                  <Text style={styles.previewMetaLine}>
-                    {selectedRow.status === "hidden" ? "Output (original, hidden from model)" : "Output (original)"}
-                  </Text>
-                  <Text style={styles.previewCodeText}>{selectedRow.tool_output ?? "(output unavailable)"}</Text>
-                </>
-              ) : (
-                <Text style={styles.previewCodeText}>
-                  {selectedRow.summary_line || "(no details available)"}
-                </Text>
-              )}
-            </ScrollView>
-            <Text style={styles.previewMetaLine}>
-              ID: {selectedRow.item_id ?? "none"} · {selectedRow.source ?? "timeline"} · v{selectedRow.version}
-              {selectedRow.tokens_display && selectedRow.tokens_display !== "—"
-                ? ` · ${selectedRow.tokens_display}`
-                : ""}
-            </Text>
-          </View>
-        ) : null}
-      </View>
+      <PreviewDrawer row={selectedRow} open={previewOpen} onToggle={() => setPreviewOpen(!previewOpen)} theme={theme} />
 
       {/* DB Error Overlay */}
       {dbErrorOpen ? (

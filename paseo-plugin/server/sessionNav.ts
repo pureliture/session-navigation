@@ -93,6 +93,9 @@ function asRow(item: unknown): z.infer<typeof RowSchema> {
     summary_line: str(obj.summary_line),
     tool_input: str(obj.tool_input),
     tool_output: str(obj.tool_output),
+    message_text: str(obj.message_text),
+    replacement_text: str(obj.replacement_text),
+    summary_pending: typeof obj.summary_pending === "boolean" ? obj.summary_pending : undefined,
   };
 }
 

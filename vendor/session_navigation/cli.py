@@ -48,6 +48,15 @@ def _tool_preview(arguments: Any, output: str) -> dict[str, str]:
     }
 
 
+def _replacement_preview(item: Any) -> dict[str, Any]:
+    if item.visibility != "hidden":
+        return {}
+    return {
+        "replacement_text": _preview_text(item.compacted),
+        "summary_pending": item.compaction_source == "summarize_pending",
+    }
+
+
 def _read_omp_session(scope_key: str) -> tuple[list[dict[str, Any]], list[int], list[tuple[int, int]]] | None:
     """Read an OMP session: messages, positions where history was compacted/reset, and injected reminders (position, chars)."""
     parts = scope_key.split(":")
@@ -387,11 +396,12 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
                     "version": 1,
                     "compaction_source": "user_prompt",
                     "summary_line": summary,
+                    "message_text": _preview_text(text),
                     "bytes_size": len(text.encode("utf-8")),
                 })
         elif role == "assistant":
             c = msg.get("content", [])
-            text = ""
+            text = c if isinstance(c, str) else ""
             if isinstance(c, list):
                 for b in c:
                     if isinstance(b, dict) and b.get("type") == "text":
@@ -409,6 +419,7 @@ def _load_omp_session_timeline(scope_key: str) -> tuple[list[dict[str, Any]], di
                     "version": 1,
                     "compaction_source": "assistant_output",
                     "summary_line": summary,
+                    "message_text": _preview_text(text),
                     "bytes_size": len(text.encode("utf-8")),
                 })
         elif role == "toolResult":
@@ -689,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "version": version,
                                 "compaction_source": "explicit_user_hide" if hidden else entry["compaction_source"],
                                 "summary_line": entry["summary_line"],
+                                "message_text": entry["message_text"],
                                 "bytes_size": entry["bytes_size"],
                                 **_token_fields(row_tokens.get(entry["item_id"])),
                             })
@@ -731,6 +743,7 @@ def main(argv: list[str] | None = None) -> int:
                                     "bytes_size": len((it.original or "").encode("utf-8")),
                                     **{key: entry[key] for key in ("tool_input",) if key in entry},
                                     "tool_output": _preview_text(it.original),
+                                    **_replacement_preview(it),
                                     **_token_fields(row_tokens.get(cid)),
                                 })
                             else:
@@ -789,6 +802,7 @@ def main(argv: list[str] | None = None) -> int:
                                 if isinstance(it.invocation_snapshot, dict) else None,
                                 it.original,
                             ),
+                            **_replacement_preview(it),
                         })
 
                     unrecorded_units = [u for u in store.list_units(args.scope) if u.get("kind") == "tool_result" and u.get("tool_call_id") not in recorded_calls]

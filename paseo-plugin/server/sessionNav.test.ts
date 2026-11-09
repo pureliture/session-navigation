@@ -32,12 +32,15 @@ test("imported OMP bare native handles resolve recursively like CLI session file
 });
 
 test("list carries original preview fields including empty output through asRow", async () => {
-  const dir = fakeCli(`echo '{"ok":true,"items":[{"item_id":"preview","tool_call_id":"call","status":"hidden","version":2,"tool_input":"original path","tool_output":""}]}'`);
+  const dir = fakeCli(`echo '{"ok":true,"items":[{"item_id":"preview","tool_call_id":"call","status":"hidden","version":2,"tool_input":"original path","tool_output":"","replacement_text":"stored replacement","summary_pending":true,"message_text":"original message"}]}'`);
   try {
     const result: any = await listItems({ scope_key: "preview-fields" });
     expect(result.ok).toBe(true);
     expect(result.items[0].tool_input).toBe("original path");
     expect(result.items[0].tool_output).toBe("");
+    expect(result.items[0].replacement_text).toBe("stored replacement");
+    expect(result.items[0].summary_pending).toBe(true);
+    expect(result.items[0].message_text).toBe("original message");
   } finally { restorePath(dir); }
 });
 function fakeCli(script: string): string {
