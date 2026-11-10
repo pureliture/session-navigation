@@ -7,7 +7,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+ENGINE_PROTOCOL_VERSION = 1
+ADAPTER_PROTOCOL_VERSION = 1
 
 DB_FILENAME = "state.sqlite3"
 APP_DIRNAME = "session-navigation"
@@ -23,6 +25,45 @@ class DBFullError(DBError):
     """Raised when the underlying SQLite database is full."""
 
     code = "db_full"
+
+
+class EngineProtocolError(DBError):
+    """The database requires an incompatible engine or schema."""
+
+    code = "engine_protocol_incompatible"
+
+
+class UnsafeJournalError(DBError):
+    """An unsafe runtime cannot write the remaining WAL database."""
+
+    code = "unsafe_journal_mode"
+
+
+def check_protocol(conn: sqlite3.Connection) -> None:
+    """Reject future contracts before any configuration or data writes."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
+        return
+    meta = dict(conn.execute("SELECT key,value FROM meta"))
+    try:
+        protocol = int(meta.get("engine_protocol_version", "1"))
+        schema = int(meta.get("schema_version", "1"))
+    except (ValueError, TypeError) as exc:
+        raise EngineProtocolError("Invalid engine protocol/schema version") from exc
+    if protocol != ENGINE_PROTOCOL_VERSION or schema not in (1, 2):
+        raise EngineProtocolError(f"Unsupported engine protocol={protocol}, schema={schema}")
+
+
+class EngineConnection(sqlite3.Connection):
+    """Recheck compatibility at each engine write, including long-lived clients."""
+
+    def execute(self, sql, parameters=()):
+        command = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+        if command in {"INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP", "BEGIN"}:
+            check_protocol(self)
+            mode = super().execute("PRAGMA journal_mode").fetchone()[0]
+            if mode == "wal" and not wal_supported():
+                raise UnsafeJournalError("Unsafe SQLite runtime cannot write a WAL database")
+        return super().execute(sql, parameters)
 
 
 def _parse_version(value: str) -> tuple[int, ...]:
@@ -69,34 +110,15 @@ default_state_path = resolve_path
 
 def _configure_connection(conn: sqlite3.Connection, path: Path) -> None:
     conn.execute("PRAGMA busy_timeout=5000")
-    want = "wal" if wal_supported() else "delete"
-    # Gate per D7: WAL only on SQLite >= 3.51.3 (or backported 3.44.6/3.50.7),
-    # else rollback journal (delete). When the version gate blocks WAL, the
-    # first attempt is DELETE; a WAL-mode file stays WAL until checkpointed,
-    # so the fallback MUST allow WAL (live DB was created in WAL by the
-    # newer OMP daemon Python). Accept either verified mode, never unverified.
-    allowed = {want}
-    if want == "delete":
-        allowed.add("wal")
-    else:
-        allowed.add("delete")
-    got = ""
-    for mode in ([want, "delete", "wal"] if want == "delete" else [want]):
-        try:
-            row = conn.execute(f"PRAGMA journal_mode={mode.upper()}").fetchone()
-            got = str(row[0]).lower() if row else ""
-        except sqlite3.Error:
-            got = ""
-        if got in allowed:
-            break
-    if got not in allowed:
-        try:
-            row = conn.execute("PRAGMA journal_mode").fetchone()
-            got = str(row[0]).lower() if row else ""
-        except sqlite3.Error:
-            pass
-    if got not in allowed:
-        raise DBError(f"journal_mode unverified (want={want}, got={got or 'unknown'})")
+    try:
+        row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+    except sqlite3.Error:
+        row = conn.execute("PRAGMA journal_mode").fetchone()
+    got = str(row[0]).lower() if row else ""
+    if got == "wal" and not wal_supported():
+        raise UnsafeJournalError("WAL could not be converted to DELETE; SQLite runtime is below the WAL safety gate")
+    if got not in {"delete", "wal"}:
+        raise DBError(f"journal_mode unverified (want=delete, got={got or 'unknown'})")
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA synchronous=NORMAL" if got == "wal" else "PRAGMA synchronous=FULL")
@@ -182,18 +204,50 @@ _SCHEMA_SQL = """
             recorded_at REAL,
             PRIMARY KEY(scope_key, call_key)
         );
+
+        CREATE TABLE IF NOT EXISTS adapter_sessions (
+            scope_key TEXT PRIMARY KEY,
+            adapter_id TEXT NOT NULL,
+            adapter_protocol INTEGER NOT NULL,
+            capabilities TEXT NOT NULL,
+            enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+            instance_id TEXT NOT NULL,
+            last_seen REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS adapter_targets (
+            scope_key TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            tool_call_id TEXT NOT NULL,
+            result_position INTEGER NOT NULL,
+            invocation_digest TEXT NOT NULL,
+            invocation_snapshot TEXT NOT NULL,
+            original TEXT NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            options_omitted INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY(scope_key,item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_adapter_targets_scope_seq ON adapter_targets(scope_key,seq);
         """
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Create the v1 schema if it does not already exist."""
-    conn.executescript(_SCHEMA_SQL)
-    conn.execute(
-        "INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (SCHEMA_VERSION,),
-    )
-    conn.commit()
+    """Adopt v1 in place and atomically install the shared engine contract."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        check_protocol(conn)
+        for statement in _SCHEMA_SQL.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        for key, value in (("schema_version", SCHEMA_VERSION),
+                           ("engine_protocol_version", str(ENGINE_PROTOCOL_VERSION))):
+            conn.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 create_tables = create_schema
@@ -205,49 +259,28 @@ def open_db(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
     """Open and configure a SQLite connection, creating parent dirs and schema."""
     resolved = resolve_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(resolved), timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(str(resolved), timeout=30, check_same_thread=False, factory=EngineConnection)
     conn.execute("PRAGMA busy_timeout=30000")
     try:
+        check_protocol(conn)
         _configure_connection(conn, resolved)
         # Concurrent first-open: serialize on BEGIN IMMEDIATE and verify ALL
         # tables (meta-first scripts commit mid-way; meta presence alone is
         # not proof the schema is complete). Read-only fast path first: a
         # complete schema never needs a write transaction.
-        required = {"meta", "items", "identities", "units", "calls"}
+        required = {"meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets"}
         try:
             have = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
         except sqlite3.OperationalError:
             have = set()
-        if required.issubset(have):
-            try:
-                conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES ('schema_version','1')")
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass  # readonly: schema is complete, version bump is best-effort
+        meta = dict(conn.execute("SELECT key,value FROM meta")) if "meta" in have else {}
+        if required.issubset(have) and meta.get("schema_version") == SCHEMA_VERSION and meta.get("engine_protocol_version") == str(ENGINE_PROTOCOL_VERSION):
             return conn
         for attempt in range(20):
             try:
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    have = {r[0] for r in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'")}
-                    if not required.issubset(have):
-                        conn.executescript(_SCHEMA_SQL)
-                        conn.execute(
-                            "INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
-                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                            (SCHEMA_VERSION,))
-                    else:
-                        conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES ('schema_version','1')")
-                    conn.commit()
-                    break
-                except Exception:
-                    try:
-                        conn.rollback()
-                    except sqlite3.Error:
-                        pass
-                    raise
+                create_schema(conn)
+                break
             except sqlite3.OperationalError:
                 if attempt == 19:
                     raise
@@ -258,6 +291,8 @@ def open_db(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
             raise DBError(f"schema incomplete after open: missing={sorted(required - have)}")
     except Exception as exc:
         conn.close()
+        if isinstance(exc, DBError):
+            raise
         if _is_full_error(exc):
             raise DBFullError(str(exc)) from exc
         raise DBError(str(exc)) from exc
@@ -290,6 +325,8 @@ def db_info(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
                     "SELECT value FROM meta WHERE key='schema_version'"
                 ).fetchone()
                 info["schema_version"] = row[0] if row else None
+                row = conn.execute("SELECT value FROM meta WHERE key='engine_protocol_version'").fetchone()
+                info["engine_protocol_version"] = row[0] if row else None
             except sqlite3.Error:
                 info["schema_version"] = None
             conn.close()

@@ -500,7 +500,7 @@ def _mutate_message(
             visibility="hidden" if command == "hide" else "visible", expected_version=expected_version,
         )
     except (DBError, DBFullError) as exc:
-        return {"ok": False, "error": "db_full" if isinstance(exc, DBFullError) else "db_error"}, 3
+        return {"ok": False, "error": exc.code}, 3
     if not res["ok"]:
         return {"ok": False, "error": res["error"],
                 "item": {"item_id": item_id, "version": res["version"], "visibility": res["visibility"]}}, 4

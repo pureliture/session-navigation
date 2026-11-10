@@ -31,7 +31,7 @@ class Daemon:
     def _db_error_response(self, exc):
         if "full" in str(exc).lower() or "disk" in str(exc).lower():
             return {"ok": False, "error": "db_full"}
-        return {"ok": False, "error": "db_error", "choices": ["abort_request", "send_original"]}
+        return {"ok": False, "error": getattr(exc, "code", "db_error"), "choices": ["abort_request", "send_original"]}
 
     def handle(self, req):
         try:

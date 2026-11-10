@@ -52,6 +52,7 @@ import copy
 import hashlib
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -60,7 +61,7 @@ from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
 from .handlers import restore as _engine_restore
 from .handlers import summarize as _engine_summarize
-from .payload import drop_messages, message_keys
+from .payload import SUPPORTED_API_MODES, drop_messages, message_keys
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
 from .usage import UsageTracker, estimate_tokens
@@ -118,6 +119,10 @@ class PluginState:
     db_error_pending: bool = False
     usage: UsageTracker = field(default_factory=UsageTracker)
     reminders: BoundaryReminders = field(default_factory=BoundaryReminders)
+    instance_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    def __post_init__(self) -> None:
+        self.engine.store.scope_aliases[ADAPTER_ID] = (BRANCH_SCOPE, "default")
 
 
 def scope_for(state: PluginState, session_id: Any) -> Scope | None:
@@ -456,6 +461,9 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
     def on_llm_request(**kwargs: Any) -> dict[str, Any] | None:
         try:
             if not state.is_enabled():
+                scope = scope_for(state, kwargs.get("session_id", ""))
+                if scope is not None and state.engine.store.adapter_session(scope) is not None:
+                    _register_adapter(state, scope, False)
                 return None
             request = kwargs.get("request")
             if not isinstance(request, dict):
@@ -472,6 +480,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 api_mode = ""
             state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
             if state.count_middlewares() > 0:
+                _register_adapter(state, scope, False)
                 # Another llm_request middleware is installed. The installed
                 # chain composes rewrites in registration order, so OUR
                 # replacement is not silently dropped -- but if we run first,
@@ -489,7 +498,10 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                     "source": SOURCE,
                     "reason": "other_middleware_present",
                 }
-            step = _engine_step(state.engine, state.store, scope, api_mode, request)
+            supported = api_mode in SUPPORTED_API_MODES
+            _register_adapter(state, scope, supported)
+            step = _engine_step(state.engine, state.store, scope, api_mode, request,
+                               publish_targets=supported, summarizer=state.summarizer)
             applied = step["applied"]
             skipped = step["skipped"]
             reason = step["trace"].get("reason", "")
@@ -559,3 +571,9 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 pass
             raise
     return on_llm_request
+
+
+def _register_adapter(state: PluginState, scope: Scope, projecting: bool) -> None:
+    state.engine.store.register_adapter(scope, adapter_id=ADAPTER_ID, instance_id=state.instance_id,
+        capabilities={"hide": projecting, "summarize": projecting and state.summarizer is not None,
+                      "unhide": projecting}, enabled=projecting)

@@ -57,7 +57,13 @@
         "invalid_handler_result",
         "no_recent_list",
         "unknown_display_number",
-        "summarize_unsupported"
+        "summarize_unsupported",
+        "engine_protocol_incompatible",
+        "unsafe_journal_mode",
+        "adapter_unavailable",
+        "invalid_adapter_registration",
+        "invalid_target_identity",
+        "not_pending"
       ]
     },
     "category": {
