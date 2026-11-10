@@ -8,6 +8,47 @@ Paseo의 우측 Explorer 패널, OMP(oh-my-pi) 확장, Hermes 플러그인에서
 게시된 릴리스가 있다는 뜻은 아닙니다. 아래 Git 설치 예시는 이 기능이 `main`에
 병합된 뒤를 기준으로 하며, 재현 가능한 설치에는 검토한 커밋이나 릴리스 태그를 사용하세요.
 
+## Demo
+
+An English Paseo session reviewing a small API with OMP and DeepSeek Flash.
+The outline stays beside the chat; original messages and tool results are preserved.
+
+![Session navigator outline beside the chat](docs/media/01-outline-hero.png)
+
+**Jump through the conversation.** Click an outline row to return to its message,
+including the first prompt. [Watch MP4](docs/media/outline-jump.mp4).
+
+![Jump from the health-check review back to the first prompt](docs/media/outline-jump.gif)
+
+**Hide a completed tool group, then Unhide it.** The footer shows the estimated
+next-request reduction; Unhide restores originals without re-running tools.
+The `next ≈` figure is an estimate, not a new measured context reading.
+[Watch MP4](docs/media/hide-restore.mp4).
+
+![Hide and restore a tool group with the next-request estimate](docs/media/hide-restore.gif)
+
+<details>
+<summary>More screenshots: Hide, Preview and the empty state</summary>
+
+**Selected group after Hide:** the footer estimates `next ≈ −3.9K` tokens.
+
+![Selected hidden group and its next-request estimate](docs/media/02-hide-estimate.png)
+
+**Hidden rows:** the group is collapsed and the saved-context indicator is visible.
+
+![Hidden tool group with its saved-context indicator](docs/media/03-hide-applied.png)
+
+**Read-only Preview:** inspect the outgoing replacement and the original input/output.
+[Original output detail](docs/media/06-preview-output.png).
+
+![Preview of the model-facing replacement and preserved original](docs/media/04-preview-original.png)
+
+**No session in view:** open a session and the outline follows the visible chat.
+
+![Unbound navigator beside a new agent tab](docs/media/05-unbound-empty.png)
+
+</details>
+
 ## 주요 기능
 
 - 도구 결과의 Hide / Summarize / Unhide와 SQLite 영속화.
