@@ -1,3 +1,160 @@
+# v4 — 정리 후 마지막 답변 완결성 (2026-11-10)
+
+제품 B-new는 **`37348b8`**이다. OMP 시스템 안내/꼬리 reminder, Hermes supervision/공통
+reminder 및 vendor에 다음 한 문장만 추가했다. 시점·대상·행동은 여전히 agent가 선택하며
+먼저 작업 단위를 끝내고 답한 뒤 필요하면 한 번에 정리한다. Hide는 rules, Summarize는
+session LLM이고 원문과 outgoing-copy-only 원칙은 바꾸지 않았다.
+
+> After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'.
+
+동일 offline `o200k_base`/JSON 방식의 고정 overhead는 OMP **679→709 (+30)**,
+Hermes **333→364 (+31)** tokens다. 대표 3행 reminder는 **185→215 (+30)** tokens,
+793 bytes로 여전히 1,000-byte cap/300-token 목표 이하다. provider 청구량은 아니다.
+
+v3와 같은 **DeepSeek V4.1 Flash 1017 / Relace 단독 / reasoning disabled/excluded**,
+65,536 effective window와 동일 fixture/25턴/host runner/proxy를 사용했다.
+B-new 8세션은 모두 새로 실행했다. **OMP final-only 4/4, visible-unit 4/4; Hermes도 4/4, 4/4**다.
+마지막 메시지의 `reported above`/`see above` 계열은 **OMP 0/100, Hermes 0/100**이다.
+같은 검출기로 v3를 별도 분석한 값은 OMP 9/100, Hermes 6/75였다. v3 증거는 수정하지 않았다.
+새 마지막 메시지의 `above/earlier/previous/prior/already/reported` 포함 문장도 확인했다:
+답을 대신한 back-reference는 없고, 파일 헤더·이전 읽기 출처·시험의 이전 실패 등과 함께
+요청한 값 자체를 명시한 문장뿐이었다. 이는 이 표본의 개선이지 모든 미래 생성에 대한 보장은 아니다.
+
+### v4 균형 비교 및 증거
+
+**24/24 장기 세션 완료**, OMP/Hermes × A/B-old/B-new × 4세션이다. 최종 답변 fact check와
+visible-unit check 모두 **24/24**이고 canonical test도 모두 통과했다. 아래 표의 과제 성공은
+미리 정한 사실 문자열/숫자와 canonical test 기준이며 설명 전체의 의미 정확성을 보증하지 않는다.
+아래 v3 역사적 결과와 원본은 그대로 보존했다.
+
+재사용은 **13세션**이다: OMP A/B-old 각 4개, Hermes A의 atlas-1/boreal-1,
+Hermes B-old의 atlas-1/atlas-2/boreal-1. 새 실행은 B-new 8개와 Hermes A boreal-2,
+B-old boreal-2, A atlas-2의 **11개**다. v3의 완료 A atlas-2도 exhausted 429 두 건과
+usage/cost 누락 두 건이 있어 제외하고 재실행했다. 첫 새 A atlas-2도 native checkpoint 한 건이
+429 backoff를 소진해 non-qualifying으로 보존한 뒤 새 label v4r2-로 재개했다.
+마지막 재개는 transient 429 두 번을 backoff로 회복했고 exhausted failure는 없다.
+어떤 API 오류도 제품 과제 실패로 세지 않았다.
+
+재사용/새 셀 목록과 제외 이유는 v4-deepseek/reuse.json에 있다. stage의 model/provider/reasoning/window,
+실제 upstream 설정, 동일 fixture와 v3 이래 바뀌지 않은 host runner/proxy를 검사했다.
+모든 신규 upstream 1,035회 시도는 같은 모델/Relace/no-fallback/reasoning-off였고,
+성공 응답 1,024개의 reasoning tokens는 모두 0이었다.
+
+| Host / arm | Final-only / visible-unit | Nav / list | Requests | Output tokens | Reported USD | Large-cache reference USD |
+|---|---:|---:|---:|---:|---:|---:|
+| OMP A | 4/4 / 4/4 | 0 / 0 | 244 | 58,906 | 0.087330 | 8.084452 |
+| OMP B-old | 4/4 / 4/4 | 67 / 4 | 249 | 46,245 | 0.062571 | 6.371886 |
+| OMP B-new | 4/4 / 4/4 | 31 / 1 | 251 | 57,083 | 0.081120 | 7.837922 |
+| Hermes A | 4/4 / 4/4 | 0 / 0 | 342 | 228,762 | 0.175768 | 10.633020 |
+| Hermes B-old | 4/4 / 4/4 | 30 / 0 | 310 | 146,861 | 0.125279 | 9.070012 |
+| Hermes B-new | 4/4 / 4/4 | 28 / 3 | 286 | 141,086 | 0.116321 | 8.145430 |
+
+Nav는 list를 포함한다. Requests/output/cost는 제품 요약과 host native 유지 요청까지 포함한다.
+Hermes의 local /api/show probe 거부는 이전처럼 upstream 모델 요청으로 세지 않는다.
+이 24세션의 usage/cost/cache 누락과 exhausted API failure는 모두 0이다.
+큰 할인 reference는 input/cache/output **$2/$0.5/$8 per M**이며 DeepSeek 청구액이 아니다.
+
+| Host / arm | Prompt tokens | Cached tokens |
+|---|---:|---:|
+| OMP A | 11,314,570 | 10,010,624 |
+| OMP B-old | 7,595,907 | 6,126,592 |
+| OMP B-new | 10,212,293 | 8,695,552 |
+| Hermes A | 11,896,758 | 9,993,728 |
+| Hermes B-old | 9,982,506 | 8,046,592 |
+| Hermes B-new | 8,807,187 | 7,065,088 |
+
+B-new 대 A의 관측 비용은 OMP **−7.11%** (reference **−3.05%**),
+Hermes **−33.82%** (reference **−23.39%**)다. OMP B-old는 여전히 B-new보다 싸다.
+재사용 시점의 cache/호스트 압축/생성 변동을 통제하지 않았으므로 독립적인 정리 효과나
+보편적 절감으로 일반화하지 않는다.
+
+#### v3 → v4: 같은 B-new 셀끼리
+
+Hermes는 v3에 완료된 세 셀만 맞춰 비교한다. 전체 새 Hermes 네 셀과 혼동하지 않는다.
+
+| Host / matched cells | Final-only | Visible-unit | Nav / list | Requests | Output tokens | Reported USD |
+|---|---:|---:|---:|---:|---:|---:|
+| OMP v3 (4) → v4 (4) | 1/4 → 4/4 | 4/4 → 4/4 | 53/7 → 31/1 | 285 → 251 | 61,235 → 57,083 | 0.084207 → 0.081120 |
+| Hermes v3 (3) → v4 (3) | 0/3 → 3/3 | 3/3 → 3/3 | 42/0 → 6/1 | 214 → 191 | 69,582 → 126,671 | 0.065667 → 0.095435 |
+
+즉 마지막 답변 완결성은 이 표본에서 개선됐지만, Hermes matched-3의 비용은 **+45.33%**이고
+출력이 늘었다. 안내 변경만의 인과 효과는 분리할 수 없다. 측정 과제 실패는 새 24세션에서 없었고,
+API 오류가 있던 이전 A 셀/첫 재개는 제외 사유와 비용을 따로 남겼다.
+B-new 사용성 gate는 **6/8세션**이 두 경계 이상 정리, literal ID **101/103 (98.1%)**로 통과했다.
+일부 세션에서 정리하지 않은 것은 자율 선택이며 강제하지 않았다.
+
+#### Hide 이후 재접근 / 복원
+
+기존 time-ordered events/성공한 Hide·Summarize·auto/unhide 방식 그대로다.
+파일 접근 proxy이며 유실 때문에 다시 읽었다는 인과 증거가 아니다.
+
+| Host / arm | bash a/b/c | read a/b/c | a same-turn / later | b visible repeats | Successful unhide calls |
+|---|---:|---:|---:|---:|---:|
+| OMP A | 0/6/18 | 0/6/88 | 0 / 0 | 12 | 0 |
+| OMP B-old | 0/1/16 | 2/3/88 | 0 / 2 | 4 | 2 |
+| OMP B-new | 1/0/36 | 0/3/68 | 0 / 1 | 3 | 0 |
+| Hermes A | N/A | N/A | N/A | N/A | 0 |
+| Hermes B-old | N/A | N/A | N/A | N/A | 0 |
+| Hermes B-new | N/A | N/A | N/A | N/A | 2 |
+
+a=아직 숨겨진 결과의 파일에 접근, b=보이는 파일 재접근, c=신규.
+Hermes에는 work-tool start events가 없어 재접근은 **측정 불가이지 0이 아니다**.
+unhide는 실제 operation의 성공 응답을 센다. OMP B-new의 a는 v3 3건 → v4 1건이다.
+
+#### 별도 명령형 component / judge
+
+16 trial을 모두 새로 실행했다. 아래 보존율은 **실제로 전송된** pure rule Hide / pure LLM Summarize만
+세며 A는 plugin off이므로 N/A다. 각 host/arm에서 Hide 2회, Summarize 2회를 지시했다.
+
+| Host / arm | Rule Hide facts | LLM Summarize facts | Pure summary trials / commanded | Judge mean / count |
+|---|---:|---:|---:|---:|
+| OMP B-old | 6/6 | 4/6 | 2/2 | 1.25 / 4 |
+| OMP B-new | 6/6 | 2/3 | 1/2 | 2.00 / 3 |
+| Hermes B-old | 6/6 | 6/6 | 2/2 | 2.50 / 4 |
+| Hermes B-new | 6/6 | 6/6 | 2/2 | 3.00 / 4 |
+
+두 arm 모두 Hide 합계 **12/12**, Summarize는 B-old **10/12**, B-new **8/9**다.
+B-new OMP 두 번째 Summarize는 verification_failed로 거절돼 전송된 replacement가 없었다.
+그 뒤 tool-call ID를 item ID로 복원하려 한 호출도 not_found였다. 이를 성공한 LLM 보존으로
+계산하지 않았다. 전송된 replacement의 source/action 불일치는 없었다.
+Component final-only는 OMP B-old 3/4, 다른 세 군은 4/4다. 실패한 B-old Hide rep-2의 복원 턴은
+복원 확인문만 남기고 요청 owner/seal/budget 세 값을 생략했다(원문 유실을 입증하는 실패가 아니다).
+
+Judge는 v3와 같은 모델/설정으로 원본·replacement·key facts를 arm-blind 평가했다.
+**15/15 유효 JSON, 평균 2.20/5** (v3 2.27/5), API/JSON 미채점은 없다.
+key-fact 3개를 남겨도 telemetry 행/host metadata 삭제를 낮게 평가한 사례가 있다.
+3-fact 보존과 전체 의미 품질은 다른 지표이므로 summary 품질이 해결됐다는 주장은 하지 않는다.
+
+#### 예산·감사·재현
+
+신규 지출 예상은 처음 **$2.204192**, 첫 완료 세 세션 관측 후 **$1.395623**,
+추가 baseline/재개 allowance까지 **$2.335284**로 모두 $5 gate 이하였다.
+새 capture의 성공 응답 reported cost 합계는 **$0.374425160**:
+B-new long $0.197440740 + missing baselines $0.080263188 + 첫 비적격 A 재시도 $0.027381194
+및 적격 A 재개 $0.048299008 + component $0.018986738 + judge $0.002054292다.
+첫 비적격 시도의 429 응답 한 건은 usage가 없고 품질·균형 비용 표에 넣지 않았다.
+재사용 historical cost $0.322385714는 신규 청구가 아니다. 균형 24 long 표의 합계 $0.648388650은
+신규 적격 long $0.326002936와 재사용분을 합친 분석용 금액이다. Stage 2는 같은 OMP A/B-new
+4vs4를 재사용하므로 별도 모델 지출은 없다.
+
+주 증거: eval/results/2026-11-09-v4-deepseek의 scorecard.json, reuse.json,
+answer-surface.json, rereads.json, cache-transitions.json, 압축 wire와 store snapshots.
+별도 raw new/fill/retry/retry2/quality 디렉터리와 setup-v4의 budget/overhead/이전 비교를 함께 보존한다.
+raw v4-retry는 non-qualifying이다. wire는 writer 종료 후 lossless archive하고 decompressed SHA-256을
+확인했다. 설정은 원래 파일을 바꾸지 않는 isolated HOME이다.
+최종 configs-final.json / budget-final.json / final-audit.json은 setup-v4에,
+실제 24세션 요청/응답의 모델·provider·reasoning 검사는 v4-deepseek/request-audit.json에 보관한다.
+
+제품 수정 직후 전체 suite 기록:
+
+    pytest: 383 passed, 11 skipped in 30.45s
+    OMP bun: 37 pass, 0 fail, 314 expect() calls
+    Paseo tsc+bun: 100 pass, 0 fail, 351 expect() calls
+    core vendor diff exit=0 / Hermes vendor diff exit=0
+    최종 harness unittest: Ran 25 tests in 2.888s — OK
+
+후속 변경은 harness/문서/증거뿐이다. 설치 runtime이나 UI는 수정하지 않았다.
+
 # v3 — DeepSeek fallback 부분 완료 (2026-11-09)
 
 ## 현재 결과 요약

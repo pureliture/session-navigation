@@ -19,9 +19,19 @@ STAGES = {"crouton": ("stealth/crouton-alpha", "Stealth"),
           "nemotron": ("nvidia/nemotron-3.5-lightning:free", "Nvidia"),
           "deepseek-quality": ("deepseek/deepseek-v4.1-flash-1017", "Relace"),
           "deepseek": ("deepseek/deepseek-v4.1-flash-1017", "Relace")}
-COMMITS = {"A": "fc07058", "B-old": "5017b97", "B-new": "fc07058"}
+COMMITS = {"A": "fc07058", "B-old": "5017b97", "B-new": "37348b8"}
 DEEPSEEK_REASONING = {"enabled": False, "exclude": True}
 HERMES = "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+
+
+def positive_int(value):
+    try:
+        result = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("Expected a positive integer") from None
+    if result < 1:
+        raise argparse.ArgumentTypeError("Expected a positive integer")
+    return result
 
 
 def source_snapshot(base, commit):
@@ -52,7 +62,8 @@ def main():
     parser.add_argument("--hosts", default="omp,hermes")
     parser.add_argument("--arms", default="A,B-old,B-new")
     parser.add_argument("--cases", default="atlas,boreal")
-    parser.add_argument("--repetitions", type=int, default=2)
+    parser.add_argument("--repetitions", type=positive_int, default=2)
+    parser.add_argument("--repetition-start", type=positive_int, default=1)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--components", action="store_true")
     parser.add_argument("--component-actions", default="hide,summarize")
@@ -146,7 +157,7 @@ def main():
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
             jobs = []
-            for rep in range(1, args.repetitions + 1):
+            for rep in range(args.repetition_start, args.repetition_start + args.repetitions):
                 arms = args.arms.split(",")
                 if rep % 2 == 0:
                     arms.reverse()

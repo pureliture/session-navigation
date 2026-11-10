@@ -2,10 +2,19 @@
 import collections
 import gzip
 import json
+import re
 from pathlib import Path
 import sys
 
 from analyze import text
+
+
+def final_backreference(answer):
+    return bool(re.search(
+        r"\b(?:(?:reported|stated|provided|listed|given|shown|answered|noted|detailed|see|as|retained|"
+        r"memo|reports?|answers?|values?|facts?|details|table)\s+"
+        r"(?:above|earlier)|(?:already|previously)\s+(?:reported|provided|answered|stated))\b",
+        answer, re.IGNORECASE))
 
 
 def unit_answer(turn):
@@ -36,13 +45,18 @@ def score_surfaces(directory):
                            "matched": [match_fact(answer, fact) for fact in original["facts"]]})
         success = len(turns) == report["user_turns"] and all(all(row["matched"]) for row in checks)
         row = {"id": report["id"], "final_message_success": report["task_success"],
-               "visible_unit_success": success, "checks": checks}
+               "visible_unit_success": success, "checks": checks,
+               "final_backreferences": [{"turn": index + 1, "answer": turn.get("answer", "")}
+                                        for index, turn in enumerate(turns)
+                                        if final_backreference(turn.get("answer", ""))]}
         sessions.append(row)
         key = report["host"] + "/" + report["arm"]
         group = groups.setdefault(key, collections.Counter())
         group["sessions"] += 1
         group["final_message_success"] += report["task_success"]
         group["visible_unit_success"] += success
+        group["final_messages"] += len(turns)
+        group["final_backreference_messages"] += len(row["final_backreferences"])
         group["missing_user_boundaries"] += sum(not check["captured_user_boundary"] for check in checks)
     result = {"groups": {key: dict(value) for key, value in groups.items()}, "sessions": sessions}
     (directory / "answer-surface.json").write_text(json.dumps(result, indent=2))

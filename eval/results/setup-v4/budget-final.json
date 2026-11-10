@@ -1,0 +1,11 @@
+{
+  "budget_usd": 5,
+  "max_projected_new_spend": 2.335283772,
+  "captured_new_reported_cost": 0.37442516,
+  "includes_nonqualifying_attempt_reported_cost": 0.027381194,
+  "nonqualifying_API_error_without_usage": 1,
+  "reused_historical_reported_cost": 0.322385714,
+  "qualifying_24_long_reported_cost": 0.64838865,
+  "additional_cost_stage_spend": 0,
+  "note": "Reported successful-response costs; one excluded 429 has no usage. Conservative projection includes that whole attempted session."
+}

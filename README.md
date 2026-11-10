@@ -280,6 +280,16 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 
 ## Evaluation
 
+**v4:** 정리 후 마지막 메시지에도 모든 요청 값을 다시 쓰도록 안내를 추가했다.
+같은 DeepSeek/Relace(reasoning off), OMP/Hermes 각 4세션/arm으로 **24/24 final-only·visible-unit 성공**.
+v3 baseline 13개를 검증 후 재사용하고 누락 셀과 API 오류 baseline을 새 label로 실행했다.
+B-new의 “reported above/see above” 계열은 **0/200 마지막 메시지**(v3 15/175).
+관측 비용은 A 대비 OMP **−7.11%**, Hermes **−33.82%**; 큰 cache 할인 reference는 **−3.05%/−23.39%**다.
+다만 Hermes의 v3와 같은 세 B-new 셀은 비용 +45.33%여서 보편적인 비용 개선으로 해석하지 않는다.
+Rule Hide는 양 arm 12/12 사실 보존. B-new LLM summary는 전송분 8/9이며 OMP 한 trial은 검증 거절,
+judge 2.20/5로 summary 품질 한계는 남는다. 신규 capture 비용 $0.374425, 예상은 최대 $2.335284로 $5 gate 이하.
+[v3→v4 결과·재사용·API 제외·감사](docs/evaluation/results-v3.md) · [실행기](eval/README.md)
+
 **v2:** Crouton Alpha의 장기 자율 24세션과 별도 명령형 16세션을 평가했다.
 B-new는 8/8세션 경계 정리·96.6% literal ID로 사용성 gate를 통과했고,
 Hide는 체크리스트 12/12를 보존했다(B-old 0/12). 다만 strict 과제는 A 8/8 vs B-new 6/8,

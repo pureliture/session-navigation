@@ -1,3 +1,26 @@
+# v4: 정리 후 마지막 답변 완결성 재평가 (2026-11-10)
+
+- B-new=`37348b8`: 먼저 답한 뒤 선택적으로 정리한다는 안내와 자율 선택은 유지한다.
+  정리 후 마지막 메시지는 요청한 모든 사실/값을 포함해 완전한 답을 다시 쓰며
+  `reported above`/`see above` 참조로 대체하지 않도록 짧게 추가했다.
+- v3와 같은 DeepSeek/Relace, reasoning disabled/excluded, no fallback, 65,536 window,
+  fixture/host runner/proxy를 사용한다. OMP와 Hermes 각각 A/B-old/B-new 4세션씩이다.
+- 동일 설정인 완료 v3 A/B-old 13세션만 재사용한다. Hermes boreal rep-2 A/B-old는 새로
+  실행하고 B-new 8세션과 component 16세션, component judge를 새로 실행한다.
+  완료한 v3 Hermes A atlas rep-2도 exhausted 429 두 건과 usage 누락 두 건이 있으므로
+  원본은 보존하고 새 label로 다시 실행한다. 추가 실행 전 갱신한 예상 $2.2697도 $5 이하다.
+  첫 새 실행의 native checkpoint도 한 건이 429 backoff를 소진해 non-qualifying으로 남기고,
+  예상 $2.3353을 다시 확인한 뒤 두 번째 새 label로 재개했다. API 오류는 과제 실패가 아니다.
+  `reuse.json`은 stage와 실제 upstream 설정 일치, source/fixture/proxy hash 및 셀 목록을 기록한다.
+- 실행 전 예상 $2.2042, 첫 완료 3세션 관측 후 $1.3956으로 $5 gate 이하를 확인했다.
+  component를 25턴 전체 세션과 같은 가격으로 잡고 1.5배 안전계수와 judge $0.50를 포함한
+  보수적 신규 지출 예상이다. 재사용 세션은 새 비용이 아니며 별도로 명시한다.
+- strict final-only와 현재 사용자 턴 assistant 텍스트의 visible-unit 지표를 모두 보존한다.
+  마지막 메시지 back-reference 검출 수를 별도로 기록하고, strict 실패 사실/값은 직접 확인한다.
+  Hide 이후 재접근(같은 턴/이후 턴), unhide, rule/LLM replacement fact retention도 동일 방식이다.
+- API/transport 오류는 제품 실패로 세지 않는다. backoff가 회복하지 못한 셀은 원본을 보존하고
+  새 label로 재시도한다. 과거 v3 원본/결과는 덮어쓰지 않는다.
+
 # v3 모델 대체 및 중단 처리 (2026-11-09)
 
 - 제품: A/B-old=`5017b97`/B-new=`fc07058` (A는 plugin off). 동일 v2 fixture/25턴/2회 반복.

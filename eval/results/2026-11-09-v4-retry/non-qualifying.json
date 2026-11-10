@@ -1,0 +1,10 @@
+{
+  "reason": "One native Hermes checkpoint request exhausted Relace shared-pool HTTP 429 backoff; its usage/cost is unavailable",
+  "request_id": "11eacfdee9d64028affd7d8b3d889042",
+  "completed_turns": 25,
+  "fact_checks_passed": true,
+  "product_failure": false,
+  "included_in_balanced_comparison": false,
+  "observed_cost_usd": 0.027381194,
+  "resume_label": "v4r2-"
+}

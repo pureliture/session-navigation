@@ -1,0 +1,14 @@
+{
+  "completed": [
+    "v4n-hermes-boreal-B-new-1",
+    "v4n-omp-atlas-B-new-1",
+    "v4n-omp-boreal-B-new-1"
+  ],
+  "completed_output_tokens": 51541,
+  "completed_cost": 0.064170512,
+  "all_captured_cost_so_far": 0.086680564,
+  "projection_basis": "26 new long/component sessions at maximum completed whole-session cost, 1.5 safety, 0.5 judge allowance",
+  "projected_new_spend": 1.395623066,
+  "budget": 5,
+  "continue": true
+}

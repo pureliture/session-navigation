@@ -1,5 +1,37 @@
 # A/B 실행기
 
+## v4 (DeepSeek, 정리 후 마지막 답변 완결성)
+
+모델은 `deepseek/deepseek-v4.1-flash-1017` 하나, Relace만 허용하며 reasoning은
+`{"enabled":false,"exclude":true}`로 고정한다. A=`fc07058`(plugin off),
+B-old=`5017b97`, B-new=`37348b8`. OMP/Hermes 각각 atlas/boreal × 2회다.
+`setup-v4/budget-before.json`과 `observed-budget.json`에 $5 gate를 보관한다.
+
+```bash
+uv run --no-sync python eval/v2_run.py --stage deepseek-quality --arms B-new --label v4n- --output eval/results/2026-11-09-v4-new
+uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A,B-old --cases boreal --repetitions 1 --repetition-start 2 --label v4f- --output eval/results/2026-11-09-v4-fill
+uv run --no-sync python eval/v2_run.py --stage deepseek-quality --components --arms B-old,B-new --label v4q- --output eval/results/2026-11-09-v4-quality
+uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A --cases atlas --repetitions 1 --repetition-start 2 --label v4r- --output eval/results/2026-11-09-v4-retry
+uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A --cases atlas --repetitions 1 --repetition-start 2 --label v4r2- --output eval/results/2026-11-09-v4-retry2
+uv run --no-sync python eval/v4_assemble.py --reuse eval/results/2026-11-09-v3-deepseek --source eval/results/2026-11-09-v4-new --source eval/results/2026-11-09-v4-fill --source eval/results/2026-11-09-v4-retry --source eval/results/2026-11-09-v4-retry2 --output eval/results/2026-11-09-v4-deepseek
+uv run --no-sync python eval/v2_analyze.py eval/results/2026-11-09-v4-deepseek
+uv run --no-sync python eval/v2_answer_surface.py eval/results/2026-11-09-v4-deepseek
+```
+
+assembler는 기존 v3 A/B-old 완료 13세션만 재사용한다. v3 Hermes A atlas rep-2는 완료했어도
+exhausted 429 두 건/usage 누락 두 건이 있어 새 label로 다시 실행한다. 추가 예산 gate는
+`setup-v4/replacement-budget.json`이다.
+첫 새 실행도 native checkpoint 요청 한 건이 429 backoff를 소진했으므로 non-qualifying으로
+보존하고 `v4r2-`로 재개했다(`resume-budget.json`, 예상 $2.3353). 해당 API 오류를 과제 실패로
+세지 않는다. assembler는 제외 사유를 manifest에 함께 남긴다. stage 설정과 실제 upstream
+model/provider/reasoning을 검사하고 host/fixture/proxy가 v3 이래 바뀌지 않았는지 검사한다.
+API/transport 실패 세션은 원본 디렉터리에 남기고 제품 실패로 세지 않는다. 24셀의 중복·누락을
+거부하며 v3 파일은 수정하지 않는다. `reuse.json`에 출처를 기록한다. 재시도 시 새 label을 쓴다.
+visible-unit 지표는 그대로 유지하며 `answer-surface.json`에 마지막 메시지의 back-reference
+정규식 검출 수/턴을 추가했다. 검출은 보조 지표이며 완전성은 별도 fact check로 본다.
+judge는 v3와 동일하게 component에서 실제 전송된 replacement를 평가하며 DeepSeek/Relace와
+같은 reasoning-off 설정을 명시해야 한다. 완료된 writer의 wire만 archive/audit한다.
+
 ## v2 (Crouton 품질 → 조건부 DeepSeek 비용)
 
 [설계](../docs/evaluation/design.md). 제품은 `git archive`로 B-old=`b1a524e`,

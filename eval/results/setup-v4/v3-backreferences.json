@@ -1,0 +1,201 @@
+{
+  "method": "Same v4 final_backreference regex over completed v3 B-new turn.answer; earlier visible messages excluded",
+  "groups": {
+    "hermes/B-new": {
+      "sessions": 3,
+      "final_messages": 75,
+      "backreference_messages": 6,
+      "sessions_with_backreferences": 3
+    },
+    "omp/B-new": {
+      "sessions": 4,
+      "final_messages": 100,
+      "backreference_messages": 9,
+      "sessions_with_backreferences": 1
+    }
+  },
+  "matches": [
+    {
+      "id": "v3ds-hermes-atlas-B-new-1",
+      "turn": 1,
+      "answer": "Answer above stands; the large raw read is now hidden (item_3ce5f1f017de324e, restorable) since the four facts you need are extracted.\n\n**atlas-team-1 / atlas-5f40dca1ac / 151 ms** \u2014 regions: us-east, eu-west, ap-south."
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "turn": 16,
+      "answer": "Done \u2014 audit-15 reported above; the three raw dumps (audit-13/14/15) are now hidden with the extracted values retained in the report."
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "turn": 17,
+      "answer": "Raw dump for audit-16 hidden; extracted values retained above."
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "turn": 20,
+      "answer": "Raw dumps for audit-17/18/19 hidden; extracted values retained in the reports above."
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "turn": 4,
+      "answer": "One data-integrity note worth flagging: line 79 in this file is malformed \u2014 the `ap-south` record at 01:14Z has `p99_ms` as `190`, but its `p50_ms` (36) and `cpu_pct`/`cache_hit_pct` (45/86) duplicate the 01:12Z `us-east` row, suggesting a corrupted row rather than a clean measurement. Values above are still reported as-is.\n\nWork units 1\u20134 are complete; the four contract tuples so far:\n\n| File | Owner | Seal | Budget |\n|---|---|---|---|\n| audit-01 | boreal-team-1 | boreal-feacaa6270 | 151 ms |\n| audit-02 | boreal-team-2 | boreal-1de8c283e5 | 152 ms |\n| audit-03 | boreal-team-3 | boreal-d06034f859 | 153 ms |\n| audit-04 | boreal-team-4 | boreal-66e6283610 | 154 ms |\n\nAll four cover the same three regions. Ready for work unit 5 when you are."
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "turn": 7,
+      "answer": "Units 6 and 7 reported above. Full contract table now stands at seven entries (team-1\u2026team-7, seals `feacaa6270`/`1de8c283e5`/`d06034f859`/`66e6283610`/`5fe740b02f`/`b12456bf7b`/`cc4c2acc54`, budgets 151\u2013157 ms), all with the same three regions."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 4,
+      "answer": "Reported above; raw reads for audits 02\u201304 compressed to their metadata lines (owner, seal, budget, regions) in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 7,
+      "answer": "Audit-07 reported above; raw reads for 05\u201307 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 9,
+      "answer": "Audit-09 reported above. Context compression for the 08/09 reads failed on stale IDs (guessed call IDs, not actual ones); the raw text stands in the transcript and needs no correction."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 13,
+      "answer": "Audit-12 reported above; raw reads for 10\u201312 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 16,
+      "answer": "Audit-15 reported above; raw reads for 13\u201315 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 17,
+      "answer": "Audit-16 reported above; raw read compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 19,
+      "answer": "Audit-18 reported above; raw reads for 17\u201318 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 20,
+      "answer": "Audit-19 reported above; raw read compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 23,
+      "answer": "Memo above stands; cleanup call failed on a `keep_lines` validation rule (`OK` line too short for the rule), no impact on results."
+    }
+  ],
+  "strict_failed_turns": [
+    {
+      "id": "v3ds-hermes-atlas-B-new-1",
+      "turn": 17,
+      "answer": "audit-16 done and hidden alongside audit-15's raw read (both restorable). Release memo facts so far: audit-01 (atlas-team-1 / atlas-5f40dca1ac / 151 ms), audit-08 (atlas-team-8 / atlas-1e6737ff84 / 158 ms), audit-15 (atlas-team-15 / atlas-f1f2a5f01c / 165 ms)."
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "turn": 16,
+      "answer": "Done \u2014 audit-15 reported above; the three raw dumps (audit-13/14/15) are now hidden with the extracted values retained in the report."
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "turn": 17,
+      "answer": "Raw dump for audit-16 hidden; extracted values retained above."
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "turn": 20,
+      "answer": "Raw dumps for audit-17/18/19 hidden; extracted values retained in the reports above."
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "turn": 7,
+      "answer": "Units 6 and 7 reported above. Full contract table now stands at seven entries (team-1\u2026team-7, seals `feacaa6270`/`1de8c283e5`/`d06034f859`/`66e6283610`/`5fe740b02f`/`b12456bf7b`/`cc4c2acc54`, budgets 151\u2013157 ms), all with the same three regions."
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "turn": 10,
+      "answer": "Ten files reviewed; the pattern holds \u2014 team index, seal, and budget all increment with file index (151\u2192160 ms), regions identical throughout."
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "turn": 13,
+      "answer": "Units 11\u201312 reported. Twelve audits now reviewed; sequence continues unbroken (team-11/`boreal-5bcc613003`/161 ms, team-12/`boreal-a6ba280a44`/162 ms), same three regions throughout."
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "turn": 16,
+      "answer": "Units 13\u201315 reported. Fifteen audits done, pattern still exact: team index = file index, budget = 150 + index."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 4,
+      "answer": "Reported above; raw reads for audits 02\u201304 compressed to their metadata lines (owner, seal, budget, regions) in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 7,
+      "answer": "Audit-07 reported above; raw reads for 05\u201307 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 9,
+      "answer": "Audit-09 reported above. Context compression for the 08/09 reads failed on stale IDs (guessed call IDs, not actual ones); the raw text stands in the transcript and needs no correction."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 13,
+      "answer": "Audit-12 reported above; raw reads for 10\u201312 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 16,
+      "answer": "Audit-15 reported above; raw reads for 13\u201315 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 17,
+      "answer": "Audit-16 reported above; raw read compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 19,
+      "answer": "Audit-18 reported above; raw reads for 17\u201318 compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 20,
+      "answer": "Audit-19 reported above; raw read compressed to metadata lines in context."
+    },
+    {
+      "id": "v3ds-omp-atlas-B-new-2",
+      "turn": 23,
+      "answer": "Memo above stands; cleanup call failed on a `keep_lines` validation rule (`OK` line too short for the rule), no impact on results."
+    },
+    {
+      "id": "v3ds-omp-boreal-B-new-1",
+      "turn": 8,
+      "answer": "Contract captured; earlier full reads remain restorable if row-level detail is needed later."
+    },
+    {
+      "id": "v3ds-omp-boreal-B-new-1",
+      "turn": 13,
+      "answer": "Audit-12 read done; dumps for audits 11\u201312 collapsed to their contract lines (originals restorable). Budget series remains +1/document (151\u2192162, plus `boreal-21` at 171 ms in `incident.log`)."
+    },
+    {
+      "id": "v3ds-omp-boreal-B-new-1",
+      "turn": 16,
+      "answer": "Done \u2014 contract lines preserved; full read restorable via `item_a4bf60ae20835baf`."
+    },
+    {
+      "id": "v3ds-omp-boreal-B-new-2",
+      "turn": 11,
+      "answer": "Incident conclusion stands: unresolved, `checksum mismatch`, `blocked`, exit 23, no retry."
+    }
+  ]
+}

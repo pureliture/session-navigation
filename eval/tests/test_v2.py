@@ -1,4 +1,5 @@
 import http.client
+import argparse
 import json
 import os
 import shutil
@@ -12,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy import serve
 from v2_fixtures import build, component, document
-from v2_run import child_environment, STAGES
+from v2_run import child_environment, STAGES, positive_int
 from v2_analyze import adoption_gate, boundary_index, eligible, match_fact
 from analyze import native_operations, response_failure_kind
 from v2_cost import projection
@@ -20,11 +21,36 @@ from v2_archive import archive
 from analyze import read_wire
 from v2_cache import transitions
 from v2_rereads import session_rereads
-from v2_answer_surface import unit_answer
+from v2_answer_surface import unit_answer, final_backreference
+from v4_assemble import check_settings, SETTINGS, case_name
 import gzip
 
 
 class V2Tests(unittest.TestCase):
+    def test_reuse_requires_identical_settings_and_recognizes_case(self):
+        check_settings(dict(SETTINGS))
+        for field, value in (("model", "wrong"), ("provider", {"order": ["Other"]}),
+                             ("reasoning", None), ("window", 128000)):
+            with self.assertRaises(AssertionError):
+                check_settings({**SETTINGS, field: value})
+        with self.assertRaises(KeyError):
+            check_settings({})
+        self.assertEqual(case_name({"id": "v4-hermes-boreal-B-old-2"}), "boreal")
+
+    def test_final_backreferences_not_earlier_visible_answers(self):
+        for answer in ("Reported above.", "See above", "Values already provided.", "As earlier, done.",
+                       "Memo above stands.", "Extracted values retained above.", "Facts retained in the reports above."):
+            self.assertTrue(final_backreference(answer))
+        for answer in ("", "owner=Orchid; seal=atlas-123; budget=73", "Cleanup complete.", "Budget above 150 ms."):
+            self.assertFalse(final_backreference(answer))
+
+    def test_resume_repetition_numbers_are_positive(self):
+        self.assertEqual(positive_int("1"), 1)
+        self.assertEqual(positive_int("2"), 2)
+        for value in ("", "0", "-1", "invalid"):
+            with self.assertRaises(argparse.ArgumentTypeError):
+                positive_int(value)
+
     def test_answer_before_cleanup_is_visible_but_previous_turn_is_not(self):
         turn = {"prompt": "Unit 2", "answer": "Reported above", "messages": [
             {"role": "user", "content": "Unit 1"},

@@ -1,0 +1,371 @@
+{
+  "groups": {
+    "omp/A": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "nav_calls": 0,
+      "output_tokens": 58906,
+      "prompt_tokens": 11314570,
+      "cached_tokens": 10010624,
+      "cost": 0.087329796,
+      "reference_cost": 8.084452,
+      "missing_cost": 0,
+      "missing_cached": 0,
+      "visible_unit_success": 4,
+      "list_calls": 0,
+      "requests": 244,
+      "final_backreferences": 0,
+      "successful_unhide": 0,
+      "rereads": {
+        "sessions": 4,
+        "after_compaction": 0,
+        "repeat_visible": 12,
+        "new": 106,
+        "same_turn": 0,
+        "later_turn": 0,
+        "unhide_calls": 0,
+        "bash_after_compaction": 0,
+        "bash_repeat_visible": 6,
+        "bash_new": 18,
+        "read_after_compaction": 0,
+        "read_repeat_visible": 6,
+        "read_new": 88
+      }
+    },
+    "omp/B-old": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "nav_calls": 67,
+      "output_tokens": 46245,
+      "prompt_tokens": 7595907,
+      "cached_tokens": 6126592,
+      "cost": 0.06257135,
+      "reference_cost": 6.371886,
+      "missing_cost": 0,
+      "missing_cached": 0,
+      "visible_unit_success": 4,
+      "list_calls": 4,
+      "requests": 249,
+      "final_backreferences": 0,
+      "successful_unhide": 2,
+      "rereads": {
+        "sessions": 4,
+        "after_compaction": 2,
+        "repeat_visible": 4,
+        "new": 104,
+        "same_turn": 0,
+        "later_turn": 2,
+        "unhide_calls": 2,
+        "bash_after_compaction": 0,
+        "bash_repeat_visible": 1,
+        "bash_new": 16,
+        "read_after_compaction": 2,
+        "read_repeat_visible": 3,
+        "read_new": 88
+      }
+    },
+    "omp/B-new": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "nav_calls": 31,
+      "output_tokens": 57083,
+      "prompt_tokens": 10212293,
+      "cached_tokens": 8695552,
+      "cost": 0.081119706,
+      "reference_cost": 7.837922,
+      "missing_cost": 0,
+      "missing_cached": 0,
+      "visible_unit_success": 4,
+      "list_calls": 1,
+      "requests": 251,
+      "final_backreferences": 0,
+      "successful_unhide": 0,
+      "rereads": {
+        "sessions": 4,
+        "after_compaction": 1,
+        "repeat_visible": 3,
+        "new": 104,
+        "same_turn": 0,
+        "later_turn": 1,
+        "unhide_calls": 0,
+        "bash_after_compaction": 1,
+        "bash_repeat_visible": 0,
+        "bash_new": 36,
+        "read_after_compaction": 0,
+        "read_repeat_visible": 3,
+        "read_new": 68
+      }
+    },
+    "hermes/A": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "nav_calls": 0,
+      "output_tokens": 228762,
+      "prompt_tokens": 11896758,
+      "cached_tokens": 9993728,
+      "cost": 0.17576782,
+      "reference_cost": 10.63302,
+      "missing_cost": 0,
+      "missing_cached": 0,
+      "visible_unit_success": 4,
+      "list_calls": 0,
+      "requests": 342,
+      "final_backreferences": 0,
+      "successful_unhide": 0,
+      "rereads": {
+        "availability": "unavailable: no Hermes tool_execution_start events"
+      }
+    },
+    "hermes/B-old": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "nav_calls": 30,
+      "output_tokens": 146861,
+      "prompt_tokens": 9982506,
+      "cached_tokens": 8046592,
+      "cost": 0.125278944,
+      "reference_cost": 9.070012,
+      "missing_cost": 0,
+      "missing_cached": 0,
+      "visible_unit_success": 4,
+      "list_calls": 0,
+      "requests": 310,
+      "final_backreferences": 1,
+      "successful_unhide": 0,
+      "rereads": {
+        "availability": "unavailable: no Hermes tool_execution_start events"
+      }
+    },
+    "hermes/B-new": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "nav_calls": 28,
+      "output_tokens": 141086,
+      "prompt_tokens": 8807187,
+      "cached_tokens": 7065088,
+      "cost": 0.116321034,
+      "reference_cost": 8.14543,
+      "missing_cost": 0,
+      "missing_cached": 0,
+      "visible_unit_success": 4,
+      "list_calls": 3,
+      "requests": 286,
+      "final_backreferences": 0,
+      "successful_unhide": 2,
+      "rereads": {
+        "availability": "unavailable: no Hermes tool_execution_start events"
+      }
+    }
+  },
+  "measured_main_failures": [],
+  "cost_changes_Bnew_vs_A_percent": {
+    "omp": {
+      "cost": -7.111078102140533,
+      "reference_cost": -3.0494336536354028,
+      "output_tokens": -3.09476114487488,
+      "requests": 2.868852459016402
+    },
+    "hermes": {
+      "cost": -33.82120003536483,
+      "reference_cost": -23.39495270393548,
+      "output_tokens": -38.32629545116759,
+      "requests": -16.374269005847953
+    }
+  },
+  "reuse": {
+    "reused_sessions": 13,
+    "new_sessions": 11,
+    "excluded": [
+      {
+        "source": "eval/results/2026-11-09-v3-deepseek/v3ds-hermes-boreal-B-old-2",
+        "reason": "incomplete"
+      },
+      {
+        "source": "eval/results/2026-11-09-v3-deepseek/v3ds-hermes-atlas-A-2",
+        "reason": "API/transport failure; not a product failure"
+      },
+      {
+        "source": "eval/results/2026-11-09-v4-retry/v4r-hermes-atlas-A-2",
+        "reason": "API/transport failure; not a product failure"
+      }
+    ]
+  },
+  "adoption": {
+    "eligible_sessions": 8,
+    "sessions_with_2_boundaries": 6,
+    "valid_ids": 101,
+    "selected_ids": 103,
+    "pass": true
+  },
+  "fresh_captures": {
+    "2026-11-09-v4-new": {
+      "reported_cost": 0.19744074,
+      "output_tokens": 198169,
+      "requests": 537,
+      "responses": 537,
+      "retries": 2,
+      "exhausted_or_transport": 0,
+      "missing_response_cost": 0
+    },
+    "2026-11-09-v4-fill": {
+      "reported_cost": 0.080263188,
+      "output_tokens": 105405,
+      "requests": 154,
+      "responses": 154,
+      "retries": 0,
+      "exhausted_or_transport": 0,
+      "missing_response_cost": 0
+    },
+    "2026-11-09-v4-retry": {
+      "reported_cost": 0.027381194,
+      "output_tokens": 17967,
+      "requests": 62,
+      "responses": 61,
+      "retries": 6,
+      "exhausted_or_transport": 1,
+      "missing_response_cost": 0
+    },
+    "2026-11-09-v4-retry2": {
+      "reported_cost": 0.048299008,
+      "output_tokens": 65494,
+      "requests": 86,
+      "responses": 86,
+      "retries": 2,
+      "exhausted_or_transport": 0,
+      "missing_response_cost": 0
+    },
+    "2026-11-09-v4-quality": {
+      "reported_cost": 0.018986738,
+      "output_tokens": 18239,
+      "requests": 171,
+      "responses": 171,
+      "retries": 0,
+      "exhausted_or_transport": 0,
+      "missing_response_cost": 0
+    },
+    "2026-11-09-v4-quality/judge": {
+      "reported_cost": 0.002054292,
+      "output_tokens": 2207,
+      "requests": 15,
+      "responses": 15,
+      "retries": 0,
+      "exhausted_or_transport": 0,
+      "missing_response_cost": 0
+    }
+  },
+  "captured_new_spend": 0.37442516,
+  "reasoning_tokens_per_successful_response": {
+    "0": 1024
+  },
+  "upstream_models": {
+    "deepseek/deepseek-v4.1-flash-1017": 1035
+  },
+  "components": {
+    "groups": {
+      "omp/B-old": {
+        "component_sessions": 4,
+        "strict_success": 3,
+        "sent_replacements": 4,
+        "wrong_source": [],
+        "hide": {
+          "facts_retained": 6,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "summarize": {
+          "facts_retained": 4,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "judge": {
+          "scored": 4,
+          "eligible_distinct": 4,
+          "mean": 1.25
+        }
+      },
+      "omp/B-new": {
+        "component_sessions": 4,
+        "strict_success": 4,
+        "sent_replacements": 3,
+        "wrong_source": [],
+        "hide": {
+          "facts_retained": 6,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "summarize": {
+          "facts_retained": 2,
+          "facts_present": 3,
+          "pure_replacements": 1,
+          "pure_trials": 1
+        },
+        "judge": {
+          "scored": 3,
+          "eligible_distinct": 3,
+          "mean": 2.0
+        }
+      },
+      "hermes/B-old": {
+        "component_sessions": 4,
+        "strict_success": 4,
+        "sent_replacements": 4,
+        "wrong_source": [],
+        "hide": {
+          "facts_retained": 6,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "summarize": {
+          "facts_retained": 6,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "judge": {
+          "scored": 4,
+          "eligible_distinct": 4,
+          "mean": 2.5
+        }
+      },
+      "hermes/B-new": {
+        "component_sessions": 4,
+        "strict_success": 4,
+        "sent_replacements": 4,
+        "wrong_source": [],
+        "hide": {
+          "facts_retained": 6,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "summarize": {
+          "facts_retained": 6,
+          "facts_present": 6,
+          "pure_replacements": 2,
+          "pure_trials": 2
+        },
+        "judge": {
+          "scored": 4,
+          "eligible_distinct": 4,
+          "mean": 3.0
+        }
+      }
+    },
+    "overall_judge": {
+      "scored": 15,
+      "distinct": 15,
+      "mean": 2.2
+    },
+    "judge_errors": []
+  }
+}

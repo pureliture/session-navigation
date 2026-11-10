@@ -1,0 +1,32 @@
+START v4q-omp-command-hide-B-old-1
+START v4q-omp-command-hide-B-new-1
+DONE v4q-omp-command-hide-B-old-1 {'returncode': 0}
+START v4q-omp-command-summarize-B-old-1
+DONE v4q-omp-command-hide-B-new-1 {'returncode': 0}
+START v4q-omp-command-summarize-B-new-1
+DONE v4q-omp-command-summarize-B-new-1 {'returncode': 0}
+START v4q-hermes-command-hide-B-old-1
+DONE v4q-omp-command-summarize-B-old-1 {'returncode': 0}
+START v4q-hermes-command-hide-B-new-1
+DONE v4q-hermes-command-hide-B-old-1 {'returncode': 0}
+START v4q-hermes-command-summarize-B-old-1
+DONE v4q-hermes-command-hide-B-new-1 {'returncode': 0}
+START v4q-hermes-command-summarize-B-new-1
+DONE v4q-hermes-command-summarize-B-old-1 {'returncode': 0}
+START v4q-omp-command-hide-B-new-2
+DONE v4q-omp-command-hide-B-new-2 {'returncode': 0}
+START v4q-omp-command-hide-B-old-2
+DONE v4q-hermes-command-summarize-B-new-1 {'returncode': 0}
+START v4q-omp-command-summarize-B-new-2
+DONE v4q-omp-command-hide-B-old-2 {'returncode': 0}
+START v4q-omp-command-summarize-B-old-2
+DONE v4q-omp-command-summarize-B-new-2 {'returncode': 0}
+START v4q-hermes-command-hide-B-new-2
+DONE v4q-omp-command-summarize-B-old-2 {'returncode': 0}
+START v4q-hermes-command-hide-B-old-2
+DONE v4q-hermes-command-hide-B-new-2 {'returncode': 0}
+START v4q-hermes-command-summarize-B-new-2
+DONE v4q-hermes-command-hide-B-old-2 {'returncode': 0}
+START v4q-hermes-command-summarize-B-old-2
+DONE v4q-hermes-command-summarize-B-new-2 {'returncode': 0}
+DONE v4q-hermes-command-summarize-B-old-2 {'returncode': 0}
