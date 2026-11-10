@@ -1,4 +1,5 @@
 import http.client
+import gzip
 import io
 import json
 import os
@@ -12,12 +13,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from current_budget import Budget
 from proxy import serve
 from v4_current import schedule, MODEL
-from v4_compare import candidates, ratio, is_original_tool_execution
+from v4_compare import candidates, ratio, is_original_tool_execution, original_safety
 from v4_current import SETTINGS
 from v4_stub import respond
 
 
 class CurrentTests(unittest.TestCase):
+    def test_host_native_pruning_is_separate_from_stored_original_corruption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / "run"
+            folder.mkdir()
+            (folder / "spec.json").write_text(json.dumps({"workspace": str(root / "workspace"), "turns": ["first", "second"]}))
+            turns = [{"turn": i, "messages": [{"role": "tool", "tool_call_id": "call", "content": content}]}
+                     for i, content in ((1, "original"), (2, "[host native compaction]"))]
+            with gzip.open(folder / "turns.json.gz", "wt") as stream:
+                json.dump(turns, stream)
+            self.assertEqual(original_safety(root, [])['original_mismatches'], 0)
+            with gzip.open(folder / "store.json.gz", "wt") as stream:
+                json.dump({"items": [{"item_id": "item", "tool_call_id": "call", "original": "corrupt", "content_sha256": "bad"}]}, stream)
+            result = original_safety(root, [{"id": "run"}])
+            self.assertEqual(result["native_tool_content_transitions"], 1)
+            self.assertGreater(result["original_mismatches"], 0)
+
     def test_restore_safety_excludes_deferred_discovery_not_work(self):
         self.assertFalse(is_original_tool_execution({"name": "tool_call", "args": {"calls": []}}))
         for name, expected in (("tool_describe", False), ("unhide_context", False), ("read_file", True)):

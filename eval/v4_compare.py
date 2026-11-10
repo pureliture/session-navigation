@@ -90,7 +90,7 @@ def assemble(destination, sources, historical=False, components=False):
 
 
 def original_safety(directory, reports):
-    checked, mutations, snapshots, unknown, native_checked = 0, [], 0, [], 0
+    checked, mutations, snapshots, unknown, native_checked, native_changes = 0, [], 0, [], 0, 0
     for report in reports:
         folder = directory / report["id"]
         spec = read(folder / "spec.json")
@@ -113,10 +113,10 @@ def original_safety(directory, reports):
                     continue
                 original = text(message.get("content"))
                 if identity in seen and seen[identity] != original:
-                    mutations.append({"id": report["id"], "call": identity, "kind": "native history tool content changed"})
+                    native_changes += 1
                 elif identity not in seen:
                     native_checked += 1
-                seen.setdefault(identity, original)
+                seen[identity] = original
         items = {item["item_id"]: item for item in [*snapshot["items"], *targets]}
         for item in items.values():
             original = item["original"]
@@ -132,7 +132,8 @@ def original_safety(directory, reports):
             else:
                 mutations.append({"id": report["id"], "item": item["item_id"], "kind": "native/store original mismatch"})
     return {"originals_compared": checked, "stored_items": snapshots, "original_mismatches": len(mutations),
-            "mismatch_details": mutations, "unmatched_native_items": len(unknown), "native_originals_checked": native_checked}
+            "mismatch_details": mutations, "unmatched_native_items": len(unknown), "native_originals_checked": native_checked,
+            "native_tool_content_transitions": native_changes}
 
 
 def metrics(directory, reports):
@@ -225,9 +226,12 @@ def component_metrics(directory, host):
                    all(r["source"] == expected for r in sent if r["run"] == report["id"]) for report in rows)
         result.update({action + "_trials": len(rows), action + "_pure_replacement_trials": pure,
                        action + "_sent_replacements": len(sent),
+                       action + "_pure_replacements": sum(r["source"] == expected for r in sent),
                        action + "_facts_present": sum(len(r["facts_retained"]) for r in sent),
                        action + "_facts_retained": sum(sum(r["facts_retained"]) for r in sent),
                        action + "_wrong_source": sum(r["source"] != expected for r in sent)})
+    result["sent_replacements"] = result["hide_sent_replacements"] + result["summarize_sent_replacements"]
+    result["wrong_source"] = result["hide_wrong_source"] + result["summarize_wrong_source"]
     result.update({k: v for k, v in original_safety(directory, reports).items() if not isinstance(v, list)})
     result.update({k: v for k, v in metrics(directory, reports).items() if k in
                    ("requests", "prompt_tokens", "cached_tokens", "output_tokens", "reported_usd")})
@@ -261,6 +265,12 @@ def compare(output, historical, currents):
         cases = ("hide", "summarize") if kind == "components" else ("atlas", "boreal")
         expected = set(itertools.product(("omp", "hermes"), ("B-new",), cases, (1, 2)))
         assert set(map(tuple, selection["current-" + kind]["cells"])) == expected, "Missing current cells; retain exclusions and retry API failures only"
+    return refresh(output, selection)
+
+
+def refresh(output, selection=None):
+    selection = selection or {folder: read(output / folder / "selection.json") for folder in
+                              ("historical-long", "current-long", "historical-components", "current-components")}
     groups, fixtures, components = {}, {}, {}
     for host in ("omp", "hermes"):
         groups[host], fixtures[host] = {}, {}
@@ -280,7 +290,13 @@ def compare(output, historical, currents):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--historical", type=Path, required=True)
-    parser.add_argument("--current", type=Path, action="append", required=True)
+    parser.add_argument("--historical", type=Path)
+    parser.add_argument("--current", type=Path, action="append")
+    parser.add_argument("--refresh", action="store_true", help="Recompute tables on assembled inputs, e.g. after judging")
     args = parser.parse_args()
-    compare(args.output, args.historical, args.current)
+    if args.refresh:
+        refresh(args.output)
+    elif args.historical and args.current:
+        compare(args.output, args.historical, args.current)
+    else:
+        parser.error("Supply frozen/current inputs, or --refresh for an assembled comparison")

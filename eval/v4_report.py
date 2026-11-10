@@ -9,7 +9,7 @@ from v4_compare import ratio
 CORRECTNESS = {"final_only_success", "visible_unit_success", "task_success", "canonical_tests_pass",
                "announced_recall", "surprise_recovery", "strict_success"}
 RESOURCES = {"requests", "prompt_tokens", "cached_tokens", "output_tokens", "reported_usd",
-             "reference_gpt41_large_cache_usd", "native_compactions"}
+             "reference_cost", "reference_no_cache", "peak_prompt", "native_compactions"}
 
 
 def value(number):
@@ -28,7 +28,7 @@ def verdict(key, columns):
         return "PASS: no observed regression" if current >= old else "REGRESSION"
     if key == "original_mismatches":
         return "PASS: no observed mutation" if current == 0 else "SAFETY REGRESSION"
-    if key.endswith("wrong_source") or key == "missing_response_cost":
+    if key.endswith("wrong_source") or key == "missing_cost":
         return "PASS" if current == 0 else "REVIEW"
     if "facts_retained" in key:
         action = key.split("_")[0]
@@ -61,7 +61,7 @@ def render(comparison):
     for host, columns in comparison["components"].items():
         lines += [f"### {host.upper()}", "", table(columns), ""]
     keys = ["sessions", "final_only_success", "visible_unit_success", "canonical_tests_pass", "announced_recall", "surprise_recovery",
-            "navigation_calls", "sessions_with_nav", "list_calls", "literal_selected_ids", "literal_valid_ids", "successful_cleanup_boundaries",
+            "navigation_calls", "sessions_using_navigation", "list_calls", "literal_ids_selected", "literal_ids_valid", "cleanup_boundaries",
             "native_compactions", "rereads_repeat_visible", "rereads_after_compaction", "requests", "prompt_tokens", "cached_tokens", "output_tokens", "reported_usd"]
     lines += ["## Per-fixture breakdown", "", "Two repetitions per host/fixture. No new A or B-old model calls were made.", ""]
     for host, fixtures in comparison["fixtures"].items():
