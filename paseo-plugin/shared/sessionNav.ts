@@ -3,6 +3,20 @@ import { z } from "zod";
 
 export const StatusSchema = z.enum(["hidden", "visible", "unhidden"]);
 
+export const CapabilitiesSchema = z.object({
+  display: z.boolean(),
+  hide: z.boolean(),
+  summarize: z.boolean(),
+  unhide: z.boolean(),
+  state: z.enum([
+    "ready",
+    "adapter_not_detected",
+    "incompatible_protocol",
+    "adapter_disabled",
+  ]),
+  hint: z.string().optional(),
+});
+
 export const RowSchema = z.object({
   item_id: z.string().nullable(),
   tool_call_id: z.string(),
@@ -25,7 +39,9 @@ export const RowSchema = z.object({
   summary_pending: z.boolean().optional(),
 });
 
-export const DbErrorChoicesSchema = z.array(z.enum(["abort_request", "send_original"]));
+export const DbErrorChoicesSchema = z.array(
+  z.enum(["abort_request", "send_original"]),
+);
 
 export const DbErrorSchema = z.object({
   ok: z.literal(false),
@@ -69,11 +85,14 @@ export const ManageResultSchema = z.object({
 export const ListResultSchema = z.object({
   ok: z.boolean(),
   items: z.array(RowSchema),
-  context: z.object({
-    used_tokens: z.number(),
-    max_tokens: z.number().nullable().optional(),
-    source: z.string().optional(),
-  }).optional(),
+  capabilities: CapabilitiesSchema.optional(),
+  context: z
+    .object({
+      used_tokens: z.number(),
+      max_tokens: z.number().nullable().optional(),
+      source: z.string().optional(),
+    })
+    .optional(),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });
@@ -96,6 +115,7 @@ export const ScopesResultSchema = z.object({
       scope_key: z.string(),
       items: z.number().int(),
       agent_id: z.string().optional(),
+      capabilities: CapabilitiesSchema.optional(),
     }),
   ),
   error: z.string().optional(),
@@ -106,7 +126,6 @@ export const listScopesRpc = defineRpc({
   input: z.object({}),
   output: ScopesResultSchema,
 });
-
 
 export const listItemsRpc = defineRpc({
   name: "session-nav.list",
@@ -148,14 +167,16 @@ export const BatchMutationResultSchema = z.object({
   ok: z.boolean(),
   applied: z.number().int(),
   failed: z.number().int(),
-  items: z.array(z.object({
-    item_id: z.string(),
-    ok: z.boolean(),
-    status: StatusSchema.nullable(),
-    visibility: z.enum(["hidden", "visible"]).nullable(),
-    version: z.number().int().nullable(),
-    error: z.string().optional(),
-  })),
+  items: z.array(
+    z.object({
+      item_id: z.string(),
+      ok: z.boolean(),
+      status: StatusSchema.nullable(),
+      visibility: z.enum(["hidden", "visible"]).nullable(),
+      version: z.number().int().nullable(),
+      error: z.string().optional(),
+    }),
+  ),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });
@@ -235,7 +256,10 @@ export function deriveScopeKey(ctx: ScopeContext): string {
   return `${adapterId}:${hostProfile}:${ctx.sessionId}:${branchScope}`;
 }
 
-export function scopeKeyFromWorkspace(workspaceId: string, agentId?: string | null): string {
+export function scopeKeyFromWorkspace(
+  workspaceId: string,
+  agentId?: string | null,
+): string {
   return deriveScopeKey({
     adapterId: "paseo",
     hostProfile: "default",

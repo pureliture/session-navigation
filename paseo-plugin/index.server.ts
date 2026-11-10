@@ -22,6 +22,7 @@ import {
   manageItems,
   summarizeItem,
   unhideItem,
+  closeService,
 } from "./server/sessionNav";
 
 export default function contribute(server: PluginServerContext) {
@@ -35,5 +36,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(manageItemsRpc, manageItems);
   server.handle(forkScopeRpc, forkScope);
   server.handle(dbChoiceRpc, dbChoice);
-  return () => {};
+  return () => closeService();
 }

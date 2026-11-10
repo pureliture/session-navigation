@@ -4,6 +4,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import extension, { CLEANUP_GUIDANCE } from "../src/extension.ts";
+import { Store } from "../../core/src/index.ts";
+import { BunDriver } from "../../core/src/drivers/bun.ts";
+import { PaseoService } from "../../../paseo-plugin/server/service.ts";
 
 beforeEach(() => releaseExtension());
 
@@ -83,22 +86,12 @@ for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
       join(sessions, "2026_pending-check.jsonl"),
       messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
     );
-    const seeded = Bun.spawnSync(
-      [
-        resolve(".venv/bin/session-navigation"),
-        "hide",
-        "--scope",
-        "pi:default:pending-check:default",
-        "--path",
-        state,
-        "--item-id",
-        "pending-read",
-        "--mode",
-        "summarize",
-      ],
-      { env: { ...process.env, HOME: dir } },
-    );
-    expect(seeded.exitCode).toBe(0);
+    const store = new Store(new BunDriver(state));
+    const scope = "omp:default:pending-check:default";
+    store.register(scope, { adapter_id: "omp", adapter_protocol: 1, capabilities: { hide: true, summarize: true, unhide: true }, enabled: true, instance_id: "test" });
+    const seeded = await new PaseoService(store, dir).handle("hide", { scope_key: scope, item_id: "pending-read", mode: "summarize" });
+    expect(seeded.ok).toBe(true);
+    store.close();
     const ctx = {
       sessionManager: { getSessionId: () => "pending-check" },
       model: { id: "test" },

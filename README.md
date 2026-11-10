@@ -87,23 +87,14 @@ A Paseo session reviewing a small API with OMP and DeepSeek Flash. The outline s
 
 ## Installation
 
-### Python CLI: required for the current Paseo integration
-
-Install Python **3.11 or later**, [uv](https://docs.astral.sh/uv/), and Git on the machine running the **Paseo daemon**. OMP now uses a bundled TypeScript core and does not require Python.
-
-```bash
-git clone https://github.com/pureliture/session-navigation.git
-cd session-navigation
-uv tool install .
-export PATH="$HOME/.local/bin:$PATH"
-session-navigation --help
-```
-
-This installs `session-navigation` and the legacy `session-navigation-daemon` oracle. To update, obtain reviewed new source and run `uv tool install --force .`. Paseo still invokes the CLI: ensure the running Paseo daemon receives the same PATH and state path, and restart it after changing its environment. The OMP package never launches the Python daemon.
+Paseo and OMP use the bundled TypeScript engine; neither requires Python. The Python
+engine remains available for Hermes. The former `session-navigation` CLI and
+`session-navigation-daemon` entry points have been retired; upgrade host packages
+instead of installing standalone CLI executables.
 
 ### Paseo plugin
 
-The SDK and runtime were tested with **Paseo 0.15.3**. The manifest accepts `>=0.15.0`, but earlier 0.15.x versions have not been separately tested. Install the Python package above first; the plugin package does not include the Python CLI.
+The SDK and runtime were tested with **Paseo 0.15.3**. The manifest accepts `>=0.15.0`, but earlier 0.15.x versions have not been separately tested. The daemon must run **Node >=22.13**. An embedded Node worker ships the core and SQLite driver; no Python package or unpublished workspace dependency is needed.
 
 Install from a source checkout:
 
@@ -186,7 +177,7 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 
 - Original host history remains intact; only the request copy changes. **Hide is not a permanent deletion or secret-erasure feature.**
 - Originals, replacements, and hide state are stored by default in `~/.local/share/session-navigation/state.sqlite3`. Override the location with `XDG_DATA_HOME` or `SESSION_NAVIGATION_STATE_PATH`. Processes sharing state must use the same path on the same machine.
-- The plugin reads local session history and model metadata to build lists. Paseo currently runs Python child processes; OMP runs the shared TypeScript core in a Bun Worker. It does not provide network synchronization, self-updates, or runtime software downloads.
+- The plugin reads local session history and model metadata to build lists. Paseo uses an embedded Node Worker; OMP uses a Bun Worker. Both run the shared TypeScript core off the host event loop. There is no network synchronization, self-update or runtime software download.
 - Summarization may send selected original content to the **session model provider configured in the host**. Local SQLite storage does not mean all data stays local.
 - DB error behavior differs by host. OMP non-interactive execution stops the request. Hermes middleware has no abort contract, so the original request may proceed on error; error logs and pending notices in lists signal the issue. Do not use this as a sensitive-data blocking tool.
 - WAL is used with SQLite 3.51.3 or later or the fixed 3.44.6/3.50.7 lines; other versions use a rollback journal.
@@ -195,12 +186,11 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 
 | Path | Responsibility |
 | --- | --- |
-| `src/session_navigation/` | Host-neutral engine, CLI, and SQLite store |
-| `src/session_navigation_omp/` | Legacy Python daemon retained as a parity oracle |
+| `src/session_navigation/` | Python engine and SQLite store used by Hermes |
 | `packages/core/` | Shared TypeScript engine and Node/Bun SQLite drivers |
 | `packages/omp/` | Bundled OMP extension, worker service, tools and UI |
 | `extensions/pi/session-navigation.ts` | Thin legacy development shim |
-| `paseo-plugin/` | Paseo client panel and CLI-backed server RPC |
+| `paseo-plugin/` | Paseo client panel, capability-gated server RPC and embedded Node worker |
 | `adapters/hermes/` | Hermes tools, middleware, `/nav`, and usage footer |
 | `plugin.yaml`, `__init__.py`, `vendor/` | Hermes-loadable distribution root and pinned source copies |
 
@@ -217,7 +207,7 @@ bunx tsc --noEmit
 bun test
 ```
 
-Check Python distributions with `uv build` from the root and Paseo package contents with `npm pack --dry-run --ignore-scripts` in `paseo-plugin/`. Paseo compiles TypeScript, so an ordinary release needs no separate JS build.
+Check Python distributions with `uv build` from the root and Paseo package contents with `npm pack --dry-run --ignore-scripts` in `paseo-plugin/`. After changing the core or Paseo worker/service, run `npm run build` in `paseo-plugin/` and commit the generated embedded worker before release.
 
 Update the Hermes `vendor/` copies with their sources: check Python source parity between `src/session_navigation/` and `vendor/session_navigation/`, and between `adapters/hermes/` and `vendor/session_navigation_hermes/`. The Python package builds as wheel/sdist, but PyPI publication is not automated.
 

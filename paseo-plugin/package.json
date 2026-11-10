@@ -1,7 +1,11 @@
 {
   "name": "paseo-plugin",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
+  "engines": {
+    "node": ">=22.13"
+  },
   "files": [
     "paseo-plugin.json",
     "OVERVIEW.md",
@@ -16,9 +20,12 @@
     "shared/"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "node --experimental-strip-types build.ts",
+    "test": "bun test client server && node --experimental-strip-types --test server/worker-lifecycle.node.ts"
   },
   "devDependencies": {
+    "esbuild": "0.25.12",
     "@getpaseo/plugin": "0.15.3",
     "@tanstack/react-query": "^5.90.11",
     "@types/react": "~19.2.0",

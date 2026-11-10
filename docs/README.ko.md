@@ -1,3 +1,8 @@
+> Installation update: Paseo now requires Node >=22.13 and an embedded Node worker,
+> not Python. OMP uses the bundled TypeScript package. The CLI and daemon entry points
+> described in this historical translation have been retired; use the current
+> [English installation instructions](../README.md#installation).
+
 <div align="center">
 
 <img src="https://capsule-render.vercel.app/api?type=waving&amp;color=0:38bdf8,50:2563eb,100:312e81&amp;height=220&amp;section=header&amp;text=Session%20Navigation&amp;fontSize=52&amp;fontColor=ffffff&amp;animation=fadeIn&amp;fontAlignY=40" alt="Session Navigation" width="100%" />

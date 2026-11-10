@@ -20,6 +20,7 @@ import { readSessionTimelineIds, resolveSessionTarget, sessionFollowCandidates }
 import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
+import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 
 import {
   buildGroupedRows,
@@ -240,6 +241,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   const hideMutation = useMutation({
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
+      if (!actionAllowed(row, capabilities, mode)) return Promise.resolve({ ok: false, error: "capability_unavailable" });
       const rowKey = row.item_id ?? row.tool_call_id;
       setLastActionByItem((prev) => ({ ...prev, [rowKey]: mode }));
       return hideRpc({
@@ -277,6 +279,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     action: "hide" | "summarize" | "unhide",
   ) => {
     if (pendingGroupId || !resolvedScopeKey) return;
+    if (action !== "unhide" && !capabilities?.[action]) { setNotice(capabilityNotice(undefined, capabilities)); return; }
     const items = groupMutationItems(group, action);
     if (items.length === 0) return;
     setPendingGroupId(group.groupId);
@@ -318,19 +321,20 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) return { items: [], context: undefined };
+      if (!resolvedScopeKey) return { items: [], context: undefined, capabilities: undefined };
       const result = await listRpc({ scope_key: scopeKey, query: query || undefined });
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
       }
-      return { items: result.items, context: result.context };
+      return { items: result.items, context: result.context, capabilities: result.capabilities };
     },
     enabled: !!resolvedScopeKey,
     refetchInterval: isMutating ? 400 : 4000,
   });
 
   // Same source as Paseo's own context meter (the `K` figure), for every provider.
+  const capabilities: Capabilities | undefined = listQuery.data?.capabilities ?? scopes.find(scope => scope.scope_key === resolvedScopeKey)?.capabilities;
   const usageQuery = useQuery({
     queryKey: ["paseo-agent-usage", agentId],
     queryFn: async () => {
@@ -994,6 +998,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={hidden ? "Unhide message" : "Hide message"}
+          disabled={!actionAllowed(row, capabilities, hidden ? "unhide" : "hide")}
           style={hidden ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
           onPress={(e) => {
             e.stopPropagation();
@@ -1151,7 +1156,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                   <>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={`Hide ${row.tool_call_id}`}
+                    accessibilityLabel={`Hide ${row.tool_call_id}`}
+                      disabled={!actionAllowed(row, capabilities, "hide")}
                       style={styles.inlineIconBtn}
                       onPress={(e) => {
                         e.stopPropagation();
@@ -1168,6 +1174,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Summarize ${row.tool_call_id}`}
+                      disabled={!actionAllowed(row, capabilities, "summarize")}
                       style={styles.inlineIconBtn}
                       onPress={(e) => {
                         e.stopPropagation();
@@ -1303,7 +1310,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                       accessibilityRole="button"
                       accessibilityLabel={`${eyeAction === "unhide" ? "Unhide hidden" : "Hide all"} in ${group.groupId}`}
                       style={eyeAction === "unhide" ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
-                      disabled={isPending}
+                      disabled={isPending || (eyeAction !== "unhide" && !capabilities?.hide)}
                       onPress={(e) => {
                         e.stopPropagation();
                         void runGroupBatch(group, eyeAction);
@@ -1320,7 +1327,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                       accessibilityRole="button"
                       accessibilityLabel={`Summarize all in ${group.groupId}`}
                       style={styles.inlineIconBtn}
-                      disabled={isPending}
+                      disabled={isPending || !capabilities?.summarize}
                       onPress={(e) => {
                         e.stopPropagation();
                         void runGroupBatch(group, "summarize");
@@ -1436,6 +1443,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Hide ${row.tool_call_id}`}
+                      disabled={!actionAllowed(row, capabilities, "hide")}
                       style={styles.inlineIconBtn}
                       onPress={(e) => {
                         e.stopPropagation();
@@ -1452,6 +1460,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={`Summarize ${row.tool_call_id}`}
+                      disabled={!actionAllowed(row, capabilities, "summarize")}
                       style={styles.inlineIconBtn}
                       onPress={(e) => {
                         e.stopPropagation();
@@ -1493,9 +1502,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   };
 
   const isLoading = resolvedScopeKey ? listQuery.isPending : fallbackTimelineQuery.isPending;
-  const noticeBar = notice ? (
+  const capabilityMessage = capabilityNotice(listQuery.error instanceof Error ? listQuery.error.message : scopesQuery.error instanceof Error ? scopesQuery.error.message : undefined, capabilities);
+  const noticeBar = notice || capabilityMessage ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
-      <Text style={styles.noticeText}>{notice}</Text>
+      <Text style={styles.noticeText}>{notice ?? capabilityMessage}</Text>
     </View>
   ) : null;
 
