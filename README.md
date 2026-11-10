@@ -172,6 +172,8 @@ After updating, restart any running **Hermes gateway completely**, as well as re
    ```bash
    uv tool uninstall session-navigation
    ```
+   This removes both the old `session-navigation` CLI and
+   `session-navigation-daemon` executable from that uv tool installation.
    This is a migration command for an existing installation, not a prerequisite
    for new users. It does not replace installing/enabling the Hermes plugin.
 4. Fully restart Hermes and its gateway after updating the Python plugin.

@@ -59,7 +59,7 @@ test("boundary/threshold notes are bounded, optional and preserve literal IDs", 
   ).not.toContain("a".repeat(100));
 });
 
-test("OMP tail note uses daemon eligibility, never persists, and unlisted IDs support keep_lines", async () => {
+test("OMP tail note uses engine eligibility, never persists, and unlisted IDs support keep_lines", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sn-reminder-"));
   process.env.SESSION_NAVIGATION_STATE_PATH = join(dir, "state.sqlite3");
   const events: Record<string, Function> = {},

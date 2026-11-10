@@ -94,7 +94,7 @@ test("OMP overlay factory renders rows and unhides via worker", async () => {
   }
   expect(after).toContain("c0");
   expect(after).toMatch(/visible|version_conflict/);
-  // Prove the daemon-side state actually flipped, not just the render text.
+  // Prove the stored state actually flipped, not just the render text.
   const database = new Database(DB);
   const row = database.query("SELECT visibility, version FROM items WHERE tool_call_id='c0' AND scope_key='omp:default:s3:default'").get() as any;
   expect(row.visibility).toBe("visible");

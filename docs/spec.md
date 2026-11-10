@@ -43,7 +43,7 @@ Three paths kept separate (agent-observatory design):
   cap or deterministic subtask/time boundary. No implicit all-results fallback.
 - `action=auto` prefers session-model summaries with rule fallback; `hide` is
   rule-only and `summarize` requires the session model. Hidden/ineligible IDs are
-  skipped before model invocation. OMP uses four model workers and batches IPC
+  skipped before model invocation. OMP uses four model workers and batches worker RPC
   internally; Hermes processes chosen IDs sequentially.
 - `list_context_items(view=candidates, limit=30)` discovers visible eligible
   results newest first, with ID, tool, command/path hint, and byte size (hosts

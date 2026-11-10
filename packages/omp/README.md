@@ -46,6 +46,8 @@ directories, not local tarball specifications directly.
    Never delete the existing database. Python remains necessary only for Hermes;
    Paseo also uses the bundled TS core. If the standalone tool was installed,
    remove it with `uv tool uninstall session-navigation` after migration.
+   This removes both the old CLI and `session-navigation-daemon` executable
+   from that uv tool installation; it does not uninstall the Hermes plugin.
 
 The repository path `extensions/pi/session-navigation.ts` remains a thin
 development shim. Build the package first; do not copy that relative-import

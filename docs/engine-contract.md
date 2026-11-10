@@ -15,8 +15,9 @@ executes a tool. Hide is deterministic; Summarize uses the owning session model.
 | `schema_version` | `2` | Physical additive schema |
 | `engine_protocol_version` | `1` | Shared identity, mutation and policy contract |
 
-Adapter protocol is independently versioned, currently integer `1`. The legacy
-OMP JSONL daemon protocol remains `3`; it is not an engine or adapter version.
+Adapter protocol is independently versioned, currently integer `1`. OMP uses a
+Bun worker transport, not the removed Python JSONL daemon. The old daemon's
+protocol `3` is historical and is not an engine or adapter version.
 Only engine protocol 1 is compatible. Unknown, malformed or newer protocols and
 unknown schemas fail with `engine_protocol_incompatible` before any DB writes,
 including journal changes. Long-lived engine writers recheck before writing.

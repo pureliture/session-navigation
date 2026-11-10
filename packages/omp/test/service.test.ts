@@ -42,6 +42,7 @@ const call = (adapter: OmpService, method: string, params: Record<string, unknow
 test("explicit IDs, invalid requests, chunk append tokens and invalidation", async () => {
   const adapter = service();
   expect((await call(adapter, "manage")).error).toBe("tool_call_ids_required");
+  expect((await call(adapter, "manage", { tool_call_ids: [] })).error).toBe("tool_call_ids_required");
   expect((await call(adapter, "manage", { tool_call_ids: "all" })).error).toBe(
     "invalid_tool_call_ids",
   );
@@ -179,6 +180,9 @@ test("candidates are newest eligible first and display limits do not limit manag
   await call(adapter, "prepare", { snapshot_id: "one", append: true, records: records.slice(64) });
   const response = await call(adapter, "list_candidates", { snapshot_id: "one", limit: 2 });
   expect((response.items as any[]).map((item) => item.tool_call_id)).toEqual(["r79", "r78"]);
+  expect((response.items as any[])[0]).toEqual({ tool_call_id: "r79", tool_name: "read", hint: "sample.txt",
+    bytes_size: Buffer.byteLength(records[0].content), tokens_display: "—" });
+  expect((await call(adapter, "list_candidates", { snapshot_id: "one" })).items).toHaveLength(30);
   expect(response.total).toBe(80);
   expect((await call(adapter, "list_candidates", { snapshot_id: "one", limit: 0 })).error).toBe(
     "invalid_limit",
@@ -194,6 +198,8 @@ test("candidates are newest eligible first and display limits do not limit manag
     "destructive_command",
   ]);
   expect((await call(adapter, "list_candidates", { snapshot_id: "one" })).items).toEqual([]);
+  const skipped = await call(adapter, "manage", { snapshot_id: "one", tool_call_ids: ["r79", "short", "danger"], action: "summarize" });
+  expect((skipped.items as any[]).map((item) => item.error)).toEqual(["already_hidden", "not_long", "destructive_command"]);
   expect(
     (
       await call(adapter, "manage", {
@@ -341,4 +347,63 @@ test("registration occurs on valid processing; legacy state is copied once and p
     (await call(adapter, "summarize", { snapshot_id: "one", tool_call_id: "call-1" })).error,
   ).toBe("summarizer_unavailable");
   expect(hidden.ok).toBe(true);
+});
+
+test("duplicate complete snapshots invalidate tokens while hidden messages survive reopen", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "omp-messages-"));
+  directories.push(directory);
+  const path = join(directory, "state.sqlite3");
+  const adapter = service(path);
+  const scope = sessionScope("a");
+  adapter.store.ensureMessages(scope, [{ unit_id: "msg:user:1", kind: "user", content_sha256: "sha", char_count: 4 }]);
+  expect(adapter.store.setMessageVisibility(scope, "msg:user:1", "user", "sha", 4, "hidden", 1).ok).toBe(true);
+  adapter.store.close();
+  const reopened = service(path);
+  const prepared = await call(reopened, "prepare", { snapshot_id: "one", records: [] });
+  expect(prepared).toEqual({ ok: true, patches: [], hidden_messages: ["msg:user:1"], pending_summaries: [] });
+  expect((await call(reopened, "prepare", { snapshot_id: "two", records: [record(), record()] })).error).toBe("invalid_record");
+  expect((await call(reopened, "compact", { snapshot_id: "one", tool_call_id: "call-1" })).error).toBe("unconfirmed_snapshot");
+  expect(reopened.store.hiddenMessages(scope)).toEqual(["msg:user:1"]);
+  expect(reopened.store.hiddenMessages(sessionScope("b"))).toEqual([]);
+});
+
+test("SQLite pending jobs survive reopen and settle to model text or plain hide", async () => {
+  for (const text of [undefined, "Invented 99999 facts.", record().content.repeat(2), "Output row 000 details"]) {
+    const directory = mkdtempSync(join(tmpdir(), "omp-pending-"));
+    directories.push(directory);
+    const path = join(directory, "state.sqlite3");
+    const adapter = service(path);
+    const scope = sessionScope("a");
+    await call(adapter, "prepare", { snapshot_id: "one", records: [record()] });
+    const hidden = await call(adapter, "compact", { snapshot_id: "one", tool_call_id: "call-1" });
+    const item = adapter.store.get(scope, String(hidden.item_id))!;
+    expect(adapter.store.put(scope, { ...item, compaction_source: "summarize_pending", version: 2 }, 1).ok).toBe(true);
+    adapter.store.close();
+    const reopened = service(path);
+    const reply = await call(reopened, "prepare", { snapshot_id: "two", records: [record()] });
+    expect((reply.pending_summaries as any[]).map((job) => job.content)).toEqual([record().content]);
+    const settled = await call(reopened, text ? "apply_summary" : "summary_failed", {
+      item_id: item.item_id, expected_version: 2, summary_text: text,
+    });
+    const valid = text === "Output row 000 details";
+    expect(settled.ok).toBe(valid || text === undefined);
+    if (text && !valid) expect(settled.error).toBe("verification_failed");
+    const stored = reopened.store.get(scope, item.item_id)!;
+    expect(stored.compaction_source).toBe(valid ? "llm_summary" : "explicit_user_hide");
+    expect(stored.original).toBe(record().content);
+    if (valid) expect(stored.compacted).toBe(text!);
+    expect((await call(reopened, "prepare", { snapshot_id: "three", records: [record()] })).pending_summaries).toEqual([]);
+  }
+});
+
+test("SQLite write refusal during prepare returns explicit request failure choices", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "omp-readonly-"));
+  directories.push(directory);
+  const adapter = service(join(directory, "state.sqlite3"));
+  adapter.store.driver.exec("PRAGMA query_only=ON");
+  try {
+    const reply = await call(adapter, "prepare", { snapshot_id: "one", records: [record()] });
+    expect(reply).toEqual({ ok: false, error: "db_error", choices: ["abort_request", "send_original"] });
+    expect(adapter.store.items(sessionScope("a"))).toEqual([]);
+  } finally { adapter.store.driver.exec("PRAGMA query_only=OFF"); }
 });

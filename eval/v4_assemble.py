@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from v2_run import COMMITS, DEEPSEEK_REASONING, STAGES
+from campaign_support import COMMITS, DEEPSEEK_REASONING, STAGES
 
 SETTINGS = {"model": STAGES["deepseek"][0],
             "provider": {"order": ["Relace"], "allow_fallbacks": False},

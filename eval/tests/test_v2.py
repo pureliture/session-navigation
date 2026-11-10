@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy import serve
 from v2_fixtures import build, component, document
-from v2_run import child_environment, STAGES, positive_int
+from campaign_support import child_environment, STAGES, positive_int
 from v2_analyze import adoption_gate, boundary_index, eligible, match_fact
 from analyze import native_operations, response_failure_kind
 from v2_cost import projection

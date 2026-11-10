@@ -447,3 +447,29 @@ test("manage handles empty, duplicate, unsupported and destructive targets", () 
       "destructive_command",
     );
   }));
+
+test("independent SQLite writers reject stale CAS and observe subsequent interleaved writes", () =>
+  database(async (store, path) => {
+    const others = [new Store(makeDriver(path)), new Store(makeDriver(path))];
+    try {
+      const stores = [store, ...others];
+      const engines = stores.map((writer) => new Engine(writer));
+      const toolRecord = record(body(fixtures.engine[0]));
+      const hidden = await engines[0].hide(fixtures.scope, toolRecord);
+      assert.equal(hidden.ok, true);
+      const item = hidden.item!;
+      const attempts = engines.map((engine) => engine.unhide(fixtures.scope, item.item_id, item.version));
+      assert.deepEqual(attempts.map((reply) => reply.ok), [true, false, false]);
+      assert.deepEqual(attempts.slice(1).map((reply) => reply.error), ["version_conflict", "version_conflict"]);
+      const rehidden = await engines[2].hide(fixtures.scope, toolRecord);
+      assert.equal(rehidden.item!.version, item.version + 2);
+      assert.equal(engines[1].unhide(fixtures.scope, item.item_id, item.version).error, "version_conflict");
+      for (const writer of stores) {
+        const rows = writer.items(fixtures.scope);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].visibility, "hidden");
+        assert.equal(rows[0].version, item.version + 2);
+        assert.equal(rows[0].original, toolRecord.content);
+      }
+    } finally { for (const writer of others) writer.close(); }
+  }));

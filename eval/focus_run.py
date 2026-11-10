@@ -16,7 +16,7 @@ from proxy import serve
 from quality_score import MODEL, PROVIDER, REASONING, campaign_wire, total_cost
 from run import hashes
 from v2_archive import archive
-from v2_run import child_environment, source_snapshot
+from campaign_support import child_environment, source_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 LIMIT = 1.50

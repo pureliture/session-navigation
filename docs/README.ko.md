@@ -199,6 +199,8 @@ Python 모듈 캐시를 비우지 않습니다. 로드된 소스와 vendor의 fi
    ```bash
    uv tool uninstall session-navigation
    ```
+   해당 uv tool 설치에 포함된 기존 `session-navigation` CLI와
+   `session-navigation-daemon` 데몬 실행 파일이 모두 제거됩니다.
    이 명령은 Hermes 플러그인의 설치·활성화를 대신하지 않습니다.
 4. Python 플러그인을 갱신한 Hermes와 gateway를 완전히 재시작합니다.
    OMP는 비어 있는 `omp:` scope에 legacy `pi:` 상태를 최초 한 번 복사하고 원본 행을 보존합니다.

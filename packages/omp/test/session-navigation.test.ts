@@ -313,7 +313,7 @@ async function execute(tool: any, args: any, context = ctx) {
   return (await tool.execute("test", args, undefined, undefined, context)).details;
 }
 
-test("실제 데몬으로 확인된 read 결과의 압축과 복원을 수행한다", async () => {
+test("worker engine compacts and restores confirmed read results", async () => {
   const { events, tools } = setup();
   const input = messages();
   try {

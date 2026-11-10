@@ -1,5 +1,18 @@
 # A/B 실행기
 
+## 현재 실행기와 과거 캠페인
+
+- `run.py`는 현재 체크아웃의 OMP TS 확장/Hermes 플러그인을 사용합니다.
+- `capture_overhead.ts`는 현재 확장의 요청을 loopback으로만 수집합니다.
+- `tools/benchmark_omp_prepare.ts`는 현재 Bun worker와 SQLite를 측정합니다.
+- 과거 커밋의 OMP Python 확장을 실행하던 `v2_run.py`는 제거했습니다.
+  재현에는 `b12db47` 또는 해당 캠페인 당시 커밋 전체와 당시 격리 runtime이 필요합니다.
+  현재 패키지의 검증 명령으로 사용하지 마세요. 아래에는 기존 결과 분석 명령만 남깁니다.
+  분석/오프라인 테스트가 쓰는 고정 metadata와 순수 helper는 `campaign_support.py`에 있습니다.
+- `focus_run.py`/`quality_run.py`도 고정된 과거 제품 커밋을 사용하는 연구 실행기입니다.
+  특히 과거 OMP live arm은 당시 runtime을 복원해야 합니다. 현재 제품 acceptance가 아니며
+  이번 정리에서는 유료 캠페인을 실행하지 않았습니다.
+
 ## 평가 원본 접근과 새 결과 저장
 
 기존 실행 원본은 프라이빗 `session-navigation-evidence` 저장소의
@@ -53,11 +66,6 @@ B-old=`5017b97`, B-new=`37348b8`. OMP/Hermes 각각 atlas/boreal × 2회다.
 `setup-v4/budget-before.json`과 `observed-budget.json`에 $5 gate를 보관한다.
 
 ```bash
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --arms B-new --label v4n- --output eval/results/2026-11-09-v4-new
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A,B-old --cases boreal --repetitions 1 --repetition-start 2 --label v4f- --output eval/results/2026-11-09-v4-fill
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --components --arms B-old,B-new --label v4q- --output eval/results/2026-11-09-v4-quality
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A --cases atlas --repetitions 1 --repetition-start 2 --label v4r- --output eval/results/2026-11-09-v4-retry
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A --cases atlas --repetitions 1 --repetition-start 2 --label v4r2- --output eval/results/2026-11-09-v4-retry2
 uv run --no-sync python eval/v4_assemble.py --reuse eval/results/2026-11-09-v3-deepseek --source eval/results/2026-11-09-v4-new --source eval/results/2026-11-09-v4-fill --source eval/results/2026-11-09-v4-retry --source eval/results/2026-11-09-v4-retry2 --output eval/results/2026-11-09-v4-deepseek
 uv run --no-sync python eval/v2_analyze.py eval/results/2026-11-09-v4-deepseek
 uv run --no-sync python eval/v2_answer_surface.py eval/results/2026-11-09-v4-deepseek
@@ -80,8 +88,8 @@ judge는 v3와 동일하게 component에서 실제 전송된 replacement를 평�
 ## v2 (Crouton 품질 → 조건부 DeepSeek 비용)
 
 [설계](../docs/evaluation/design.md). 제품은 `git archive`로 B-old=`b1a524e`,
-B-new=`5017b97`를 격리한다. 설치본은 바꾸지 않는다. `v2_run.py`는 모델과 provider를
-한 쌍으로 고정하고 65,536 effective window에서 실제 OMP SDK/Hermes를 실행한다.
+B-new=`5017b97`를 격리했다. 설치본은 바꾸지 않았다. 제거된 과거 실행기는 모델과 provider를
+한 쌍으로 고정하고 65,536 effective window에서 실제 OMP SDK/Hermes를 실행했다.
 명령형 trial은 자율 실행과 다른 디렉터리에 둔다.
 
 OMP headless host는 `extensionRunner.initialize`로 실제 세션 callback을 연결한다.
@@ -93,15 +101,10 @@ pilot 분석/stage/safety는 본 실행 전에 `pilot-*`로 복사해 보존한�
 있으면 `v2_cost.py DIR PRIOR_COST`로 예산 예상에 더한다. [최종 결과](../docs/evaluation/results-v2.md).
 
 ```bash
-uv run --no-sync python eval/v2_run.py --stage crouton --output eval/results/DATE-crouton
-uv run --no-sync python eval/v2_run.py --stage crouton --components --arms B-old,B-new --output eval/results/DATE-components
 uv run --no-sync python eval/v2_analyze.py eval/results/DATE-crouton
-uv run --no-sync python eval/v2_run.py --stage deepseek --hosts omp --arms A,B-new --cases atlas --repetitions 1 --pilot --adoption-report eval/results/DATE-crouton/summary-v2.json --output eval/results/DATE-deepseek
 uv run --no-sync python eval/v2_analyze.py eval/results/DATE-deepseek
 uv run --no-sync python eval/v2_cost.py eval/results/DATE-deepseek
 uv run --no-sync python eval/v2_cache.py eval/results/DATE-deepseek
-# pilot-budget.json의 출력 토큰과 예상 비용을 보고한 뒤 continue=true일 때만:
-uv run --no-sync python eval/v2_run.py --stage deepseek --hosts omp --arms A,B-new --adoption-report eval/results/DATE-crouton/summary-v2.json --pilot-report eval/results/DATE-deepseek/pilot-budget.json --output eval/results/DATE-deepseek
 ```
 
 판정·심판은 stage 모델/provider를 명시한다. Crouton judge는
@@ -151,7 +154,7 @@ SDK 수집기는 OMP의 일반 extension runtime을 초기화하고 `session_sta
 prompt를 실행한다. 그렇지 않으면 main-session guard 때문에 도구가 노출되지 않는다.
 오프라인 A/B 수집은 B에만 컨텍스트 도구 5개가 모두 있는지 검사한다.
 runtime 초기화는 설치된 OMP 18.18.3의 source API를 사용하며 다른 버전의 SDK 호환성을 보장하지 않는다.
-`v2_run.py`의 고정된 과거 커밋은 당시 Python 기반 확장을 포함한다. 현재 체크아웃의
+과거 캠페인의 고정된 커밋은 당시 Python 기반 확장을 포함한다. 현재 체크아웃의
 삭제된 실행 파일 경로를 주입하지 않는다. 과거 캠페인의 실제 재실행에는 해당 커밋의
 원래 격리 환경을 복원해야 하며, 현재 TS 엔진으로 바꿔 실행한 수치를 과거 결과로 취급하면 안 된다.
 이번 이관에서는 과거 유료 캠페인을 재실행하지 않았다.
