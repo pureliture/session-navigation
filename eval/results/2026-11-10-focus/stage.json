@@ -1,0 +1,493 @@
+{
+  "product_commit": "37348b89faf82ced7510fe09e2a97a893fbcc8a3",
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "provider": {
+    "order": [
+      "Relace"
+    ],
+    "allow_fallbacks": false
+  },
+  "reasoning": {
+    "enabled": false,
+    "exclude": true
+  },
+  "window": 131072,
+  "native_compaction": false,
+  "schedule": [
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "long",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "long",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "short",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "short",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "short",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "short",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "short",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "short",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "long",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "long",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "short",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "short",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "short",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "short",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "long",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "long",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "short",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "short",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "long",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "long",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "long",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "long",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "short",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "short",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "short",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "short",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "long",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "long",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "long",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "long",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "long",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "long",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "long",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "long",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "short",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "short",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "short",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "short",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "short",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "short",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "long",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "long",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "short",
+      "rep": 1,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "short",
+      "rep": 1,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "short",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 631,
+      "length": "short",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "long",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "long",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "long",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "long",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "long",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 317,
+      "length": "long",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "long",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "long",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "short",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 419,
+      "length": "short",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "long",
+      "rep": 2,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 743,
+      "length": "long",
+      "rep": 2,
+      "arm": "RAW"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "short",
+      "rep": 3,
+      "arm": "PLUGIN-HIDE"
+    },
+    {
+      "part": "replay",
+      "seed": 523,
+      "length": "short",
+      "rep": 3,
+      "arm": "RAW"
+    },
+    {
+      "part": "live",
+      "seed": 523,
+      "length": "long",
+      "rep": 1,
+      "arm": "A"
+    },
+    {
+      "part": "live",
+      "seed": 523,
+      "length": "long",
+      "rep": 1,
+      "arm": "B-new"
+    },
+    {
+      "part": "live",
+      "seed": 317,
+      "length": "long",
+      "rep": 1,
+      "arm": "A"
+    },
+    {
+      "part": "live",
+      "seed": 317,
+      "length": "long",
+      "rep": 1,
+      "arm": "B-new"
+    },
+    {
+      "part": "live",
+      "seed": 419,
+      "length": "long",
+      "rep": 1,
+      "arm": "B-new"
+    },
+    {
+      "part": "live",
+      "seed": 419,
+      "length": "long",
+      "rep": 1,
+      "arm": "A"
+    }
+  ],
+  "randomization_seed": 20261111,
+  "source_hashes": {
+    "focus_fixtures.py": "d661836592c6bd843e83d4c114a1469df1d5959e6bb3965c37594697086fdd12",
+    "focus_score.py": "0ae6d5983a65594ef928e822768f6a9accd8a8c63540d2edaa71b64de0990997",
+    "focus_run.py": "7a299b0ae2772ee44c869246f930bfd8a365f47c1040126e762210fb2517555a",
+    "v2_omp.ts": "8444e153271761cf621369d55433aab05017d3a13a975837a1fd725b5d05e3f3",
+    "proxy.py": "6acf7a54e093bb5b5d8861bdaec2d14d4444251cdd4788934c18853c663606f7"
+  },
+  "primary": "11 reachable fields; audit_marker is separately scored hidden-only loss",
+  "selection_rule": "Hide tool results of all eight finished subtasks, never keep_lines; fail-open refusals retained",
+  "summary_arm": "Omitted; main contrast is deterministic rule Hide without auxiliary model calls",
+  "inference": "Paired exact-vector McNemar plus seed-cluster bootstrap; five independent synthetic seeds",
+  "replay_tools": "Historical read calls; final response cannot call tools or restore hidden-only facts"
+}

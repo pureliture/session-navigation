@@ -1,5 +1,37 @@
 # A/B 실행기
 
+## Focus effect: no native compaction
+
+[Results and limitations](../docs/evaluation/results-focus.md). `focus_fixtures.py`
+builds five matched seeds at 35%/70% of a 131,072-token declared window. Fixed
+OMP-style wire histories compare RAW with actual product rule Hide (commit
+`37348b8`), three repetitions each: 60 calls. Eleven reachable facts/derivations
+are primary; a buried hidden-only marker has a separate loss score. The joint
+question can induce recovery behavior, so a miss is not automatically a focus effect.
+
+Six fresh live OMP sessions separately check autonomous adoption with native
+compaction explicitly disabled. The runner never commands B cleanup. All model
+calls use DeepSeek V4.1 Flash 1017, Relace only, reasoning disabled, the existing
+guarded proxy and an env-only key. The included pilot is one long replay pair
+and one live pair; continuing requires projected total <= $1.50.
+
+```bash
+uv run --no-sync --with tiktoken python eval/focus_run.py --output eval/results/DATE-focus --phase pilot --label pilot
+# Only after reviewing budget.json with continue=true:
+uv run --no-sync --with tiktoken python eval/focus_run.py --output eval/results/DATE-focus --phase rest --label main
+# API-only recovery, never retry a qualifying outcome; use a fresh label/index:
+uv run --no-sync --with tiktoken python eval/focus_run.py --output eval/results/DATE-focus --phase retry --label retry1 --job 0
+uv run --no-sync --with tiktoken python eval/focus_score.py eval/results/DATE-focus
+uv run --no-sync --with tiktoken python eval/focus_audit.py eval/results/DATE-focus
+uv run --no-sync python eval/v2_audit.py eval/results/DATE-focus
+```
+
+`stage.json` freezes schedules/settings/source hashes. Fixtures retain full
+originals, exact engine replacements and reachability checks; outgoing histories
+are independently compared with fixtures. API failures/missing usage are excluded,
+not converted to product failures. McNemar is on paired trial vectors; seed-cluster
+bootstrap uncertainty recognizes repeated seeds/facts. Five seeds are a small sample.
+
 ## v4 (DeepSeek, 정리 후 마지막 답변 완결성)
 
 모델은 `deepseek/deepseek-v4.1-flash-1017` 하나, Relace만 허용하며 reasoning은

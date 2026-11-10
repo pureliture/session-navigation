@@ -18,9 +18,10 @@ const model = { id: spec.model, name: "V2 evaluation", provider: "evaluation", a
   baseUrl: spec.proxy + "/" + spec.id + "/v1", reasoning: false, input: ["text"], contextWindow: spec.window, maxTokens: 4096,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { supportsDeveloperRole: false, supportsStore: false, maxTokensField: "max_tokens" } };
 const settings = await sdk.Settings.init({ cwd: spec.workspace, agentDir: spec.home, inMemory: true,
-  overrides: { "compaction.enabled": true, "compaction.thresholdPercent": 95, "compaction.reserveTokens": 4096,
+  overrides: { "compaction.enabled": spec.native_compaction !== false, "compaction.thresholdPercent": 95, "compaction.reserveTokens": 4096,
     "compaction.keepRecentTokens": 8192, "compaction.modelThresholdsEnabled": false } });
 const enabled = spec.arm !== "A";
+record({ kind: "native_config", enabled: spec.native_compaction !== false, window: spec.window });
 const extensions = enabled ? [(pi: any) => {
   const observed = Object.create(pi);
   observed.registerTool = (tool: any) => pi.registerTool({ ...tool, execute: async (...args: any[]) => {

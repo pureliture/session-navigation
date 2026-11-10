@@ -1,0 +1,10 @@
+{
+  "pilot_ready": true,
+  "continue": true,
+  "spent": 0.019398337999999998,
+  "projected_total": 0.105835784,
+  "limit": 1.5,
+  "safety_factor": 1.5,
+  "eligible_sessions": 4,
+  "planned_sessions": 66
+}

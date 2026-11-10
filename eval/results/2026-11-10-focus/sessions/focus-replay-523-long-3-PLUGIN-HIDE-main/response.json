@@ -1,0 +1,45 @@
+{
+  "id": "gen-1794300316-LSjlUkoC6l9ADoCFUodT",
+  "object": "chat.completion",
+  "created": 1794300316,
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "provider": "Relace",
+  "system_fingerprint": null,
+  "service_tier": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "```json\n{\n  \"owner\": \"Cobalt\",\n  \"release\": \"r523-signed\",\n  \"capacity\": 1623,\n  \"load\": 446,\n  \"worker_cost\": 19,\n  \"worker_limit\": 53,\n  \"drain_minutes\": 22,\n  \"canary\": \"4e82e2bb26de79725a83\",\n  \"spare_capacity\": 1177,\n  \"safe_parallel\": 53,\n  \"drain_seconds\": 1320,\n  \"audit_marker\": null\n}\n```\n\nNote: `safe_parallel = min(53, floor(1177/19)) = min(53, 61) = 53`. No `audit_marker` field appears in any of the inspected telemetry (the compiler report only contained `owner` and `release`), so it is null rather than fabricated.",
+        "refusal": null
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1605,
+    "completion_tokens": 193,
+    "total_tokens": 1798,
+    "cost": 0.00010613,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00010613,
+      "upstream_inference_prompt_cost": 9.63e-06,
+      "upstream_inference_completions_cost": 9.65e-05
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}
