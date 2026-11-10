@@ -191,5 +191,3 @@ def test_large_snapshot_survives_restart(tmp_path):
     items = engine2.list_items(scope)
     assert len(items) == 200
     store2.close()
-
-

@@ -14,15 +14,20 @@ export class ServiceClient {
   private nextId = 0;
   private readonly pending = new Map<number, (reply: Reply) => void>();
   private closed = false;
+  readonly home: string;
+  readonly path: string;
   constructor(
-    readonly home = homedir(),
-    readonly path = process.env.SESSION_NAVIGATION_STATE_PATH ??
+    home = homedir(),
+    path = process.env.SESSION_NAVIGATION_STATE_PATH ??
       join(
         process.env.XDG_DATA_HOME ?? join(home, ".local", "share"),
         "session-navigation",
         "state.sqlite3",
       ),
-  ) {}
+  ) {
+    this.home = home;
+    this.path = path;
+  }
 
   request(method: string, input: object): Promise<Reply> {
     if (!runtimeSupported())

@@ -9,7 +9,6 @@ from session_navigation.model import Scope
 from session_navigation.policy import HIGH_SIGNAL_BYTES, RuleSpanSelector, strip_consecutive_numbering
 from session_navigation.reminders import BoundaryReminders, NOTE_BYTES
 from test_engine import _make_record
-from test_omp_daemon import Daemon, call, record
 from _adapter_loader import hermes_adapter
 
 
@@ -159,37 +158,60 @@ def test_reminder_boundaries_thresholds_empty_sessions_and_literal_ids():
     assert "a" * 100 not in reminders.note("s", "3", 100, None, huge)
 
 
-def test_daemon_hide_keep_lines_and_unlisted_targets():
-    daemon = Daemon()
-    records = [record(f"r{i}", body()) for i in range(5)]
-    call(daemon, "prepare", snapshot_id="one", records=records)
-    listed = call(daemon, "list_candidates", snapshot_id="one", limit=3)
-    assert listed["total"] == 5
+def cleanup_session(records):
+    plugin = hermes_adapter().plugin
+    state = plugin.PluginState(is_enabled=lambda: True, count_middlewares=lambda: 0)
+    messages = []
+    for call_id, content in records:
+        messages.extend([
+            {"role": "assistant", "tool_calls": [{"id": call_id, "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path":"sample.txt"}'}}]},
+            {"role": "tool", "tool_call_id": call_id, "content": content},
+        ])
+    request = {"messages": messages}
+    middleware = plugin.make_middleware(state)
+    middleware(request=request, session_id="s", api_mode="chat_completions")
+    return plugin, state, middleware, request
+
+
+def test_engine_hide_keep_lines_and_unlisted_targets():
+    plugin, state, middleware, request = cleanup_session([(f"r{i}", body()) for i in range(5)])
+    original = copy.deepcopy(request)
+    listed = json.loads(plugin.make_list_handler(state)({"view": "candidates", "limit": 3}, session_id="s"))
+    assert len(json.loads(plugin.make_list_handler(state)({"view": "candidates"}, session_id="s"))["items"]) == 5
     assert "r0" not in [item["tool_call_id"] for item in listed["items"]]
-    result = call(daemon, "manage", snapshot_id="one", tool_call_ids=["r0"], action="hide", keep_lines=["rare middle sentence"])
+    manage = plugin.make_manage_handler(state)
+    result = json.loads(manage({"tool_call_ids": ["r0"], "action": "hide", "keep_lines": ["rare middle sentence"]}, session_id="s"))
     assert result["applied"] == 1
-    patched = call(daemon, "prepare", snapshot_id="two", records=records)
-    assert "rare middle sentence" in patched["patches"][0]["text"]
-    mixed = call(daemon, "manage", snapshot_id="two", tool_call_ids=["r1", "r2"], action="hide",
-                 keep_lines=["20:rare middle sentence", "invented"])
+    patched = middleware(request=request, session_id="s", api_mode="chat_completions")["request"]
+    assert "rare middle sentence" in patched["messages"][1]["content"]
+    assert patched["messages"][1]["content"] != body()
+    mixed = json.loads(manage({"tool_call_ids": ["r1", "r2"], "action": "hide",
+                 "keep_lines": ["20:rare middle sentence", "invented"]}, session_id="s"))
     assert mixed["applied"] == 2 and mixed["failed"] == 0
     for item in mixed["items"]:
         assert item["keep_lines_ignored"][0]["entry"] == "invented"
         assert "not found verbatim" in item["keep_lines_ignored"][0]["reason"]
         assert item["keep_lines_normalized"][0]["accepted"] == "rare middle sentence"
-    assert call(daemon, "manage", snapshot_id="two", tool_call_ids=["r1"], action="auto", keep_lines=[])["error"] == "invalid_keep_lines_action"
+    assert json.loads(manage({"tool_call_ids": ["r1"], "action": "auto", "keep_lines": []}, session_id="s"))["error"] == "invalid_keep_lines_action"
+    assert request == original
 
 
 def test_batch_keep_lines_are_resolved_independently_for_each_target():
-    daemon = Daemon()
-    records = [record(name, f"Report: {name}\nSigned-live generation 42\n" + body()) for name in ("integration", "linker")]
-    call(daemon, "prepare", snapshot_id="mixed", records=records)
-    result = call(daemon, "manage", snapshot_id="mixed", tool_call_ids=["integration", "linker"], action="hide",
-        keep_lines=["Report: integration", "Report: linker", "Signed-live generation 42", "invented"])
+    records = [(name, f"Report: {name}\nSigned-live generation 42\n" + body()) for name in ("integration", "linker")]
+    plugin, state, middleware, request = cleanup_session(records)
+    original = copy.deepcopy(request)
+    result = json.loads(plugin.make_manage_handler(state)({"tool_call_ids": ["integration", "linker"], "action": "hide",
+        "keep_lines": ["Report: integration", "Report: linker", "Signed-live generation 42", "invented"]}, session_id="s"))
     assert result["applied"] == 2 and result["failed"] == 0
     for row, other in zip(result["items"], ("linker", "integration")):
         assert [entry["entry"] for entry in row["keep_lines_ignored"]] == [f"Report: {other}", "invented"]
-    assert records[0]["content"].startswith("Report: integration")
+    patched = middleware(request=request, session_id="s", api_mode="chat_completions")["request"]
+    for index, name in ((1, "integration"), (3, "linker")):
+        assert f"Report: {name}" in patched["messages"][index]["content"]
+        assert "Signed-live generation 42" in patched["messages"][index]["content"]
+        assert patched["messages"][index]["content"] != records[index // 2][1]
+    assert request == original
 
 
 @pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
