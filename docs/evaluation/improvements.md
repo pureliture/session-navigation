@@ -48,8 +48,10 @@ Hermes **333→364 (+31)** tokens. 대표 후보 3행 reminder는 **185→215 (+
 - `manage_context(action=hide, keep_lines=[...])`는 agent가 고른 exact 한 줄 부분문자열을
   포함하는 원문 줄을 그대로 남긴다. envelope/연속 줄번호를 제거한 본문 기준이며 합계
   1,024바이트 이내다. 같은 목록을 각 대상에 적용한다. 없는 값·잘못된 형식은
-  `invalid_keep_lines`, 다른 action은 `invalid_keep_lines_action`, 이미 저장된 대체문이
-  새 보존 요구를 충족하지 못하면 `keep_lines_conflict`로 거절한다. 조용히 무시하지 않는다.
+  항목별 `keep_lines_ignored`와 영어 이유로 알리고 나머지는 적용한다. 앞뒤 공백과
+  OMP `20:` / `20|` 접두사는 원문 그대로의 일치가 없을 때만 정규화한다.
+  목록 자체가 잘못되면 `invalid_keep_lines`, 다른 action은 `invalid_keep_lines_action`,
+  이미 저장된 대체문이 새 보존 요구를 충족하지 못하면 `keep_lines_conflict`로 거절한다.
 
 ## 고정 overhead와 안내 크기
 

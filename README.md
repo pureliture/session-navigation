@@ -280,35 +280,35 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 
 ## Evaluation
 
-**v4:** 정리 후 마지막 메시지에도 모든 요청 값을 다시 쓰도록 안내를 추가했다.
-같은 DeepSeek/Relace(reasoning off), OMP/Hermes 각 4세션/arm으로 **24/24 final-only·visible-unit 성공**.
-v3 baseline 13개를 검증 후 재사용하고 누락 셀과 API 오류 baseline을 새 label로 실행했다.
-B-new의 “reported above/see above” 계열은 **0/200 마지막 메시지**(v3 15/175).
-관측 비용은 A 대비 OMP **−7.11%**, Hermes **−33.82%**; 큰 cache 할인 reference는 **−3.05%/−23.39%**다.
-다만 Hermes의 v3와 같은 세 B-new 셀은 비용 +45.33%여서 보편적인 비용 개선으로 해석하지 않는다.
-Rule Hide는 양 arm 12/12 사실 보존. B-new LLM summary는 전송분 8/9이며 OMP 한 trial은 검증 거절,
-judge 2.20/5로 summary 품질 한계는 남는다. 신규 capture 비용 $0.374425, 예상은 최대 $2.335284로 $5 gate 이하.
-[v3→v4 결과·재사용·API 제외·감사](docs/evaluation/results-v3.md) · [실행기](eval/README.md)
+**Less context, without deleting history—not a claim of smarter answers.**
 
-**v2:** Crouton Alpha의 장기 자율 24세션과 별도 명령형 16세션을 평가했다.
-B-new는 8/8세션 경계 정리·96.6% literal ID로 사용성 gate를 통과했고,
-Hide는 체크리스트 12/12를 보존했다(B-old 0/12). 다만 strict 과제는 A 8/8 vs B-new 6/8,
-OMP summary는 입력 12K 제한으로 일부 사실을 놓쳤다. 별도 DeepSeek 4vs4세션 비용은
-A $0.114316 / B-new $0.202723(**+77.3%**)로 절감은 입증하지 못했다.
-[v2 설계](docs/evaluation/design.md) · [v2 결과·실패·비용](docs/evaluation/results-v2.md)
+- Tool results accounted for roughly **70–81% of outgoing prompt tokens** in our
+  captured runs. For external context, JetBrains/TUM reports approximately
+  [84% observation tokens](https://kairos.jetbrains.com/research/articles/the-complexity-trap)
+  in its SWE-agent sample; the populations differ. [Measurement details](docs/evaluation/context-share.md).
+- **v4:** the plugin removed **53–66% of final-request tool-result tokens** without
+  measured task-quality loss: **4/4 in every host/arm group**, on both final-only
+  and visible-unit checks. [Results and limitations](docs/evaluation/results-v3.md).
+- **Synthetic focus replay:** rule-hidden histories used approximately **97–98%
+  fewer prompt tokens**, with no statistically significant accuracy difference:
+  short **15/15 vs 15/15**, long **14/15 Hide vs 15/15 RAW** (five seeds).
+  The one miss attempted recovery instead of answering. Hidden-only details were
+  **0/30 without recovery**; they must be unhidden to become available again.
+  [Full results, paired statistics and caveats](docs/evaluation/results-focus.md).
+- **Live OMP, no native compaction:** **3/3 vs 3/3**, with **54% fewer aggregate
+  B prompt tokens**. This small autonomous comparison is **not causal**; only two
+  of three B sessions actually cleaned. [Live results](docs/evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled).
 
-[v3 DeepSeek fallback 부분 결과](docs/evaluation/results-v3.md): Nemotron 무료 일일 할당량 소진 후
-승인된 DeepSeek/Relace(reasoning off)로 21/24 장기 세션과 16 component trial을 완료했다.
-완료 B-new 7/7 사용성 gate 통과. 답변 후 정리 안내로 기존 마지막-message 채점이 일부 답변을
-놓쳐, 원래 지표와 보이는 단위 답변 채점을 함께 공개했다(후자 21/21 성공).
-완료 OMP 4vs4 비용은 A $0.087330 / B-new $0.084207(−3.58%), 큰 cache 할인 reference는 +3.19%.
-후반 Relace 429로 Hermes 마지막 3셀은 미완료다. summary 손실·지시 불이행은 여전히 남는다.
+Originals remain preserved. Rule Hide retains key lines, Unhide restores originals
+without re-executing tools, and user-visible controls/preview span **OMP, Hermes
+and Paseo**. Retention is not complete recall: inspect or recover details as needed.
 
-**v1:** 실제 OMP/Hermes에서 **GLM 5.3 Flash**로 A/B 48세션(셀별 3회)을 실행했다.
-양 군 모두 과제·회상 24/24 성공했지만, 자발적 hide는 OMP B 한 세션뿐이고 LLM summary는 없어 요약 품질은 미평가다.
-보고 비용은 B가 OMP +10.91%, Hermes +5.53%였으며, 정리의 독립적인 인과 효과로 단정하지 않는다.
-[v1 설계](docs/evaluation/design-v1.md) · [v1 결과·한계](docs/evaluation/results.md) · [재현 harness](eval/README.md)
-[내비게이터 단일 사용성 평가](docs/evaluation/navigator-usability.md): 실제 OMP 기록의 6쌍 찾기 과업, 기본 틱과 아웃라인의 정보 단서·검색 한계·279px 폭을 확인했다.
+We do **not** claim improved accuracy or guaranteed cost savings. Observed OMP
+DeepSeek cost differences ranged from **+77% in v2 to −7% in v4**. Every edit
+invalidates the prompt-cache prefix from its first changed position onward;
+batching can mitigate, not eliminate, that overhead. [v2 failures/costs](docs/evaluation/results-v2.md)
+· [v4 costs](docs/evaluation/results-v3.md) · [reproduction harness](eval/README.md)
+· [earlier v1 results](docs/evaluation/results.md)
 
 ## 기여
 

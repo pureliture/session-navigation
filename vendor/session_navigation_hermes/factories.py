@@ -324,17 +324,17 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
     return _track_mutation(state, unhide_context)
 
 
-def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_lines: list[str] | None = None) -> tuple[bool, str | None, str | None]:
+def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_lines: list[str] | None = None) -> tuple[bool, str | None, str | None, dict[str, Any]]:
     """Apply one rule-based hide through shared engine paths (manage_context helper)."""
     from session_navigation.model import ToolResultRecord, compute_invocation_digest
     from .allowlist import AdapterRejected, filter_invocation
 
     if entry.arguments_parse_error or not entry.tool_name:
-        return False, "invalid_invocation", None
+        return False, "invalid_invocation", None, {}
     try:
         invocation, omitted = filter_invocation(entry.tool_name, entry.raw_arguments)
     except AdapterRejected as exc:
-        return False, exc.code, None
+        return False, exc.code, None, {}
     record = ToolResultRecord(
         call_id=entry.call_id,
         result_position=entry.result_position,
@@ -347,11 +347,16 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_li
         host_handle=entry.host_handle,
     )
     result = state.engine.compact_sync(scope, record, options_omitted=bool(omitted), keep_lines=keep_lines)
+    diagnostics = {}
+    if result.keep_lines_ignored:
+        diagnostics["keep_lines_ignored"] = list(result.keep_lines_ignored)
+    if result.keep_lines_normalized:
+        diagnostics["keep_lines_normalized"] = list(result.keep_lines_normalized)
     if not result.ok or result.plan is None:
-        return False, result.error or "not_found", None
+        return False, result.error or "not_found", None, diagnostics
     state.presentations.record_compacted(
         scope.scope_key(), result.plan.item_id, len(record.content.encode("utf-8")))
-    return True, None, result.plan.item_id
+    return True, None, result.plan.item_id, diagnostics
 
 
 def _cleanup_error(state: PluginState, scope: Scope, entry: Any) -> str | None:
@@ -426,8 +431,8 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                 if action == "summarize":
                     results.append({"tool_call_id": entry.call_id, "ok": False, "error": outcome.error or "not_found"})
                     continue
-            ok, error, item_id = _apply_hide_for_manage(state, scope, entry, keep_lines)
-            row: dict[str, Any] = {"tool_call_id": entry.call_id, "ok": ok}
+            ok, error, item_id, diagnostics = _apply_hide_for_manage(state, scope, entry, keep_lines)
+            row: dict[str, Any] = {"tool_call_id": entry.call_id, "ok": ok, **diagnostics}
             if ok:
                 row["item_id"] = item_id
             else:

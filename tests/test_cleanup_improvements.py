@@ -33,13 +33,44 @@ def test_rule_keeps_middle_metadata_and_exact_agent_substrings_without_model():
     assert engine.restore(Scope("test", "default", "s"), result.item.item_id).ok
 
 
-@pytest.mark.parametrize("keep", ["owner=Orchid", ["invented=other"], [""], [3], ["owner=Orchid\ncompletion_code=done-1"], ["x" * 1025]])
+@pytest.mark.parametrize("keep", ["owner=Orchid", {}, 3])
 def test_invalid_keep_is_rejected_without_storage(keep):
     engine = SessionNavigationEngine()
     scope = Scope("test", "default", "s")
     result = engine.compact_sync(scope, _make_record(body()), keep_lines=keep)
     assert result.error == "invalid_keep_lines"
     assert not engine.store.items(scope)
+
+
+@pytest.mark.parametrize("entry,reason", [("invented=other", "not found verbatim"), ("", "empty"),
+    (3, "must be a string"), ("a\nb", "single line"), ("a\rb", "single line")])
+def test_invalid_entries_are_ignored_with_english_reasons(entry, reason):
+    result = SessionNavigationEngine().compact_sync(Scope("test", "default", "s"), _make_record(body()),
+        keep_lines=[entry, "rare middle sentence"])
+    assert result.ok
+    assert result.keep_lines_ignored[0]["entry"] == entry
+    assert reason in result.keep_lines_ignored[0]["reason"]
+    assert "rare middle sentence" in result.item.compacted
+    assert result.item.original == body()
+
+
+@pytest.mark.parametrize("entry", ["  rare middle sentence  ", "20:rare middle sentence", " 20| rare middle sentence "])
+def test_keep_normalization_is_reported_and_preserves_exact_source(entry):
+    result = SessionNavigationEngine().compact_sync(Scope("test", "default", "s"), _make_record(body()), keep_lines=[entry])
+    assert result.ok and not result.keep_lines_ignored
+    assert result.keep_lines_normalized == ({"entry": entry, "accepted": "rare middle sentence"},)
+    assert "Original excerpt: A rare middle sentence that the agent selects." in result.item.compacted
+    assert result.item.original == body()
+
+
+def test_keep_budget_drops_only_overflow_then_accepts_later_entries():
+    from session_navigation.policy import normalize_keep_lines
+    text = "a" * 700 + "\n" + "b" * 400 + "\nshort"
+    valid, ignored, normalized = normalize_keep_lines(text, ["a" * 700, "b" * 400, "short"])
+    assert valid == ["a" * 700, "short"]
+    assert "1024-byte" in ignored[0]["reason"]
+    assert not normalized
+    assert normalize_keep_lines("20:literal", ["20:literal"])[0] == ["20:literal"]
 
 
 def test_empty_keep_and_cached_rehide_do_not_silently_drop_new_requirements():
@@ -139,8 +170,26 @@ def test_daemon_hide_keep_lines_and_unlisted_targets():
     assert result["applied"] == 1
     patched = call(daemon, "prepare", snapshot_id="two", records=records)
     assert "rare middle sentence" in patched["patches"][0]["text"]
-    assert call(daemon, "manage", snapshot_id="two", tool_call_ids=["r1"], action="hide", keep_lines=["invented"])["items"][0]["error"] == "invalid_keep_lines"
+    mixed = call(daemon, "manage", snapshot_id="two", tool_call_ids=["r1", "r2"], action="hide",
+                 keep_lines=["20:rare middle sentence", "invented"])
+    assert mixed["applied"] == 2 and mixed["failed"] == 0
+    for item in mixed["items"]:
+        assert item["keep_lines_ignored"][0]["entry"] == "invented"
+        assert "not found verbatim" in item["keep_lines_ignored"][0]["reason"]
+        assert item["keep_lines_normalized"][0]["accepted"] == "rare middle sentence"
     assert call(daemon, "manage", snapshot_id="two", tool_call_ids=["r1"], action="auto", keep_lines=[])["error"] == "invalid_keep_lines_action"
+
+
+def test_batch_keep_lines_are_resolved_independently_for_each_target():
+    daemon = Daemon()
+    records = [record(name, f"Report: {name}\nSigned-live generation 42\n" + body()) for name in ("integration", "linker")]
+    call(daemon, "prepare", snapshot_id="mixed", records=records)
+    result = call(daemon, "manage", snapshot_id="mixed", tool_call_ids=["integration", "linker"], action="hide",
+        keep_lines=["Report: integration", "Report: linker", "Signed-live generation 42", "invented"])
+    assert result["applied"] == 2 and result["failed"] == 0
+    for row, other in zip(result["items"], ("linker", "integration")):
+        assert [entry["entry"] for entry in row["keep_lines_ignored"]] == [f"Report: {other}", "invented"]
+    assert records[0]["content"].startswith("Report: integration")
 
 
 @pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
@@ -177,8 +226,14 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     out = middleware(request=request, session_id="s", api_mode=mode)["request"]
     assert "rare middle sentence" in json.dumps(out)
     assert request == original
-    bad = json.loads(handler({"tool_call_ids": ["c1"], "action": "hide", "keep_lines": ["invented"]}, session_id="s"))
-    assert bad["items"][0]["error"] == "invalid_keep_lines"
+    mixed = json.loads(handler({"tool_call_ids": ["c1", "c2"], "action": "hide",
+        "keep_lines": [" 20:rare middle sentence ", "invented"]}, session_id="s"))
+    assert mixed["applied"] == 2 and mixed["failed"] == 0
+    for item in mixed["items"]:
+        assert item["keep_lines_ignored"][0]["entry"] == "invented"
+        assert "not found verbatim" in item["keep_lines_ignored"][0]["reason"]
+        assert item["keep_lines_normalized"][0]["accepted"] == "rare middle sentence"
+    assert request == original
     assert state.summarizer is None
 
 

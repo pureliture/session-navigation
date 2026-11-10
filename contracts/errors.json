@@ -6,6 +6,7 @@
   "properties": {
     "error": {
       "type": "string",
+      "description": "invalid_keep_lines means the container is not a list. Invalid list entries are ignored per target and returned as keep_lines_ignored with entry and English reason; normalized entries appear in keep_lines_normalized. keep_lines_conflict still protects an already compacted target missing newly requested evidence; Unhide recovers its original rather than silently discarding the new retention requirement.",
       "enum": [
         "not_long",
         "protected_error",

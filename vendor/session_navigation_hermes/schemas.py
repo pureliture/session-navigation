@@ -189,7 +189,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "name": MANAGE_TOOL,
         "description": (
             "Clean agent-chosen tool_call_ids. hide=rules; summarize=session LLM; auto=summary with rule fallback. "
-            "Any eligible ID accepted; returns per-item outcomes. keep_lines: exact single-line substrings to retain (hide only, total 1024 bytes)."
+            "Any eligible ID accepted; returns per-item outcomes. keep_lines: single-line substrings (hide only, 1024 bytes per target). "
+            "Whitespace/line-number near misses are normalized. Unmatched or invalid entries are ignored per target "
+            "with English reasons in keep_lines_ignored; valid entries still apply."
         ),
         "parameters": {
             "type": "object",

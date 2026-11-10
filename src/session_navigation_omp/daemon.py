@@ -442,6 +442,10 @@ class Daemon:
                 items.append({"tool_call_id": record.call_id, "ok": True, "item_id": result.plan.item_id})
             else:
                 items.append({"tool_call_id": record.call_id, "ok": False, "error": result.error or "not_found"})
+            if result.keep_lines_ignored:
+                items[-1]["keep_lines_ignored"] = list(result.keep_lines_ignored)
+            if result.keep_lines_normalized:
+                items[-1]["keep_lines_normalized"] = list(result.keep_lines_normalized)
 
         applied = sum(1 for row in items if row.get("ok"))
         ok_all = all(bool(row.get("ok")) for row in items) if items else True

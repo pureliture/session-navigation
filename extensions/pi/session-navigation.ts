@@ -484,7 +484,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		const applied = items.filter((item) => item.ok).length;
 		return { ok: applied === items.length, applied, failed: items.length - applied, items };
 	}
-	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Clean agent-chosen tool_call_ids. action: hide=rules, summarize=session LLM, auto=summary with rule fallback. keep_lines: exact single-line substrings to retain (hide only, total 1024 bytes).", parameters: z.object({ tool_call_ids: z.array(z.string()), action: z.enum(["auto", "hide", "summarize"]).optional(), keep_lines: z.array(z.string()).optional() }),
+	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Clean agent-chosen tool_call_ids. action: hide=rules, summarize=session LLM, auto=summary with rule fallback. keep_lines: single-line substrings (hide only, 1024 bytes per target). Whitespace/line-number near misses are normalized. Unmatched or invalid entries are ignored per target with English reasons in keep_lines_ignored; valid entries still apply.", parameters: z.object({ tool_call_ids: z.array(z.string()), action: z.enum(["auto", "hide", "summarize"]).optional(), keep_lines: z.array(z.string()).optional() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await manageChosen(params, ctx, signal)); } });
 	if (typeof pi.registerCommand === "function") {
 	pi.registerCommand("session-navigation", {

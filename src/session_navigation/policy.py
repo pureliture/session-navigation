@@ -14,6 +14,40 @@ from session_navigation.model import (
     compute_sha256,
 )
 
+def normalize_keep_lines(original: str, entries: list[Any]):
+    accepted, ignored, normalized = [], [], []
+    used = 0
+    for entry in entries:
+        reason = None
+        candidate = entry
+        if not isinstance(entry, str):
+            reason = "Entry must be a string."
+        elif not entry.strip():
+            reason = "Entry is empty or whitespace only."
+        elif "\n" in entry or "\r" in entry:
+            reason = "Entry must contain a single line."
+        else:
+            if candidate not in original:
+                candidate = entry.strip()
+            if candidate not in original:
+                match = re.fullmatch(r"\d+\s*[:|]\s?(.*)", candidate)
+                if match:
+                    candidate = match.group(1).strip()
+            if not candidate or candidate not in original:
+                reason = "Line substring not found verbatim in target after whitespace and line-number normalization."
+            elif candidate not in accepted and used + len(candidate.encode("utf-8")) > 1024:
+                reason = "Entry exceeds the remaining 1024-byte retention budget for this target."
+        if reason:
+            ignored.append({"entry": entry, "reason": reason})
+        else:
+            if candidate not in accepted:
+                accepted.append(candidate)
+                used += len(candidate.encode("utf-8"))
+            if candidate != entry:
+                normalized.append({"entry": entry, "accepted": candidate})
+    return accepted, ignored, normalized
+
+
 HEAD_EXCERPTS = 3
 TAIL_EXCERPTS = 2
 MAX_EVIDENCE_EXCERPTS = 8

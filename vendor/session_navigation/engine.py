@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from dataclasses import replace
 from typing import Any
 
 from session_navigation.model import (
@@ -23,6 +24,7 @@ from session_navigation.policy import (
     render_compaction,
     required_evidence_lines,
     verified_facts,
+    normalize_keep_lines,
 )
 from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.summary import selectable_text, validate_summary_text
@@ -58,6 +60,20 @@ class SessionNavigationEngine:
         self.store = store or SQLiteContextStore()
 
     async def _apply(
+        self, scope: Scope, record: ToolResultRecord, summarizer: Summarizer | None = None,
+        *, options_omitted: bool = False, allow_fallback: bool = True,
+        keep_lines: list[str] | None = None,
+    ) -> MutationResult:
+        if keep_lines is not None and summarizer is not None:
+            return MutationResult(ok=False, error="invalid_keep_lines_action")
+        if keep_lines is not None and not isinstance(keep_lines, list):
+            return MutationResult(ok=False, error="invalid_keep_lines")
+        accepted, ignored, normalized = normalize_keep_lines(selectable_text(record.content), keep_lines or [])
+        result = await self._apply_validated(scope, record, summarizer,
+            options_omitted=options_omitted, allow_fallback=allow_fallback, keep_lines=accepted)
+        return replace(result, keep_lines_ignored=tuple(ignored), keep_lines_normalized=tuple(normalized))
+
+    async def _apply_validated(
         self,
         scope: Scope,
         record: ToolResultRecord,
@@ -71,15 +87,6 @@ class SessionNavigationEngine:
         Guarantees: Fail-Open on any failure. Never crashes host loop.
         """
         rule_source = selectable_text(record.content)
-        if keep_lines is not None and summarizer is not None:
-            return MutationResult(ok=False, error="invalid_keep_lines_action")
-        if keep_lines is not None and (
-            not isinstance(keep_lines, list)
-            or any(not isinstance(line, str) or not line or "\n" in line or "\r" in line
-                   or line not in rule_source for line in keep_lines)
-            or sum(len(line.encode("utf-8")) for line in keep_lines) > 1024
-        ):
-            return MutationResult(ok=False, error="invalid_keep_lines")
         # 1. Policy & input validation
         refusal = refusal_reason(record, self.config)
         if refusal is not None:

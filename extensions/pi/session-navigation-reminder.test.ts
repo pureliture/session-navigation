@@ -75,13 +75,18 @@ test("OMP tail note uses daemon eligibility, never persists, and unlisted IDs su
     expect(out.messages.at(-1).content[0].text).toContain("eligible=4");
     expect(Number(out.messages.at(-1).content[0].text.match(/\((\d+)%\)/)[1])).toBeGreaterThanOrEqual(75);
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
-    result = (await tools.manage_context.execute("hide", { tool_call_ids: ["r1"], action: "hide", keep_lines: ["invented"] }, undefined, undefined, ctx)).details;
-    expect(result.items[0].error).toBe("invalid_keep_lines");
+    result = (await tools.manage_context.execute("hide", { tool_call_ids: ["r1", "r2"], action: "hide", keep_lines: [" 20:selected middle sentence ", "invented"] }, undefined, undefined, ctx)).details;
+    expect(result.applied).toBe(2);
+    for (const item of result.items) {
+      expect(item.keep_lines_ignored[0].entry).toBe("invented");
+      expect(item.keep_lines_ignored[0].reason).toContain("not found verbatim");
+      expect(item.keep_lines_normalized[0].accepted).toBe("selected middle sentence");
+    }
     result = (await tools.manage_context.execute("hide", { tool_call_ids: ["r1"], keep_lines: [] }, undefined, undefined, ctx)).details;
     expect(result.error).toBe("invalid_keep_lines_action");
     messages.push({ role: "user", content: [{ type: "text", text: "Next unit" }], timestamp: 2 });
     out = await events.context({ messages }, ctx);
-    expect(out.messages.at(-1).content[0].text).toContain("eligible=4");
+    expect(out.messages.at(-1).content[0].text).toContain("eligible=2");
   } finally {
     await events.session_shutdown?.();
     rmSync(dir, { recursive: true, force: true });

@@ -42,7 +42,10 @@ Paseo/CLI에서 요청한 pending 요약은 다음 context 훅에서 기다립�
 `manage_context({tool_call_ids:[...],action:"hide",keep_lines:["owner=Orchid"]})`는
 선택한 각 원문의 해당 부분을 포함하는 줄을 그대로 보존합니다. 전송용 JSON envelope/줄번호를
 제거한 본문 기준의 한 줄짜리 exact substring이며, 전체 1,024바이트 한도입니다.
-모든 대상에 같은 목록을 적용하고 없는 값은 항목별 `invalid_keep_lines`로 거절합니다.
+모든 대상에 같은 목록을 적용하되, 대상에 없는 값이나 잘못된 항목만 무시합니다.
+응답의 `keep_lines_ignored`에 무시한 원문과 영어 이유를 대상별로 반환하며 나머지는 정상 적용합니다.
+앞뒤 공백과 `20:owner=...` / `20|owner=...` 줄번호는 원문 그대로의 일치가 없을 때 정규화하고
+`keep_lines_normalized`에 알립니다. 한도 초과 항목은 입력 순서대로 건너뛰며 원문은 바꾸지 않습니다.
 다른 action과 함께 쓰면 `invalid_keep_lines_action`, 기존 대체문과 충돌하면 `keep_lines_conflict`입니다.
 규칙 발췌는 head/tail·필수 증거와 함께 주요 대입문·경고를 추가 바이트 예산 내에 남깁니다.
 
