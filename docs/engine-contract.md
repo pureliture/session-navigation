@@ -82,7 +82,11 @@ mutations use only the `omp:` scope: this is not an alias or live synchronizatio
 Discovery must prefer the registered OMP scope over a legacy history-only scope.
 Hermes's canonical branch remains **unknown**:
 `hermes:<profile>:<session>:unknown`. Keeping this suffix preserves existing
-item hashes and hidden state. A compression-created session ID is a new scope.
+item hashes and hidden state. A compression-created session ID is a new scope;
+in-place compression that keeps the host session ID keeps the same scope. The
+live Hermes ACP manual-compression probe kept its ID stable. Native ACP fork
+created a new ID/scope without copying hidden state; see the
+[live verification](phase6-live-verification.md) for the tested paths and limits.
 
 For adapter discovery, `:default` and `:unknown` are Hermes aliases. Exact stored
 scope wins; only when absent may discovery consult the other suffix. Return the

@@ -1,5 +1,11 @@
 # Issue 9: 공통 코어 작업 인계
 
+> Live follow-up: Step 1 fixed the recorded Node/Python failures; Step 2 verified
+> the packed Paseo/OMP integration. Step 3 verified Hermes ACP mutations, resume,
+> native fork/import, in-place compression, shared-DB writers, and one real
+> session-model summary per host. See [Phase 6 live evidence](phase6-live-verification.md)
+> for observed behavior and remaining limits. The original snapshot below is historical.
+
 ## 현재 상태와 시작점
 
 - 저장소: `/Users/devin/repos/session-navigation`
