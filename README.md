@@ -1,4 +1,30 @@
-# session-navigation
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=waving&amp;color=0:38bdf8,50:2563eb,100:312e81&amp;height=220&amp;section=header&amp;text=Session%20Navigation&amp;fontSize=52&amp;fontColor=ffffff&amp;animation=fadeIn&amp;fontAlignY=40" alt="Session Navigation" width="100%" />
+
+<h3>긴 AI 에이전트 세션을 탐색하고,<br/>필요한 컨텍스트를 숨기고 다시 복원하는 도구</h3>
+
+<p>
+  <img src="https://img.shields.io/badge/Paseo-0.15.3-2563eb?style=for-the-badge" alt="검증한 Paseo 버전: 0.15.3" />
+  <img src="https://img.shields.io/badge/Python-3.11%2B-0e7490?style=for-the-badge&amp;logo=python&amp;logoColor=white" alt="Python 3.11 이상" />
+  <img src="https://img.shields.io/badge/license-MIT-312e81?style=for-the-badge" alt="MIT 라이선스" />
+</p>
+
+<p>
+  <a href="#demo">데모</a> ·
+  <a href="#주요-기능">주요 기능</a> ·
+  <a href="#설치">설치</a> ·
+  <a href="#사용법">사용법</a> ·
+  <a href="#데이터와-안전-경계">데이터와 안전</a> ·
+  <a href="#구조">구조</a> ·
+  <a href="#배포--게시-계획">배포</a>
+</p>
+
+</div>
+
+<img src="https://capsule-render.vercel.app/api?type=rect&amp;color=0:38bdf8,50:2563eb,100:312e81&amp;height=3" width="100%" alt="" />
+
+## Session Navigation은 무엇인가요?
 
 긴 AI 에이전트 세션의 컨텍스트를 숨기고, 요약하고, 다시 복원하는 호스트 중립 엔진입니다.
 Paseo의 우측 Explorer 패널, OMP(oh-my-pi) 확장, Hermes 플러그인에서 사용합니다.
@@ -8,42 +34,47 @@ Paseo의 우측 Explorer 패널, OMP(oh-my-pi) 확장, Hermes 플러그인에서
 게시된 릴리스가 있다는 뜻은 아닙니다. 아래 Git 설치 예시는 이 기능이 `main`에
 병합된 뒤를 기준으로 하며, 재현 가능한 설치에는 검토한 커밋이나 릴리스 태그를 사용하세요.
 
+| 사용자가 겪는 문제 | Session Navigation의 방식 |
+| --- | --- |
+| 긴 세션에서 필요한 대화를 찾기 어려움 | 대화와 도구 결과를 outline으로 탐색하고 해당 위치로 이동 |
+| 완료한 도구 결과가 다음 요청의 컨텍스트를 차지함 | 지원하는 결과를 숨기거나 요약하고 예상 변화를 표시 |
+| 숨긴 내용을 다시 확인해야 함 | 원본과 대체문을 Preview하고 원본을 복원 |
+
 ## Demo
 
-An English Paseo session reviewing a small API with OMP and DeepSeek Flash.
-The outline stays beside the chat; original messages and tool results are preserved.
+OMP와 DeepSeek Flash를 사용해 작은 API를 검토하는 Paseo 세션입니다.
+대화 옆에 outline을 표시하며 원본 메시지와 도구 결과를 보존합니다.
 
 ![Session navigator outline beside the chat](docs/media/01-outline-hero.png)
 
-**Jump through the conversation.** Click an outline row to return to its message,
-including the first prompt. [Watch MP4](docs/media/outline-jump.mp4).
+**대화 위치로 이동:** outline의 행을 선택하면 첫 프롬프트를 포함한 해당 메시지로 이동합니다.
+[MP4 보기](docs/media/outline-jump.mp4).
 
 ![Jump from the health-check review back to the first prompt](docs/media/outline-jump.gif)
 
-**Hide a completed tool group, then Unhide it.** The footer shows the estimated
-next-request reduction; Unhide restores originals without re-running tools.
-The `next ≈` figure is an estimate, not a new measured context reading.
-[Watch MP4](docs/media/hide-restore.mp4).
+**완료한 도구 그룹 숨기기와 복원:** 하단에 다음 요청의 예상 감소량을 표시합니다.
+Unhide는 도구를 다시 실행하지 않고 원본을 복원합니다. `next ≈`는 새로 측정한
+컨텍스트 사용량이 아닌 추정치입니다. [MP4 보기](docs/media/hide-restore.mp4).
 
 ![Hide and restore a tool group with the next-request estimate](docs/media/hide-restore.gif)
 
 <details>
-<summary>More screenshots: Hide, Preview and the empty state</summary>
+<summary>스크린샷 더 보기: Hide, Preview, 빈 상태</summary>
 
-**Selected group after Hide:** the footer estimates `next ≈ −3.9K` tokens.
+**Hide 후 선택된 그룹:** 하단에 `next ≈ −3.9K` 토큰을 예상합니다.
 
 ![Selected hidden group and its next-request estimate](docs/media/02-hide-estimate.png)
 
-**Hidden rows:** the group is collapsed and the saved-context indicator is visible.
+**숨긴 행:** 그룹이 접히고 절약된 컨텍스트 표시가 나타납니다.
 
 ![Hidden tool group with its saved-context indicator](docs/media/03-hide-applied.png)
 
-**Read-only Preview:** inspect the outgoing replacement and the original input/output.
-[Original output detail](docs/media/06-preview-output.png).
+**읽기 전용 Preview:** 전송할 대체문과 원본 입력·출력을 확인합니다.
+[원본 출력 상세](docs/media/06-preview-output.png).
 
 ![Preview of the model-facing replacement and preserved original](docs/media/04-preview-original.png)
 
-**No session in view:** open a session and the outline follows the visible chat.
+**표시 중인 세션이 없는 경우:** 세션을 열면 outline이 보이는 대화를 따라갑니다.
 
 ![Unbound navigator beside a new agent tab](docs/media/05-unbound-empty.png)
 
@@ -98,7 +129,9 @@ paseo plugin add "$PWD/paseo-plugin"
 paseo plugin ls
 ```
 
-병합 후 Git 폴더에서 직접 설치:
+Git 폴더에서 직접 설치할 수 있습니다. 재현 가능한 설치에는 `main` 대신
+검증한 커밋이나 릴리스 태그를 지정하세요. 기존 `152f63c` 커밋은 타입 의존성
+해석 오류로 깨끗한 Git 설치에 실패합니다.
 
 ```bash
 paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref main
@@ -252,7 +285,8 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 ### Paseo: Git 폴더 또는 npm → 공식 검토 레지스트리
 
 1. 권장 초기 형식은 공개 GitHub 저장소의 `paseo-plugin/` 폴더입니다.
-   manifest·TS 진입점·가져오는 소스·아이콘은 포함되어 있습니다.
+   manifest·TS 진입점·가져오는 소스·아이콘을 포함하고, 게시할 커밋에서
+   깨끗한 Git 설치를 검증하세요. `152f63c`의 직접 Git 설치는 타입 의존성 오류로 실패했습니다.
 2. 현재 `media: []`이고 저장소에는 아이콘만 있습니다. **실제 UI 스크린샷**을
    package 내부에 포함하거나 제출 PR에 공개 PNG/JPG 등의 URL로 제공해야 합니다.
 3. npm 경로를 택하면 `paseo-plugin/package.json`의 `private: true`를 해제하고,

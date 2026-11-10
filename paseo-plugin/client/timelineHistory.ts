@@ -1,4 +1,6 @@
-import type { PaseoAgentTimelineHandle } from "@getpaseo/client";
+import type { usePaseo } from "@getpaseo/plugin/client";
+
+type PaseoAgentTimelineHandle = ReturnType<ReturnType<typeof usePaseo>["agents"]["ref"]>["timeline"];
 
 export type TimelineHistory = {
   entries: Array<{ item?: Record<string, unknown>; seqStart?: number }>;

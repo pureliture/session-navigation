@@ -1,4 +1,6 @@
-import type { PaseoApi } from "@getpaseo/client";
+import type { usePaseo } from "@getpaseo/plugin/client";
+
+type PaseoApi = ReturnType<typeof usePaseo>;
 
 export type WorkspaceAgent = { id: string; title: string };
 

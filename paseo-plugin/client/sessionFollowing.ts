@@ -1,6 +1,8 @@
-import type { PaseoAgentTimelineHandle } from "@getpaseo/client";
+import type { usePaseo } from "@getpaseo/plugin/client";
 import { identityMatches } from "./chatNavigation";
 import { readTimelineHistory } from "./timelineHistory";
+
+type PaseoAgentTimelineHandle = ReturnType<ReturnType<typeof usePaseo>["agents"]["ref"]>["timeline"];
 
 export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHandle, "refetch">) {
   const { entries, complete } = await readTimelineHistory(timeline, { allowPartial: true });
