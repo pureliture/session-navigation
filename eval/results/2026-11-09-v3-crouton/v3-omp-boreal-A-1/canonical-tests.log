@@ -1,0 +1,276 @@
+test_rounding (test_ledger.Discount.test_rounding) ... 
+  test_rounding (test_ledger.Discount.test_rounding) (cents=101) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=102) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=103) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=104) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=105) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=106) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=107) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=108) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=109) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=110) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=111) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=112) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=113) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=114) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=115) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=116) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=117) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=118) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=119) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=120) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=121) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=122) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=123) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=124) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=125) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=126) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=127) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=128) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=129) ... FAIL
+  test_rounding (test_ledger.Discount.test_rounding) (cents=130) ... FAIL
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=101)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 84 != 83
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=102)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 85 != 84
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=103)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 86 != 85
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=104)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 87 != 86
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=105)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 88 != 87
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=106)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 88 != 87
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=107)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 89 != 88
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=108)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 90 != 89
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=109)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 91 != 90
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=110)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 92 != 91
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=111)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 93 != 92
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=112)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 93 != 92
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=113)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 94 != 93
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=114)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 95 != 94
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=115)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 96 != 95
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=116)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 97 != 96
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=117)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 98 != 97
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=118)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 98 != 97
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=119)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 99 != 98
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=120)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 100 != 99
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=121)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 101 != 100
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=122)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 102 != 101
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=123)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 103 != 102
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=124)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 103 != 102
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=125)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 104 != 103
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=126)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 105 != 104
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=127)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 106 != 105
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=128)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 107 != 106
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=129)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 108 != 107
+
+======================================================================
+FAIL: test_rounding (test_ledger.Discount.test_rounding) (cents=130)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/devin/.session-navigation-eval-v2/v3-omp-boreal-A-1/workspace/test_ledger.py", line 7, in test_rounding
+    self.assertEqual(discounted(cents, 17), cents * 83 // 100)
+AssertionError: 108 != 107
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=30)

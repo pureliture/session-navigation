@@ -6,6 +6,7 @@
   "properties": {
     "error": {
       "type": "string",
+      "description": "invalid_keep_lines means the container is not a list. Invalid list entries are ignored per target and returned as keep_lines_ignored with entry and English reason; normalized entries appear in keep_lines_normalized. keep_lines_conflict still protects an already compacted target missing newly requested evidence; Unhide recovers its original rather than silently discarding the new retention requirement.",
       "enum": [
         "not_long",
         "protected_error",
@@ -39,9 +40,15 @@
         "unknown_method",
         "identity_expired",
         "invalid_action",
+        "invalid_keep_lines",
+        "invalid_keep_lines_action",
+        "keep_lines_conflict",
         "invalid_max_items",
         "invalid_summaries",
         "invalid_tool_call_ids",
+        "tool_call_ids_required",
+        "already_hidden",
+        "invalid_limit",
         "invalid_request",
         "missing_tool_call_id",
         "invalid_invocation",
@@ -49,7 +56,8 @@
         "handler_unavailable",
         "invalid_handler_result",
         "no_recent_list",
-        "unknown_display_number"
+        "unknown_display_number",
+        "summarize_unsupported"
       ]
     },
     "category": {

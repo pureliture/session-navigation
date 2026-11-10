@@ -6,6 +6,18 @@ export function fmtBytes(n: number | undefined): string {
   return `${(n / 1024).toFixed(1)} KiB`;
 }
 
+export function fmtTokenCount(n: number): string {
+  return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}K`;
+}
+
+export function fmtTokens(n: number): string {
+  return `${fmtTokenCount(n)} tok`;
+}
+
+export function rowMetric(row: Row): string {
+  return row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+}
+
 export function truncateString(str: string, maxLen = 120): string {
   if (!str) return "";
   const singleLine = str.replace(/\r?\n/g, " ").trim();
@@ -16,7 +28,7 @@ export function truncateString(str: string, maxLen = 120): string {
 export function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boolean {
   if (localMode) return localMode === "summarize";
   const src = row.source ?? "";
-  return src === "rule_summary" || src === "llm" || src === "llm_summary" || src === "summarize";
+  return src === "rule_summary" || src === "llm" || src === "llm_summary" || src === "summarize" || src === "summarize_pending";
 }
 
 export type OutlineRow =
@@ -29,6 +41,7 @@ export type OutlineRow =
       title: string;
       subTitle: string;
       totalBytes: number;
+      totalTokens: number | null;
       children: Row[];
       allHidden: boolean;
       allSummarized: boolean;
@@ -50,6 +63,9 @@ export function buildGroupedRows(
     const first = currentGroupTools[0];
     const groupId = `group:${first.item_id ?? first.tool_call_id}`;
     const totalBytes = currentGroupTools.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0);
+    const totalTokens = currentGroupTools.every((r) => typeof r.tokens === "number")
+      ? currentGroupTools.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
+      : null;
     const hiddenCount = currentGroupTools.filter((r) => r.status === "hidden").length;
     const allHidden = hiddenCount === currentGroupTools.length && currentGroupTools.length > 0;
     const mixed = hiddenCount > 0 && !allHidden;
@@ -81,6 +97,7 @@ export function buildGroupedRows(
       title,
       subTitle,
       totalBytes,
+      totalTokens,
       children: currentGroupTools,
       allHidden,
       allSummarized,
@@ -128,4 +145,18 @@ export function buildGroupedRows(
 
   flushGroup();
   return result;
+}
+
+export function groupEyeAction(group: { hiddenCount: number }): "hide" | "unhide" {
+  return group.hiddenCount > 0 ? "unhide" : "hide";
+}
+
+export function groupMutationItems(
+  group: { children: Row[] },
+  action: "hide" | "summarize" | "unhide",
+): { item_id: string; expected_version: number }[] {
+  const members = group.children.filter((row) =>
+    row.manageable !== false && (action === "unhide" ? row.status === "hidden" : row.status !== "hidden"),
+  );
+  return members.map((row) => ({ item_id: row.item_id ?? row.tool_call_id, expected_version: row.version }));
 }

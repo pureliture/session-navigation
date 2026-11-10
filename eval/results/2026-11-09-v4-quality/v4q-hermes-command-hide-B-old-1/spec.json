@@ -1,0 +1,47 @@
+{
+  "id": "v4q-hermes-command-hide-B-old-1",
+  "turns": [
+    "Read audit-01.jsonl in full and identify its owner, audit seal and budget. Do not clean any results until the next explicit instruction.",
+    "Hide the transmitted audit-01.jsonl result using rule-based Hide only, never Summarize/auto. Preserve these exact substrings if keep_lines is supported: owner=component-team-1, audit_seal=component-9e54cadbf4, latency_budget_ms=151",
+    "State the owner, audit seal and latency budget, then restore the original result without re-executing the read if supported."
+  ],
+  "answers": [
+    [
+      "component-team-1",
+      "component-9e54cadbf4",
+      "151"
+    ],
+    [],
+    [
+      "component-team-1",
+      "component-9e54cadbf4",
+      "151"
+    ]
+  ],
+  "results": [
+    {
+      "match": "audit-01.jsonl",
+      "label": "needed-later",
+      "protected": false,
+      "facts": [
+        "owner=component-team-1",
+        "audit_seal=component-9e54cadbf4",
+        "latency_budget_ms=151"
+      ]
+    }
+  ],
+  "component": "hide",
+  "host": "hermes",
+  "arm": "B-old",
+  "repetition": 1,
+  "repo": "/Users/devin/.session-navigation-eval-v2/sources/5017b97",
+  "product_commit": "5017b97",
+  "home": "/Users/devin/.session-navigation-eval-v2/v4q-hermes-command-hide-B-old-1/home",
+  "workspace": "/Users/devin/.session-navigation-eval-v2/v4q-hermes-command-hide-B-old-1/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-09-v4-quality/v4q-hermes-command-hide-B-old-1",
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "provider": "Relace",
+  "proxy": "http://127.0.0.1:65424",
+  "window": 65536,
+  "hermes_source": "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+}

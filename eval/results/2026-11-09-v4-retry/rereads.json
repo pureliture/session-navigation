@@ -1,0 +1,13 @@
+{
+  "groups": {},
+  "unavailable": [
+    {
+      "id": "v4r-hermes-atlas-A-2",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    }
+  ],
+  "sessions": [],
+  "details": {}
+}

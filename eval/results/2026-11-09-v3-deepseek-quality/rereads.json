@@ -1,0 +1,290 @@
+{
+  "groups": {
+    "omp/B-new": {
+      "sessions": 4,
+      "after_compaction": 0,
+      "repeat_visible": 3,
+      "new": 4,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 4,
+      "bash_after_compaction": 0,
+      "bash_repeat_visible": 1,
+      "bash_new": 2,
+      "read_after_compaction": 0,
+      "read_repeat_visible": 2,
+      "read_new": 2
+    },
+    "omp/B-old": {
+      "sessions": 4,
+      "after_compaction": 2,
+      "repeat_visible": 0,
+      "new": 5,
+      "same_turn": 2,
+      "later_turn": 0,
+      "unhide_calls": 4,
+      "bash_after_compaction": 0,
+      "bash_repeat_visible": 0,
+      "bash_new": 1,
+      "read_after_compaction": 2,
+      "read_repeat_visible": 0,
+      "read_new": 4
+    }
+  },
+  "unavailable": [
+    {
+      "id": "v3dsq-hermes-command-hide-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-hide-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-hide-B-old-1",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-hide-B-old-2",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-summarize-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-summarize-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-summarize-B-old-1",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3dsq-hermes-command-summarize-B-old-2",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    }
+  ],
+  "sessions": [
+    {
+      "work_calls": 2,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 1,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 0
+      },
+      "id": "v3dsq-omp-command-hide-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 1,
+      "after_compaction": 0,
+      "repeat_visible": 0,
+      "new": 1,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 0
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "id": "v3dsq-omp-command-hide-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 1,
+      "after_compaction": 0,
+      "repeat_visible": 0,
+      "new": 1,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 0
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "id": "v3dsq-omp-command-hide-B-old-1",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 2,
+      "after_compaction": 0,
+      "repeat_visible": 0,
+      "new": 2,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "id": "v3dsq-omp-command-hide-B-old-2",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 1,
+      "after_compaction": 0,
+      "repeat_visible": 0,
+      "new": 1,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 0
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "id": "v3dsq-omp-command-summarize-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 3,
+      "after_compaction": 0,
+      "repeat_visible": 2,
+      "new": 1,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 1
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 0
+      },
+      "id": "v3dsq-omp-command-summarize-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 2,
+      "after_compaction": 1,
+      "repeat_visible": 0,
+      "new": 1,
+      "same_turn": 1,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 0
+      },
+      "read": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "id": "v3dsq-omp-command-summarize-B-old-1",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 2,
+      "after_compaction": 1,
+      "repeat_visible": 0,
+      "new": 1,
+      "same_turn": 1,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 0
+      },
+      "read": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 1
+      },
+      "id": "v3dsq-omp-command-summarize-B-old-2",
+      "host": "omp",
+      "arm": "B-old"
+    }
+  ],
+  "details": {
+    "v3dsq-omp-command-hide-B-new-1": [],
+    "v3dsq-omp-command-hide-B-new-2": [],
+    "v3dsq-omp-command-hide-B-old-1": [],
+    "v3dsq-omp-command-hide-B-old-2": [],
+    "v3dsq-omp-command-summarize-B-new-1": [],
+    "v3dsq-omp-command-summarize-B-new-2": [],
+    "v3dsq-omp-command-summarize-B-old-1": [
+      {
+        "turn": 2,
+        "tool": "read",
+        "files": [
+          "audit-01"
+        ],
+        "gap": 0
+      }
+    ],
+    "v3dsq-omp-command-summarize-B-old-2": [
+      {
+        "turn": 2,
+        "tool": "read",
+        "files": [
+          "audit-01"
+        ],
+        "gap": 0
+      }
+    ]
+  }
+}

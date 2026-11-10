@@ -1,0 +1,20 @@
+{
+  "incident": "INC-71",
+  "authority_rule": "Only generation 42 signed-live entries are effective. Generation 41 archive entries are obsolete even when their export timestamp is newer.",
+  "reports": [
+    "report-01.jsonl",
+    "report-02.jsonl",
+    "report-03.jsonl",
+    "report-04.jsonl",
+    "report-05.jsonl",
+    "report-06.jsonl",
+    "report-07.jsonl",
+    "report-08.jsonl",
+    "report-09.jsonl",
+    "report-10.jsonl",
+    "report-11.jsonl",
+    "report-12.jsonl",
+    "report-13.jsonl",
+    "report-14.jsonl"
+  ]
+}

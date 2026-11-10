@@ -6,6 +6,7 @@ import json
 import time
 from typing import Any
 
+from session_navigation.policy import required_evidence_lines
 from session_navigation.summary import validate_summary_text
 from session_navigation.transport import Summarizer, SummarizerError, SummarizerUnavailable
 
@@ -52,6 +53,7 @@ class CtxLlmSummarizer:
         if scope_key is None:
             scope_key = self._scope_key
 
+        required_evidence = required_evidence_lines(original)
         messages = [
             {
                 "role": "system",

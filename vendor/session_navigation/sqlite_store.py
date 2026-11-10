@@ -687,6 +687,80 @@ class SQLiteContextStore:
     def units(self, scope: Any, message_uid: str | None = None) -> list[dict[str, Any]]:
         return self.list_units(scope, message_uid)
 
+    def set_message_visibility(
+        self, scope: Any, unit_id: str, *, kind: str, content_sha256: str, char_count: int,
+        visibility: str, expected_version: int | None = None,
+    ) -> dict[str, Any]:
+        """CAS-toggle a user/assistant message unit between visible and hidden."""
+        sk = _scope_key(scope)
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    "SELECT version, visibility FROM units WHERE scope_key=? AND unit_id=?", (sk, unit_id)
+                ).fetchone()
+                version = int(row["version"]) if row else 1
+                current = row["visibility"] if row else "visible"
+                if expected_version is not None and version != expected_version:
+                    return {"ok": False, "error": "version_conflict", "version": version, "visibility": current}
+                if current == visibility:
+                    return {"ok": True, "version": version, "visibility": visibility}
+                now_ts = time.time()
+                if row:
+                    cur = self._conn.execute(
+                        "UPDATE units SET visibility=?, version=?, updated_at=? WHERE scope_key=? AND unit_id=? AND version=?",
+                        (visibility, version + 1, now_ts, sk, unit_id, version),
+                    )
+                    if cur.rowcount == 0:
+                        self._conn.rollback()
+                        return {"ok": False, "error": "version_conflict", "version": version, "visibility": current}
+                else:
+                    self._conn.execute(
+                        "INSERT INTO units (scope_key,unit_id,message_uid,kind,content_sha256,char_count,visibility,version,updated_at)"
+                        " VALUES (?,?,?,?,?,?,?,?,?)",
+                        (sk, unit_id, unit_id, kind, content_sha256, int(char_count), visibility, version + 1, now_ts),
+                    )
+                self._conn.commit()
+                return {"ok": True, "version": version + 1, "visibility": visibility}
+            except sqlite3.Error as exc:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
+
+    def ensure_message_units(self, scope: Any, units: list[tuple[str, str, str, int]]) -> None:
+        """Record (unit_id, kind, content_sha256, char_count) message units without touching existing visibility."""
+        if not units:
+            return
+        sk = _scope_key(scope)
+        now_ts = time.time()
+        with self._lock:
+            try:
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO units (scope_key,unit_id,message_uid,kind,content_sha256,char_count,visibility,version,updated_at)"
+                    " VALUES (?,?,?,?,?,?,'visible',1,?)",
+                    [(sk, uid, uid, kind, sha, int(chars), now_ts) for uid, kind, sha, chars in units],
+                )
+                self._conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
+
+    def hidden_message_keys(self, scope: Any) -> list[str]:
+        sk = _scope_key(scope)
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    "SELECT unit_id FROM units WHERE scope_key=? AND kind IN ('user','assistant') AND visibility='hidden'",
+                    (sk,),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
+            return sorted(r["unit_id"] for r in rows)
+
     def _coerce_unit(self, unit: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
         if unit is None:
             data = dict(kwargs)

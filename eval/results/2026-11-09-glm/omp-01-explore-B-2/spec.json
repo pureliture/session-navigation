@@ -1,0 +1,65 @@
+{
+  "id": "omp-01-explore-B-2",
+  "turns": [
+    "Inspect router.py in full. Explain its retry settings and report the jitter cap and routing mode.",
+    "Inspect storage.py in full. Report its flush interval and consistency mode.",
+    "Inspect worker.py in full. Report its concurrency and batch limit.",
+    "Recall the exact retry jitter cap from the first subtask, in milliseconds. What was the routing mode?"
+  ],
+  "answers": [
+    [
+      "137",
+      "sticky"
+    ],
+    [
+      "240",
+      "quorum"
+    ],
+    [
+      "6",
+      "48"
+    ],
+    [
+      "137",
+      "sticky"
+    ]
+  ],
+  "results": [
+    {
+      "match": "router.py",
+      "label": "needed-later",
+      "protected": false,
+      "facts": [
+        "RETRY_JITTER_CAP_MS = 137",
+        "ROUTING_MODE = 'sticky'"
+      ]
+    },
+    {
+      "match": "storage.py",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "FLUSH_INTERVAL_MS = 240",
+        "CONSISTENCY_MODE = 'quorum'"
+      ]
+    },
+    {
+      "match": "worker.py",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "CONCURRENCY = 6",
+        "BATCH_LIMIT = 48"
+      ]
+    }
+  ],
+  "host": "omp",
+  "arm": "B",
+  "repetition": 2,
+  "repo": "/Users/devin/repos/session-navigation",
+  "home": "/Users/devin/.session-navigation-eval/omp-01-explore-B-2/home",
+  "workspace": "/Users/devin/.session-navigation-eval/omp-01-explore-B-2/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-09-glm/omp-01-explore-B-2",
+  "proxy": "http://127.0.0.1:51600",
+  "hermes_source": "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+}

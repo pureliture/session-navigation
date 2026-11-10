@@ -1,0 +1,42 @@
+{"time": 1794295383.671036, "turn": 0, "kind": "compressor_config", "context_length": 65536, "threshold_percent": 0.75}
+{"time": 1794295383.671087, "turn": 1, "kind": "turn_start"}
+{"time": 1794295414.3873842, "turn": 1, "kind": "turn_end", "completed": true}
+{"time": 1794295414.38742, "turn": 2, "kind": "turn_start"}
+{"time": 1794295424.1589189, "turn": 2, "kind": "turn_end", "completed": true}
+{"time": 1794295424.158945, "turn": 3, "kind": "turn_start"}
+{"time": 1794295430.115268, "turn": 3, "kind": "turn_end", "completed": true}
+{"time": 1794295430.1153102, "turn": 4, "kind": "turn_start"}
+{"time": 1794295435.925316, "turn": 4, "kind": "turn_end", "completed": true}
+{"time": 1794295435.925357, "turn": 5, "kind": "turn_start"}
+{"time": 1794295437.129545, "turn": 5, "kind": "native_start", "sequence": 1, "messages": 35}
+{"time": 1794295452.672611, "turn": 5, "kind": "native_end", "sequence": 1, "success": true, "changed": true, "before_chars": 210980, "after_chars": 60685}
+{"time": 1794295460.385652, "turn": 5, "kind": "turn_end", "completed": true}
+{"time": 1794295460.385681, "turn": 6, "kind": "turn_start"}
+{"time": 1794295471.710523, "turn": 6, "kind": "turn_end", "completed": true}
+{"time": 1794295471.710559, "turn": 7, "kind": "turn_start"}
+{"time": 1794295478.116981, "turn": 7, "kind": "turn_end", "completed": true}
+{"time": 1794295478.117032, "turn": 8, "kind": "turn_start"}
+{"time": 1794295484.8928971, "turn": 8, "kind": "turn_end", "completed": true}
+{"time": 1794295484.892936, "turn": 9, "kind": "turn_start"}
+{"time": 1794295486.366982, "turn": 9, "kind": "native_start", "sequence": 2, "messages": 46}
+{"time": 1794295544.613754, "turn": 9, "kind": "native_end", "sequence": 2, "success": true, "changed": true, "before_chars": 198453, "after_chars": 68743}
+{"time": 1794295550.911207, "turn": 9, "kind": "turn_end", "completed": true}
+{"time": 1794295550.911246, "turn": 10, "kind": "turn_start"}
+{"time": 1794295556.003823, "turn": 10, "kind": "turn_end", "completed": true}
+{"time": 1794295556.003854, "turn": 11, "kind": "turn_start"}
+{"time": 1794295561.6176698, "turn": 11, "kind": "turn_end", "completed": true}
+{"time": 1794295561.6177, "turn": 12, "kind": "turn_start"}
+{"time": 1794295567.2694259, "turn": 12, "kind": "turn_end", "completed": true}
+{"time": 1794295567.2694468, "turn": 13, "kind": "turn_start"}
+{"time": 1794295568.6269372, "turn": 13, "kind": "native_start", "sequence": 3, "messages": 43}
+{"time": 1794295620.731261, "turn": 13, "kind": "native_end", "sequence": 3, "success": true, "changed": true, "before_chars": 205446, "after_chars": 73508}
+{"time": 1794295638.410752, "turn": 13, "kind": "turn_end", "completed": true}
+{"time": 1794295638.410777, "turn": 14, "kind": "turn_start"}
+{"time": 1794295647.501973, "turn": 14, "kind": "turn_end", "completed": true}
+{"time": 1794295647.502008, "turn": 15, "kind": "turn_start"}
+{"time": 1794295658.695442, "turn": 15, "kind": "turn_end", "completed": true}
+{"time": 1794295658.695484, "turn": 16, "kind": "turn_start"}
+{"time": 1794295669.302387, "turn": 16, "kind": "turn_end", "completed": true}
+{"time": 1794295669.3024378, "turn": 17, "kind": "turn_start"}
+{"time": 1794295675.745246, "turn": 17, "kind": "turn_end", "completed": true}
+{"time": 1794295675.7453141, "turn": 17, "kind": "complete", "turns": 17}

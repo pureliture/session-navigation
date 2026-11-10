@@ -1,0 +1,12 @@
+{
+  "basis": "v3 DeepSeek same settings; maximum observed host/arm cost per session; components conservatively priced as whole 25-turn sessions",
+  "max_observed_session_cost": 0.04369723266666667,
+  "new_long_sessions": 10,
+  "new_component_sessions": 16,
+  "safety_multiplier": 1.5,
+  "judge_allowance": 0.5,
+  "prior_v4_spend": 0,
+  "projected_new_spend": 2.2041920740000003,
+  "budget_usd": 5,
+  "continue": true
+}

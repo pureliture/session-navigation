@@ -1,0 +1,110 @@
+Scored 8 completed runs, 74 labelled replacements
+omp A n 0 success 0 recall 0 calls 0 prompt 0 cached 0 cost 0
+omp B n 0 success 0 recall 0 calls 0 prompt 0 cached 0 cost 0
+hermes A n 0 success 0 recall 0 calls 0 prompt 0 cached 0 cost 0
+hermes B n 0 success 0 recall 0 calls 0 prompt 0 cached 0 cost 0
+{
+  "omp/B-new": {
+    "sessions": 4,
+    "after_compaction": 1,
+    "repeat_visible": 3,
+    "new": 104,
+    "same_turn": 0,
+    "later_turn": 1,
+    "unhide_calls": 0,
+    "bash_after_compaction": 1,
+    "bash_repeat_visible": 0,
+    "bash_new": 36,
+    "read_after_compaction": 0,
+    "read_repeat_visible": 3,
+    "read_new": 68
+  }
+}
+{
+  "groups": {
+    "omp/B-new": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "announced_recall": 4,
+      "surprise_recovery": 4,
+      "nav_calls": 31,
+      "successful_boundaries": 19,
+      "sessions_with_2_boundaries": 4,
+      "literal_ids_valid": 73,
+      "literal_ids_selected": 75,
+      "eligible_disposable": 69,
+      "selected_disposable": 44,
+      "eligible_selections": 73,
+      "disposable_selections": 62,
+      "explicit_hide_eligible": 71,
+      "explicit_hide_disposable": 61,
+      "keep_lines_calls": 28,
+      "native_compactions": 126,
+      "failure_kinds": {},
+      "prompt_tokens": 10212293,
+      "output_tokens": 57083,
+      "cached_tokens": 8695552,
+      "missing_cached": 0,
+      "cost": 0.081119706,
+      "missing_cost": 0,
+      "peak_prompt": 77381,
+      "reference_cost": 7.837922,
+      "reference_no_cache": 20.88125
+    },
+    "hermes/B-new": {
+      "n": 4,
+      "complete": 4,
+      "task_success": 4,
+      "announced_recall": 4,
+      "surprise_recovery": 4,
+      "nav_calls": 28,
+      "successful_boundaries": 20,
+      "sessions_with_2_boundaries": 2,
+      "literal_ids_valid": 28,
+      "literal_ids_selected": 28,
+      "eligible_disposable": 68,
+      "selected_disposable": 24,
+      "eligible_selections": 28,
+      "disposable_selections": 24,
+      "explicit_hide_eligible": 20,
+      "explicit_hide_disposable": 17,
+      "keep_lines_calls": 0,
+      "native_compactions": 18,
+      "failure_kinds": {},
+      "prompt_tokens": 8807187,
+      "output_tokens": 141086,
+      "cached_tokens": 7065088,
+      "missing_cached": 0,
+      "cost": 0.116321034,
+      "missing_cost": 0,
+      "peak_prompt": 54549,
+      "reference_cost": 8.14543,
+      "reference_no_cache": 18.743062
+    }
+  },
+  "deepseek_gate": {
+    "eligible_sessions": 8,
+    "sessions_with_2_boundaries": 6,
+    "valid_ids": 101,
+    "selected_ids": 103,
+    "pass": true
+  },
+  "rereads": {
+    "omp/B-new": {
+      "sessions": 4,
+      "after_compaction": 1,
+      "repeat_visible": 3,
+      "new": 104,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash_after_compaction": 1,
+      "bash_repeat_visible": 0,
+      "bash_new": 36,
+      "read_after_compaction": 0,
+      "read_repeat_visible": 3,
+      "read_new": 68
+    }
+  }
+}

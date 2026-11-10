@@ -1,0 +1,6 @@
+{
+  "observation": "All 25 user turns and turns.json completed; the SDK process remained inside post-loop await session.dispose() for over two hours.",
+  "evidence": "Last events are turn 25 turn_end/context_usage; host.log prints turn 25 complete; turns.json exists (16 MiB). Parent Bun PID 75720 owned worker broker PID 81048.",
+  "action": "Terminated only these isolated evaluation processes to release the controller; retain this session in all task and adoption denominators.",
+  "root_cause": "Post-task SDK teardown hang; internal cause unverified. Future harness teardown is bounded to 30 seconds. No product/runtime edits."
+}

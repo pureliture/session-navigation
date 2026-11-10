@@ -189,6 +189,8 @@ class MutationResult:
     error: str | None = None
     plan: ReplacementPlan | None = None
     item: ContextItem | None = None
+    keep_lines_ignored: tuple[dict[str, Any], ...] = ()
+    keep_lines_normalized: tuple[dict[str, str], ...] = ()
 
     @property
     def replacement(self) -> ReplacementPlan | None:

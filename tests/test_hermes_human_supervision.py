@@ -69,20 +69,20 @@ def test_list_counts_compacted_separately_from_restored_records():
     empty = _list(state)
     assert empty["count"] == 0 and empty["items"] == []
     assert empty["compacted_count"] == 0
-    assert empty["message"] == "현재 숨겨진 항목 없음"
+    assert empty["message"] == "Current hidden items: none"
 
     compacted = _compact(state)
     listed = _list(state)
     assert listed["count"] == len(listed["items"]) == 1
     assert listed["compacted_count"] == 1
-    assert listed["message"] == "현재 숨겨진 항목 1건"
+    assert listed["message"] == "Current hidden items: 1"
 
     assert _restore(state, compacted["item_id"])["ok"] is True
     restored = _list(state)
     assert restored["count"] == len(restored["items"]) == 1
     assert restored["items"][0]["visibility"] == "visible"
     assert restored["compacted_count"] == 0
-    assert restored["message"] == "현재 숨겨진 항목 없음"
+    assert restored["message"] == "Current hidden items: none"
 
 
 def test_compacted_items_carry_human_fields_and_newest_first():
@@ -123,12 +123,12 @@ def test_query_view_renumbers_and_reports_search_scope():
 
     matched = _list(state, query="beta")
     assert matched["compacted_count"] == 1
-    assert matched["message"] == "검색 조건에 맞는 숨겨진 항목 1건"
+    assert matched["message"] == "Matching hidden items: 1"
     assert [item["display_number"] for item in matched["items"]] == [1]
 
     none = _list(state, query="no-such-marker")
     assert none["count"] == 0 and none["compacted_count"] == 0
-    assert none["message"] == "검색 조건에 맞는 숨겨진 항목 없음"
+    assert none["message"] == "Matching hidden items: none"
 
     full = _list(state)
     assert full["compacted_count"] == 3
@@ -202,7 +202,7 @@ def test_enabled_plugin_registers_static_supervision_section():
     assert section["max_chars"] == 1200
     text = section["content"]
     assert isinstance(text, str) and len(text) <= 1200
-    for token in ("list_context_items", "unhide_context", "숨김"):
+    for token in ("list_context_items", "unhide_context", "hidden"):
         assert token in text, token
 
 
@@ -220,15 +220,15 @@ def test_tool_descriptions_route_human_list_and_restore_requests():
     sections = plugin.TOOL_SCHEMAS
     list_desc = sections["list_context_items"]["description"]
     restore_desc = sections["unhide_context"]["description"]
-    assert "사용자" in list_desc and "보여" in list_desc
-    assert "복원" in restore_desc and "item_id" in restore_desc
-    assert "목록" in restore_desc
+    assert "user list request" in list_desc and "numbered table" in list_desc
+    assert "Restore" in restore_desc and "item_id" in restore_desc
+    assert "list" in restore_desc
 
 
 def test_restore_description_routes_number_references_verbatim():
     desc = plugin.TOOL_SCHEMAS["unhide_context"]["description"]
-    assert "번" in desc and "고정" in desc
-    assert "복원 직전" in desc and "임의로" in desc
+    assert "item N" in desc and "bind" in desc
+    assert "immediately before restore" in desc and "never guess" in desc
 
 
 def test_numeric_reference_resolves_against_the_last_shown_list():

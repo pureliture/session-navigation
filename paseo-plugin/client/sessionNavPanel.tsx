@@ -7,17 +7,29 @@ import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-na
 import { z } from "zod";
 import {
   dbChoiceRpc,
+  hideBatchRpc,
   hideItemRpc,
   listItemsRpc,
   listScopesRpc,
+  unhideBatchRpc,
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
+import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { readSessionTimelineIds, resolveSessionTarget, sessionFollowCandidates } from "./sessionFollowing";
+import { fallbackToolPreview } from "./toolPreview";
+import { PreviewDrawer } from "./PreviewDrawer";
+import { readTimelineHistory } from "./timelineHistory";
 
 import {
   buildGroupedRows,
   fmtBytes,
+  fmtTokenCount,
+  fmtTokens,
+  groupMutationItems,
+  groupEyeAction,
   isSummarizedRow,
+  rowMetric,
   truncateString,
   type OutlineRow,
 } from "./outlineGrouping";
@@ -90,99 +102,16 @@ function ActionSvgIcon({
   );
 }
 
-/**
- * Scroll the main Paseo chat view to the message/tool matching the item
- */
-function scrollToMessageInChat(
-  itemId?: string | null,
-  toolCallId?: string | null,
-  summarySnippet?: string,
-): boolean {
-  const doc = (
-    globalThis as unknown as {
-      document?: {
-        querySelector: (sel: string) => any;
-        querySelectorAll: (sel: string) => ArrayLike<any>;
-      };
-    }
-  ).document;
-  if (!doc) return false;
-
-  const highlightAndScroll = (el: any): boolean => {
-    if (!el) return false;
-    if (typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-    if (el.style) {
-      const originalBg = el.style.backgroundColor;
-      el.style.transition = "background-color 0.3s ease";
-      el.style.backgroundColor = "rgba(59, 130, 246, 0.22)";
-      setTimeout(() => {
-        el.style.backgroundColor = originalBg || "";
-      }, 1200);
-    }
-    return true;
-  };
-
-  const idsToTry = [
-    toolCallId,
-    itemId,
-    itemId?.startsWith("user-") ? itemId.replace("user-", "") : undefined,
-    itemId?.startsWith("ast-") ? itemId.replace("ast-", "") : undefined,
-  ].filter((id): id is string => typeof id === "string" && id.length > 0);
-
-  for (const id of idsToTry) {
-    const encoded = encodeURIComponent(id);
-    const selectors = [
-      `[data-message-id="${id}"]`,
-      `[data-message-id="agent_tool_${id}"]`,
-      `[data-message-id$="/${encoded}"]`,
-      `[data-history-row-id="${id}"]`,
-      `[data-history-row-id="agent_tool_${id}"]`,
-      `[data-history-row-id$="/${encoded}"]`,
-      `[data-call-id="${id}"]`,
-      `[data-turn-id="${id}"]`,
-      `[data-item-id="${id}"]`,
-      `#message-${id}`,
-      `#call-${id}`,
-      `#turn-${id}`,
-    ];
-    for (const sel of selectors) {
-      try {
-        const el = doc.querySelector(sel);
-        if (el) return highlightAndScroll(el);
-      } catch {
-        // ignore selector error
-      }
-    }
-  }
-
-  // Fallback text match inside Paseo's agent-chat-scroll container for user/assistant messages
-  if (summarySnippet && typeof doc.querySelectorAll === "function") {
-    const needle = summarySnippet.replace(/\r?\n/g, " ").trim().slice(0, 36);
-    if (needle.length >= 4) {
-      try {
-        const candidates = doc.querySelectorAll('[data-testid="agent-chat-scroll"] [data-message-id]');
-        for (let i = 0; i < candidates.length; i++) {
-          const node = candidates[i];
-          const text = typeof node?.textContent === "string" ? node.textContent.replace(/\s+/g, " ") : "";
-          if (text.includes(needle)) {
-            return highlightAndScroll(node);
-          }
-        }
-      } catch {
-        // ignore fallback error
-      }
-    }
-  }
-
-  return false;
-}
-
-export function SessionNavPanel({ theme, layout, params, navigation, tab }: PluginAgentPanelProps) {
+export function SessionNavPanel({ theme, layout, params, navigation, tab, followVisible = true, candidateAgentIds }: PluginAgentPanelProps & {
+  followVisible?: boolean;
+  candidateAgentIds?: readonly string[];
+}) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
-  const agentId = params.agentId;
+  // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
+  const [followedId, setFollowedId] = useState<string | null>(null);
+  const [inView, setInView] = useState(!!params.agentId);
+  const agentId = followVisible ? followedId ?? params.agentId : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -193,6 +122,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const scopesRpc = useRpc(listScopesRpc);
   const hideRpc = useRpc(hideItemRpc);
   const unhideRpc = useRpc(unhideItemRpc);
+  const hideBatch = useRpc(hideBatchRpc);
+  const unhideBatch = useRpc(unhideBatchRpc);
   const dbChoice = useRpc(dbChoiceRpc);
 
   const [tabState, setTabState] = useTabState(tab, panelTabStateSchema, DEFAULT_TAB_STATE);
@@ -201,6 +132,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const [dbErrorOpen, setDbErrorOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (notice !== "Not loaded in chat") return;
+    const timer = setTimeout(() => setNotice((current) => current === notice ? null : current), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const [lastActionByItem, setLastActionByItem] = useState<Record<string, "hide" | "summarize">>({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [pendingGroupId, setPendingGroupId] = useState<string | null>(null);
@@ -212,9 +148,44 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       if (!result.ok) throw new Error(result.error ?? "scopes_failed");
       return result.scopes;
     },
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const bound = data?.some(
+        (s) =>
+          s.agent_id === agentId ||
+          s.scope_key === `pi:default:${agentId}:default` ||
+          s.scope_key === `paseo:default:${agentId}:default`,
+      );
+      return bound ? false : 3000;
+    },
   });
 
   const scopes = scopesQuery.data ?? [];
+
+  useEffect(() => {
+    if (!followVisible) return;
+    const doc = (globalThis as any).document;
+    if (!doc || !paseo?.agents) return;
+    let cancelled = false;
+    const tick = async () => {
+      const values = visibleChatValues(doc);
+      const id = await resolveSessionTarget({
+        followVisible, boundAgentId: params.agentId, visibleValues: values,
+        candidates: sessionFollowCandidates(candidateAgentIds, scopes.map((s) => s.agent_id).filter((id): id is string => !!id)),
+        timelineIds: async (id) => (await queryClient.fetchQuery({
+          queryKey: ["session-nav-follow", id],
+          staleTime: (query) => query.state.data?.complete ? 10_000 : 0,
+          queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
+        })).ids,
+      });
+      if (cancelled) return;
+      setInView(!!id);
+      setFollowedId(id === params.agentId ? null : id);
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 1500);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [paseo, params.agentId, scopes, queryClient, followVisible, candidateAgentIds]);
   const agentScopePi = `pi:default:${agentId}:default`;
   const agentScopePaseo = `paseo:default:${agentId}:default`;
 
@@ -242,7 +213,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
       return true;
     }
-    if (!result.ok && result.error === "db_error") {
+    if (!result.ok && (result.error === "db_error" || result.error === "db_full")) {
       setDbErrorOpen(true);
       return true;
     }
@@ -258,6 +229,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
+  // The host meter only moves after the next model request; until then show the expected change.
+  const [pendingEstimate, setPendingEstimate] = useState<{ used: number; tokens: number } | null>(null);
+  const notePending = (changed: Row[], sign: 1 | -1) => {
+    const used = usageQuery.data?.contextWindowUsedTokens ?? listQuery.data?.context?.used_tokens;
+    const tokens = changed.reduce((sum, r) => sum + (typeof r.tokens === "number" ? r.tokens : 0), 0) * sign;
+    if (!used || !tokens) return;
+    setPendingEstimate((prev) => ({ used, tokens: (prev?.used === used ? prev.tokens : 0) + tokens }));
+  };
 
   const hideMutation = useMutation({
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
@@ -270,9 +249,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         mode,
       });
     },
-    onSuccess: (r) => {
+    onSuccess: (r, { row }) => {
       if (!onMutationError(r)) {
         setNotice(null);
+        if (row.status !== "hidden") notePending([row], -1);
         void invalidate();
       }
     },
@@ -281,9 +261,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const unhideMutation = useMutation({
     mutationFn: (row: Row) =>
       unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version }),
-    onSuccess: (r) => {
+    onSuccess: (r, row) => {
       if (!onMutationError(r)) {
         setNotice(null);
+        notePending([row], 1);
         void invalidate();
       }
     },
@@ -291,70 +272,44 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
 
   const isMutating = hideMutation.isPending || unhideMutation.isPending || !!pendingGroupId;
 
-  const handleGroupHide = async (group: OutlineRow & { type: "group" }, mode: "hide" | "summarize") => {
+  const runGroupBatch = async (
+    group: OutlineRow & { type: "group" },
+    action: "hide" | "summarize" | "unhide",
+  ) => {
     if (pendingGroupId || !resolvedScopeKey) return;
+    const items = groupMutationItems(group, action);
+    if (items.length === 0) return;
     setPendingGroupId(group.groupId);
+    setLastActionByItem((prev) => {
+      const next = { ...prev };
+      for (const item of items) {
+        if (action === "unhide") delete next[item.item_id];
+        else next[item.item_id] = action;
+      }
+      return next;
+    });
     try {
-      const updates: Record<string, "hide" | "summarize"> = {};
-      for (const child of group.children) {
-        const k = child.item_id ?? child.tool_call_id;
-        updates[k] = mode;
+      const result =
+        action === "unhide"
+          ? await unhideBatch({ scope_key: scopeKey, items })
+          : await hideBatch({ scope_key: scopeKey, mode: action, items });
+      const failures = result.items.filter((item) => !item.ok);
+      const applied = new Set(result.items.filter((item) => item.ok).map((item) => item.item_id));
+      notePending(rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
+        action === "unhide" ? 1 : -1);
+      if (result.error) onMutationError(result);
+      for (const item of failures) onMutationError(item);
+      if (failures.length) {
+        const reasons = [...new Set(failures.map((item) => item.error ?? "failed"))].join(", ");
+        setNotice(`${result.applied} applied, ${result.failed} failed — ${reasons}. List refreshed.`);
+      } else if (result.ok) {
+        setNotice(null);
       }
-      setLastActionByItem((prev) => ({ ...prev, ...updates }));
-
-      const chunkSize = 5;
-      for (let i = 0; i < group.children.length; i += chunkSize) {
-        const chunk = group.children.slice(i, i + chunkSize);
-        await Promise.allSettled(
-          chunk.map((child) =>
-            hideRpc({
-              scope_key: scopeKey,
-              item_id: child.item_id ?? "",
-              expected_version: child.version,
-              mode,
-            }),
-          ),
-        );
-      }
-      void invalidate();
     } catch {
-      setNotice("Failed to update tool group");
+      onMutationError({ ok: false, error: "db_error" });
     } finally {
       setPendingGroupId(null);
-    }
-  };
-
-  const handleGroupUnhide = async (group: OutlineRow & { type: "group" }) => {
-    if (pendingGroupId || !resolvedScopeKey) return;
-    setPendingGroupId(group.groupId);
-    try {
-      setLastActionByItem((prev) => {
-        const next = { ...prev };
-        for (const child of group.children) {
-          const k = child.item_id ?? child.tool_call_id;
-          delete next[k];
-        }
-        return next;
-      });
-
-      const chunkSize = 5;
-      for (let i = 0; i < group.children.length; i += chunkSize) {
-        const chunk = group.children.slice(i, i + chunkSize);
-        await Promise.allSettled(
-          chunk.map((child) =>
-            unhideRpc({
-              scope_key: scopeKey,
-              item_id: child.item_id ?? "",
-              expected_version: child.version,
-            }),
-          ),
-        );
-      }
       void invalidate();
-    } catch {
-      setNotice("Failed to restore tool group");
-    } finally {
-      setPendingGroupId(null);
     }
   };
 
@@ -363,29 +318,42 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) return [];
+      if (!resolvedScopeKey) return { items: [], context: undefined };
       const result = await listRpc({ scope_key: scopeKey, query: query || undefined });
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
       }
-      return result.items;
+      return { items: result.items, context: result.context };
     },
     enabled: !!resolvedScopeKey,
     refetchInterval: isMutating ? 400 : 4000,
   });
+
+  // Same source as Paseo's own context meter (the `K` figure), for every provider.
+  const usageQuery = useQuery({
+    queryKey: ["paseo-agent-usage", agentId],
+    queryFn: async () => {
+      if (!agentId || !paseo?.agents) return null;
+      const handle = paseo.agents.ref(agentId);
+      await handle.refresh();
+      return handle.lastUsage ?? null;
+    },
+    refetchInterval: 5000,
+  });
+
+  const historyQueryOptions = {
+    queryKey: ["paseo-agent-timeline-history", agentId],
+    queryFn: () => readTimelineHistory(paseo.agents.ref(agentId).timeline),
+    staleTime: 5000,
+  };
 
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
       if (!agentId || !paseo?.agents) return [];
       try {
-        // Issue 6: Increased limit to 1000 to cover full session outline
-        const page = await paseo.agents
-          .ref(agentId)
-          .timeline.refetch({ direction: "tail", limit: 1000, projection: "canonical" });
-        const entries =
-          (page as { entries?: Array<{ item?: Record<string, unknown>; seqStart?: number }> })?.entries ?? [];
+        const { entries } = await queryClient.fetchQuery(historyQueryOptions);
         const result: Row[] = [];
 
         for (let i = 0; i < entries.length; i++) {
@@ -414,6 +382,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               tokens_display: "—",
               bytes_size: text.length,
               summary_line: text,
+              message_text: text,
             });
           } else if (itemType === "assistant_message") {
             const text = typeof item.text === "string" ? item.text : "";
@@ -427,6 +396,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               tokens_display: "—",
               bytes_size: text.length,
               summary_line: text,
+              message_text: text,
             });
           } else if (
             itemType === "tool_call" ||
@@ -585,6 +555,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               tokens_display: "—",
               bytes_size: totalBytes,
               summary_line: summary,
+              ...fallbackToolPreview(item, detail),
             });
           }
         }
@@ -601,7 +572,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
   }, [scopeKey, queryClient]);
 
-  const rawRows = resolvedScopeKey ? (listQuery.data ?? []) : (fallbackTimelineQuery.data ?? []);
+  const rawRows = resolvedScopeKey ? (listQuery.data?.items ?? []) : (fallbackTimelineQuery.data ?? []);
   const rows = useMemo(() => {
     if (!query) return rawRows;
     const q = query.toLowerCase();
@@ -620,18 +591,34 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
 
   const hiddenCount = rows.filter((r) => r.status === "hidden").length;
 
-  const maxContextBytes = 128_000 * 4; // 128K tokens scale (~512KB)
   const totalBytes = useMemo(() => rows.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0), [rows]);
   const visibleBytes = useMemo(
     () => rows.filter((r) => r.status !== "hidden").reduce((sum, r) => sum + (r.bytes_size ?? 0), 0),
     [rows],
   );
   const savedBytes = Math.max(0, totalBytes - visibleBytes);
-  const activeRatio = maxContextBytes > 0 ? Math.min(1, Math.max(0, visibleBytes / maxContextBytes)) : 0;
+  const hiddenRows = rows.filter((r) => r.status === "hidden");
+  const savedTokens =
+    hiddenRows.length > 0 && hiddenRows.every((r) => typeof r.tokens === "number")
+      ? hiddenRows.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
+      : null;
+  const sessionContext = useMemo(() => {
+    const usage = usageQuery.data;
+    if (usage?.contextWindowUsedTokens) {
+      return { used: usage.contextWindowUsedTokens, max: usage.contextWindowMaxTokens ?? null };
+    }
+    const fromLog = listQuery.data?.context;
+    if (fromLog?.used_tokens) return { used: fromLog.used_tokens, max: fromLog.max_tokens ?? null };
+    return null;
+  }, [usageQuery.data, listQuery.data]);
+  const pendingDelta = pendingEstimate && pendingEstimate.used === sessionContext?.used ? pendingEstimate.tokens : 0;
+  const activeRatio = sessionContext?.max
+    ? Math.min(1, Math.max(0, sessionContext.used / sessionContext.max))
+    : 0;
 
   const selectedRow = useMemo(() => {
-    if (!selectedId) return rows[0] ?? null;
-    return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? rows[0] ?? null;
+    if (!selectedId) return null;
+    return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? null;
   }, [rows, selectedId]);
 
   const styles = useMemo(() => {
@@ -715,6 +702,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
       },
 
       noticeBar: {
+        flexShrink: 0,
         paddingHorizontal: pad,
         paddingVertical: 4,
         backgroundColor: theme.colors.surface1,
@@ -927,59 +915,6 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         flexShrink: 1,
       },
 
-      // 4. Preview Drawer (Read-only inspector; actions unified inline on rows)
-      previewDrawer: {
-        borderTopWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface0,
-      },
-      previewHeader: {
-        flexDirection: "row" as const,
-        alignItems: "center" as const,
-        justifyContent: "space-between" as const,
-        gap: 6,
-        paddingHorizontal: pad,
-        paddingVertical: layout.compact ? 4 : 6,
-        backgroundColor: theme.colors.surface1 + "44",
-        minWidth: 0,
-      },
-      previewHeaderTitle: {
-        fontSize: layout.compact ? 10 : 11,
-        fontWeight: "600" as const,
-        color: theme.colors.foreground,
-        flex: 1,
-        flexShrink: 1,
-        minWidth: 0,
-      },
-      previewHeaderSub: {
-        fontSize: layout.compact ? 9 : 10,
-        color: theme.colors.foregroundMuted,
-        flexShrink: 0,
-      },
-      previewBody: {
-        paddingHorizontal: pad,
-        paddingVertical: 8,
-        gap: 6,
-        maxHeight: 180,
-      },
-      previewCodeBox: {
-        backgroundColor: theme.colors.surface1,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        padding: 8,
-        maxHeight: 110,
-      },
-      previewCodeText: {
-        fontFamily: "monospace",
-        fontSize: 11,
-        color: theme.colors.foreground,
-        lineHeight: 15,
-      },
-      previewMetaLine: {
-        fontSize: 10,
-        color: theme.colors.foregroundMuted,
-      },
       actionBtnPrimary: {
         paddingHorizontal: 8,
         paddingVertical: 4,
@@ -1042,8 +977,46 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   const handleRowPress = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
-    scrollToMessageInChat(row.item_id, row.tool_call_id, row.summary_line);
+    void scrollToMessageInChat(row, rawRows, {
+      onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
+      onNotFound: () => setNotice("Not loaded in chat"),
+      getHistory: () => queryClient.fetchQuery(historyQueryOptions),
+    });
   };
+
+  // Prompts and responses can only be hidden (removed from the outgoing context), never summarized.
+  const renderMessageHideToggle = (row: Row) => {
+    if (!resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
+    const hidden = row.status === "hidden";
+    const iconSize = layout.compact ? 13 : 14;
+    return (
+      <View style={styles.actionsContainer}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={hidden ? "Unhide message" : "Hide message"}
+          style={hidden ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
+          onPress={(e) => {
+            e.stopPropagation();
+            if (hidden) unhideMutation.mutate(row);
+            else hideMutation.mutate({ row, mode: "hide" });
+          }}
+        >
+          <ActionSvgIcon kind="hide" slashed={hidden} size={iconSize} color={theme.colors.foregroundMuted} />
+        </Pressable>
+      </View>
+    );
+  };
+
+  const renderMessageSnippet = (row: Row, empty: string) =>
+    row.status === "hidden" ? (
+      <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
+        {`[hidden] ${(row.summary_line || "").split("\n")[0] || "tap icon to restore"}`}
+      </Text>
+    ) : (
+      <Text style={styles.summarySnippet} numberOfLines={2}>
+        {row.summary_line || empty}
+      </Text>
+    );
 
   const renderRow = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
@@ -1069,13 +1042,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
-              <Text style={styles.rightMetricsText}>{fmtBytes(row.bytes_size)}</Text>
+              {renderMessageHideToggle(row)}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
             </View>
           </View>
           <View style={styles.treeLineContainer}>
-            <Text style={styles.summarySnippet} numberOfLines={2}>
-              {row.summary_line || "(empty prompt)"}
-            </Text>
+            {renderMessageSnippet(row, "(empty prompt)")}
           </View>
         </Pressable>
       );
@@ -1098,13 +1070,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
-              <Text style={styles.rightMetricsText}>{fmtBytes(row.bytes_size)}</Text>
+              {renderMessageHideToggle(row)}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
             </View>
           </View>
           <View style={styles.treeLineContainer}>
-            <Text style={styles.summarySnippet} numberOfLines={2}>
-              {row.summary_line || "(empty response)"}
-            </Text>
+            {renderMessageSnippet(row, "(empty response)")}
           </View>
         </Pressable>
       );
@@ -1116,7 +1087,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         : row.tool_call_id;
 
     const metricText =
-      row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+      rowMetric(row);
 
     const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
     const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
@@ -1157,7 +1128,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
 
           {/* Right inline slot: [Hide/Summarize Icons] + [Bytes/Tokens] */}
           <View style={styles.rowRightWrap}>
-            {resolvedScopeKey ? (
+            {resolvedScopeKey && row.manageable !== false ? (
               <View style={styles.actionsContainer}>
                 {isHidden ? (
                   <Pressable
@@ -1238,6 +1209,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const renderGroupRow = (group: OutlineRow & { type: "group" }) => {
+    const eyeAction = groupEyeAction(group);
     const isExpanded = !!expandedGroups[group.groupId];
     const isPending = pendingGroupId === group.groupId;
     const isSelected =
@@ -1315,7 +1287,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                     disabled={isPending}
                     onPress={(e) => {
                       e.stopPropagation();
-                      void handleGroupUnhide(group);
+                      void runGroupBatch(group, "unhide");
                     }}
                   >
                     <ActionSvgIcon
@@ -1329,17 +1301,17 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                   <>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={`Hide all in ${group.groupId}`}
-                      style={styles.inlineIconBtn}
+                      accessibilityLabel={`${eyeAction === "unhide" ? "Unhide hidden" : "Hide all"} in ${group.groupId}`}
+                      style={eyeAction === "unhide" ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
                       disabled={isPending}
                       onPress={(e) => {
                         e.stopPropagation();
-                        void handleGroupHide(group, "hide");
+                        void runGroupBatch(group, eyeAction);
                       }}
                     >
                       <ActionSvgIcon
                         kind="hide"
-                        slashed={false}
+                        slashed={eyeAction === "unhide"}
                         size={iconSize}
                         color={theme.colors.foregroundMuted}
                       />
@@ -1351,7 +1323,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
                       disabled={isPending}
                       onPress={(e) => {
                         e.stopPropagation();
-                        void handleGroupHide(group, "summarize");
+                        void runGroupBatch(group, "summarize");
                       }}
                     >
                       <ActionSvgIcon
@@ -1367,7 +1339,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
             ) : null}
 
             <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
-              {fmtBytes(group.totalBytes)}
+              {group.totalTokens != null ? fmtTokens(group.totalTokens) : fmtBytes(group.totalBytes)}
             </Text>
           </View>
         </View>
@@ -1393,7 +1365,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
         : row.tool_call_id;
     const metricText =
-      row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
+      rowMetric(row);
     const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
     const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
     const iconSize = layout.compact ? 12 : 13;
@@ -1440,7 +1412,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
           </View>
 
           <View style={styles.rowRightWrap}>
-            {resolvedScopeKey ? (
+            {resolvedScopeKey && row.manageable !== false ? (
               <View style={styles.actionsContainer}>
                 {isHidden ? (
                   <Pressable
@@ -1521,10 +1493,44 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
   };
 
   const isLoading = resolvedScopeKey ? listQuery.isPending : fallbackTimelineQuery.isPending;
+  const noticeBar = notice ? (
+    <View accessibilityRole="alert" style={styles.noticeBar}>
+      <Text style={styles.noticeText}>{notice}</Text>
+    </View>
+  ) : null;
+
+  if (followVisible && !inView) {
+    return (
+      <View style={styles.screen}>
+        {noticeBar}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.headerTitle}>Outline</Text>
+          </View>
+        </View>
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 8 }}>
+          <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
+            No session in view
+          </Text>
+          <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}>
+            Open a session to see its outline. The outline follows the session shown in the chat.
+          </Text>
+          {navigation && params.agentId ? (
+            <Pressable accessibilityRole="button" onPress={() => navigation.openAgent({ agentId: params.agentId })}>
+              <Text style={{ fontSize: 11, color: theme.colors.foreground, textDecorationLine: "underline" }}>
+                Open this panel's session
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   if (!isLoading && rows.length === 0) {
     return (
       <View style={styles.screen}>
+        {noticeBar}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Outline</Text>
@@ -1600,11 +1606,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         </View>
       ) : null}
 
-      {notice ? (
-        <View style={styles.noticeBar}>
-          <Text style={styles.noticeText}>{notice}</Text>
-        </View>
-      ) : null}
+      {noticeBar}
       {listQuery.isError ? <Text style={styles.errorText}>List failed — retrying.</Text> : null}
 
       {/* 2. Main Timeline Tree List */}
@@ -1634,53 +1636,21 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab }: Plug
         </View>
         <View style={styles.usageLabelRow}>
           <Text style={styles.usageLabel} numberOfLines={1}>
-            {layout.compact
-              ? `~${fmtBytes(visibleBytes)} (${(activeRatio * 100).toFixed(0)}%)`
-              : `~${fmtBytes(visibleBytes)} / ${fmtBytes(maxContextBytes)} (${(activeRatio * 100).toFixed(1)}%) active`}
+            {sessionContext
+              ? `context ${fmtTokenCount(sessionContext.used)}${
+                  sessionContext.max ? ` / ${fmtTokenCount(sessionContext.max)}` : ""
+                } tokens${
+                  sessionContext.max ? ` (${(activeRatio * 100).toFixed(layout.compact ? 0 : 1)}%)` : ""
+                }${pendingDelta ? ` · next ≈ ${pendingDelta < 0 ? "−" : "+"}${fmtTokenCount(Math.abs(pendingDelta))}` : ""}`
+              : "context — tokens"}
           </Text>
           <Text style={[styles.usageLabel, { textAlign: "right" }]} numberOfLines={1}>
-            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${fmtBytes(savedBytes)}` : `${rows.length} entries`}
+            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : `${rows.length} entries`}
           </Text>
         </View>
       </View>
 
-      {/* 4. Bottom Preview Drawer (Read-only payload/metadata inspector) */}
-      <View style={styles.previewDrawer}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Toggle preview drawer"
-          style={styles.previewHeader}
-          onPress={() => setPreviewOpen(!previewOpen)}
-        >
-          <Text style={styles.previewHeaderTitle} numberOfLines={1}>
-            Preview {previewOpen ? "︾" : "︽"}
-            {selectedRow
-              ? ` · ${selectedRow.tool_name ?? "item"} (${selectedRow.tool_call_id ? selectedRow.tool_call_id.slice(0, 10) : selectedRow.item_id?.slice(0, 10)})`
-              : ""}
-          </Text>
-          {selectedRow ? (
-            <Text style={styles.previewHeaderSub}>
-              {selectedRow.status} · {fmtBytes(selectedRow.bytes_size)}
-            </Text>
-          ) : null}
-        </Pressable>
-
-        {previewOpen && selectedRow ? (
-          <View style={styles.previewBody}>
-            <ScrollView style={styles.previewCodeBox}>
-              <Text style={styles.previewCodeText}>
-                {selectedRow.summary_line || "(no details available)"}
-              </Text>
-            </ScrollView>
-            <Text style={styles.previewMetaLine}>
-              ID: {selectedRow.item_id ?? "none"} · {selectedRow.source ?? "timeline"} · v{selectedRow.version}
-              {selectedRow.tokens_display && selectedRow.tokens_display !== "—"
-                ? ` · ${selectedRow.tokens_display}`
-                : ""}
-            </Text>
-          </View>
-        ) : null}
-      </View>
+      <PreviewDrawer row={selectedRow} open={previewOpen} onToggle={() => setPreviewOpen(!previewOpen)} theme={theme} />
 
       {/* DB Error Overlay */}
       {dbErrorOpen ? (

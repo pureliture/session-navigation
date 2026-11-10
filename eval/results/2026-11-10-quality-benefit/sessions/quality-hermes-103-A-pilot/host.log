@@ -1,0 +1,107 @@
+📦 Pre-API compression: ~24,436 tokens near the context/output limit. Compacting before the next model call.
+🗜️ Compacting context — summarizing earlier conversation so I can continue...
+Traceback (most recent call last):
+  File "/Users/devin/repos/session-navigation/eval/quality_hermes.py", line 86, in <module>
+    main()
+    ~~~~^^
+  File "/Users/devin/repos/session-navigation/eval/quality_hermes.py", line 63, in main
+    result = agent.run_conversation(prompt, conversation_history=history)
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/turn_facade.py", line 148, in run_conversation
+    result = run_conversation(
+        self, user_message, system_message, conversation_history, effective_task_id,
+    ...<7 lines>...
+        prelude=prelude,
+    )
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_loop.py", line 1843, in run_conversation
+    result = _run_conversation_turn(
+        agent,
+    ...<13 lines>...
+        prelude=prelude,
+    )
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_loop.py", line 1758, in _run_conversation_turn
+    _pg = _run_phase(run_preflight_gate, agent, s)
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_loop.py", line 1564, in _run_phase
+    verdict = fn(agent, **{n: extra[n] if n in extra else getattr(state, n) for n in params})
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/turn_preflight_gate.py", line 90, in run_preflight_gate
+    return run_preflight_compression(
+        agent, v, compressor=_compressor, request_pressure_tokens=request_pressure_tokens,
+    ...<9 lines>...
+        effective_task_id=effective_task_id,
+    )
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/turn_preflight.py", line 148, in run_preflight_compression
+    v.messages, v.active_system_prompt = agent._compress_context(
+                                         ~~~~~~~~~~~~~~~~~~~~~~~^
+        v.messages, system_message, approx_tokens=request_pressure_tokens,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        task_id=effective_task_id, trigger="pre_api",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/compression_facade.py", line 304, in _compress_context
+    result = _run_under_progress_timeout(
+        self, _run, messages, system_message,
+    ...<2 lines>...
+        idle_timeout=idle_timeout, total_ceiling=total_ceiling, approx_tokens=approx_tokens,
+    )
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/compression_facade.py", line 178, in _run_under_progress_timeout
+    return run_compress_context_with_progress_timeout(
+        worker=_snapshot_worker, messages=messages,
+    ...<5 lines>...
+        request_exceeds_window=request_exceeds_model_window(agent, approx_tokens) is True,
+    )
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression.py", line 1316, in run_compress_context_with_progress_timeout
+    settled, result = _await_worker_within_budget(
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        future, fence, idle=idle, ceiling=ceiling, wait_started=wait_started
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression.py", line 1077, in _await_worker_within_budget
+    return True, future.result(timeout=wait_slice)
+                 ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/Users/devin/hermes-nav-runtime/python-3.14.9+20261021-darwin-arm64/lib/python3.14/concurrent/futures/_base.py", line 454, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "/Users/devin/hermes-nav-runtime/python-3.14.9+20261021-darwin-arm64/lib/python3.14/concurrent/futures/_base.py", line 396, in __get_result
+    raise self._exception
+  File "/Users/devin/hermes-nav-runtime/python-3.14.9+20261021-darwin-arm64/lib/python3.14/concurrent/futures/thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "/Users/devin/hermes-nav-runtime/python-3.14.9+20261021-darwin-arm64/lib/python3.14/concurrent/futures/thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/tools/daemon_pool.py", line 35, in _run_with_context
+    return ctx.run(fn, *call_args, **call_kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/tools/thread_context.py", line 74, in _runner
+    return ctx.run(_inner)
+           ~~~~~~~^^^^^^^^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/tools/thread_context.py", line 65, in _inner
+    return target(*args, **kwargs)
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression.py", line 1265, in _fence_gated_worker
+    return worker(worker_fence)
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/compression_facade.py", line 145, in _snapshot_worker
+    result_msgs, result_prompt = run(
+                                 ~~~^
+        fence, target_messages=snapshot, same_turn_fallback_recovery=same_turn_fallback_recovery
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/compression_facade.py", line 286, in _run
+    return compress_context(
+        self, target_messages if target_messages is not None else messages, system_message,
+    ...<4 lines>...
+        overflow_reason=overflow_reason,
+    )
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression.py", line 4042, in compress_context
+    lazy_compression_feasibility_check(agent)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression_feasibility.py", line 126, in lazy_compression_feasibility_check
+    _probe(agent)
+    ~~~~~~^^^^^^^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression_feasibility.py", line 15, in _probe
+    check_compression_model_feasibility(agent)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace/agent/conversation_compression.py", line 2091, in check_compression_model_feasibility
+    raise ValueError(
+    ...<8 lines>...
+    )
+ValueError: Auxiliary compression model deepseek/deepseek-v4.1-flash-1017 has a context window of 32,768 tokens, which is below the minimum 64,000 required by Hermes Agent.  Choose a compression model with at least 64K context (set auxiliary.compression.model in config.yaml), or set auxiliary.compression.context_length to override the detected value if it is wrong.

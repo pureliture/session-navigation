@@ -1,0 +1,65 @@
+{
+  "id": "hermes-03-logs-A-1",
+  "turns": [
+    "Use bash/terminal to print bootstrap.log in full. Identify the recovery marker and the shard that required recovery.",
+    "Print traffic.log in full using bash/terminal. Report the measured p99 latency and total requests.",
+    "Print rollout.log in full using bash/terminal. Report the deployed release and whether rollout completed.",
+    "Without changing files, report the exact recovery marker and affected shard from the initial bootstrap analysis."
+  ],
+  "answers": [
+    [
+      "violet-27",
+      "7"
+    ],
+    [
+      "182",
+      "9100"
+    ],
+    [
+      "r18",
+      "complete"
+    ],
+    [
+      "violet-27",
+      "7"
+    ]
+  ],
+  "results": [
+    {
+      "match": "bootstrap.log",
+      "label": "needed-later",
+      "protected": false,
+      "facts": [
+        "RECOVERY_MARKER=violet-27",
+        "recovered sequence mismatch on shard 7"
+      ]
+    },
+    {
+      "match": "traffic.log",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "p99_latency_ms=182",
+        "total_requests=9100"
+      ]
+    },
+    {
+      "match": "rollout.log",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "deployed_release=r18",
+        "rollout=complete"
+      ]
+    }
+  ],
+  "host": "hermes",
+  "arm": "A",
+  "repetition": 1,
+  "repo": "/Users/devin/repos/session-navigation",
+  "home": "/Users/devin/.session-navigation-eval/hermes-03-logs-A-1/home",
+  "workspace": "/Users/devin/.session-navigation-eval/hermes-03-logs-A-1/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-09-glm/hermes-03-logs-A-1",
+  "proxy": "http://127.0.0.1:51600",
+  "hermes_source": "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+}

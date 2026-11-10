@@ -1,0 +1,15 @@
+  ⟳ compacting context…
+🗜️ Compacting context — summarizing earlier conversation so I can continue...
+🗜️ Compacting context — still summarizing earlier conversation so I can continue...
+🗜️ Compacting context — still summarizing earlier conversation so I can continue...
+⚠ Compression summary failed: <!DOCTYPE HTML>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Error response</title>
+    </head>
+    <body>
+        <h1>Error response</h1>
+        <p>Error code: 429</p>
+        <p>Message.... Inserted a fallback context marker.
+⚠ Context is over the compression threshold (~57,248 tokens >= 52,224) but compression is currently blocked (cooldown:38). The model may stop responding. Run /new to start a fresh session or /compress to retry immediately.

@@ -162,6 +162,9 @@ def register(ctx: Any) -> PluginState:
         description=TOOL_SCHEMAS[MANAGE_TOOL]["description"],
     )
     ctx.register_middleware("llm_request", make_middleware(state))
+    register_hook = getattr(ctx, "register_hook", None)
+    if callable(register_hook):
+        register_hook("post_api_request", state.usage.observe)
 
     # Optional host capability: freeze the human-supervision protocol into
     # each new session prompt. Absent API, disabled plugin, or a duplicate

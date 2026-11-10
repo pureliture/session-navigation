@@ -1,0 +1,19 @@
+{
+  "eval_tests": {
+    "command": "uv run --no-sync --with tiktoken python -m unittest discover -s eval/tests -v",
+    "output": "Ran 32 tests in 2.700s\nOK",
+    "passed": true
+  },
+  "key_audit": {
+    "command": "uv run --no-sync python eval/v2_audit.py eval/results/2026-11-10-quality-benefit-64k",
+    "output": "{\"files_checked\": 189238, \"actual_key_matches\": 0, \"credential_prefix_matches\": 0}",
+    "passed": true
+  },
+  "config_restore": {
+    "command": "uv run --no-sync --with tiktoken python eval/results/2026-11-10-quality-benefit-64k/audit_commands.py",
+    "output": "final configurations byte-exact: True",
+    "passed": true
+  },
+  "product_suites": "Not rerun: no product code or installed runtime changed.",
+  "visual_checks": "Not applicable: evaluation-only work."
+}

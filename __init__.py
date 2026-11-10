@@ -24,6 +24,7 @@ rewritten) until an operator turns it on.
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -52,6 +53,19 @@ def _load_engine():
         return None, exc
 
 
+def _check_bundle(package, directory: Path) -> None:
+    source = b"".join(
+        path.relative_to(directory).as_posix().encode() + b"\0" + path.read_bytes() + b"\0"
+        for path in sorted(directory.rglob("*.py"))
+    )
+    if getattr(package, "__bundle_fingerprint__", None) != hashlib.sha256(source).hexdigest():
+        raise ImportError(
+            f"session-navigation: cached {package.__name__} does not match bundled sources. "
+            "Fully restart Hermes, including its gateway, after updating the plugin; "
+            "a plugin reload cannot replace cached core or adapter modules."
+        )
+
+
 def _load_register():
     """Return the adapter's ``register(ctx)`` or ``None`` when unavailable."""
     try:
@@ -63,8 +77,12 @@ def _load_register():
 
 _prepend_vendor()
 _engine, _engine_error = _load_engine()
+if _engine is not None:
+    _check_bundle(_engine, _VENDOR / "session_navigation")
 SessionNavigationEngine = getattr(_engine, "SessionNavigationEngine", None)
-register = _load_register()
+register = _load_register() if _engine is not None else None
+if callable(register):
+    _check_bundle(sys.modules["session_navigation_hermes"], _VENDOR / "session_navigation_hermes")
 _ADAPTER_IMPORT_ERROR: Exception | None = (
     None if callable(register) else (_engine_error or ImportError("adapter unavailable"))
 )

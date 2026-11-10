@@ -49,6 +49,7 @@ Decisions recorded here (first-version scope):
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -59,9 +60,14 @@ from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
 from .handlers import restore as _engine_restore
 from .handlers import summarize as _engine_summarize
+from .payload import drop_messages, message_keys
 from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore
-from session_navigation.model import Scope
+from .usage import UsageTracker, estimate_tokens
+from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
+from session_navigation.policy import refusal_reason, is_destructive_command
+from session_navigation.reminders import BoundaryReminders
+from .allowlist import AdapterRejected, filter_invocation
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.transport import Summarizer, SummarizerError
 from .llm import CtxLlmSummarizer
@@ -110,6 +116,8 @@ class PluginState:
     count_middlewares: Callable[[], int] = field(
         default=_default_count_llm_middlewares)
     db_error_pending: bool = False
+    usage: UsageTracker = field(default_factory=UsageTracker)
+    reminders: BoundaryReminders = field(default_factory=BoundaryReminders)
 
 
 def scope_for(state: PluginState, session_id: Any) -> Scope | None:
@@ -131,6 +139,27 @@ def scope_for(state: PluginState, session_id: Any) -> Scope | None:
 
 def _dump(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _track_mutation(state: PluginState, handler: Callable[..., str]) -> Callable[..., str]:
+    def savings(scope: Scope) -> int | None:
+        try:
+            return sum(estimate_tokens(item.original) - estimate_tokens(item.compacted)
+                       for item in state.engine.store.items(scope) if item.visibility == "hidden")
+        except Exception:
+            return None
+
+    def tracked(args: Any = None, session_id: str = "", **extra: Any) -> str:
+        scope = scope_for(state, session_id)
+        before = savings(scope) if scope is not None and state.is_enabled() else None
+        result = handler(args, session_id=session_id, **extra)
+        if before is not None:
+            after = savings(scope)
+            if after is not None:
+                state.usage.adjust(session_id, after - before)
+        return result
+
+    return tracked
 
 
 def make_hide_handler(state: PluginState) -> Callable[..., str]:
@@ -165,7 +194,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             "visibility_version": result.plan.visibility_version,
         })
 
-    return hide_context
+    return _track_mutation(state, hide_context)
 
 def make_summarize_handler(state: PluginState) -> Callable[..., str]:
     """Build the `summarize_context` tool handler bound to this registration."""
@@ -202,7 +231,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
             "compaction_source": "llm",
         })
 
-    return summarize_context
+    return _track_mutation(state, summarize_context)
 
 
 def make_list_handler(state: PluginState) -> Callable[..., str]:
@@ -217,6 +246,21 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        if isinstance(args, dict) and args.get("view") == "candidates":
+            limit = args.get("limit", 30)
+            if type(limit) is not int or not 1 <= limit <= 200:
+                return _dump({"ok": False, "error": "invalid_limit"})
+            candidates = []
+            for entry in reversed(state.store.entries(scope.scope_key())):
+                if _cleanup_error(state, scope, entry) is not None:
+                    continue
+                hints = entry.raw_arguments
+                candidates.append({"tool_call_id": entry.call_id, "tool_name": entry.tool_name,
+                                   "hint": str(hints.get("command") or hints.get("path") or hints.get("pattern") or "")[:160],
+                                   "bytes_size": len(entry.content.encode("utf-8")), "tokens_display": "—"})
+                if len(candidates) >= limit:
+                    break
+            return _dump({"ok": True, "items": candidates})
         items = _engine_list(state.engine, scope, query)
         scope_key = scope.scope_key()
         live_ids = {
@@ -229,8 +273,8 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
             for item in items if item["display_number"] is not None
         ])
         compacted_count = sum(item["visibility"] == "hidden" for item in items)
-        prefix = "검색 조건에 맞는" if query else "현재"
-        message = f"{prefix} 숨겨진 항목 {compacted_count}건" if compacted_count else f"{prefix} 숨겨진 항목 없음"
+        prefix = "Matching" if query else "Current"
+        message = f"{prefix} hidden items: {compacted_count}" if compacted_count else f"{prefix} hidden items: none"
         payload: dict[str, Any] = {
             "ok": True, "count": len(items), "items": items,
             "compacted_count": compacted_count, "message": message,
@@ -277,20 +321,20 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
             "visibility_version": result.item.version,
         })
 
-    return unhide_context
+    return _track_mutation(state, unhide_context)
 
 
-def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any) -> tuple[bool, str | None, str | None]:
+def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_lines: list[str] | None = None) -> tuple[bool, str | None, str | None, dict[str, Any]]:
     """Apply one rule-based hide through shared engine paths (manage_context helper)."""
     from session_navigation.model import ToolResultRecord, compute_invocation_digest
     from .allowlist import AdapterRejected, filter_invocation
 
     if entry.arguments_parse_error or not entry.tool_name:
-        return False, "invalid_invocation", None
+        return False, "invalid_invocation", None, {}
     try:
         invocation, omitted = filter_invocation(entry.tool_name, entry.raw_arguments)
     except AdapterRejected as exc:
-        return False, exc.code, None
+        return False, exc.code, None, {}
     record = ToolResultRecord(
         call_id=entry.call_id,
         result_position=entry.result_position,
@@ -302,12 +346,42 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any) -> tupl
         status="ok",
         host_handle=entry.host_handle,
     )
-    result = state.engine.compact_sync(scope, record, options_omitted=bool(omitted))
+    result = state.engine.compact_sync(scope, record, options_omitted=bool(omitted), keep_lines=keep_lines)
+    diagnostics = {}
+    if result.keep_lines_ignored:
+        diagnostics["keep_lines_ignored"] = list(result.keep_lines_ignored)
+    if result.keep_lines_normalized:
+        diagnostics["keep_lines_normalized"] = list(result.keep_lines_normalized)
     if not result.ok or result.plan is None:
-        return False, result.error or "not_found", None
+        return False, result.error or "not_found", None, diagnostics
     state.presentations.record_compacted(
         scope.scope_key(), result.plan.item_id, len(record.content.encode("utf-8")))
-    return True, None, result.plan.item_id
+    return True, None, result.plan.item_id, diagnostics
+
+
+def _cleanup_error(state: PluginState, scope: Scope, entry: Any) -> str | None:
+    if len(state.store.lookup(scope.scope_key(), entry.call_id)) != 1:
+        return "ambiguous"
+    if entry.arguments_parse_error or not entry.tool_name:
+        return "invalid_invocation"
+    try:
+        invocation, omitted = filter_invocation(entry.tool_name, entry.raw_arguments)
+    except AdapterRejected as exc:
+        return exc.code
+    record = ToolResultRecord(call_id=entry.call_id, content=entry.content,
+                              content_sha256=entry.content_sha256, invocation=invocation,
+                              invocation_digest=compute_invocation_digest(invocation, omitted if omitted else None),
+                              result_position=entry.result_position, status="ok")
+    item = state.engine.store.get(scope, _item_id(scope.scope_key(), record.call_id, record.content_sha256,
+                                               record.invocation_digest, record.result_position))
+    if item is not None and item.visibility == "hidden":
+        return "already_hidden"
+    try:
+        if is_destructive_command(entry.tool_name, entry.raw_arguments):
+            return "destructive_command"
+    except Exception:
+        return "destructive_check_failed"
+    return refusal_reason(record, state.engine.config)
 
 
 def make_manage_handler(state: PluginState) -> Callable[..., str]:
@@ -320,36 +394,27 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
         params = args if isinstance(args, dict) else {}
+        want = params.get("tool_call_ids")
+        if want is None or want == []:
+            return _dump({"ok": False, "error": "tool_call_ids_required"})
+        if not isinstance(want, list) or not all(isinstance(x, str) and x.strip() for x in want):
+            return _dump({"ok": False, "error": "invalid_tool_call_ids"})
         action = params.get("action", "auto")
         if action not in ("auto", "hide", "summarize"):
             return _dump({"ok": False, "error": "invalid_action"})
-        max_items = params.get("max_items", 20)
-        if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1 or max_items > 64:
-            return _dump({"ok": False, "error": "invalid_max_items"})
+        keep_lines = params.get("keep_lines")
+        if keep_lines is not None and action != "hide":
+            return _dump({"ok": False, "error": "invalid_keep_lines_action"})
         if action == "summarize" and state.summarizer is None:
             return _dump({"ok": False, "error": "summarizer_unavailable"})
-        want = params.get("tool_call_ids")
-        entries = state.store.entries(scope.scope_key())
-        if want is not None:
-            if not isinstance(want, list) or not all(isinstance(x, str) for x in want):
-                return _dump({"ok": False, "error": "invalid_tool_call_ids"})
-            wanted = {x.strip() for x in want if x.strip()}
-            entries = [e for e in entries if e.call_id in wanted]
         results: list[dict[str, Any]] = []
-        for entry in entries[:max_items]:
-            # D8: manage_context IS auto-manage regardless of action value; destructive
-            # commands are excluded here and allowed only via manual hide_context.
-            # Gate errors fail closed (skip the item, report) — never auto-hide blind.
-            try:
-                from session_navigation.policy import is_destructive_command
-                destructive = is_destructive_command(entry.tool_name, entry.raw_arguments)
-            except Exception:
-                logger.warning("session-navigation D8 gate error; skipping auto-hide")
-                results.append({"tool_call_id": entry.call_id, "ok": False, "error": "destructive_check_failed"})
+        for call_id in dict.fromkeys(want):
+            matches = state.store.lookup(scope.scope_key(), call_id)
+            error = _cleanup_error(state, scope, matches[0]) if matches else "not_found"
+            if error is not None:
+                results.append({"tool_call_id": call_id, "ok": False, "error": error})
                 continue
-            if destructive:
-                results.append({"tool_call_id": entry.call_id, "ok": False, "error": "destructive_command"})
-                continue
+            entry = matches[0]
             use_summarizer = action == "summarize" or (action == "auto" and state.summarizer is not None)
             item_id: str | None = None
             if use_summarizer:
@@ -366,8 +431,8 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                 if action == "summarize":
                     results.append({"tool_call_id": entry.call_id, "ok": False, "error": outcome.error or "not_found"})
                     continue
-            ok, error, item_id = _apply_hide_for_manage(state, scope, entry)
-            row: dict[str, Any] = {"tool_call_id": entry.call_id, "ok": ok}
+            ok, error, item_id, diagnostics = _apply_hide_for_manage(state, scope, entry, keep_lines)
+            row: dict[str, Any] = {"tool_call_id": entry.call_id, "ok": ok, **diagnostics}
             if ok:
                 row["item_id"] = item_id
             else:
@@ -382,7 +447,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
             "items": results,
         })
 
-    return manage_context
+    return _track_mutation(state, manage_context)
 
 
 def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
@@ -405,6 +470,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             api_mode = kwargs.get("api_mode", "")
             if not isinstance(api_mode, str):
                 api_mode = ""
+            state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
             if state.count_middlewares() > 0:
                 # Another llm_request middleware is installed. The installed
                 # chain composes rewrites in registration order, so OUR
@@ -448,8 +514,40 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             logger.debug(
                 "session-navigation middleware: %s (found %s)",
                 reason, step["trace"].get("found", 0))
+            request_out = step["request"]
+            if isinstance(request_out, dict):
+                found = message_keys(api_mode, request_out)
+                store = state.engine.store
+                store.ensure_message_units(scope, [
+                    (key, role, hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text))
+                    for key, role, _index, text in found])
+                hidden = set(store.hidden_message_keys(scope))
+                if hidden:
+                    request_out = drop_messages(api_mode, request_out, hidden)
+                users = [(index, text) for _key, role, index, text in message_keys(api_mode, request) if role == "user"]
+                if users:
+                    entries = state.store.entries(scope.scope_key())
+                    candidates = []
+                    for entry in reversed(entries):
+                        if _cleanup_error(state, scope, entry) is not None:
+                            continue
+                        index = entry.host_handle.get("index", -1)
+                        candidates.append({"tool_call_id": entry.call_id, "tool_name": entry.tool_name,
+                                           "hint": entry.raw_arguments.get("command") or entry.raw_arguments.get("path") or "",
+                                           "bytes_size": len(entry.content.encode()),
+                                           "turn": sum(i <= index for i, _text in users)})
+                    turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
+                    note = state.reminders.note(scope.scope_key(), turn,
+                        estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
+                        kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates)
+                    if note:
+                        request_out = copy.deepcopy(request_out)
+                        if api_mode == "chat_completions":
+                            request_out["messages"].append({"role": "user", "content": note})
+                        elif isinstance(request_out.get("input"), list):
+                            request_out["input"].append({"role": "user", "content": [{"type": "input_text", "text": note}]})
             return {
-                "request": step["request"],
+                "request": request_out,
                 "source": SOURCE,
                 "reason": reason,
             }
@@ -461,5 +559,3 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 pass
             raise
     return on_llm_request
-
-

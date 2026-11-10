@@ -1,0 +1,7 @@
+{
+  "release": "r2026.11.71-signed",
+  "rollback": "r2026.10.71-stable",
+  "drain_seconds": 1500,
+  "safe_parallel": 52,
+  "receipt": "7674472ead2d06af715a7efb"
+}

@@ -6,21 +6,147 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 
+export type ReminderItem = { tool_call_id: string; tool_name?: string; hint?: string; bytes_size: number; turn?: number };
+const REMINDER_BYTES = 1000;
+const REMINDER_ITEMS = 3;
+export class BoundaryReminder {
+	private seen: { turn: string; tier: number } | undefined;
+	private tier(tokens: number, window?: number) {
+		return window && window > 0 ? [50, 75, 90].filter(t => 100 * tokens / window >= t).length : 0;
+	}
+	due(turn: string, tokens: number, window?: number): boolean {
+		return !!turn && (!this.seen || this.seen.turn !== turn || this.tier(tokens, window) > this.seen.tier);
+	}
+	note(turn: string, tokens: number, window: number | undefined, total: number, items: ReminderItem[]): string | null {
+		if (!total || !this.due(turn, tokens, window)) return null;
+		const usage = window && window > 0 ? `~${tokens}/${window} tokens (${Math.round(100 * tokens / window)}%)` : `~${tokens}/? tokens (?%)`;
+		const header = `[context-navigation] ${usage}; eligible=${total}. Finish the work unit and answer first; then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].`;
+		const rows: string[] = [];
+		for (const item of items) {
+			const row = JSON.stringify([item.tool_call_id, (item.tool_name ?? "").slice(0, 24), (item.hint ?? "").slice(0, 48), item.bytes_size, item.turn ?? 0]);
+			if (Buffer.byteLength([header, ...rows, row].join("\n"), "utf8") <= REMINDER_BYTES) rows.push(row);
+			if (rows.length === REMINDER_ITEMS) break;
+		}
+		this.seen = { turn, tier: this.tier(tokens, window) };
+		return [header, ...rows].join("\n");
+	}
+}
+
 type Reply = { id?: number; ok: boolean; error?: string; protocol?: number; patches?: Patch[]; [key: string]: unknown };
 type Patch = { call_id: string; sha256: string; text: string };
 type RecordItem = { call_id: string; tool_name: string; arguments: Record<string, unknown>; status: string; content: string };
 type Candidate = { session: string; token: string; confirmed: boolean; records: RecordItem[] };
-const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_RECORDS = 64;
+const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+const MAX_CHUNK_RECORDS = 64;
+const MAX_SUMMARY_CONCURRENCY = 4;
+const SUMMARY_TIMEOUT_MS = 25_000;
+export const CLEANUP_GUIDANCE = "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+
+function messageText(message: any): string {
+	if (typeof message?.content === "string") return message.content;
+	if (!Array.isArray(message?.content)) return "";
+	return message.content.filter((b: any) => b?.type === "text" && typeof b.text === "string").map((b: any) => b.text).join("");
+}
+/** Same id as the CLI's `_message_key`, so a prompt/response hidden from Paseo or Hermes is recognised here. */
+export function messageKey(message: any): string | null {
+	if ((message?.role !== "user" && message?.role !== "assistant") || !Number.isInteger(message.timestamp)) return null;
+	return `msg:${message.role}:${message.timestamp}:${hash(messageText(message)).slice(0, 12)}`;
+}
+/**
+ * Drop hidden prompts; a hidden response that made tool calls keeps only those calls so call/result pairs stay valid.
+ * Its thinking survives only on the latest assistant turn, where providers require it alongside the calls.
+ */
+export function dropHiddenMessages(messages: any[], hidden: ReadonlySet<string>): any[] | null {
+	if (hidden.size === 0) return null;
+	let changed = false;
+	const kept: any[] = [];
+	const lastAssistant = messages.reduce((last: number, m: any, i: number) => (m?.role === "assistant" ? i : last), -1);
+	for (const [index, message] of messages.entries()) {
+		const key = messageKey(message);
+		if (!key || !hidden.has(key)) { kept.push(message); continue; }
+		changed = true;
+		if (message.role === "assistant" && Array.isArray(message.content) && message.content.some((b: any) => b?.type === "toolCall")) {
+			const keep = (b: any) => b?.type === "toolCall" || (index === lastAssistant && (b?.type === "thinking" || b?.type === "redactedThinking"));
+			kept.push({ ...message, content: message.content.filter(keep) });
+		}
+	}
+	return changed ? kept : null;
+}
+
+function* prepareChunks(records: RecordItem[], session: string, token: string): Generator<RecordItem[]> {
+	const envelope = Buffer.byteLength(JSON.stringify({ id: Number.MAX_SAFE_INTEGER, method: "prepare",
+		params: { session_id: session, snapshot_id: token, records: [], append: true } }), "utf8") + 1;
+	let chunk: RecordItem[] = [], bytes = envelope;
+	for (const record of records) {
+		const size = Buffer.byteLength(JSON.stringify(record), "utf8") + 1;
+		if (envelope + size > MAX_CHUNK_BYTES) continue;
+		if (chunk.length === MAX_CHUNK_RECORDS || bytes + size > MAX_CHUNK_BYTES) {
+			yield chunk; chunk = []; bytes = envelope;
+		}
+		chunk.push(record); bytes += size;
+	}
+	yield chunk;
+}
+
+/** Each reply covers its chunk; the daemon retains all chunks under the same snapshot token. */
+export async function prepareSnapshot(records: RecordItem[], session: string, token: string,
+	send: (method: string, params: object, timeout: number) => Promise<Reply>): Promise<Reply> {
+	const patches: Patch[] = [], pending: unknown[] = [], hidden = new Set<string>(), evicted = new Set<string>();
+	let append = false, response: Reply = { ok: true };
+	for (const chunk of prepareChunks(records, session, token)) {
+		response = await send("prepare", { session_id: session, snapshot_id: token, records: chunk, ...(append ? { append: true } : {}) }, 2000);
+		if (!response.ok || !Array.isArray(response.patches)) return response;
+		for (const patch of response.patches) patches.push(patch);
+		if (Array.isArray(response.pending_summaries)) for (const job of response.pending_summaries) pending.push(job);
+		if (Array.isArray(response.hidden_messages)) for (const key of response.hidden_messages) if (typeof key === "string") hidden.add(key);
+		if (Array.isArray(response.evicted_snapshots)) for (const key of response.evicted_snapshots) if (typeof key === "string") evicted.add(key);
+		append = true;
+	}
+	return { ...response, patches, pending_summaries: pending, hidden_messages: [...hidden],
+		...(evicted.size ? { evicted_snapshots: [...evicted] } : {}) };
+}
+
+export async function prepareRequest(records: RecordItem[], session: string, token: string,
+	send: (method: string, params: object, timeout: number) => Promise<Reply>,
+	summarize: (content: string, timeout: number) => Promise<string | null>,
+	deadline = Date.now() + SUMMARY_TIMEOUT_MS): Promise<Reply> {
+	const response = await prepareSnapshot(records, session, token, send);
+	if (!response.ok || !Array.isArray(response.pending_summaries)) return response;
+	const jobs = new Map<string, { item_id: string; content: string }>();
+	for (const job of response.pending_summaries as any[]) {
+		if (typeof job?.item_id === "string" && typeof job.content === "string") jobs.set(job.item_id, job);
+	}
+	if (jobs.size === 0) return response;
+	const waiting = [...jobs.values()];
+	const summaries = new Map<string, string>();
+	await Promise.all(Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, waiting.length) }, async () => {
+		while (waiting.length && Date.now() < deadline) {
+			const job = waiting.shift()!;
+			try {
+				const text = await summarize(job.content, Math.max(1, deadline - Date.now()));
+				if (text) summaries.set(job.item_id, text);
+			} catch { /* retain the rule excerpt */ }
+		}
+	}));
+	for (const job of jobs.values()) {
+		const text = summaries.get(job.item_id);
+		const finished = await send(text ? "apply_summary" : "summary_failed",
+			{ session_id: session, item_id: job.item_id, ...(text ? { summary_text: text } : {}) }, 5000);
+		if (!finished.ok && finished.error !== "verification_failed" && finished.error !== "not_found") return finished;
+	}
+	return prepareSnapshot(records, session, token, send);
+}
 
 export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	const z = pi.zod;
+	pi.on("before_agent_start", async (event) => ({ systemPrompt: [...event.systemPrompt, CLEANUP_GUIDANCE] }));
 	let proc: ChildProcessWithoutNullStreams | null = null;
 	let ready = false;
 	let busy = false;
 	let nextId = 1;
 	let candidate: Candidate | null = null;
+	const reminders = new Map<string, BoundaryReminder>();
 	let cooldownUntil = 0;
 	let lastWarning = 0;
 	let pending: { child: ChildProcessWithoutNullStreams; id: number; resolve: (r: Reply) => void } | null = null;
@@ -72,7 +198,14 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			} catch { invalidate(child, "write_failed"); }
 		});
 	}
-	async function rpc(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
+	// OMP can fire a background request's context hook while the main one is still preparing; queue instead of dropping it.
+	let queue: Promise<unknown> = Promise.resolve();
+	function rpc(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
+		const run = queue.then(() => rpcOnce(method, params, timeout, signal));
+		queue = run.catch(() => undefined);
+		return run;
+	}
+	async function rpcOnce(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
 		if (busy) return { ok: false, error: "busy" };
 		if (!proc && Date.now() < cooldownUntil) return { ok: false, error: "cooldown" };
 		busy = true;
@@ -118,7 +251,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		for (const message of messages) if (message?.role === "toolResult" && typeof message.toolCallId === "string") {
 			resultCounts.set(message.toolCallId, (resultCounts.get(message.toolCallId) ?? 0) + 1);
 		}
-	const records: RecordItem[] = []; const positions = new Map<string, number>(); let bytes = 0;
+	const records: RecordItem[] = []; const positions = new Map<string, number>();
 	for (let i = 0; i < messages.length; i++) {
 		const message = messages[i]; const id = message?.toolCallId; const found = calls.get(id); const call = found?.block;
 		if (message?.role !== "toolResult" || typeof id !== "string" || duplicates.has(id) || resultCounts.get(id) !== 1 ||
@@ -138,8 +271,6 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			if (typeof call.arguments.cwd === "string" && call.arguments.cwd.trim()) args.cwd = call.arguments.cwd;
 		}
 		const content = message.content[0].text;
-		bytes += Buffer.byteLength(content, "utf8");
-		if (bytes > MAX_BYTES || records.length >= MAX_RECORDS) return null;
 		records.push({ call_id: id, tool_name: call.name, arguments: args, status: "ok", content });
 		positions.set(id, i);
 	}
@@ -151,7 +282,33 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		if (!session || !collected) return;
 		const next: Candidate = { session, token: randomUUID(), confirmed: false, records: collected.records };
 		candidate = next;
-		const response = await rpc("prepare", { session_id: session, snapshot_id: next.token, records: collected.records }, 2000);
+		const deadline = Date.now() + SUMMARY_TIMEOUT_MS;
+		const users = event.messages.filter(message => message?.role === "user");
+		const turn = users.length ? `${users.length}:${hash(messageText(users.at(-1)))}` : "";
+		let usage: { tokens: number; contextWindow?: number } | undefined;
+		try { usage = ctx.getContextUsage?.(); } catch { /* use request estimate */ }
+		const tokens = usage && Number.isFinite(usage.tokens) && usage.tokens >= 0 ? usage.tokens : Math.ceil(JSON.stringify(event.messages).length / 4);
+		const window = usage?.contextWindow ?? ctx.model?.contextWindow;
+		let reminder = reminders.get(session);
+		if (!reminder) { reminder = new BoundaryReminder(); reminders.set(session, reminder); }
+		if (reminders.size > 128) reminders.delete(reminders.keys().next().value!);
+		let note: string | null = null;
+		let reminderItems: ReminderItem[] = [], eligibleCount = 0;
+		const prepared = queue.then(async () => {
+			const response = await prepareRequest(collected.records, session, next.token, rpcOnce,
+				(content, timeout) => summarizeText(ctx, content, timeout), deadline);
+			if (response.ok && collected.records.length && reminder.due(turn, tokens, window)) {
+				const listed = await rpcOnce("list_candidates", { session_id: session, snapshot_id: next.token, limit: 3 }, 2000);
+				if (listed.ok && Array.isArray(listed.items)) {
+					reminderItems = (listed.items as ReminderItem[]).filter(item => typeof item?.tool_call_id === "string" && typeof item.bytes_size === "number").map(item => ({ ...item,
+						turn: event.messages.slice(0, (collected.positions.get(item.tool_call_id) ?? -1) + 1).filter(message => message.role === "user").length }));
+					eligibleCount = Number(listed.total ?? reminderItems.length);
+				}
+			}
+			return response;
+		});
+		queue = prepared.catch(() => undefined);
+		const response = await prepared;
 		// Structural daemon death (spawn/exit/protocol) means persistence is
 		// unverifiable: D9 treats it like a DB failure, never a silent
 		// pass-through. Transient timeout/cancel/busy/cooldown keep the
@@ -183,7 +340,8 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			}
 			return;
 		}
-		if (candidate !== next || !response.ok || !Array.isArray(response.patches)) { if (candidate === next) candidate = null; return; }
+		// A newer context hook may have replaced `candidate`; these patches still belong to this request's messages.
+		if (!response.ok || !Array.isArray(response.patches)) { if (candidate === next) candidate = null; return; }
 		let messages: any[] | null = null;
 		for (const patch of response.patches) {
 			if (!patch || typeof patch.call_id !== "string" || typeof patch.sha256 !== "string" || typeof patch.text !== "string") continue;
@@ -193,6 +351,11 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			messages ??= event.messages.slice();
 			messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
 		}
+		const hidden = new Set<string>(Array.isArray(response.hidden_messages) ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string") : []);
+		messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
+		const saved = messages ? Math.ceil((JSON.stringify(event.messages).length - JSON.stringify(messages).length) / 4) : 0;
+		note = reminder.note(turn, Math.max(0, tokens - saved), window, eligibleCount, reminderItems);
+		if (note) messages = [...(messages ?? event.messages), { role: "user", content: [{ type: "text", text: note }], timestamp: Date.now() }];
 		if (messages) return { messages };
 	});
 	pi.on("assistant_message", async (event: { message: { role?: string; stopReason?: string } }, ctx: ExtensionContext) => {
@@ -204,13 +367,13 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 	async function tool(method: string, params: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal) {
 		const session = sessionId(ctx);
 		if (!session) return { ok: false, error: "invalid_session" };
-		if ((method === "compact" || method === "summarize" || method === "manage") && (!candidate?.confirmed || candidate.session !== session)) return { ok: false, error: "unconfirmed_snapshot" };
+		if ((method === "compact" || method === "summarize" || method === "manage" || method === "list_candidates") && (!candidate?.confirmed || candidate.session !== session)) return { ok: false, error: "unconfirmed_snapshot" };
 		return rpc(method, { ...params, session_id: session, snapshot_id: candidate?.token }, method === "summarize" || method === "manage" ? 25_000 : 5000, signal);
 	}
 	function result(value: Reply) { return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value }; }
 	// D5: session-model-only summary. Returns target text or null when no session
 	// model is available. Never throws; callers map null to summarizer_unavailable.
-	async function summarizeText(ctx: unknown, content: string): Promise<string | null> {
+	async function summarizeText(ctx: unknown, content: string, timeout = SUMMARY_TIMEOUT_MS): Promise<string | null> {
 		try {
 			if (!ctx || typeof ctx !== "object") return null;
 			const c: Record<string, unknown> = ctx as Record<string, unknown>;
@@ -236,7 +399,11 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			const prompt = `Summarize this tool result in one paragraph. State only facts present in the result.\n\n${content.slice(0, 12000)}`;
 			const params = { messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] };
 			// 25s end-to-end: the RPC timeout after this covers transport, this covers the model call.
-			const msg: unknown = await withTimeout(25_000, (complete as (m: unknown, cc: unknown, o?: unknown) => Promise<unknown>)(model, params, { apiKey, disableReasoning: true }));
+			const controller = new AbortController();
+			let msg: unknown;
+			try {
+				msg = await withTimeout(timeout, (complete as (m: unknown, cc: unknown, o?: unknown) => Promise<unknown>)(model, params, { apiKey, disableReasoning: true, signal: controller.signal }));
+			} finally { controller.abort(); }
 			if (!msg || typeof msg !== "object" || !("content" in msg)) return null;
 			const blocks: unknown = (msg as { content: unknown }).content;
 			if (!Array.isArray(blocks)) return null;
@@ -260,9 +427,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 		const timer = setTimeout(() => reject(new Error("session-navigation: summarize timeout")), ms);
 		return Promise.race([p.finally(() => clearTimeout(timer)), promise]) as Promise<T>;
 	}
-	pi.registerTool({ name: "hide_context", label: "Hide Context", description: "Hide one confirmed, eligible read result using rule-based excerpts only (never calls a model).", parameters: z.object({ tool_call_id: z.string() }),
+	pi.registerTool({ name: "hide_context", label: "Hide Context", description: "Hide one result with rule excerpts; no LLM.", parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("compact", params, ctx, signal)); } });
-	pi.registerTool({ name: "summarize_context", label: "Summarize Context", description: "Hide one confirmed, eligible read or bash result with a session-model summary. Returns summarizer_unavailable when no session model exists.", parameters: z.object({ tool_call_id: z.string() }),
+	pi.registerTool({ name: "summarize_context", label: "Summarize Context", description: "Summarize one result using the session LLM; no rule fallback.", parameters: z.object({ tool_call_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) {
 			const session = sessionId(ctx);
 			if (session && candidate?.confirmed && candidate.session === session) {
@@ -275,27 +442,50 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
 			}
 			return result(await tool("summarize", params, ctx, signal));
 		} });
-	pi.registerTool({ name: "unhide_context", label: "Unhide Context", description: "Unhide a hidden result; the stored summary is kept for re-hiding.", parameters: z.object({ item_id: z.string() }),
+	pi.registerTool({ name: "unhide_context", label: "Unhide Context", description: "Restore an original by item_id without re-execution.", parameters: z.object({ item_id: z.string() }),
 		async execute(_id, params, signal, _update, ctx) { return result(await tool("restore", params, ctx, signal)); } });
-	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "List hidden results in this session.", parameters: z.object({ query: z.string().optional() }),
-		async execute(_id, params, signal, _update, ctx) { return result(await tool("list_items", params, ctx, signal)); } });
-	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Automatically hide confirmed, eligible read and bash results. action=auto prefers a session-model summary with rule fallback.", parameters: z.object({ tool_call_ids: z.array(z.string()).optional(), action: z.enum(["auto", "hide", "summarize"]).optional(), max_items: z.number().int().min(1).max(64).optional() }),
-		async execute(_id, params, signal, _update, ctx) {
-			const session = sessionId(ctx);
-			const action = (params as { action?: string }).action ?? "auto";
-			if (session && candidate?.confirmed && candidate.session === session && (action === "auto" || action === "summarize")) {
-				const want = (params as { tool_call_ids?: string[] }).tool_call_ids;
-				const wanted = Array.isArray(want) ? new Set(want) : null;
-				const summaries: Record<string, string> = {};
-				await Promise.all(candidate.records.filter((r) => !wanted || wanted.has(r.call_id)).map(async (r) => {
-					const text = await summarizeText(ctx, r.content);
-					if (text) summaries[r.call_id] = text;
+	pi.registerTool({ name: "list_context_items", label: "List Context Items", description: "Discover visible cleanup IDs with view=candidates; default items lists stored results. limit is display-only (default 30).", parameters: z.object({ query: z.string().optional(), view: z.enum(["items", "candidates"]).optional(), limit: z.number().int().min(1).max(200).optional() }),
+		async execute(_id, params, signal, _update, ctx) { return result(await tool(params.view === "candidates" ? "list_candidates" : "list_items", params, ctx, signal)); } });
+	async function manageChosen(params: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal): Promise<Reply> {
+		const ids = params.tool_call_ids;
+		if (ids === undefined || (Array.isArray(ids) && ids.length === 0)) return { ok: false, error: "tool_call_ids_required" };
+		if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string" && id.trim())) return { ok: false, error: "invalid_tool_call_ids" };
+		const snapshot = candidate;
+		const session = sessionId(ctx);
+		if (!session || !snapshot?.confirmed || snapshot.session !== session) return { ok: false, error: "unconfirmed_snapshot" };
+		const action = params.action ?? "auto";
+		if (!["auto", "hide", "summarize"].includes(String(action))) return { ok: false, error: "invalid_action" };
+		if (params.keep_lines !== undefined && action !== "hide") return { ok: false, error: "invalid_keep_lines_action" };
+		const wanted = [...new Set(ids as string[])];
+		const records = new Map(snapshot.records.map((record) => [record.call_id, record]));
+		const items: any[] = [];
+		for (let offset = 0; offset < wanted.length; offset += MAX_CHUNK_RECORDS) {
+			if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
+			if (signal?.aborted) return { ok: false, error: "cancelled", items };
+			const batch = wanted.slice(offset, offset + MAX_CHUNK_RECORDS);
+			const summaries: Record<string, string> = {};
+			if (action !== "hide") {
+				const eligible = await tool("list_candidates", { tool_call_ids: batch, limit: batch.length }, ctx, signal);
+				if (!eligible.ok) return eligible;
+				const queue = (eligible.items as { tool_call_id: string }[]).map((item) => records.get(item.tool_call_id)).filter((record): record is RecordItem => !!record);
+				await Promise.all(Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, queue.length) }, async () => {
+					while (queue.length && !signal?.aborted && candidate === snapshot) {
+						const record = queue.shift()!;
+						const text = await summarizeText(ctx, record.content);
+						if (text) summaries[record.call_id] = text;
+					}
 				}));
-				if (action === "summarize" && Object.keys(summaries).length === 0) return result({ ok: false, error: "summarizer_unavailable" });
-				return result(await tool("manage", { ...(params as Record<string, unknown>), summaries: Object.keys(summaries).length ? summaries : undefined }, ctx, signal));
 			}
-			return result(await tool("manage", params, ctx, signal));
-		} });
+			if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
+			const response = await tool("manage", { tool_call_ids: batch, action, summaries, ...(params.keep_lines !== undefined ? { keep_lines: params.keep_lines } : {}) }, ctx, signal);
+			if (!Array.isArray(response.items)) return response;
+			items.push(...response.items);
+		}
+		const applied = items.filter((item) => item.ok).length;
+		return { ok: applied === items.length, applied, failed: items.length - applied, items };
+	}
+	pi.registerTool({ name: "manage_context", label: "Manage Context", description: "Clean agent-chosen tool_call_ids. action: hide=rules, summarize=session LLM, auto=summary with rule fallback. keep_lines: single-line substrings (hide only, 1024 bytes per target). Whitespace/line-number near misses are normalized. Unmatched or invalid entries are ignored per target with English reasons in keep_lines_ignored; valid entries still apply.", parameters: z.object({ tool_call_ids: z.array(z.string()), action: z.enum(["auto", "hide", "summarize"]).optional(), keep_lines: z.array(z.string()).optional() }),
+		async execute(_id, params, signal, _update, ctx) { return result(await manageChosen(params, ctx, signal)); } });
 	if (typeof pi.registerCommand === "function") {
 	pi.registerCommand("session-navigation", {
   description: "Open the session navigation panel",
@@ -389,15 +579,9 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
         await finishMutation(await rpc("restore", { item_id: row.item_id, expected_version: row.version, session_id: session, snapshot_id: snapshotId() }, 5000));
       };
       const rehideSelected = async () => { await hideSelected(); };
-      const manageAll = async () => {
-        const summaries: Record<string, string> = {};
-        if (candidate?.confirmed && Array.isArray(candidate?.records)) {
-          await Promise.all(candidate.records.map(async (r: any) => {
-            const text = await summarizeText(ctx, r.content);
-            if (text) summaries[r.call_id] = text;
-          }));
-        }
-        const res = await rpc("manage", { action: "auto", max_items: 20, session_id: session, snapshot_id: snapshotId(), summaries: Object.keys(summaries).length ? summaries : undefined }, 25000);
+      const manageSelected = async () => {
+        const id = rows[selected]?.tool_call_id ?? rows[selected]?.call_id;
+        const res = await manageChosen({ action: "auto", tool_call_ids: id ? [id] : [] }, ctx);
         await finishMutation(res);
       };
       await reload();
@@ -411,7 +595,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
             const prefix = idx === selected ? "> " : "  ";
             lines.push(prefix + String(r?.status ?? "") + " " + String(r?.tool_call_id ?? r?.call_id ?? "") + " tokens:" + String(r?.tokens_display ?? "—") + " v" + String(r?.version ?? ""));
           });
-          lines.push("[h]ide [s]ummarize [u]nhide [r]e-hide [m]anage [Esc] close");
+          lines.push("[h]ide [s]ummarize [u]nhide [r]e-hide [m]anage selected [Esc] close");
           return lines;
         },
         handleInput: async (data: string) => {
@@ -428,7 +612,7 @@ export default function sessionNavigationExtension(pi: ExtensionAPI) {
           if (key === "s") { void summarizeSelected(); return; }
           if (key === "u") { void unhideSelected(); return; }
           if (key === "r") { void rehideSelected(); return; }
-          if (key === "m") { void manageAll(); return; }
+          if (key === "m") { void manageSelected(); return; }
           if (selectList && typeof selectList.handleInput === "function") {
             try { selectList.handleInput(data); } catch { /* ignore */ }
           }

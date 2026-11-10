@@ -1,0 +1,16 @@
+START v4n-omp-boreal-B-new-1
+START v4n-omp-atlas-B-new-1
+DONE v4n-omp-boreal-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v4n-hermes-atlas-B-new-1
+DONE v4n-omp-atlas-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v4n-hermes-boreal-B-new-1
+DONE v4n-hermes-boreal-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v4n-omp-atlas-B-new-2
+DONE v4n-hermes-atlas-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v4n-omp-boreal-B-new-2
+DONE v4n-omp-atlas-B-new-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v4n-hermes-atlas-B-new-2
+DONE v4n-omp-boreal-B-new-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v4n-hermes-boreal-B-new-2
+DONE v4n-hermes-boreal-B-new-2 {'returncode': 0, 'canonical_tests_pass': True}
+DONE v4n-hermes-atlas-B-new-2 {'returncode': 0, 'canonical_tests_pass': True}

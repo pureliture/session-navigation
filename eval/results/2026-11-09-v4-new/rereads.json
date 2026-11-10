@@ -1,0 +1,150 @@
+{
+  "groups": {
+    "omp/B-new": {
+      "sessions": 4,
+      "after_compaction": 1,
+      "repeat_visible": 3,
+      "new": 104,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash_after_compaction": 1,
+      "bash_repeat_visible": 0,
+      "bash_new": 36,
+      "read_after_compaction": 0,
+      "read_repeat_visible": 3,
+      "read_new": 68
+    }
+  },
+  "unavailable": [
+    {
+      "id": "v4n-hermes-atlas-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v4n-hermes-atlas-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v4n-hermes-boreal-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v4n-hermes-boreal-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    }
+  ],
+  "sessions": [
+    {
+      "work_calls": 26,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 25,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 21
+      },
+      "id": "v4n-omp-atlas-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 1,
+      "repeat_visible": 0,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 24
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 2
+      },
+      "id": "v4n-omp-atlas-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 27,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 23
+      },
+      "id": "v4n-omp-boreal-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v4n-omp-boreal-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    }
+  ],
+  "details": {
+    "v4n-omp-atlas-B-new-1": [],
+    "v4n-omp-atlas-B-new-2": [
+      {
+        "turn": 24,
+        "tool": "bash",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 20
+      }
+    ],
+    "v4n-omp-boreal-B-new-1": [],
+    "v4n-omp-boreal-B-new-2": []
+  }
+}

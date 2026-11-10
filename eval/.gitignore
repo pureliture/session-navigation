@@ -1,0 +1,3 @@
+results/smoke/
+results/setup-glm/*
+!results/setup-glm/probe.json

@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { Row } from "../shared/sessionNav";
 import {
+  groupEyeAction,
   buildGroupedRows,
   fmtBytes,
+  fmtTokenCount,
+  fmtTokens,
+  groupMutationItems,
   isSummarizedRow,
+  rowMetric,
   truncateString,
   type OutlineRow,
 } from "./outlineGrouping";
@@ -182,4 +187,61 @@ describe("outlineGrouping", () => {
       expect(group.hiddenCount).toBe(1);
     });
   });
+});
+
+describe("groupMutationItems", () => {
+  const rows = [
+    { item_id: "a", tool_call_id: "a", status: "visible", version: 2 },
+    { item_id: "b", tool_call_id: "b", status: "hidden", version: 5 },
+  ] as Row[];
+  test("hide/summarize target visible members, unhide targets hidden ones, with CAS versions", async () => {
+    const { groupMutationItems } = await import("./outlineGrouping");
+    expect(groupMutationItems({ children: rows }, "hide")).toEqual([{ item_id: "a", expected_version: 2 }]);
+    expect(groupMutationItems({ children: rows }, "summarize")).toEqual([{ item_id: "a", expected_version: 2 }]);
+    expect(groupMutationItems({ children: rows }, "unhide")).toEqual([{ item_id: "b", expected_version: 5 }]);
+  });
+});
+
+test("group eye restores hidden members of partial groups and preserves visible/hidden behavior", () => {
+  const visible: Row = { item_id: "visible", tool_call_id: "visible", kind: "tool",
+    status: "visible", version: 2, tokens_display: "—" };
+  const hidden: Row = { ...visible, item_id: "hidden", tool_call_id: "hidden", status: "hidden", version: 5 };
+  for (const children of [[visible], [visible, hidden], [hidden]]) {
+    const group = buildGroupedRows(children, {}, {})[0];
+    if (group.type !== "group") throw new Error("expected group");
+    const action = groupEyeAction(group);
+    expect(action).toBe(children.includes(hidden) ? "unhide" : "hide");
+    expect(groupMutationItems(group, action)).toEqual(children.includes(hidden)
+      ? [{ item_id: "hidden", expected_version: 5 }]
+      : [{ item_id: "visible", expected_version: 2 }]);
+  }
+});
+
+describe("token display", () => {
+  const tool = (id: string, tokens?: number): Row => ({
+    item_id: id, tool_call_id: id, kind: "tool", tool_name: "bash", status: "visible", version: 1,
+    tokens_display: tokens === undefined ? "—" : `${tokens} tok`, bytes_size: 100, tokens,
+  });
+  const group = (rows: Row[]) => buildGroupedRows(rows, {}, {}).find((r) => r.type === "group") as any;
+
+  test("formats counts like Paseo's K figure", () => {
+    expect(fmtTokens(44)).toBe("44 tok");
+    expect(fmtTokenCount(9069)).toBe("9.1K");
+  });
+
+  test("group shows summed tokens only when every member is measured", () => {
+    expect(group([tool("a", 30), tool("b", 12)]).totalTokens).toBe(42);
+    expect(group([tool("a", 30), tool("b")]).totalTokens).toBeNull();
+  });
+});
+
+test("user/assistant/tool rows share one metric: measured tokens, else bytes", () => {
+  const base = { item_id: "u", tool_call_id: "", kind: "user" as const, status: "visible" as const, version: 1, bytes_size: 190 };
+  expect(rowMetric({ ...base, tokens_display: "42 tok", tokens: 42 })).toBe("42 tok");
+  expect(rowMetric({ ...base, tokens_display: "—" })).toBe("190 B");
+});
+
+test("group actions skip display-only tool rows", () => {
+  const row = (id: string, manageable?: boolean): Row => ({ item_id: id, tool_call_id: id, kind: "tool", status: "visible", version: 1, tokens_display: "—", manageable });
+  expect(groupMutationItems({ children: [row("a"), row("b", false)] }, "hide")).toEqual([{ item_id: "a", expected_version: 1 }]);
 });

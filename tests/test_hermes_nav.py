@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 
 from _adapter_loader import hermes_adapter
@@ -130,6 +131,83 @@ def test_nav_manage_reports_counts(tmp_path, monkeypatch):
     sid = _seeded_session_id()
     # Unhide first so manage has a visible row to re-hide.
     ctx.commands["nav"](f"unhide 1 {sid}")
-    out = ctx.commands["nav"](f"manage auto {sid}")
+    out = ctx.commands["nav"]("manage auto call_1", session_id=sid)
     assert "applied" in out.lower(), out
     assert "[hidden]" in ctx.commands["nav"](sid)
+
+
+def test_nav_summarizes_numbered_read_file_envelope_and_rewrites_only_the_request_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+    adapter = hermes_adapter()
+    ctx = FakeCtx(config={"enabled": True})
+    state = adapter.plugin.register(ctx)
+    body = "\n".join(f"{i}|Synthetic row {i:03d} detail line" for i in range(1, 501))
+    raw = json.dumps({"content": body, "total_lines": 500, "file_size": len(body),
+                      "truncated": False, "is_binary": False, "is_image": False, "not_found": False})
+
+    class Summarizer:
+        async def summarize(self, original, required_evidence, **kwargs):
+            assert original == raw
+            assert required_evidence == ()
+            return {"summary": "Synthetic rows contain detail lines."}
+
+    state.summarizer = Summarizer()
+    request = {"messages": [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_env", "type": "function",
+         "function": {"name": "read_file", "arguments": '{"path":"rows.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "call_env", "content": raw},
+    ]}
+    middleware = ctx.middlewares["llm_request"][0]
+    middleware(request=request, session_id="env-nav", api_mode="chat_completions")
+    out = ctx.commands["nav"]("summarize call_env", session_id="env-nav")
+    assert "summarized" in out.lower(), out
+    rewritten = middleware(request=request, session_id="env-nav", api_mode="chat_completions")
+    assert "Synthetic rows contain detail lines." in rewritten["request"]["messages"][-1]["content"]
+    assert request["messages"][-1]["content"] == raw
+    assert "Unhidden" in ctx.commands["nav"]("unhide 1", session_id="env-nav")
+    assert middleware(request=request, session_id="env-nav", api_mode="chat_completions")["request"] == request
+
+
+def test_registered_nav_accepts_host_session_context_without_environment_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+    ctx = _register()
+    _seed(ctx)
+    monkeypatch.setenv("HERMES_SESSION_ID", "different-session")
+    listed = ctx.commands["nav"]("", session_id=_seeded_session_id(), session_key="route",
+                                 platform="cli", source=None)
+    assert "items (1)" in listed and f"session={_seeded_session_id()}" in listed
+    assert "items (0)" in ctx.commands["nav"]("", session_id="other-session")
+
+
+def test_nav_works_when_host_context_has_no_tools_dictionary(tmp_path, monkeypatch):
+    class HostCtx(FakeCtx):
+        def __init__(self):
+            super().__init__(config={"enabled": True})
+            self.registrations = self.tools
+            del self.tools
+
+        def register_tool(self, name, toolset, schema, handler, description="", **extra):
+            self.registrations[name] = {"handler": handler}
+
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
+    adapter = hermes_adapter()
+    ctx = HostCtx()
+    adapter.plugin.register(ctx)
+    sid = "host-session"
+    content = "\n".join(f"Output row {i:03} details" for i in range(80))
+    ctx.middlewares["llm_request"][0](session_id=sid, api_mode="chat_completions", request={"messages": [
+        {"role": "user", "content": "old prompt"},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call_1", "type": "function", "function": {
+                "name": "read_file", "arguments": '{"path":"file.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": content},
+    ]})
+    nav = lambda args: ctx.commands["nav"](args, session_id=sid)
+    assert "items (0)" in nav("")
+    assert "Hidden call_1" in nav("hide call_1")
+    assert "[hidden]" in nav("")
+    assert "Unhidden" in nav("unhide 1")
+    assert "[visible]" in nav("")
+    assert "Hidden " in nav("hide-msg 1")
+    assert "Unhidden " in nav("unhide-msg 1")
+    assert "not_found" in nav("hide missing")

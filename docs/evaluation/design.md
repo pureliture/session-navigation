@@ -1,0 +1,174 @@
+# v4: 정리 후 마지막 답변 완결성 재평가 (2026-11-10)
+
+- B-new=`37348b8`: 먼저 답한 뒤 선택적으로 정리한다는 안내와 자율 선택은 유지한다.
+  정리 후 마지막 메시지는 요청한 모든 사실/값을 포함해 완전한 답을 다시 쓰며
+  `reported above`/`see above` 참조로 대체하지 않도록 짧게 추가했다.
+- v3와 같은 DeepSeek/Relace, reasoning disabled/excluded, no fallback, 65,536 window,
+  fixture/host runner/proxy를 사용한다. OMP와 Hermes 각각 A/B-old/B-new 4세션씩이다.
+- 동일 설정인 완료 v3 A/B-old 13세션만 재사용한다. Hermes boreal rep-2 A/B-old는 새로
+  실행하고 B-new 8세션과 component 16세션, component judge를 새로 실행한다.
+  완료한 v3 Hermes A atlas rep-2도 exhausted 429 두 건과 usage 누락 두 건이 있으므로
+  원본은 보존하고 새 label로 다시 실행한다. 추가 실행 전 갱신한 예상 $2.2697도 $5 이하다.
+  첫 새 실행의 native checkpoint도 한 건이 429 backoff를 소진해 non-qualifying으로 남기고,
+  예상 $2.3353을 다시 확인한 뒤 두 번째 새 label로 재개했다. API 오류는 과제 실패가 아니다.
+  `reuse.json`은 stage와 실제 upstream 설정 일치, source/fixture/proxy hash 및 셀 목록을 기록한다.
+- 실행 전 예상 $2.2042, 첫 완료 3세션 관측 후 $1.3956으로 $5 gate 이하를 확인했다.
+  component를 25턴 전체 세션과 같은 가격으로 잡고 1.5배 안전계수와 judge $0.50를 포함한
+  보수적 신규 지출 예상이다. 재사용 세션은 새 비용이 아니며 별도로 명시한다.
+- strict final-only와 현재 사용자 턴 assistant 텍스트의 visible-unit 지표를 모두 보존한다.
+  마지막 메시지 back-reference 검출 수를 별도로 기록하고, strict 실패 사실/값은 직접 확인한다.
+  Hide 이후 재접근(같은 턴/이후 턴), unhide, rule/LLM replacement fact retention도 동일 방식이다.
+- API/transport 오류는 제품 실패로 세지 않는다. backoff가 회복하지 못한 셀은 원본을 보존하고
+  새 label로 재시도한다. 과거 v3 원본/결과는 덮어쓰지 않는다.
+
+# v3 모델 대체 및 중단 처리 (2026-11-09)
+
+- 제품: A/B-old=`5017b97`/B-new=`fc07058` (A는 plugin off). 동일 v2 fixture/25턴/2회 반복.
+- Crouton 폐기, Inkling agentic-app gate 이후 사용자 지정 Nemotron을 확인했다:
+  `nvidia/nemotron-3.5-lightning:free`, provider `Nvidia`, tool 지원/1M window/tiny tool probe 통과.
+  무료 일일 quota 0으로 지속 429가 발생해 해당 자율/component/judge 전부 non-qualifying으로 보존했다.
+- 사용자 승인 fallback: Stage 1·2 모두 `deepseek/deepseek-v4.1-flash-1017` / `Relace`,
+  reasoning disabled/excluded, no provider fallback. Stage 1 A/B-old/B-new를 새로 실행해
+  v2 Crouton과 혼합하지 않는다. 동일 설정 OMP A/B-new 자료는 gate 통과 후 비용 비교에 재사용한다.
+- 3-arm pilot 이후 전체 지출 예상 $1.7511(안전계수·component·judge 포함)로 $5 gate 통과;
+  2-arm cost pilot도 8세션 예상 $0.2834로 기존 $3 gate를 통과했다.
+- 마지막 메시지 strict 채점은 유지한다. 답변 후 cleanup 확인문 때문에 생기는 false negative를
+  분리하려고 별도 `answer-surface.json`에 **현재 사용자 턴 이후 assistant 텍스트**만 재채점한다.
+  도구 결과·reasoning·이전 턴은 제외하며, 같은 보조 지표를 v2에도 계산한다.
+- 지속 provider 429로 미완료된 셀은 0점이나 성공으로 대체하지 않고 별도 기록한다.
+  [v3 결과](results-v3.md), `completeness.json` 참조.
+
+# Session Navigation 평가 v2
+
+v1은 [보관 설계](design-v1.md)·[GLM 결과](results.md)·기존 raw data를 그대로 유지한다.
+B-old=`b1a524e`(제품 `cc00609`), B-new=`5017b97`, A=플러그인 없음이다.
+후속 문서 커밋은 제품 차이에 넣지 않고 각 제품을 격리 source snapshot에서 로드한다.
+
+## 단계·모델·사전 gate
+
+1. 사용성/품질은 **`stealth/crouton-alpha`만**, provider **Stealth** 고정.
+   A/B-old/B-new × 2 장기 사례 × 2회 × OMP/Hermes = **24세션**.
+   반복별 arm 순서를 교대한다. 2회는 사전 결정이며 실패를 숨기지 않는다.
+   별도 commanded Hide/Summarize는 2호스트 × 2제품 × 2회 × 2동작 = **16세션**.
+   명령형 표본은 자율 채택률 분모에서 제외한다. 심판도 Crouton만 사용한다.
+2. B-new 자율 세션 절반 이상에서 서로 다른 경계의 성공한 정리가 2회 이상이고,
+   선택 ID 유효율 ≥90%이면 비용 단계로 진행한다. 아니면 중단·보고한다.
+   **`deepseek/deepseek-v4.1-flash-1017`만**, provider **Relace** 고정.
+   A/B-new × 2사례 × 2회, OMP **8세션**을 계획한다. 먼저 같은 사례 A/B-new
+   각 1세션 pilot의 출력 토큰·reported cost와 전체 예상 비용을 보고한다.
+   보수적 예상(`pilot 두 세션 비용 ×4×1.5 + 부적격 사전 지출`, pilot 포함)이 **$3 이하일 때만** 나머지를
+   실행하고, 초과/비용 누락이면 중단하고 묻는다.
+
+단계별 proxy는 해당 모델 **하나만** 허용하고 upstream에
+`provider.order=[고정 provider], allow_fallbacks:false`를 강제한다. 실제 provider도 저장한다.
+단계 사이에 proxy를 종료한다. 429/5xx는 Retry-After·지수 backoff 및 횟수·지연을 기록한다.
+Crouton이 불가능하면 다른 모델로 대체하지 않는다.
+
+사전 Stealth pin probe: 64-token 한도는 출력 없이 length 종료,
+2,048-token 한도는 `OK`, prompt 2/completion 1/cost 0/cached 0을 보고했다.
+둘 다 설치 점검이며 본 통계에서 제외한다. 작은 한도도 출력 전 reasoning으로 소진될 수 있다.
+
+DeepSeek 단계는 동일한 tiny prompt로 OpenRouter 파라미터를 사전 검증한다. 2026-11-09 probe에서
+기본 설정은 completion 12 / reasoning 9 tokens였고 `reasoning:{enabled:false,exclude:true}`는
+completion 2 / reasoning 0 tokens였다(Relace 고정). 따라서 proxy가 이 설정을 A/B-new 모두에 강제한다.
+빈 답변이면서 `finish_reason=length`인 응답은 `empty_answer_length`로 별도 집계한다.
+
+## 작업과 압력
+
+`eval/v2_fixtures.py`의 Atlas/Boreal은 각 **25 사용자 하위 작업**이다.
+20개 고유한 문서는 시간·지역·트래픽·CPU·큐·지연·worker pool의 실제 형태 JSONL이며
+hash로 정해진 서로 다른 관측치를 가진다. 같은 filler를 반복하지 않는다.
+전체 문서 검토, 보호 오류 분석, 작은 코드의 진단/수정/원본 테스트, 두 회상 과제로 구성한다.
+정답·라벨은 agent 작업공간 밖에 두고 사용자 턴은 세 arm에서 동일하다.
+
+effective window는 **65,536**으로 줄인다(실제 API 최대 window와 구별).
+OMP native compaction은 95% threshold, reserve 4,096/recent 8,192로 설정하고 이벤트를
+기록한다. Hermes도 window를 pin하고 native compressor의 원래 threshold와 호출 전후를
+기록한다. native 유지보수와 plugin summary 호출 비용도 모두 proxy를 통과해야 한다.
+50/75/90% 도달 여부를 실제 보고 토큰·호스트 추정치로 나눠 확인한다.
+압력 미도달을 near-limit 성공으로 부르지 않는다. B의 정리가 압력을 낮추면 동일 workload A와
+비교한다. 자율 arm에 외부 정리 지시는 추가하지 않는다.
+
+audit-01/08/15의 **예고된 보존 의무**와 audit-02의 **예고하지 않은 복구 질문**을 분리한다.
+surprise 질문 때문에 disposable 라벨을 사후 변경하지 않는다. 보호 오류/status 및
+크기·형식·정책상 부적격 결과는 precision/recall 분모에서 제외한다.
+관측한 실제 tool-call ID 단위로 매칭하며 표시 제한을 대상 제한으로 쓰지 않는다.
+
+## 지표와 안전
+
+- 호출 수·경계 시점·ID 유효율·거절, 적격 disposable precision/recall. 필요한 자료를
+  summarize로 보존한 선택은 별도다. Hide의 사실·keep_lines 보존과 LLM summary의 사실·환각·
+  압축률·실제 전송·재읽기/복원은 명령형/자율 표본을 분리한다.
+- 과제·canonical tests·예고 회상·surprise 복구, 턴/모델 요청, peak/총 토큰,
+  native compaction 횟수·시점·비용. 실패/미완료도 분모에 남긴다.
+- 1차 비용은 reported `usage.cost`, 캐시는 reported cached tokens다. 누락은 0 아닌 N/A.
+  누락 시 consecutive `{messages,tools}` JSON LCP 기반 추정만 별도 표시한다.
+  Relace의 작은 할인(input/cache/output **$0.006/$0.005/$0.50 per million**) 외에
+  GPT-4.1 참조(**$2/$0.50/$8**)를 적용하고 prefix 변경 시 cached/uncached 변화를 분리한다.
+  provider pin은 TTL·batching까지 통제한다는 뜻은 아니다.
+- 심판은 arm을 가리고 원문·실제 replacement·체크리스트만 평가한다. 같은 모델 편향을
+  명시하며 결정적 사실 검사보다 우선하지 않는다.
+- key는 환경에서만 읽고 proxy 밖 자식에 넘기지 않는다. 실제 HOME/config/runtime은 수정하지
+  않으며 byte-exact hash와 최종 key audit를 수행한다. wire와 큰 로그는 gzip으로 보관한다.
+  제품 SHA·host 버전·fixture hash·provider·retry·gate를 [v2 결과](results-v2.md)에 남긴다.
+
+## Headless OMP 사전조건·부적격 실행
+
+SDK 생성만으로 extension host callback이 초기화되지 않는다. SDK의 공개
+`extensionRunner.initialize()`에 실제 세션 model/usage/action을 연결하고, 각 세션 시작 시
+확장 context의 model/window 일치와 `completeSimple`의 실제 import(native addon 포함)를
+검증한다. 격리 HOME에서 Bun의 자동 다운로드가 native addon 없는 다른 복사본을 선택하지
+않도록 `NODE_PATH`는 설치된 SDK의 기존 `node_modules`를 읽기 전용으로 지정한다.
+제품·설치본은 고치지 않는다. 빈 세션 회귀 테스트는 네트워크 없이 이 사전조건을 검사한다.
+
+초기 v2 실행은 callback 누락 및 native import 실패가 확인되어 **전체 batch를 최종 통계에서
+제외**한다(Hermes도 paired batch에서 함께 제외). 삭제하지 않고 `non-qualifying.json`과
+원문을 보존한다. 최초 DeepSeek 2세션 $0.065459492도 적격 pilot으로 쓰지 않으며 실제 지출
+상한에는 더한다. 최종 사용성 gate·pilot·본 실행은 수정된 harness로 다시 측정한다.
+native compaction start/end는 시도 이벤트이며 skipped/aborted 여부를 구별한다.
+
+## Matched distractor-pressure quality experiment (Hermes)
+
+The quality-benefit campaign is separate from v1–v4. Four deterministic seeds
+(71, 103, 149, 211) each run A and B-new (`37348b8`), in a reproducibly randomized
+paired order. The first pair is the included pilot. A has native compaction only;
+B additionally has the current navigation plugin. Both retain ordinary tools,
+notes, source files and native recovery. No cleanup timing, action or target is
+prescribed to B.
+
+Each case contains fourteen complete incident/build/test reports, with signed-live
+generation-42 configuration and plausible superseded generation-41 archive exports.
+The archive's newer export timestamp does not make its old configuration effective.
+The first fourteen work units inspect the complete reports symmetrically and ask
+for effective component/failure counts. Later units separately test announced
+owner/release/rollback/drain retention, unannounced receipt/canary recall and
+capacity derivations, then a canonical executable handover JSON artifact. Source
+re-reads remain legitimate, including for surprise questions.
+
+The declared window is 65,536 tokens, with the same DeepSeek V4.1 Flash 1017,
+Relace-only/no-fallback, reasoning-disabled guarded proxy and isolated child
+environment as v4. A 32,768-token setup was rejected by Hermes' minimum 64,000-token
+auxiliary-compression check, not by model task failure. It is preserved and its
+cost included. Native before/after histories must differ and shrink, and their
+new summary content must appear in a later outgoing request; a start/end event
+alone does not qualify as pressure evidence. Every A session must meet this check.
+
+Primary quality is matched late announced/surprise/canonical success on final-only
+and current visible-unit surfaces. Secondary all-work-unit success remains visible.
+Requested JSON fields are compared exactly; obsolete values and other incorrect
+values are separately counted as stale claims and unsupported values. Conflicting
+JSON answers fail even if a correct object also appears. Extra fields and arbitrary
+prose are not semantically adjudicated. The artifact gate independently compares
+the generated `decision.json` with the canonical derivations outside the workspace.
+
+The pilot must complete with cost evidence and actual native compaction in A.
+Project remaining sessions at 1.5 times the pilot mean, include excluded setup
+spending, and stop before continuation if the projection exceeds $1.50. Preserve
+pilot scorecard/budget separately. Transport-failed sessions are not product
+failures; only those may be resumed with new labels. A completed bad product
+answer is never rerun. For any scored failure, inspect the exact final request,
+compaction snapshots and still-available originals before attributing context loss.
+Four pairs can demonstrate a case, not estimate a general treatment effect.
+
+Results and the provider-blocked fourth pair are recorded in
+[`results-quality-benefit.md`](results-quality-benefit.md).

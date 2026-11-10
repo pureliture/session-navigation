@@ -1,0 +1,18 @@
+{
+  "part": "replay",
+  "seed": 523,
+  "length": "long",
+  "rep": 3,
+  "arm": "RAW",
+  "id": "focus-replay-523-long-3-RAW-main",
+  "host": "omp",
+  "repo": "/Users/devin/.session-navigation-eval-v2/sources/37348b89faf82ced7510fe09e2a97a893fbcc8a3",
+  "product_commit": "37348b89faf82ced7510fe09e2a97a893fbcc8a3",
+  "home": "/Users/devin/.session-navigation-eval-v2/focus-replay-523-long-3-RAW-main/home",
+  "workspace": "/Users/devin/.session-navigation-eval-v2/focus-replay-523-long-3-RAW-main/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-10-focus/sessions/focus-replay-523-long-3-RAW-main",
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "window": 131072,
+  "native_compaction": false,
+  "proxy": "http://127.0.0.1:64911"
+}

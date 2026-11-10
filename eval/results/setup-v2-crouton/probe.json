@@ -1,0 +1,51 @@
+{
+  "id": "gen-1794236661-RUOHDGZklwgYGNMyRabh",
+  "model": "stealth/crouton-alpha",
+  "provider": "Stealth",
+  "usage": {
+    "prompt_tokens": 2,
+    "completion_tokens": 0,
+    "total_tokens": 2,
+    "cost": 0,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0,
+      "upstream_inference_prompt_cost": 0,
+      "upstream_inference_completions_cost": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  },
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "length",
+      "native_finish_reason": "max_output_tokens",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "reasoning_details": [
+          {
+            "type": "reasoning.encrypted",
+            "data": "orsr1_yx7U4PaeyruVu2XUOloOy0lZFbj3zFHFdEctis5_0S3mw8D1QpDrU9Pe3Hc8garkcJ1v3mVUgN6c3KhQTR3ARzVjeoMbpY-gixXFgqdVzMbBFWh9AnEHESY9bB65DzZhRpeoGZOLnyvTxmQaax5q09crgwOefX2kOLOcY_s_UgISsX0VrBIKWYrLAIRvMgA4kgFbPdCBoNqIKA4OU_1yez1S2y6cK_ehDqLIVoLQjEMaIyzs8x73UE2oKVet4kuA6K8CAdi_dRkpC8_CCDS28Jm7YW2EEruZNsmNsGB6sQMlhVtv_-HTPrCnnt-dBW9_cmVWPBbsou3uglfn81rccK1nNJ541R5OpapZ7quICNDkkxaMYX5nTEvDZFWFJV1YixPxRLKqr5SJ-jmsMkydI14CwwKzcCDJS0HUExDI9lTLBfcZrUsxPtxOepebszw-8JGYGnqWVQPCuO6xB14bZ2RRLgV8i1P6byW-ojhKMpSTi4P5eI6XTIiYYVOaej-49mZzGYXr2EMI9Y9mtbYa8VbkJOc3aYJgE8Ij2ZnOftKlhVP4wqsfDqevQYfFnMWkg5gfKlimqWT6-ns9qAhCtGww8aU2zk4XuvdUu5V3MdBBL_YJ0LRLDR1k9xRRNxYJv7holaxKtsAqQX1BVoGpY1VbVAkjAzLXWRirCQysH6Taq1YPsXP4ArJ3VencfL3RZsVvagcbzIy4N2kn6MOuIowa-ELcbM8rAx4BIedYnxw8E78UGbLTgS6ep93KyLasjQ5phL_NQh4pa5OyxaQWiUD97HmNvcz6DQ5QaG3RyePXJMqKEOM-ukiIHRcCFDREKv4ci7DaI-Uf1JoYvx96FLtMW7dnksvV4BlbGYrNVX26zW4T0SgDGUKHk_nJx0ZmuNLlXpABdlwTUqbQFccLV0vnR449TLmsBiGpv9ku7mTmIDLtVssgkoFzKlahQH0XjEyxHRoxlUic9C8Vc0uQr28na2XilA9YQPVisURy3kr6jrBMlmbYTY2Z_v3393VgT3ydeseA3B-U5j6VP-gFjvLtz-pX8F7TnuO-r5KEIRtytccz-sRzorFmwSdEfv5ID3lwL94SxptvmGlmPheCYta2aimxG3vJDML4JD8NYli1enE3TPw0zE8m9AnxIwmZJN4J6gWKYFcWqV-Fp3Bjh5c4JIukvcZ2T-HpJtgQZ1UjQD5Z59JbiK5ZNAWVKP1xXajAJntxpQo2eESDrV94_vjVg0PATfOf9FPCD3SxLBBRglnVGUCiDznESk1ewqPaUCWsbZDBgvx_t8v0GVgGbyjuQ1juZI6PMMv17YhFQrRLF0lcHweiDDdJppC30yw1G5lPtvO4ESvu1g8b9GwiR_mK_gaDbrJpCeLHZ-ZLJIEl16ZIXna8kAdf8vio4CdkzhvZLGqm-Gtfugr8EKvUeA0uJZMMKwk-7-xi65sVY-YFN9Vu-RpbKlJXI53oFEzQADAkvusTfX1Xxs4Vt6Ba0nYdDwibne2RYipK8XfZITB9g2Z18v8FJEQf1IJXMZYIGym370mqoGqDJ_fRZjXyXQrw8w87R4U_oOA8W5N4hyAnsLtMkcLNkt4do_vRadKf4Edg_tqRWWrcKlxMk60Xyt9V6OgZB_f7oiz9oeHg0ftxLYGBKQjuMwfrDn9rusT85wwXCQuGgWQRNSGY9xs3J-Echmj7B6ozG-rd4y2qaM_9DWTAcsm2si9RET1Ooc1pmvXL7jdF6doIPyTivUsnNxU6ZjtYGRG2Nkcalmj6c_DdjwFenjes_pd1MFNCmc_lRvrkakLIpKCFU1QdufIG-z24T0CzhQJTa5e_zROqeLXAKxQVZKgPuf91DR3aIHP3btLRkYRnc5TLOHIjpgIIFOAa-jQNTSwvxtRVRDJMs7Dpi8HXwyydvs1eU5slmE112_PmN-P75Q2ba9jScLIkNev44d9ZQF0_hAk.eyJlbmRwb2ludF9zbHVnIjoic3RlYWx0aC9jcm91dG9uLWFscGhhfHN0ZWFsdGgifQ",
+            "format": "openrouter-stealth-v1",
+            "id": "4f056675-feae-4e7e-bede-a4c69723711f",
+            "index": 0
+          }
+        ]
+      }
+    }
+  ]
+}

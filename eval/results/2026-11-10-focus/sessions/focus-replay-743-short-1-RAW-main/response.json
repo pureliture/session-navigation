@@ -1,0 +1,45 @@
+{
+  "id": "gen-1794300334-LLqPMATuDI6wlsFHE9K1",
+  "object": "chat.completion",
+  "created": 1794300334,
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "provider": "Relace",
+  "system_fingerprint": null,
+  "service_tier": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"owner\": \"Cobalt\", \"release\": \"r743-signed\", \"capacity\": 1843, \"load\": 401, \"worker_cost\": 19, \"worker_limit\": 52, \"drain_minutes\": 21, \"canary\": \"0ac09a44f683e1f88407\", \"spare_capacity\": 1442, \"safe_parallel\": 52, \"drain_seconds\": 1260, \"audit_marker\": \"30fcdb88a0ecc5355e728342\"}",
+        "refusal": null
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 46927,
+    "completion_tokens": 121,
+    "total_tokens": 47048,
+    "cost": 0.00029547,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 46592,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.00029547,
+      "upstream_inference_prompt_cost": 0.00023497,
+      "upstream_inference_completions_cost": 6.05e-05
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

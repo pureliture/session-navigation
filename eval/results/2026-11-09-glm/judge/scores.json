@@ -1,0 +1,142 @@
+{
+  "06d4a28a0a80d02c69e09b87ba5ae12b150e377292a54caca678bae55f57e2c0": {
+    "judgement": {
+      "score": 3,
+      "reason": "Accurate partial retention: the shown excerpt rows (0299=098, 0300=115, 0301=132, 0418=127, 0419=144) match the original verbatim with no hallucination, and a valid unhide_context(item_27520a77ce37dbd7) pointer archives the remainder. However, ~96% of the rows (0302\u20130417) are not directly present and require an extra retrieval step, so only the head and tail are retained inline.",
+      "lost_facts": [
+        "fixture rows 0302\u20130417 component inventory detail values (116 rows; archived under item_27520a77ce37dbd7, recoverable via unhide_context; values follow +17 increment: 0302=149 ... 0417=110)"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 2127,
+      "completion_tokens": 1973,
+      "total_tokens": 4100,
+      "cost": 0.000748798,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000748798,
+        "upstream_inference_prompt_cost": 0.000259494,
+        "upstream_inference_completions_cost": 0.000489304
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 1779,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "z-ai/glm-5.3-flash"
+  },
+  "9489687a9af28c63ca62f4832277ee5d4224dfe7a9a203ad1b2d7ff944593cf5": {
+    "judgement": {
+      "score": 3,
+      "reason": "Replacement hides the bulk fixture data behind an unhide mechanism and preserves the truncation notice, row range markers, and first/last rows, so the pattern is recoverable. However, the three embedded key facts (owner=Maple, completion_code=done-2, seal=canal-2) are hidden from the visible replacement and only retrievable via unhide, so key facts are not directly retained.",
+      "lost_facts": [
+        "owner=Maple",
+        "completion_code=done-2",
+        "seal=canal-2",
+        "intermediate fixture row values (rows 0003-0298) hidden from immediate view"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 4768,
+      "completion_tokens": 352,
+      "total_tokens": 5120,
+      "cost": 0.00039114,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 18,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00039114,
+        "upstream_inference_prompt_cost": 0.00028554,
+        "upstream_inference_completions_cost": 0.0001056
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 207,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "z-ai/glm-5.3-flash"
+  },
+  "267fdd895640c753757616dc2df84b77c12b1546df3195f2a945402c0c770990": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement keeps only 5 of ~121 fixture rows (0299-0301, 0418-0419) and offloads rows 0302-0417 to an opaque hidden store, so the bulk of the component inventory values are not directly available in the context. The unhide token provides potential recovery, but as presented the replacement loses most of the data.",
+      "lost_facts": [
+        "fixture rows 0302-0417 with their component inventory detail values (value=149 through value=110) are not present in the visible replacement text, only referenced as hidden/stored content"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 2131,
+      "completion_tokens": 301,
+      "total_tokens": 2432,
+      "cost": 0.0001306083,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.0001306083,
+        "upstream_inference_prompt_cost": 7.52243e-05,
+        "upstream_inference_completions_cost": 5.5384e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 161,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "z-ai/glm-5.3-flash"
+  },
+  "a1bd630f5519c942db205b5b7b67646e407a4c3fd76327f260c645970f6d23fd": {
+    "judgement": {
+      "score": 1,
+      "reason": "The replacement hides nearly the entire tool result and drops all key facts \u2014 owner=Orchid, completion_code=done-1, and seal=harbor-91 are missing from the visible content. The completion_code is critical status evidence, and the seal/owner fields are lost entirely; only a few sample fixture rows remain.",
+      "lost_facts": [
+        "owner=Orchid",
+        "completion_code=done-1",
+        "seal=harbor-91",
+        "fixture rows 0003-0012, 0013-0031, 0032-0050, 0051-0298 (their specific component inventory values)",
+        "knowledge that rows 0030 and 0049 were truncated/interleaved with metadata lines"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 4751,
+      "completion_tokens": 244,
+      "total_tokens": 4995,
+      "cost": 0.00083465,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00083465,
+        "upstream_inference_prompt_cost": 0.00071265,
+        "upstream_inference_completions_cost": 0.000122
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 71,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "z-ai/glm-5.3-flash",
+    "attempts": 2
+  }
+}

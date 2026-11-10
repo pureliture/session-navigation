@@ -1,0 +1,99 @@
+{
+  "id": "omp-06-long-B-1",
+  "turns": [
+    "Subtask 1: inspect phase-1.txt in full and report its owner and completion code.",
+    "Subtask 2: inspect phase-2.txt in full and report its owner and completion code.",
+    "Subtask 3: inspect phase-3.txt in full and report its owner and completion code.",
+    "Subtask 4: inspect phase-4.txt in full and report its owner and completion code.",
+    "Subtask 5: inspect phase-5.txt in full and report its owner and completion code.",
+    "Recall the owner and exact seal of phase 1. Also report how many phases were inspected."
+  ],
+  "answers": [
+    [
+      "Orchid",
+      "done-1"
+    ],
+    [
+      "Maple",
+      "done-2"
+    ],
+    [
+      "Birch",
+      "done-3"
+    ],
+    [
+      "Cedar",
+      "done-4"
+    ],
+    [
+      "Aspen",
+      "done-5"
+    ],
+    [
+      "Orchid",
+      "harbor-91",
+      "5"
+    ]
+  ],
+  "results": [
+    {
+      "match": "phase-1.txt",
+      "label": "needed-later",
+      "protected": false,
+      "facts": [
+        "owner=Orchid",
+        "completion_code=done-1",
+        "seal=harbor-91"
+      ]
+    },
+    {
+      "match": "phase-2.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "owner=Maple",
+        "completion_code=done-2",
+        "seal=canal-2"
+      ]
+    },
+    {
+      "match": "phase-3.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "owner=Birch",
+        "completion_code=done-3",
+        "seal=canal-3"
+      ]
+    },
+    {
+      "match": "phase-4.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "owner=Cedar",
+        "completion_code=done-4",
+        "seal=canal-4"
+      ]
+    },
+    {
+      "match": "phase-5.txt",
+      "label": "disposable",
+      "protected": false,
+      "facts": [
+        "owner=Aspen",
+        "completion_code=done-5",
+        "seal=canal-5"
+      ]
+    }
+  ],
+  "host": "omp",
+  "arm": "B",
+  "repetition": 1,
+  "repo": "/Users/devin/repos/session-navigation",
+  "home": "/Users/devin/.session-navigation-eval/omp-06-long-B-1/home",
+  "workspace": "/Users/devin/.session-navigation-eval/omp-06-long-B-1/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-09-glm/omp-06-long-B-1",
+  "proxy": "http://127.0.0.1:51600",
+  "hermes_source": "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+}

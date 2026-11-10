@@ -1,0 +1,745 @@
+{
+  "sessions": [
+    {
+      "id": "quality-hermes-103-A-pilot",
+      "seed": 103,
+      "arm": "A",
+      "eligible": false,
+      "complete": false,
+      "api_errors": 0,
+      "turns": 2,
+      "checks": [
+        {
+          "turn": 1,
+          "kind": "work",
+          "expected": {
+            "component": "release-control",
+            "failed_jobs": 6
+          },
+          "sources": [
+            "report-01.jsonl"
+          ],
+          "visible_boundary": true,
+          "final": {
+            "success": true,
+            "facts_correct": true,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [
+              {
+                "component": "release-control",
+                "failed_jobs": 6
+              }
+            ],
+            "missing": []
+          },
+          "visible": {
+            "success": true,
+            "facts_correct": true,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [
+              {
+                "component": "release-control",
+                "failed_jobs": 6
+              }
+            ],
+            "missing": []
+          }
+        },
+        {
+          "turn": 2,
+          "kind": "work",
+          "expected": {
+            "component": "rollback-safety",
+            "failed_jobs": 2
+          },
+          "sources": [
+            "report-02.jsonl"
+          ],
+          "visible_boundary": true,
+          "final": {
+            "success": true,
+            "facts_correct": true,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [
+              {
+                "component": "rollback-safety",
+                "failed_jobs": 2
+              }
+            ],
+            "missing": []
+          },
+          "visible": {
+            "success": true,
+            "facts_correct": true,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [
+              {
+                "component": "rollback-safety",
+                "failed_jobs": 2
+              }
+            ],
+            "missing": []
+          }
+        },
+        {
+          "turn": 3,
+          "kind": "work",
+          "expected": {
+            "component": "capacity-planning",
+            "failed_jobs": 3
+          },
+          "sources": [
+            "report-03.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 4,
+          "kind": "work",
+          "expected": {
+            "component": "traffic-replay",
+            "failed_jobs": 4
+          },
+          "sources": [
+            "report-04.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 5,
+          "kind": "work",
+          "expected": {
+            "component": "canary-validation",
+            "failed_jobs": 5
+          },
+          "sources": [
+            "report-05.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 6,
+          "kind": "work",
+          "expected": {
+            "component": "compiler",
+            "failed_jobs": 6
+          },
+          "sources": [
+            "report-06.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 7,
+          "kind": "work",
+          "expected": {
+            "component": "integration",
+            "failed_jobs": 2
+          },
+          "sources": [
+            "report-07.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 8,
+          "kind": "work",
+          "expected": {
+            "component": "migration",
+            "failed_jobs": 3
+          },
+          "sources": [
+            "report-08.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 9,
+          "kind": "work",
+          "expected": {
+            "component": "cache",
+            "failed_jobs": 4
+          },
+          "sources": [
+            "report-09.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 10,
+          "kind": "work",
+          "expected": {
+            "component": "routing",
+            "failed_jobs": 5
+          },
+          "sources": [
+            "report-10.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 11,
+          "kind": "work",
+          "expected": {
+            "component": "rate-limit",
+            "failed_jobs": 6
+          },
+          "sources": [
+            "report-11.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 12,
+          "kind": "work",
+          "expected": {
+            "component": "database",
+            "failed_jobs": 2
+          },
+          "sources": [
+            "report-12.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 13,
+          "kind": "work",
+          "expected": {
+            "component": "deploy",
+            "failed_jobs": 3
+          },
+          "sources": [
+            "report-13.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 14,
+          "kind": "work",
+          "expected": {
+            "component": "recovery",
+            "failed_jobs": 4
+          },
+          "sources": [
+            "report-14.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "component",
+              "failed_jobs"
+            ]
+          }
+        },
+        {
+          "turn": 15,
+          "kind": "announced",
+          "expected": {
+            "owner": "Saffron",
+            "release": "r2026.11.103-signed",
+            "rollback": "r2026.10.103-stable",
+            "drain_minutes": 21
+          },
+          "sources": [
+            "report-01.jsonl",
+            "report-02.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "owner",
+              "release",
+              "rollback",
+              "drain_minutes"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "owner",
+              "release",
+              "rollback",
+              "drain_minutes"
+            ]
+          }
+        },
+        {
+          "turn": 16,
+          "kind": "surprise",
+          "expected": {
+            "receipt": "ac7580e28acc7a08def9f14c",
+            "canary": "8170977739a48257e2055c90",
+            "spare_capacity": 676,
+            "safe_parallel": 42
+          },
+          "sources": [
+            "report-01.jsonl",
+            "report-03.jsonl",
+            "report-04.jsonl",
+            "report-05.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "receipt",
+              "canary",
+              "spare_capacity",
+              "safe_parallel"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "receipt",
+              "canary",
+              "spare_capacity",
+              "safe_parallel"
+            ]
+          }
+        },
+        {
+          "turn": 17,
+          "kind": "canonical",
+          "expected": {
+            "release": "r2026.11.103-signed",
+            "rollback": "r2026.10.103-stable",
+            "drain_seconds": 1260,
+            "safe_parallel": 42,
+            "receipt": "ac7580e28acc7a08def9f14c"
+          },
+          "sources": [
+            "report-01.jsonl",
+            "report-02.jsonl",
+            "report-03.jsonl",
+            "report-04.jsonl"
+          ],
+          "visible_boundary": false,
+          "final": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "release",
+              "rollback",
+              "drain_seconds",
+              "safe_parallel",
+              "receipt"
+            ]
+          },
+          "visible": {
+            "success": false,
+            "facts_correct": false,
+            "stale_claims": [],
+            "unsupported_values": [],
+            "parsed_objects": [],
+            "missing": [
+              "release",
+              "rollback",
+              "drain_seconds",
+              "safe_parallel",
+              "receipt"
+            ]
+          }
+        }
+      ],
+      "canonical_pass": false,
+      "native_starts": 0,
+      "native_changed": 0,
+      "native_failed": 0,
+      "native_sent": 0,
+      "native_evidence": [],
+      "nav_calls": 0,
+      "nav_operations": [],
+      "requests": 7,
+      "prompt_tokens": 100547,
+      "output_tokens": 1377,
+      "cost": 0.001216518,
+      "tool_share_median": 0.7017682926829268,
+      "tool_share_p90": 0.800329843059417,
+      "measurements": [
+        {
+          "id": "66047ca465cb43c290ee3def3a3fa8a8",
+          "offline_tokens": 4445,
+          "tool_tokens": 0,
+          "tool_token_share": 0.0,
+          "tool_bytes": 0,
+          "prompt_bytes": 20282,
+          "tool_byte_share": 0.0,
+          "prompt_tokens": 4904,
+          "output_tokens": 99,
+          "cost": 7.8924e-05,
+          "reasoning_tokens": 0
+        },
+        {
+          "id": "14aa57fddcd44f5d91fc9c8a29fd57f8",
+          "offline_tokens": 4949,
+          "tool_tokens": 392,
+          "tool_token_share": 0.07920792079207921,
+          "tool_bytes": 1087,
+          "prompt_bytes": 21801,
+          "tool_byte_share": 0.04986009816063483,
+          "prompt_tokens": 5329,
+          "output_tokens": 42,
+          "cost": 4.8366e-05,
+          "reasoning_tokens": 0
+        },
+        {
+          "id": "1b5f8f74eedb44c796afafe54d5c0ad0",
+          "offline_tokens": 15523,
+          "tool_tokens": 10908,
+          "tool_token_share": 0.702699220511499,
+          "tool_bytes": 33999,
+          "prompt_bytes": 54921,
+          "tool_byte_share": 0.6190528213251761,
+          "prompt_tokens": 13663,
+          "output_tokens": 256,
+          "cost": 0.000205114,
+          "reasoning_tokens": 0
+        },
+        {
+          "id": "ea5937fa8e3649988ebffb20dc39624b",
+          "offline_tokens": 16400,
+          "tool_tokens": 11509,
+          "tool_token_share": 0.7017682926829268,
+          "tool_bytes": 35748,
+          "prompt_bytes": 57522,
+          "tool_byte_share": 0.6214665693126108,
+          "prompt_tokens": 14397,
+          "output_tokens": 398,
+          "cost": 0.000271814,
+          "reasoning_tokens": 0
+        },
+        {
+          "id": "38215e7e8a0d49adbce2ef97b8c6ce9a",
+          "offline_tokens": 16886,
+          "tool_tokens": 11509,
+          "tool_token_share": 0.6815705318014924,
+          "tool_bytes": 35748,
+          "prompt_bytes": 59350,
+          "tool_byte_share": 0.6023251895534962,
+          "prompt_tokens": 14874,
+          "output_tokens": 42,
+          "cost": 9.5908e-05,
+          "reasoning_tokens": 0
+        },
+        {
+          "id": "778eab542dc549d1b6147ff62689ebe3",
+          "offline_tokens": 27475,
+          "tool_tokens": 22040,
+          "tool_token_share": 0.8021838034576888,
+          "tool_bytes": 68436,
+          "prompt_bytes": 92246,
+          "tool_byte_share": 0.7418858270277302,
+          "prompt_tokens": 23365,
+          "output_tokens": 219,
+          "cost": 0.000235098,
+          "reasoning_tokens": 0
+        },
+        {
+          "id": "bac2695ac33c495793ce07dad2f0eff2",
+          "offline_tokens": 28252,
+          "tool_tokens": 22576,
+          "tool_token_share": 0.7990938694605692,
+          "tool_bytes": 69977,
+          "prompt_bytes": 94526,
+          "tool_byte_share": 0.7402936758140617,
+          "prompt_tokens": 24015,
+          "output_tokens": 321,
+          "cost": 0.000281294,
+          "reasoning_tokens": 0
+        }
+      ],
+      "final_success": false,
+      "final_late_success": false,
+      "final_stale": 0,
+      "final_unsupported": 0,
+      "visible_success": false,
+      "visible_late_success": false,
+      "visible_stale": 0,
+      "visible_unsupported": 0
+    }
+  ],
+  "total_cost": 0.001216518
+}

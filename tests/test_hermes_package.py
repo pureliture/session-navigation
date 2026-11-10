@@ -112,6 +112,62 @@ def test_engine_stays_host_neutral() -> None:
     assert not offenders, f"engine must stay host-neutral, found {offenders}"
 
 
+@pytest.mark.parametrize("stale", ["session_navigation", "session_navigation_hermes"])
+def test_root_rejects_preloaded_unverified_packages(stale, tmp_path):
+    code = f"""
+import importlib.util, sys, types
+sys.path.insert(0, {str(REPO / 'vendor')!r})
+import session_navigation
+if {stale!r} == 'session_navigation_hermes':
+    import session_navigation_hermes
+cached = sys.modules[{stale!r}]
+cached.__bundle_fingerprint__ = 'old-installed-version'
+spec = importlib.util.spec_from_file_location('probe', {str(PACKAGE_INIT)!r})
+module = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(module)
+except ImportError as exc:
+    assert 'Fully restart Hermes' in str(exc), exc
+    assert {stale!r} in str(exc), exc
+else:
+    raise AssertionError('stale package was accepted')
+assert sys.modules[{stale!r}] is cached
+print('stale package rejected without replacing cached modules')
+"""
+    proc = subprocess.run([sys.executable, "-B", "-c", code], cwd=tmp_path,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_root_detects_in_place_bundle_update_on_reload(tmp_path):
+    import shutil
+
+    shutil.copy(PACKAGE_INIT, tmp_path / "__init__.py")
+    shutil.copytree(REPO / "vendor", tmp_path / "vendor", ignore=shutil.ignore_patterns("__pycache__"))
+    code = """
+import importlib.util
+from pathlib import Path
+def load():
+    spec = importlib.util.spec_from_file_location('probe', '__init__.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+assert callable(load().register)
+path = Path('vendor/session_navigation/policy.py')
+path.write_text(path.read_text() + '\\n')
+try:
+    load()
+except ImportError as exc:
+    assert 'Fully restart Hermes' in str(exc), exc
+else:
+    raise AssertionError('cached bundle survived an update')
+print('in-place update rejected until a full restart')
+"""
+    proc = subprocess.run([sys.executable, "-B", "-c", code], cwd=tmp_path,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_wheel_builds_with_plugin_entry_point(tmp_path: Path) -> None:
     """The built wheel must contain the plugin root so a pip install is usable."""
     hatchet = pytest.importorskip("hatchling")

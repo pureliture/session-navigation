@@ -1,0 +1,40 @@
+START v3n-omp-atlas-A-1
+START v3n-omp-atlas-B-old-1
+DONE v3n-omp-atlas-A-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-atlas-B-new-1
+DONE v3n-omp-atlas-B-old-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-boreal-A-1
+DONE v3n-omp-atlas-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-boreal-B-old-1
+DONE v3n-omp-boreal-A-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-boreal-B-new-1
+DONE v3n-omp-boreal-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-atlas-A-1
+DONE v3n-omp-boreal-B-old-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-atlas-B-old-1
+DONE v3n-hermes-atlas-A-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-atlas-B-new-1
+DONE v3n-hermes-atlas-B-old-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-boreal-A-1
+DONE v3n-hermes-atlas-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-boreal-B-old-1
+DONE v3n-hermes-boreal-A-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-boreal-B-new-1
+DONE v3n-hermes-boreal-B-old-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-atlas-B-new-2
+DONE v3n-omp-atlas-B-new-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-atlas-B-old-2
+DONE v3n-omp-atlas-B-old-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-atlas-A-2
+DONE v3n-hermes-boreal-B-new-1 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-boreal-B-new-2
+DONE v3n-omp-atlas-A-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-boreal-B-old-2
+DONE v3n-omp-boreal-B-new-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-omp-boreal-A-2
+DONE v3n-omp-boreal-A-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-atlas-B-new-2
+DONE v3n-omp-boreal-B-old-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-atlas-B-old-2
+DONE v3n-hermes-atlas-B-old-2 {'returncode': 0, 'canonical_tests_pass': True}
+START v3n-hermes-atlas-A-2

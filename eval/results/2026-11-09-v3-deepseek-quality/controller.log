@@ -1,0 +1,33 @@
+INFO Waiting to acquire exclusive lock for `/Users/devin/repos/session-navigation` at `/var/folders/jj/fwmm45ns4dz80954vdr61l2w0000gn/T/uv-d875d270e515d2fa.lock`
+START v3dsq-omp-command-hide-B-old-1
+START v3dsq-omp-command-hide-B-new-1
+DONE v3dsq-omp-command-hide-B-new-1 {'returncode': 0}
+START v3dsq-omp-command-summarize-B-old-1
+DONE v3dsq-omp-command-hide-B-old-1 {'returncode': 0}
+START v3dsq-omp-command-summarize-B-new-1
+DONE v3dsq-omp-command-summarize-B-new-1 {'returncode': 0}
+START v3dsq-hermes-command-hide-B-old-1
+DONE v3dsq-omp-command-summarize-B-old-1 {'returncode': 0}
+START v3dsq-hermes-command-hide-B-new-1
+DONE v3dsq-hermes-command-hide-B-old-1 {'returncode': 0}
+START v3dsq-hermes-command-summarize-B-old-1
+DONE v3dsq-hermes-command-hide-B-new-1 {'returncode': 0}
+START v3dsq-hermes-command-summarize-B-new-1
+DONE v3dsq-hermes-command-summarize-B-old-1 {'returncode': 0}
+START v3dsq-omp-command-hide-B-new-2
+DONE v3dsq-hermes-command-summarize-B-new-1 {'returncode': 0}
+START v3dsq-omp-command-hide-B-old-2
+DONE v3dsq-omp-command-hide-B-new-2 {'returncode': 0}
+START v3dsq-omp-command-summarize-B-new-2
+DONE v3dsq-omp-command-hide-B-old-2 {'returncode': 0}
+START v3dsq-omp-command-summarize-B-old-2
+DONE v3dsq-omp-command-summarize-B-old-2 {'returncode': 0}
+START v3dsq-hermes-command-hide-B-new-2
+DONE v3dsq-omp-command-summarize-B-new-2 {'returncode': 0}
+START v3dsq-hermes-command-hide-B-old-2
+DONE v3dsq-hermes-command-hide-B-old-2 {'returncode': 0}
+START v3dsq-hermes-command-summarize-B-new-2
+DONE v3dsq-hermes-command-hide-B-new-2 {'returncode': 0}
+START v3dsq-hermes-command-summarize-B-old-2
+DONE v3dsq-hermes-command-summarize-B-new-2 {'returncode': 0}
+DONE v3dsq-hermes-command-summarize-B-old-2 {'returncode': 0}

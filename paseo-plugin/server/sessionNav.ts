@@ -5,6 +5,9 @@ import * as path from "node:path";
 import type { RpcInput } from "@getpaseo/plugin";
 import { z } from "zod";
 import {
+  BatchMutationResultSchema,
+  hideBatchRpc,
+  unhideBatchRpc,
   dbChoiceRpc,
   forkScopeRpc,
   hideItemRpc,
@@ -40,6 +43,7 @@ function invokeCli(args: string[]): CliResult {
         encoding: "utf8",
         env,
         timeout: 30000,
+        maxBuffer: 256 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"],
       });
       const parsed = JSON.parse(String(stdout || "{}"));
@@ -81,10 +85,17 @@ function asRow(item: unknown): z.infer<typeof RowSchema> {
         : undefined,
     version: num(obj.version) ?? 1,
     tokens_display: str(obj.tokens_display) ?? "—",
+    tokens: num(obj.tokens),
+    manageable: typeof obj.manageable === "boolean" ? obj.manageable : undefined,
     cost_usd: num(obj.cost_usd) ?? null,
     source: str(obj.source) ?? str(obj.compaction_source),
     bytes_size: num(obj.bytes_size),
     summary_line: str(obj.summary_line),
+    tool_input: str(obj.tool_input),
+    tool_output: str(obj.tool_output),
+    message_text: str(obj.message_text),
+    replacement_text: str(obj.replacement_text),
+    summary_pending: typeof obj.summary_pending === "boolean" ? obj.summary_pending : undefined,
   };
 }
 
@@ -123,14 +134,30 @@ function dbNoteSuccess(scopeKey: string): void {
 }
 
 
-function findAgentMappings(): {
+function ompHandleExists(handle: string, home: string): boolean {
+  if (fs.existsSync(handle)) return true;
+  if (!handle || handle.includes("/") || handle.includes("\\")) return false;
+  const suffix = `_${handle}.jsonl`;
+  const search = (directory: string): boolean => {
+    try {
+      return fs.readdirSync(directory, { withFileTypes: true }).some((entry) =>
+        entry.isDirectory() ? search(path.join(directory, entry.name)) :
+          entry.isFile() && entry.name.endsWith(suffix));
+    } catch {
+      return false;
+    }
+  };
+  return search(path.join(home, ".omp", "agent", "sessions"));
+}
+
+export function findAgentMappings(home = os.homedir()): {
   sessionToAgent: Map<string, string>;
   ompScopes: Array<{ scope_key: string; agent_id: string }>;
 } {
   const sessionToAgent = new Map<string, string>(); // sessionId -> agentId
   const ompScopes: Array<{ scope_key: string; agent_id: string }> = [];
   try {
-    const agentsDir = path.join(os.homedir(), ".paseo", "agents");
+    const agentsDir = path.join(home, ".paseo", "agents");
     if (!fs.existsSync(agentsDir)) return { sessionToAgent, ompScopes };
     const dirs = fs.readdirSync(agentsDir);
     for (const d of dirs) {
@@ -169,7 +196,7 @@ function findAgentMappings(): {
               sessionToAgent.set(sessionId, agentId);
               if (
                 (provider === "omp" || provider === "pi") &&
-                (!nativeHandle || fs.existsSync(nativeHandle))
+                (!nativeHandle || ompHandleExists(nativeHandle, home))
               ) {
                 ompScopes.push({
                   scope_key: `pi:default:${sessionId}:default`,
@@ -246,7 +273,11 @@ export async function listItems(input: RpcInput<typeof listItemsRpc>) {
     } else {
       dbNoteSuccess(input.scope_key);
     }
-    return { ok: true, items };
+    const ctx = typeof res.context === "object" && res.context !== null ? (res.context as Record<string, unknown>) : null;
+    const used = num(ctx?.used_tokens);
+    const context =
+      used !== undefined ? { used_tokens: used, max_tokens: num(ctx?.max_tokens) ?? null, source: str(ctx?.source) } : undefined;
+    return { ok: true, items, ...(context ? { context } : {}) };
   } catch {
     return { ok: false, items: [], error: "db_error", choices: ["abort_request", "send_original"] };
   }
@@ -329,6 +360,36 @@ export async function unhideItem(input: RpcInput<typeof unhideItemRpc>) {
 export async function summarizeItem(_input: RpcInput<typeof summarizeItemRpc>) {
   // D5: Paseo has no session model. Never report a rule hide as a summary.
   return { ok: false, error: "summarizer_unavailable" };
+}
+
+async function mutateBatch(
+  command: "hide" | "unhide",
+  input: RpcInput<typeof hideBatchRpc>,
+) {
+  const empty = { applied: 0, failed: 0, items: [] };
+  const gate = dbGate(input.scope_key);
+  if (gate) return { ...empty, ...gate };
+  try {
+    const res = invokeCli([
+      command, "--scope", input.scope_key,
+      "--items-json", JSON.stringify(input.items),
+      ...(command === "hide" ? ["--mode", input.mode ?? "hide"] : []),
+    ]);
+    if (!Array.isArray(res.items)) return { ...empty, ...dbErrorResponse(res) };
+    const result = BatchMutationResultSchema.parse(res);
+    if (result.ok) dbNoteSuccess(input.scope_key);
+    return result.error ? { ...result, ...dbErrorResponse(res) } : result;
+  } catch {
+    return { ...empty, ...dbErrorResponse(undefined) };
+  }
+}
+
+export async function hideBatch(input: RpcInput<typeof hideBatchRpc>) {
+  return mutateBatch("hide", input);
+}
+
+export async function unhideBatch(input: RpcInput<typeof unhideBatchRpc>) {
+  return mutateBatch("unhide", input);
 }
 
 export async function manageItems(input: RpcInput<typeof manageItemsRpc>) {

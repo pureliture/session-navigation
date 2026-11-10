@@ -1,0 +1,45 @@
+{
+  "id": "gen-1794300423-z21mbmOTxoUx0kPK5dHD",
+  "object": "chat.completion",
+  "created": 1794300423,
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "provider": "Relace",
+  "system_fingerprint": null,
+  "service_tier": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"owner\": \"Juniper\", \"release\": \"r419-signed\", \"capacity\": 1519, \"load\": 448, \"worker_cost\": 14, \"worker_limit\": 51, \"drain_minutes\": 22, \"canary\": \"51dd81ff980fb70584fa\", \"spare_capacity\": 1071, \"safe_parallel\": 51, \"drain_seconds\": 1320, \"audit_marker\": null}",
+        "refusal": null
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1589,
+    "completion_tokens": 105,
+    "total_tokens": 1694,
+    "cost": 6.0754e-05,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 1280,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 6.0754e-05,
+      "upstream_inference_prompt_cost": 8.254e-06,
+      "upstream_inference_completions_cost": 5.25e-05
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "requests_verified": 210,
+  "replay_histories_verified": 60,
+  "live_requests": 150,
+  "native_starts": 0,
+  "configurations_byte_exact": true,
+  "all_primary_facts_survive_rule_hide": true,
+  "hidden_only_loss_separated": true
+}

@@ -1,0 +1,40 @@
+{
+  "upstream_attempts": 434,
+  "unique_requests": 388,
+  "responses": 385,
+  "reported_providers": {
+    "Relace": 385
+  },
+  "reported_reasoning_tokens": {
+    "0": 385
+  },
+  "settings_match": true,
+  "source_hashes_match": true,
+  "B_raw_wire_function_counts": {
+    "read_file": 81,
+    "search_files": 27,
+    "terminal": 9,
+    "write_file": 4
+  },
+  "B_calls_with_context_arguments": [],
+  "exhausted_requests": [
+    {
+      "id": "b57ec4a7834b46769b6b11647db705da",
+      "path": "/quality-hermes-149-B-new-rest64/v1/chat/completions",
+      "status": 429,
+      "attempt": 6
+    },
+    {
+      "id": "29f9f37fe62445368d10bdb564c6b2fe",
+      "path": "/quality-hermes-149-A-rest64/v1/chat/completions",
+      "status": 429,
+      "attempt": 6
+    },
+    {
+      "id": "aad082b693c64a2eb7f3bef24dd2e7a5",
+      "path": "/quality-hermes-149-B-new-retry64b/v1/chat/completions",
+      "status": 429,
+      "attempt": 6
+    }
+  ]
+}

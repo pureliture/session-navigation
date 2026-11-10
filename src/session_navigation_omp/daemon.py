@@ -1,19 +1,20 @@
 """OMP daemon."""
 from __future__ import annotations
+import re
 import json, sys
 from collections import OrderedDict
 from typing import Any
 from session_navigation.db import DBError, DBFullError
 from session_navigation.engine import SessionNavigationEngine, _run_sync
 from session_navigation.model import Scope, ToolResultRecord, _item_id, compute_invocation_digest, compute_sha256, pair_unit_id
-from session_navigation.policy import is_destructive_command, required_evidence_lines
+from session_navigation.policy import is_destructive_command, required_evidence_lines, refusal_reason
 from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.summary import validate_summary_text
 
 PROTOCOL = 3
 MAX_SCOPES = 32
-MAX_RECORDS = 64
-MAX_BYTES = 4 * 1024 * 1024
+MAX_CHUNK_RECORDS = 64
+MAX_CHUNK_BYTES = 4 * 1024 * 1024
 _MISSING = object()
 
 
@@ -68,12 +69,20 @@ class Daemon:
             return {"ok": False, "error": "invalid_session"}
         scope = self._scope(session)
 
+        if method in ("apply_summary", "summary_failed"):
+            return self._finish_summary(method, scope, params)
         if method == "prepare":
-            self.snapshots.pop(session, None)
             token = params.get("snapshot_id")
+            append = params.get("append", False)
+            snapshot = self.snapshots.get(session)
+            if append is True and (snapshot is None or snapshot[0] != token):
+                return {"ok": False, "error": "unconfirmed_snapshot"}
+            self.snapshots.pop(session, None)
             records = params.get("records")
-            if not isinstance(token, str) or not isinstance(records, list) or len(records) > MAX_RECORDS:
+            if (not isinstance(append, bool) or not isinstance(token, str)
+                    or not isinstance(records, list) or len(records) > MAX_CHUNK_RECORDS):
                 return {"ok": False, "error": "invalid_snapshot"}
+            previous = snapshot[1] if append else {}
             selected = {}
             total = 0
             for raw in records:
@@ -85,7 +94,7 @@ class Daemon:
                 tool_name = raw.get("tool_name")
                 status = raw.get("status", "ok")
                 result_position = raw.get("result_position", 0)
-                if (not isinstance(call_id, str) or not call_id or call_id in selected
+                if (not isinstance(call_id, str) or not call_id or call_id in selected or call_id in previous
                         or not isinstance(content, str)
                         or not isinstance(args, dict)
                         or tool_name not in ("read", "bash")
@@ -103,7 +112,7 @@ class Daemon:
                             or not str(args.get("command")).strip()):
                         return {"ok": False, "error": "invalid_record"}
                 total += len(content.encode("utf-8"))
-                if total > MAX_BYTES:
+                if total > MAX_CHUNK_BYTES:
                     return {"ok": False, "error": "snapshot_too_large"}
                 invocation = {"tool_name": tool_name, "arguments": args}
                 selected[call_id] = ToolResultRecord(
@@ -115,7 +124,6 @@ class Daemon:
                     status="ok",
                     result_position=result_position,
                 )
-            self.snapshots[session] = (token, selected)
             # Pair-atomic units: one pair_ row per confirmed record (call+result).
             try:
                 for record in selected.values():
@@ -127,6 +135,8 @@ class Daemon:
                 raise
             except Exception:
                 pass
+            previous.update(selected)
+            self.snapshots[session] = (token, previous)
             evicted: list[str] = []
             while len(self.snapshots) > MAX_SCOPES:
                 key, _ = self.snapshots.popitem(last=False)
@@ -143,7 +153,15 @@ class Daemon:
                         "sha256": record.content_sha256,
                         "text": item.compacted,
                     })
-            out: dict[str, Any] = {"ok": True, "patches": patches}
+            pending = [
+                {"item_id": item.item_id, "call_id": record.call_id, "version": item.version, "content": record.content}
+                for record in selected.values()
+                for item in [items_by_key.get((record.call_id, record.content_sha256, record.invocation_digest or ""))]
+                if item is not None and item.visibility == "hidden" and item.compaction_source == "summarize_pending"
+            ]
+            out: dict[str, Any] = {"ok": True, "patches": patches,
+                                   "hidden_messages": self.store.hidden_message_keys(scope),
+                                   "pending_summaries": pending}
             if evicted:
                 out["evicted_snapshots"] = evicted
             return out
@@ -199,8 +217,36 @@ class Daemon:
 
         if method == "manage":
             return self._manage(scope, session, params)
+        if method == "list_candidates":
+            return self._list_candidates(scope, session, params)
 
         return {"ok": False, "error": "unknown_method"}
+
+    def _finish_summary(self, method, scope, params):
+        """Swap a pending summarize hide for the session model's summary, or fall back to a plain hide."""
+        from dataclasses import replace
+        item = self.store.get(scope, params.get("item_id"))
+        if item is None or item.compaction_source != "summarize_pending":
+            return {"ok": False, "error": "not_found"}
+        if method == "summary_failed":
+            updated = replace(item, compaction_source="explicit_user_hide", version=item.version + 1)
+        else:
+            text = params.get("summary_text")
+            if not isinstance(text, str) or not text.strip():
+                return {"ok": False, "error": "summarizer_unavailable"}
+            invocation = item.invocation_snapshot if isinstance(item.invocation_snapshot, dict) else None
+            # A summary must be smaller than the result and share its wording; otherwise keep the plain hide.
+            original_words = set(re.findall(r"\w{4,}", item.original.lower()))
+            grounded = bool(original_words & set(re.findall(r"\w{4,}", text.lower())))
+            if len(text) >= len(item.original) or not grounded or validate_summary_text(
+                    item.original, {"summary": text}, required_evidence_lines(item.original), invocation=invocation) is None:
+                res = self.store.put(scope, replace(item, compaction_source="explicit_user_hide", version=item.version + 1),
+                                     expected_version=item.version)
+                return {"ok": False, "error": "verification_failed" if res.ok else res.error, "item_id": item.item_id}
+            updated = replace(item, compacted=text, compaction_source="llm_summary", version=item.version + 1)
+        res = self.store.put(scope, updated, expected_version=item.version)
+        return {"ok": res.ok, "error": res.error, "item_id": item.item_id,
+                "version": res.item.version if res.item else None}
 
     def _identity_state(self, scope, record, method):
         item_id = _item_id(scope.scope_key(), record.call_id, record.content_sha256, record.invocation_digest, record.result_position)
@@ -287,16 +333,63 @@ class Daemon:
             "version": result.item.version if result.item else None,
         }
 
+    def _cleanup_error(self, scope, record):
+        error = self._identity_state(scope, record, "compact")
+        if error:
+            return error
+        item = self.store.get(scope, _item_id(scope.scope_key(), record.call_id, record.content_sha256,
+                                             record.invocation_digest, record.result_position))
+        if item is not None and item.visibility == "hidden":
+            return "already_hidden"
+        try:
+            if is_destructive_command(record.invocation.get("tool_name"), record.invocation.get("arguments")):
+                return "destructive_command"
+        except Exception:
+            return "destructive_check_failed"
+        return refusal_reason(record, self.engine.config)
+
+    def _list_candidates(self, scope, session, params):
+        snapshot = self.snapshots.get(session)
+        if not snapshot or params.get("snapshot_id") != snapshot[0]:
+            return {"ok": False, "error": "unconfirmed_snapshot"}
+        limit = params.get("limit", 30)
+        if type(limit) is not int or not 1 <= limit <= 200:
+            return {"ok": False, "error": "invalid_limit"}
+        wanted = params.get("tool_call_ids")
+        if wanted is not None and (not isinstance(wanted, list) or not all(isinstance(x, str) for x in wanted)):
+            return {"ok": False, "error": "invalid_tool_call_ids"}
+        wanted = set(wanted) if wanted is not None else None
+        items = []
+        total = 0
+        for record in reversed(list(snapshot[1].values())):
+            if wanted is not None and record.call_id not in wanted:
+                continue
+            if self._cleanup_error(scope, record) is not None:
+                continue
+            total += 1
+            if len(items) >= limit:
+                continue
+            args = record.invocation.get("arguments", {})
+            items.append({"tool_call_id": record.call_id, "tool_name": record.invocation.get("tool_name"),
+                          "hint": str(args.get("command") or args.get("path") or "")[:160],
+                          "bytes_size": len(record.content.encode("utf-8")), "tokens_display": "—"})
+        return {"ok": True, "items": items, "total": total}
+
     def _manage(self, scope, session, params):
+        want = params.get("tool_call_ids")
+        if want is None or want == []:
+            return {"ok": False, "error": "tool_call_ids_required"}
+        if not isinstance(want, list) or not all(isinstance(x, str) and x.strip() for x in want):
+            return {"ok": False, "error": "invalid_tool_call_ids"}
         snapshot = self.snapshots.get(session)
         if not snapshot or params.get("snapshot_id") != snapshot[0]:
             return {"ok": False, "error": "unconfirmed_snapshot"}
         action = params.get("action", "auto")
         if action not in ("auto", "hide", "summarize"):
             return {"ok": False, "error": "invalid_action"}
-        max_items = params.get("max_items", 20)
-        if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1 or max_items > 64:
-            return {"ok": False, "error": "invalid_max_items"}
+        keep_lines = params.get("keep_lines")
+        if keep_lines is not None and action != "hide":
+            return {"ok": False, "error": "invalid_keep_lines_action"}
         summaries = params.get("summaries")
         if summaries is not None and not isinstance(summaries, dict):
             return {"ok": False, "error": "invalid_summaries"}
@@ -305,27 +398,15 @@ class Daemon:
                 if not isinstance(k, str) or not isinstance(v, str):
                     return {"ok": False, "error": "invalid_summaries"}
 
-        want = params.get("tool_call_ids")
-        records = list(snapshot[1].values())
-        if want is not None:
-            if not isinstance(want, list) or not all(isinstance(x, str) for x in want):
-                return {"ok": False, "error": "invalid_tool_call_ids"}
-            wanted = {x for x in want if x}
-            records = [r for r in records if r.call_id in wanted]
-
         items = []
-        for record in records[:max_items]:
-            err = self._identity_state(scope, record, "summarize" if action == "summarize" else "compact")
+        for call_id in dict.fromkeys(want):
+            record = snapshot[1].get(call_id)
+            if record is None:
+                items.append({"tool_call_id": call_id, "ok": False, "error": "not_found"})
+                continue
+            err = self._cleanup_error(scope, record)
             if err is not None:
                 items.append({"tool_call_id": record.call_id, "ok": False, "error": err})
-                continue
-            try:
-                destructive = is_destructive_command(record.invocation.get("tool_name"), record.invocation.get("arguments"))
-            except Exception:
-                items.append({"tool_call_id": record.call_id, "ok": False, "error": "destructive_check_failed"})
-                continue
-            if destructive:
-                items.append({"tool_call_id": record.call_id, "ok": False, "error": "destructive_command"})
                 continue
 
             summary_text = None
@@ -354,13 +435,17 @@ class Daemon:
 
                 result = _run_sync(self.engine.summarize(scope, record, _SuppliedSummarizer()))
             else:
-                result = self.engine.compact_sync(scope, record)
+                result = self.engine.compact_sync(scope, record, keep_lines=keep_lines)
 
             if result.ok and result.plan is not None and result.item is not None:
                 self._fence_set(scope, record, result.item, "summarize" if do_summarize else "compact")
                 items.append({"tool_call_id": record.call_id, "ok": True, "item_id": result.plan.item_id})
             else:
                 items.append({"tool_call_id": record.call_id, "ok": False, "error": result.error or "not_found"})
+            if result.keep_lines_ignored:
+                items[-1]["keep_lines_ignored"] = list(result.keep_lines_ignored)
+            if result.keep_lines_normalized:
+                items[-1]["keep_lines_normalized"] = list(result.keep_lines_normalized)
 
         applied = sum(1 for row in items if row.get("ok"))
         ok_all = all(bool(row.get("ok")) for row in items) if items else True

@@ -1,0 +1,553 @@
+{
+  "7f81b94519dd3a70f169c0436ca040bc5ec6d04567e83dab75c40356a7fc69c5": {
+    "judgement": {
+      "score": 3,
+      "reason": "Replacement is an excerpted/compressed view, not the full result. It preserves the key metadata facts (owner, audit_seal, latency_budget) and the header/regions line, but most per-minute telemetry rows and totals (total_lines=105, file_size 21698, truncated/is_binary flags) are omitted.",
+      "lost_facts": [
+        "total_lines=105",
+        "file_size=21698",
+        "truncated=false/is_binary=false/is_image=false/not_found=false flags",
+        "94 of 97 per-minute telemetry rows (all but first two and last one)"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13601,
+      "completion_tokens": 140,
+      "total_tokens": 13741,
+      "cost": 0.000151606,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000151606,
+        "upstream_inference_prompt_cost": 8.1606e-05,
+        "upstream_inference_completions_cost": 7e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "4d8d3da9dcba93916759c08918386b650e66f291004ea81f687de8eaa7b2e290": {
+    "judgement": {
+      "score": 4,
+      "reason": "Replacement is a hidden/truncated placeholder that retains only a few excerpts (header, first two rows, owner, seal, budget, last row, regions line) and explicitly defers the rest. The key facts owner, audit_seal, and latency_budget are preserved, but the vast majority of the 105-line telemetry data is not immediately available in the replacement text, so full evidence is only conditionally retained.",
+      "lost_facts": []
+    },
+    "usage": {
+      "prompt_tokens": 13603,
+      "completion_tokens": 106,
+      "total_tokens": 13709,
+      "cost": 0.000121818,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000121818,
+        "upstream_inference_prompt_cost": 6.8818e-05,
+        "upstream_inference_completions_cost": 5.3e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "2769f3d0f6449ae0801a04f6ac93aa2fe166a198abf15347f9c875957d856efb": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement keeps a few header/footer lines, two sample records, and all three key facts, but omits nearly all of the 105-line telemetry dataset and gives no status/size/truncation metadata; most content is lost.",
+      "lost_facts": [
+        "total_lines/file_size/truncated/is_binary/is_image/not_found metadata",
+        "records for minutes 00:02 through 00:43",
+        "records for minutes 00:44 through 01:38",
+        "line-numbered layout"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13757,
+      "completion_tokens": 121,
+      "total_tokens": 13878,
+      "cost": 0.000130242,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000130242,
+        "upstream_inference_prompt_cost": 6.9742e-05,
+        "upstream_inference_completions_cost": 6.05e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "6261645a120670a30f818a28a7944d048fd9b044f839c20d7a1ce6bda6f11823": {
+    "judgement": {
+      "score": 2,
+      "reason": "The replacement keeps the header, three key metadata facts, first two measurement rows, the final row (01:39), and the closing summary, but omits ~57 of the 60 per-minute telemetry rows (00:02 through 01:38). It is explicitly a hidden/partial view deferring to an unavailable context, so most row-level facts are lost.",
+      "lost_facts": [
+        "All per-minute telemetry rows from 2026-10-01T00:02:00Z through 2026-10-01T01:38:00Z (except first two rows, owner/seal/budget lines, and final 01:39 row)",
+        "Row-level metrics for nearly all minutes: requests, p50_ms, p99_ms, cpu_pct, queue_depth, cache_hit_pct, worker_pool, payload_bytes, service, region",
+        "Header 'total_lines': 105 / file_size metadata not preserved in replacement"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13755,
+      "completion_tokens": 211,
+      "total_tokens": 13966,
+      "cost": 0.00017523,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00017523,
+        "upstream_inference_prompt_cost": 6.973e-05,
+        "upstream_inference_completions_cost": 0.0001055
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "aad078391532823364330835e61383601f101c56460c595dba11277ae4109be9": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement is a summary that mentions the metadata lines (owner, audit_seal, latency_budget) and regions, but the actual per-minute metric rows and the specific key fact values are not preserved\u2014only referenced abstractly. The three required key facts appear as labels without their values except partially; audit_seal value and full owner value are present in summary, but no underlying data rows. Substantial data loss vs original.",
+      "lost_facts": [
+        "per-minute metric rows (timestamped requests/latency/cpu/etc.)",
+        "audited_regions value us-east,eu-west,ap-south; document=component-1",
+        "line count 105 explicit content and individual measurement values"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13370,
+      "completion_tokens": 154,
+      "total_tokens": 13524,
+      "cost": 0.00014442,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00014442,
+        "upstream_inference_prompt_cost": 6.742e-05,
+        "upstream_inference_completions_cost": 7.7e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "97b076c94ed350cf32b5f44fbc4b34f6c11e1e184453853e63dbf1e80fb4d945": {
+    "judgement": {
+      "score": 3,
+      "reason": "Summary retains metadata and evidence header, but the full 105-line telemetry data is hidden and not actually present; key facts listed are mentioned, yet most per-measurement facts are lost from the visible replacement.",
+      "lost_facts": [
+        "Full per-minute/region telemetry rows are not present in the replacement, only summarized",
+        "Audit seal and owner appear in summary but primary data table is missing"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13413,
+      "completion_tokens": 95,
+      "total_tokens": 13508,
+      "cost": 0.000115178,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000115178,
+        "upstream_inference_prompt_cost": 6.7678e-05,
+        "upstream_inference_completions_cost": 4.75e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "6a4d7a95ba604dc852f0513cae128138cb359be6440a2e33d7e5f0842b632e1c": {
+    "judgement": {
+      "score": 4,
+      "reason": "Replacement preserves the document's structure, time/region/service scope, measurement fields, and all three key metadata facts (owner, audit_seal, latency_budget_ms). It drops the exact per-row numeric telemetry values, which are summarized rather than retained, so some granular data is lost but the essential audit metadata and error/status evidence (full read, untruncated, exit_code not available) are conveyed.",
+      "lost_facts": [
+        "per-minute numeric measurements for each row (requests, p50/p99, cpu_pct, queue_depth, cache_hit_pct, worker_pool, payload_bytes)",
+        "total_lines=105 and file_size=21698 metadata"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13603,
+      "completion_tokens": 152,
+      "total_tokens": 13755,
+      "cost": 0.000144818,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000144818,
+        "upstream_inference_prompt_cost": 6.8818e-05,
+        "upstream_inference_completions_cost": 7.6e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "fd37a4de1eed012272587e5e99a52d3a86ed325af157800c546ddf7f9a24baa0": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement is a high-level summary that omits essentially all per-minute measurement data and even the explicit owner/seal/budget values are only vaguely referenced; key facts list items like owner=component-team-1 are not actually preserved verbatim in the replacement (owner field described generically as part of metadata). Substantial data loss.",
+      "lost_facts": [
+        "owner=component-team-1",
+        "audit_seal=component-9e54cadbf4",
+        "latency_budget_ms=151",
+        "all 105 per-minute telemetry rows (requests, p50_ms, p99_ms, cpu_pct, queue_depth, cache_hit_pct, worker_pool, payload_bytes)",
+        "total_lines=105",
+        "file_size=21698",
+        "truncated=false",
+        "is_binary=false",
+        "is_image=false",
+        "not_found=false",
+        "header line 'component service telemetry audit 1: distinct minute/region measurements'",
+        "audited_regions=us-east,eu-west,ap-south; document=component-1"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 13561,
+      "completion_tokens": 233,
+      "total_tokens": 13794,
+      "cost": 0.000185066,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 12800,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000185066,
+        "upstream_inference_prompt_cost": 6.8566e-05,
+        "upstream_inference_completions_cost": 0.0001165
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "92127a3d4d67f4a316c5f7a5113ef0608a9f93d9f8d310b82191e27545d41497": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement is a hidden/excerpt placeholder that only preserves a few sampled lines (owner, audit_seal, latency_budget, first two and last records) while omitting the vast majority of per-minute telemetry records and the audited_regions line, so the bulk of measurement data is lost.",
+      "lost_facts": [
+        "most per-minute telemetry records (00:02 through 01:38 details)",
+        "audited_regions=us-east,eu-west,ap-south; document=component-1 line",
+        "complete set of minute/region measurements needed for the audit"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10335,
+      "completion_tokens": 132,
+      "total_tokens": 10467,
+      "cost": 0.00012801,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.00012801,
+        "upstream_inference_prompt_cost": 6.201e-05,
+        "upstream_inference_completions_cost": 6.6e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "2e9bec3b77839218c7424fab44c405348c90b9ac3f7a933e766e9376820e9aff": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement is a hide/restore stub that drops nearly all telemetry rows; only a few excerpts and key metadata lines remain, with full data omitted pending unhide. Key facts are present but bulk measurement evidence is largely lost.",
+      "lost_facts": [
+        "all telemetry rows between 00:02 and 01:38 omitted",
+        "per-minute metrics for most services/regions missing",
+        "complete audit dataset not preserved"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10337,
+      "completion_tokens": 100,
+      "total_tokens": 10437,
+      "cost": 0.000112022,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000112022,
+        "upstream_inference_prompt_cost": 6.2022e-05,
+        "upstream_inference_completions_cost": 5e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "7af36134d73abdcf63d280585b09664aa6cf53ee2fd34b23e30922f12557c5de": {
+    "judgement": {
+      "score": 1,
+      "reason": "The replacement discards nearly all telemetry rows and key metadata (owner, audit_seal, latency_budget) behind an 'unhide' instruction, retaining only 3 of ~100 records. Key facts and status evidence are lost.",
+      "lost_facts": [
+        "owner=component-team-1",
+        "audit_seal=component-9e54cadbf4",
+        "latency_budget_ms=151",
+        "most minute/region measurement rows for 2026-10-01T00:00 to 01:39"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10499,
+      "completion_tokens": 122,
+      "total_tokens": 10621,
+      "cost": 0.000114522,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 9472,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000114522,
+        "upstream_inference_prompt_cost": 5.3522e-05,
+        "upstream_inference_completions_cost": 6.1e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "b4d6db1f36d0d71e35894fbb361dee1d9973cd3724853c457a197af2d3a71437": {
+    "judgement": {
+      "score": 2,
+      "reason": "Replacement heavily truncates the telemetry dataset, retaining only the first two and last minute records plus key metadata; most minute/region measurements are dropped, though key facts and status/metadata are preserved.",
+      "lost_facts": [
+        "Majority of per-minute telemetry records (00:02 through 01:38) omitted",
+        "Only 3 of ~100 data rows retained"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10494,
+      "completion_tokens": 90,
+      "total_tokens": 10584,
+      "cost": 9.8492e-05,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 9472,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 9.8492e-05,
+        "upstream_inference_prompt_cost": 5.3492e-05,
+        "upstream_inference_completions_cost": 4.5e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "a5361affcee85aa0f97e4fc824ee0a79cab764e15af3a4493119942325560866": {
+    "judgement": {
+      "score": 2,
+      "reason": "The replacement is a lossy summary that truncates the dataset at 00:55 (original covers through 01:39), omits the latency_budget_ms=151 line and audited_regions/document trailer, and only vaguely promises preservation rather than retaining the records. It does retain owner and audit_seal facts, but most key telemetry data and status fields are dropped.",
+      "lost_facts": [
+        "latency_budget_ms=151",
+        "audited_regions=us-east,eu-west,ap-south; document=component-1",
+        "All minute/region measurement records from 2026-10-01T00:56:00Z through 2026-10-01T01:39:00Z",
+        "Full field-level values for records beyond 00:54, including the partial 00:55 eu-west record details"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10201,
+      "completion_tokens": 188,
+      "total_tokens": 10389,
+      "cost": 0.000145734,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 9472,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000145734,
+        "upstream_inference_prompt_cost": 5.1734e-05,
+        "upstream_inference_completions_cost": 9.4e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "47cbdae9bc9f7f3abad8f85faf2a9cb0f8c139ee8a8a742a6d3894965e793730": {
+    "judgement": {
+      "score": 1,
+      "reason": "Replacement is a lossy hidden-summary wrapper that omits nearly all telemetry records and key facts; it even misstates coverage (claims through 00:54 with truncation at 00:55), drops latency_budget_ms, and only mentions owner/audit_seal lines in a paraphrased summary.",
+      "lost_facts": [
+        "owner=component-team-1 (only paraphrased, not retained as a fact value in original context)",
+        "audit_seal=component-9e54cadbf4 (only paraphrased)",
+        "latency_budget_ms=151",
+        "audited_regions=us-east,eu-west,ap-south",
+        "document=component-1",
+        "All individual minute/region measurement records (e.g., requests, p50_ms, p99_ms, cpu_pct, queue_depth, cache_hit_pct, worker_pool, payload_bytes across 00:00\u201301:39Z)"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10394,
+      "completion_tokens": 208,
+      "total_tokens": 10602,
+      "cost": 0.000156892,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 9472,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000156892,
+        "upstream_inference_prompt_cost": 5.2892e-05,
+        "upstream_inference_completions_cost": 0.000104
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  },
+  "ea47cb8bb7addbb60eb1ef050c0c88ecc959bfe6cfc75734ad5e167f7558b742": {
+    "judgement": {
+      "score": 1,
+      "reason": "Replacement is a lossy paraphrase that drops nearly all telemetry records, omits the key fact latency_budget_ms=151, and misstates the time range (claims through 00:55 with truncation, whereas original extends to 01:39). Only owner and audit_seal appear; substantive data is lost.",
+      "lost_facts": [
+        "latency_budget_ms=151",
+        "records for 2026-10-01T00:56:00Z through 2026-10-01T01:39:00Z",
+        "most per-minute metric values",
+        "audited_regions=us-east,eu-west,ap-south",
+        "document=component-1"
+      ]
+    },
+    "usage": {
+      "prompt_tokens": 10369,
+      "completion_tokens": 155,
+      "total_tokens": 10524,
+      "cost": 0.000130242,
+      "is_byok": false,
+      "prompt_tokens_details": {
+        "cached_tokens": 9472,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "video_tokens": 0
+      },
+      "cost_details": {
+        "upstream_inference_cost": 0.000130242,
+        "upstream_inference_prompt_cost": 5.2742e-05,
+        "upstream_inference_completions_cost": 7.75e-05
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "image_tokens": 0,
+        "audio_tokens": 0
+      }
+    },
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "attempts": 1
+  }
+}
