@@ -46,6 +46,37 @@ class Element {
   scrollIntoView() { this.scrolled = true; }
 }
 
+test("subagent fallback opens the main agent before waiting for its chat and scrolling the row", async () => {
+  const target = row("main-message", "user");
+  const node = new Element({ "data-message-id": "main-message" });
+  const root = new Element({ "data-testid": "agent-chat-scroll" }).add(node);
+  let mounted = false, opened = false, waits = 0;
+  const doc = { querySelectorAll: (selector: string) => selector.includes("aria-selected")
+    ? [new Element({ "data-testid": mounted ? "workspace-tab-agent_main" : "workspace-tab-provider_subagent_4_main_5_child" })]
+    : mounted ? [root] : [] };
+  expect(await scrollToMessageInChat(target, [target], {
+    document: doc,
+    openAgent: { agentId: "main", open: () => { opened = true; expect(node.scrolled).toBe(false); } },
+    afterLoad: async () => { expect(opened).toBe(true); waits++; mounted = true; },
+  })).toBe(true);
+  expect(waits).toBe(1);
+  expect(node.scrolled).toBe(true);
+});
+
+test("failed or unavailable main navigation reports failure without scrolling the child", async () => {
+  const f = fixture();
+  let missing = 0;
+  const options = { document: f.doc, onNotFound: () => { missing++; } };
+  expect(await scrollToMessageInChat(f.rows[0], f.rows, {
+    ...options, openAgent: { agentId: "main", open: () => { throw new Error("offline"); } },
+  })).toBe(false);
+  expect(await scrollToMessageInChat(f.rows[0], f.rows, {
+    ...options, openAgent: { agentId: "main", open: () => {} }, timeoutMs: 5,
+  })).toBe(false);
+  expect(missing).toBe(2);
+  expect(f.root.scrolled).toBe(false);
+});
+
 test("loads older history over multiple rounds in the chosen chat root", async () => {
   const f = fixture();
   const target = row("old-message", "user");

@@ -1,6 +1,7 @@
 import type { Row } from "../shared/sessionNav";
 import type { TimelineHistory } from "./timelineHistory";
 import { fallbackToolPreview } from "./toolPreview";
+import { focusedSessionTab } from "./subagents";
 
 const GROUP = '[data-testid="tool-call-group"]';
 const BADGE = '[data-testid="tool-call-badge"]';
@@ -164,6 +165,7 @@ function pickChatRoot(doc: any, rows: Row[], target: Row): any {
 let navigationVersion = 0;
 
 type NavigationOptions = {
+  openAgent?: { agentId: string; open: () => void };
   document?: any;
   afterExpand?: () => Promise<void>;
   afterLoad?: () => Promise<void>;
@@ -316,6 +318,16 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 
 async function navigate(row: Row, rows: Row[], version: number, options: NavigationOptions): Promise<boolean> {
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
+  if (options.openAgent) {
+    options.openAgent.open();
+    for (;;) {
+      if (version !== navigationVersion) return false;
+      const tab = focusedSessionTab(doc);
+      if (tab?.kind === "agent" && tab.agentId === options.openAgent.agentId &&
+        (Array.from(doc?.querySelectorAll?.('[data-testid="agent-chat-scroll"]') ?? []) as any[]).some(visible)) break;
+      await (options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 100))))();
+    }
+  }
   const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row);
   if (!root) return false;
   if (findIdentity(root, row) || findText(root, row.summary_line)) {

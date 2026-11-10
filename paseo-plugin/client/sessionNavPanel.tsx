@@ -21,6 +21,7 @@ import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
+import { focusedSessionTab, subagentMainTarget } from "./subagents";
 
 import {
   buildGroupedRows,
@@ -112,7 +113,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [inView, setInView] = useState(!!params.agentId);
-  const agentId = followVisible ? followedId ?? params.agentId : params.agentId;
+  const [subagentFallback, setSubagentFallback] = useState(false);
+  const agentId = followVisible || subagentFallback ? followedId ?? params.agentId : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -164,13 +166,26 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const scopes = scopesQuery.data ?? [];
 
   useEffect(() => {
-    if (!followVisible) return;
     const doc = (globalThis as any).document;
     if (!doc || !paseo?.agents) return;
     let cancelled = false;
     const tick = async () => {
+      const focused = focusedSessionTab(doc);
+      const fallback = await subagentMainTarget(focused, (id) => queryClient.fetchQuery({
+        queryKey: ["session-nav-parent", id],
+        staleTime: 10_000,
+        queryFn: async () => {
+          const handle = paseo.agents.ref(id);
+          await handle.refresh();
+          const snapshot = handle.current();
+          if (!snapshot) throw new Error("agent_not_found");
+          return snapshot.labels["paseo.parent-agent-id"] ?? null;
+        },
+      }));
       const values = visibleChatValues(doc);
-      const id = await resolveSessionTarget({
+      const id = fallback.subagent
+        ? fallback.agentId && (!candidateAgentIds || candidateAgentIds.includes(fallback.agentId)) ? fallback.agentId : null
+        : await resolveSessionTarget({
         followVisible, boundAgentId: params.agentId, visibleValues: values,
         candidates: sessionFollowCandidates(candidateAgentIds, scopes.map((s) => s.agent_id).filter((id): id is string => !!id)),
         timelineIds: async (id) => (await queryClient.fetchQuery({
@@ -179,7 +194,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
         })).ids,
       });
-      if (cancelled) return;
+      if (cancelled || JSON.stringify(focusedSessionTab(doc)) !== JSON.stringify(focused)) return;
+      setSubagentFallback(fallback.subagent);
       setInView(!!id);
       setFollowedId(id === params.agentId ? null : id);
     };
@@ -981,7 +997,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const handleRowPress = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
+    if (subagentFallback && !navigation) {
+      setNotice("Main session navigation is unavailable.");
+      return;
+    }
     void scrollToMessageInChat(row, rawRows, {
+      openAgent: subagentFallback && navigation ? { agentId, open: () => navigation.openAgent({ agentId }) } : undefined,
       onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
       onNotFound: () => setNotice("Not loaded in chat"),
       getHistory: () => queryClient.fetchQuery(historyQueryOptions),
@@ -1503,13 +1524,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   const isLoading = resolvedScopeKey ? listQuery.isPending : fallbackTimelineQuery.isPending;
   const capabilityMessage = capabilityNotice(listQuery.error instanceof Error ? listQuery.error.message : scopesQuery.error instanceof Error ? scopesQuery.error.message : undefined, capabilities);
-  const noticeBar = notice || capabilityMessage ? (
+  const noticeBar = notice || capabilityMessage || subagentFallback ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
-      <Text style={styles.noticeText}>{notice ?? capabilityMessage}</Text>
+      {subagentFallback ? <Text style={styles.noticeText}>subagent context is not managed</Text> : null}
+      {notice || capabilityMessage ? <Text style={styles.noticeText}>{notice ?? capabilityMessage}</Text> : null}
     </View>
   ) : null;
 
-  if (followVisible && !inView) {
+  if ((followVisible || subagentFallback) && !inView) {
     return (
       <View style={styles.screen}>
         {noticeBar}

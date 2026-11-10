@@ -5,6 +5,11 @@
 > native fork/import, in-place compression, shared-DB writers, and one real
 > session-model summary per host. See [Phase 6 live evidence](phase6-live-verification.md)
 > for observed behavior and remaining limits. The original snapshot below is historical.
+>
+> Step 4: [Subagent probe and fallback evidence](subagent-live-verification.md)
+> records real OMP/Hermes delegation and the main-outline fallback. OMP children
+> remain inert; Hermes child-to-Paseo mapping is unverified. Neither host now
+> claims per-child context management.
 
 ## 현재 상태와 시작점
 
