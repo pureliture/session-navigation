@@ -1,0 +1,7 @@
+{
+  "reason": "Native compression summary request exhausted seven Relace HTTP 429 attempts. It has no response usage/cost. Hermes inserted a fallback marker; completed task answers pass, but this API-contaminated session is excluded from the paired product denominator.",
+  "missing_usage_request_id": "29f9f37fe62445368d10bdb564c6b2fe",
+  "captured_cost_usd": 0.012664680,
+  "product_failure": false,
+  "retry_label": "retry64a"
+}

@@ -1,0 +1,358 @@
+{
+  "seed": 211,
+  "turns": [
+    "Review INC-211. Read manifest.json first. Both notes and ordinary tools/recovery are available; retain the effective owner, release, rollback and drain_minutes for the later handover. Work unit 1: inspect the complete report-01.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 2: inspect the complete report-02.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 3: inspect the complete report-03.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 4: inspect the complete report-04.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 5: inspect the complete report-05.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 6: inspect the complete report-06.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 7: inspect the complete report-07.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 8: inspect the complete report-08.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 9: inspect the complete report-09.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 10: inspect the complete report-10.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 11: inspect the complete report-11.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 12: inspect the complete report-12.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 13: inspect the complete report-13.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Work unit 14: inspect the complete report-14.jsonl using read_file (paginate if needed), including the build/test rows and legacy/current configuration entries. Other tools and notes are allowed. Report the effective component and failed_jobs from the signed-live entry. End your answer with a JSON object containing exactly component and failed_jobs; no raw log dump.",
+    "Handover: give the effective owner, release, rollback and drain_minutes retained from the earlier review. Notes, source re-reads, native recovery and ordinary tools remain available. Return a JSON object with exactly these requested keys and values.",
+    "New incident question, not announced earlier: report the signed-live receipt and canary, plus spare_capacity=capacity-load and safe_parallel=min(worker_limit, floor((capacity-load)/worker_cost)). Use the effective configuration, not archived exports. Notes, source re-reads, native recovery and ordinary tools remain available. Return a JSON object with exactly these requested keys and values.",
+    "Create decision.json for the executable handover gate: exactly release, rollback, drain_seconds=drain_minutes*60, safe_parallel=min(worker_limit, floor((capacity-load)/worker_cost)), and receipt, all from effective records. Also return that complete JSON object in your final answer. Notes, source re-reads, native recovery and ordinary tools remain available. Return a JSON object with exactly these requested keys and values."
+  ],
+  "checks": [
+    {
+      "kind": "work",
+      "expected": {
+        "component": "release-control",
+        "failed_jobs": 4
+      },
+      "stale": {
+        "failed_jobs": [
+          12
+        ]
+      },
+      "sources": [
+        "report-01.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "rollback-safety",
+        "failed_jobs": 5
+      },
+      "stale": {
+        "failed_jobs": [
+          13
+        ]
+      },
+      "sources": [
+        "report-02.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "capacity-planning",
+        "failed_jobs": 6
+      },
+      "stale": {
+        "failed_jobs": [
+          14
+        ]
+      },
+      "sources": [
+        "report-03.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "traffic-replay",
+        "failed_jobs": 2
+      },
+      "stale": {
+        "failed_jobs": [
+          10
+        ]
+      },
+      "sources": [
+        "report-04.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "canary-validation",
+        "failed_jobs": 3
+      },
+      "stale": {
+        "failed_jobs": [
+          11
+        ]
+      },
+      "sources": [
+        "report-05.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "compiler",
+        "failed_jobs": 4
+      },
+      "stale": {
+        "failed_jobs": [
+          12
+        ]
+      },
+      "sources": [
+        "report-06.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "integration",
+        "failed_jobs": 5
+      },
+      "stale": {
+        "failed_jobs": [
+          13
+        ]
+      },
+      "sources": [
+        "report-07.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "migration",
+        "failed_jobs": 6
+      },
+      "stale": {
+        "failed_jobs": [
+          14
+        ]
+      },
+      "sources": [
+        "report-08.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "cache",
+        "failed_jobs": 2
+      },
+      "stale": {
+        "failed_jobs": [
+          10
+        ]
+      },
+      "sources": [
+        "report-09.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "routing",
+        "failed_jobs": 3
+      },
+      "stale": {
+        "failed_jobs": [
+          11
+        ]
+      },
+      "sources": [
+        "report-10.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "rate-limit",
+        "failed_jobs": 4
+      },
+      "stale": {
+        "failed_jobs": [
+          12
+        ]
+      },
+      "sources": [
+        "report-11.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "database",
+        "failed_jobs": 5
+      },
+      "stale": {
+        "failed_jobs": [
+          13
+        ]
+      },
+      "sources": [
+        "report-12.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "deploy",
+        "failed_jobs": 6
+      },
+      "stale": {
+        "failed_jobs": [
+          14
+        ]
+      },
+      "sources": [
+        "report-13.jsonl"
+      ]
+    },
+    {
+      "kind": "work",
+      "expected": {
+        "component": "recovery",
+        "failed_jobs": 2
+      },
+      "stale": {
+        "failed_jobs": [
+          10
+        ]
+      },
+      "sources": [
+        "report-14.jsonl"
+      ]
+    },
+    {
+      "kind": "announced",
+      "expected": {
+        "owner": "Cobalt",
+        "release": "r2026.11.211-signed",
+        "rollback": "r2026.10.211-stable",
+        "drain_minutes": 21
+      },
+      "stale": {
+        "owner": [
+          "Legacy-NOC"
+        ],
+        "release": [
+          "r2026.09.211-candidate"
+        ],
+        "rollback": [
+          "r2026.08.211-archived"
+        ],
+        "drain_minutes": [
+          36
+        ],
+        "spare_capacity": [
+          1012
+        ],
+        "safe_parallel": [
+          63
+        ],
+        "drain_seconds": [
+          2160
+        ]
+      },
+      "sources": [
+        "report-01.jsonl",
+        "report-02.jsonl"
+      ]
+    },
+    {
+      "kind": "surprise",
+      "expected": {
+        "receipt": "2a01e304df2dd6bde870a988",
+        "canary": "e2ceb3a0fea15eaadc29e2d5",
+        "spare_capacity": 762,
+        "safe_parallel": 63
+      },
+      "stale": {
+        "receipt": [
+          "deadbeef0000000000000000"
+        ],
+        "canary": [
+          "badcafe00000000000000000"
+        ],
+        "spare_capacity": [
+          1012
+        ],
+        "safe_parallel": [
+          63
+        ],
+        "drain_seconds": [
+          2160
+        ]
+      },
+      "sources": [
+        "report-01.jsonl",
+        "report-03.jsonl",
+        "report-04.jsonl",
+        "report-05.jsonl"
+      ]
+    },
+    {
+      "kind": "canonical",
+      "expected": {
+        "release": "r2026.11.211-signed",
+        "rollback": "r2026.10.211-stable",
+        "drain_seconds": 1260,
+        "safe_parallel": 63,
+        "receipt": "2a01e304df2dd6bde870a988"
+      },
+      "stale": {
+        "release": [
+          "r2026.09.211-candidate"
+        ],
+        "rollback": [
+          "r2026.08.211-archived"
+        ],
+        "receipt": [
+          "deadbeef0000000000000000"
+        ],
+        "spare_capacity": [
+          1012
+        ],
+        "safe_parallel": [
+          63
+        ],
+        "drain_seconds": [
+          2160
+        ]
+      },
+      "sources": [
+        "report-01.jsonl",
+        "report-02.jsonl",
+        "report-03.jsonl",
+        "report-04.jsonl"
+      ]
+    }
+  ],
+  "plan": {
+    "release": "r2026.11.211-signed",
+    "rollback": "r2026.10.211-stable",
+    "drain_seconds": 1260,
+    "safe_parallel": 63,
+    "receipt": "2a01e304df2dd6bde870a988"
+  },
+  "id": "quality-hermes-211-A-rest64",
+  "arm": "A",
+  "host": "hermes",
+  "repo": "/Users/devin/.session-navigation-eval-v2/sources/37348b89faf82ced7510fe09e2a97a893fbcc8a3",
+  "product_commit": "37348b89faf82ced7510fe09e2a97a893fbcc8a3",
+  "home": "/Users/devin/.session-navigation-eval-v2/quality-hermes-211-A-rest64/home",
+  "workspace": "/Users/devin/.session-navigation-eval-v2/quality-hermes-211-A-rest64/workspace",
+  "output": "/Users/devin/repos/session-navigation/eval/results/2026-11-10-quality-benefit-64k/sessions/quality-hermes-211-A-rest64",
+  "window": 65536,
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "provider": "Relace",
+  "proxy": "http://127.0.0.1:58303",
+  "hermes_source": "/Users/devin/hermes-nav-live/installs/a6031367d5037fff/environments/3be5d82bc8954afa9633eb60c0780749/workspace"
+}

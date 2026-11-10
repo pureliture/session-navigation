@@ -1,0 +1,6 @@
+{
+  "reason": "Declared 32768-token window is below Hermes' 64000-token minimum auxiliary compression window. The initial A session stopped at turn 3 before native compression; this is a harness configuration failure, not a product outcome.",
+  "captured_cost_usd": 0.001216518,
+  "replacement_campaign": "../2026-11-10-quality-benefit-64k",
+  "preserved": true
+}

@@ -126,3 +126,49 @@ SDK 생성만으로 extension host callback이 초기화되지 않는다. SDK의
 원문을 보존한다. 최초 DeepSeek 2세션 $0.065459492도 적격 pilot으로 쓰지 않으며 실제 지출
 상한에는 더한다. 최종 사용성 gate·pilot·본 실행은 수정된 harness로 다시 측정한다.
 native compaction start/end는 시도 이벤트이며 skipped/aborted 여부를 구별한다.
+
+## Matched distractor-pressure quality experiment (Hermes)
+
+The quality-benefit campaign is separate from v1–v4. Four deterministic seeds
+(71, 103, 149, 211) each run A and B-new (`37348b8`), in a reproducibly randomized
+paired order. The first pair is the included pilot. A has native compaction only;
+B additionally has the current navigation plugin. Both retain ordinary tools,
+notes, source files and native recovery. No cleanup timing, action or target is
+prescribed to B.
+
+Each case contains fourteen complete incident/build/test reports, with signed-live
+generation-42 configuration and plausible superseded generation-41 archive exports.
+The archive's newer export timestamp does not make its old configuration effective.
+The first fourteen work units inspect the complete reports symmetrically and ask
+for effective component/failure counts. Later units separately test announced
+owner/release/rollback/drain retention, unannounced receipt/canary recall and
+capacity derivations, then a canonical executable handover JSON artifact. Source
+re-reads remain legitimate, including for surprise questions.
+
+The declared window is 65,536 tokens, with the same DeepSeek V4.1 Flash 1017,
+Relace-only/no-fallback, reasoning-disabled guarded proxy and isolated child
+environment as v4. A 32,768-token setup was rejected by Hermes' minimum 64,000-token
+auxiliary-compression check, not by model task failure. It is preserved and its
+cost included. Native before/after histories must differ and shrink, and their
+new summary content must appear in a later outgoing request; a start/end event
+alone does not qualify as pressure evidence. Every A session must meet this check.
+
+Primary quality is matched late announced/surprise/canonical success on final-only
+and current visible-unit surfaces. Secondary all-work-unit success remains visible.
+Requested JSON fields are compared exactly; obsolete values and other incorrect
+values are separately counted as stale claims and unsupported values. Conflicting
+JSON answers fail even if a correct object also appears. Extra fields and arbitrary
+prose are not semantically adjudicated. The artifact gate independently compares
+the generated `decision.json` with the canonical derivations outside the workspace.
+
+The pilot must complete with cost evidence and actual native compaction in A.
+Project remaining sessions at 1.5 times the pilot mean, include excluded setup
+spending, and stop before continuation if the projection exceeds $1.50. Preserve
+pilot scorecard/budget separately. Transport-failed sessions are not product
+failures; only those may be resumed with new labels. A completed bad product
+answer is never rerun. For any scored failure, inspect the exact final request,
+compaction snapshots and still-available originals before attributing context loss.
+Four pairs can demonstrate a case, not estimate a general treatment effect.
+
+Results and the provider-blocked fourth pair are recorded in
+[`results-quality-benefit.md`](results-quality-benefit.md).

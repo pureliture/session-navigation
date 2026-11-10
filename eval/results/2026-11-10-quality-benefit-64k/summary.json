@@ -1,0 +1,78 @@
+{
+  "status": "partial_api_blocked",
+  "benefit": "not_shown",
+  "mechanism_exercised": false,
+  "included_ids": [
+    "quality-hermes-103-A-pilot64",
+    "quality-hermes-103-B-new-pilot64",
+    "quality-hermes-211-A-rest64",
+    "quality-hermes-211-B-new-rest64",
+    "quality-hermes-71-A-rest64",
+    "quality-hermes-71-B-new-rest64"
+  ],
+  "missing_qualifying_cells": [
+    {
+      "seed": 149,
+      "arm": "B-new"
+    },
+    {
+      "seed": 149,
+      "arm": "A"
+    }
+  ],
+  "groups": {
+    "A": {
+      "final_success": 3,
+      "visible_success": 3,
+      "final_late_success": 3,
+      "visible_late_success": 3,
+      "prompt_tokens": 4269216,
+      "output_tokens": 63370,
+      "native_starts": 9,
+      "native_changed": 9,
+      "native_sent": 9,
+      "nav_calls": 0,
+      "requests": 144,
+      "cost": 0.053676871999999994,
+      "final_stale": 0,
+      "visible_stale": 0,
+      "final_unsupported": 0,
+      "visible_unsupported": 0,
+      "sessions": 3,
+      "final_checks": 51,
+      "visible_checks": 51,
+      "tool_token_share_median": 0.668340594425336,
+      "tool_token_share_p90": 0.8435615157371845,
+      "maximum_reported_prompt_tokens": 52667
+    },
+    "B-new": {
+      "final_success": 3,
+      "visible_success": 3,
+      "final_late_success": 3,
+      "visible_late_success": 3,
+      "prompt_tokens": 3570752,
+      "output_tokens": 55835,
+      "native_starts": 8,
+      "native_changed": 8,
+      "native_sent": 8,
+      "nav_calls": 0,
+      "requests": 123,
+      "cost": 0.046381884,
+      "final_stale": 0,
+      "visible_stale": 0,
+      "final_unsupported": 0,
+      "visible_unsupported": 0,
+      "sessions": 3,
+      "final_checks": 51,
+      "visible_checks": 51,
+      "tool_token_share_median": 0.6858596512998697,
+      "tool_token_share_p90": 0.848130994425891,
+      "maximum_reported_prompt_tokens": 52085
+    }
+  },
+  "captured_total_cost": 0.1374410859999999,
+  "qualifying_cost": 0.10005875599999998,
+  "excluded_cost": 0.036165812,
+  "excluded_setup_cost": 0.001216518,
+  "limitation": "No cleanup was invoked. This does not establish Hide/Summarize efficacy. Requested JSON fields only; arbitrary prose is not semantically adjudicated."
+}

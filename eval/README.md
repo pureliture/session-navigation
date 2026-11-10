@@ -144,3 +144,39 @@ assistant 텍스트를 합쳐 별도 `answer-surface.json`을 낸다. 답변 후
 `tool_execution_start`가 없는 호스트(현재 Hermes)는 0이 아니라 `unavailable`로 남긴다.
 v3 Crouton 실행은 모델 폐기(HTTP 404)로 중단됐다. `2026-11-09-v3-crouton`에는
 `non-qualifying.json`이 있으므로 gate/pilot으로 쓸 수 없고 통계에 섞지 않는다.
+
+## Distractor-pressure quality experiment
+
+`quality_fixtures.py` generates four matched incident-review cases with signed-live
+configuration, superseded archive exports, build/test records, announced retention
+and late surprise derivations. Both arms retain source files, ordinary tools, notes
+and host-native recovery. Work units request complete report inspection equally;
+the runner never selects B cleanup targets or requires a cleanup action.
+
+`quality_run.py` runs an isolated Hermes pair first, then gates the remaining three
+pairs on captured cost and actual transmitted native compaction in A. Hermes needs
+at least 64,000 tokens for auxiliary compression, so the declared window is 65,536
+(the same 64-Ki-token window as v4). The rejected 32,768-token setup is preserved
+separately and included in campaign spending, not task outcomes.
+
+```bash
+uv run --no-sync --with tiktoken python eval/quality_run.py \
+  --phase pilot --label pilot --output eval/results/NEW-QUALITY-CAMPAIGN
+uv run --no-sync --with tiktoken python eval/quality_run.py \
+  --phase rest --label rest --output eval/results/NEW-QUALITY-CAMPAIGN
+uv run --no-sync --with tiktoken python eval/quality_score.py eval/results/NEW-QUALITY-CAMPAIGN
+uv run --no-sync --with tiktoken python -m unittest discover -s eval/tests -v
+```
+
+Retry transport-failed cells only with `--phase retry --seed N --arm A|B-new`
+and a fresh label. Qualifying product outcomes cannot be retried. Scoring checks
+requested JSON fields on final-only and current visible-unit surfaces, separately
+counts stale/unsupported values, and canonically validates `decision.json` outside
+the agent workspace. It does not semantically judge arbitrary prose. Native
+before/after snapshots and matching outgoing summary content distinguish actual
+compaction from no-op attempts. Tool shares use normalized messages+tools JSON and
+offline `o200k_base` tokens, not provider billing attribution.
+
+The initial campaign's [partial results](../docs/evaluation/results-quality-benefit.md)
+include three qualifying pairs and a fourth pair blocked by native-summary Relace 429s.
+No B cleanup action was invoked, so no Hide/Summarize efficacy claim is supported.
