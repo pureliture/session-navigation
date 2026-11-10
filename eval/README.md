@@ -144,7 +144,17 @@ uv run --no-sync python eval/audit.py eval/results/YYYY-MM-DD
 기존 결과의 실패를 삭제하고 성공으로 교체하지 않는다.
 작업공간은 `~/.session-navigation-eval/`에 남고, 정답은 에이전트에 전달하지 않는다.
 
-필수: Python 3.11+, Bun, 저장소 `.venv/bin/session-navigation-daemon`, 설치된 OMP SDK 및 Hermes Python 환경.
+필수: 분석용 Python 3.11+, Bun, 설치된 OMP SDK 및 Hermes Python 환경.
+현재 OMP 수집기는 `bun run packages/omp/build.ts`로 빌드한 TS 확장을 사용하며
+별도 Python CLI/데몬을 실행하지 않는다. `eval/capture_overhead.ts`도 같은 확장을 사용한다.
+SDK 수집기는 OMP의 일반 extension runtime을 초기화하고 `session_start`를 보낸 뒤
+prompt를 실행한다. 그렇지 않으면 main-session guard 때문에 도구가 노출되지 않는다.
+오프라인 A/B 수집은 B에만 컨텍스트 도구 5개가 모두 있는지 검사한다.
+runtime 초기화는 설치된 OMP 18.18.3의 source API를 사용하며 다른 버전의 SDK 호환성을 보장하지 않는다.
+`v2_run.py`의 고정된 과거 커밋은 당시 Python 기반 확장을 포함한다. 현재 체크아웃의
+삭제된 실행 파일 경로를 주입하지 않는다. 과거 캠페인의 실제 재실행에는 해당 커밋의
+원래 격리 환경을 복원해야 하며, 현재 TS 엔진으로 바꿔 실행한 수치를 과거 결과로 취급하면 안 된다.
+이번 이관에서는 과거 유료 캠페인을 재실행하지 않았다.
 분석은 반드시 프로젝트 `uv` 환경을 사용한다. 이 VM의 시스템 Python(SQLite 3.51.0)은 Hermes가 만든
 WAL DB의 read-only 조회에 `unable to open database file`을 냈고, 프로젝트 SQLite 3.53.4에서는 정상 조회됐다.
 `OMP_PACKAGE`, `HERMES_SOURCE`, `HERMES_PYTHON`으로 호스트 위치를 바꿀 수 있다.

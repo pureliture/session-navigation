@@ -1,8 +1,3 @@
-> Installation update: Paseo now requires Node >=22.13 and an embedded Node worker,
-> not Python. OMP uses the bundled TypeScript package. The CLI and daemon entry points
-> described in this historical translation have been retired; use the current
-> [English installation instructions](../README.md#installation).
-
 <div align="center">
 
 <img src="https://capsule-render.vercel.app/api?type=waving&amp;color=0:38bdf8,50:2563eb,100:312e81&amp;height=220&amp;section=header&amp;text=Session%20Navigation&amp;fontSize=52&amp;fontColor=ffffff&amp;animation=fadeIn&amp;fontAlignY=40" alt="Session Navigation" width="100%" />
@@ -11,7 +6,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/Paseo-0.15.3-2563eb?style=for-the-badge" alt="검증한 Paseo 버전: 0.15.3" />
-  <img src="https://img.shields.io/badge/Python-3.11%2B-0e7490?style=for-the-badge&amp;logo=python&amp;logoColor=white" alt="Python 3.11 이상" />
+  <img src="https://img.shields.io/badge/Node-22.13%2B-0e7490?style=for-the-badge&amp;logo=node.js&amp;logoColor=white" alt="Paseo용 Node 22.13 이상" />
   <img src="https://img.shields.io/badge/license-MIT-312e81?style=for-the-badge" alt="MIT 라이선스" />
 </p>
 
@@ -92,7 +87,7 @@ Unhide는 도구를 다시 실행하지 않고 원본을 복원합니다. `next 
 - 도구 결과의 Hide / Summarize / Unhide와 SQLite 영속화.
 - Paseo Explorer의 **+ → Session navigation**, 보이는 세션 자동 추적과 선택적 고정.
 - 원본과 모델에 전달되는 대체문을 나란히 보는 읽기 전용 Preview.
-- OMP의 컨텍스트 도구와 `/nav` UI, Hermes의 컨텍스트 도구와 `/nav` 명령.
+- OMP의 컨텍스트 도구와 `/session-navigation` UI, Hermes의 컨텍스트 도구와 `/nav` 명령.
 - 사용자·assistant 메시지의 컨텍스트 제외와 복원. 호스트 원본은 유지합니다.
 - `manage_context`를 작업 단위마다 반복 호출하는 에이전트 주도 정리.
 - 새 사용자 턴과 컨텍스트 50/75/90% 구간에서 요청 사본 끝에 짧은 후보/ID 안내.
@@ -104,83 +99,76 @@ Unhide는 도구를 다시 실행하지 않고 원본을 복원합니다. `next 
 
 ## 설치
 
-### 공통 CLI / 데몬: Paseo와 OMP에 필요
+Paseo와 OMP는 번들에 포함된 **공통 TypeScript 엔진**을 사용하므로 Python이 필요하지 않습니다.
+Hermes는 **Python 엔진과 어댑터를 포함한 Python 플러그인**을 사용합니다.
+이전 독립 CLI/데몬 실행 파일은 폐기됐으며 새 설치에는 공통 CLI를 설치하지 않습니다.
 
-Python **3.11 이상**, [uv](https://docs.astral.sh/uv/), Git이 필요합니다.
-Paseo **데몬이 실행되는 머신**, OMP가 실행되는 머신에 각각 설치합니다.
+### Paseo 플러그인만 설치
 
-```bash
-git clone https://github.com/pureliture/session-navigation.git
-cd session-navigation
-uv tool install .
-export PATH="$HOME/.local/bin:$PATH"
-session-navigation --help
-```
+SDK와 실제 검증 대상은 **Paseo 0.15.3**입니다. manifest는 `>=0.15.0`을 허용하지만
+다른 0.15.x 버전은 별도 검증하지 않았습니다. 데몬의 Node는 **22.13 이상**이어야 합니다.
+실제 검증은 Node 24.21.0에서 했으며 최소 버전 22.13 자체의 acceptance는 남아 있습니다.
+내장 Node Worker에 코어와 SQLite 드라이버가 포함되며 Python이나 미게시 workspace 의존성은 없습니다.
 
-`session-navigation` CLI와 `session-navigation-daemon` 실행 파일이 설치됩니다.
-업데이트할 때는 검토한 새 소스를 받은 뒤 `uv tool install --force .`를 사용합니다.
-OMP 확장이 데몬을 자식 프로세스로 실행하므로 별도 데몬 서비스를 등록할 필요는 없습니다.
-Paseo는 CLI를 호출합니다. 이미 실행 중인 Paseo 데몬에도 같은 PATH와 상태 경로가
-전달되도록 환경을 설정하고 재시작하세요.
-
-### Paseo 플러그인
-
-현재 SDK와 런타임 검증 대상은 **Paseo 0.15.3**입니다. manifest의 허용 범위는
-`>=0.15.0`이지만, 그보다 낮은 0.15.x 버전의 호환성은 별도 검증하지 않았습니다.
-위 Python 패키지를 먼저 설치하세요. 플러그인 패키지에는 Python CLI가 포함되지 않습니다.
-
-소스 체크아웃에서 설치:
+Paseo 데몬 호스트에 다음 플러그인만 설치합니다. 기록 표시는 호스트 어댑터 없이도 가능하지만
+Hide/Summarize는 세션 호스트의 OMP 확장 또는 Hermes 플러그인이 필요합니다.
 
 ```bash
 paseo plugin add "$PWD/paseo-plugin"
 paseo plugin ls
 ```
 
-Git 폴더에서 직접 설치할 수 있습니다. 재현 가능한 설치에는 `main` 대신
-검증한 커밋이나 릴리스 태그를 지정하세요. 기존 `152f63c` 커밋은 타입 의존성
-해석 오류로 깨끗한 Git 설치에 실패합니다.
+Git 폴더 설치도 가능합니다. 재현 가능한 설치에는 `main` 대신 검토한 커밋이나 태그를 사용하세요.
+이전 `152f63c` 커밋은 타입 의존성 문제로 깨끗한 Git 설치에 실패합니다.
 
 ```bash
 paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref main
 ```
 
-Explorer의 **+ → Session navigation**을 선택하면 보이는 채팅 세션을 추적합니다.
-**Follow visible session**을 유지하거나 선택기로 특정 에이전트를 고정할 수 있습니다.
-식별할 수 없는 빈 채팅·비세션 화면에서는 **No session in view**를 표시합니다.
-**Cmd/Ctrl+K → Open session navigation**과 **/nav**도 사용할 수 있습니다.
-패널을 열어 두면 Paseo가 탭 레이아웃을 복원하며, 사용자가 닫은 패널을 강제로 다시 열지는 않습니다.
-플러그인 리로드 뒤 이전 페이지가 남아 있으면 페이지 전체를 새로고침하세요.
+Explorer의 **+ → Session navigation**을 선택하고 **Follow visible session**으로 현재 대화를
+따라가거나 선택기로 에이전트를 고정합니다. 비어 있거나 일치하지 않는 화면, 세션이 아닌 화면에는
+**No session in view**를 표시합니다. **Cmd/Ctrl+K → Open session navigation**, **/nav**도
+사용할 수 있습니다. 닫은 패널은 강제로 다시 열지 않으며 열려 있던 배치는 Paseo가 복원합니다.
+갱신 뒤 이전 화면이 남으면 페이지 전체를 새로고침하세요.
 
-### OMP(oh-my-pi) 확장
+### OMP(oh-my-pi) npm 패키지 확장
 
-검증 대상은 `@oh-my-pi/pi-coding-agent` **18.18.3**입니다. 위 Python CLI/데몬과
-OMP 확장은 **별도로** 설치해야 합니다. 기본 프로필의 자동 로드 경로에 파일을 복사합니다.
+`@oh-my-pi/pi-coding-agent` **18.18.3**에서 검증했습니다. Bun으로 빌드한 패키지를 설치합니다.
 
 ```bash
-mkdir -p "$HOME/.omp/agent/extensions"
-cp extensions/pi/session-navigation.ts "$HOME/.omp/agent/extensions/session-navigation.ts"
+(cd packages/omp && bun install)
+bun run packages/omp/build.ts
+omp plugin install "$PWD/packages/omp"
 ```
 
-새 OMP 세션을 시작하세요. 복사 없이 일회성으로 로드할 수도 있습니다.
+OMP를 재시작하세요. 일회성 로드는 `omp --extension "$PWD/packages/omp"`입니다.
+로컬 tarball은 `packages/omp`에서 `bun pm pack`으로 만듭니다. OMP 18.18.3의
+`omp plugin install`은 로컬 tarball을 직접 받지 않으므로 Bun으로 설치합니다.
 
 ```bash
-omp --extension "$PWD/extensions/pi/session-navigation.ts"
+mkdir -p "$HOME/.omp/plugins"
+cd "$HOME/.omp/plugins"
+bun add /absolute/path/to/session-navigation-omp-0.1.0.tgz
+omp plugin list
 ```
 
-이름 있는 프로필은 해당 프로필의 확장 디렉터리를 사용합니다.
-기본적으로 `~/.local/bin/session-navigation-daemon`, 없으면 PATH의 실행 파일을 사용합니다.
-다른 위치라면 `SESSION_NAVIGATION_DAEMON`에 **실행 파일의 절대 경로**를 지정하세요.
-인자가 포함된 셸 명령을 넣는 설정은 아닙니다.
+XDG 또는 named profile에서는 해당 프로필의 plugin 디렉터리를 사용하세요.
+향후 게시한 릴리스는 `omp plugin install @session-navigation/omp@<version>`으로 설치할 수
+있지만 **현재 npm 게시 완료를 주장하지 않습니다**. 공통 코어는 번들에 포함됩니다.
 
-디렉터리 이름은 `extensions/pi/`이지만 확장은 `@oh-my-pi/pi-*` API를 사용합니다.
-upstream **pi**와의 호환성은 검증하지 않았으며, pi 패키지로 바로 설치할 수 있다고
-보장하지 않습니다. 현재 OMP용 `package.json`도 없어 npm 플러그인 설치 대신 위 파일 로드를 사용합니다.
+이전 Python-spawning 사본인 **`~/.omp/agent/extensions/session-navigation.ts`를 모든 해당
+프로필에서 제거하거나 비활성화**하세요. 예전 사본은 새 중복 로딩 guard에 참여할 수 없습니다.
+저장소의 `extensions/pi/session-navigation.ts`는 개발용 상대 경로 shim이므로 autoload
+디렉터리에 복사하지 마세요. `SESSION_NAVIGATION_DAEMON` 환경변수는 더 이상 사용하지 않습니다.
+[OMP 패키지 안내](../packages/omp/README.md)에서 설치·상태 이관·검사를 확인하세요.
+upstream **pi**와의 호환성은 검증하지 않았습니다.
 
-### Hermes 플러그인
+### Hermes Python 플러그인
 
-Hermes 소스 커밋 `109fd8161a509db5a00942152ba48882e446e8b0`에서 검증했습니다.
-저장소 루트의 `plugin.yaml`, `__init__.py`, `vendor/`가 독립 플러그인을 구성합니다.
-Hermes에만 사용할 때는 공통 CLI를 따로 설치하지 않아도 됩니다.
+실제 ACP 검증에는 Hermes 소스 `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8`을,
+이전 플러그인 검사에는 `109fd8161a509db5a00942152ba48882e446e8b0`을 사용했습니다.
+루트 `plugin.yaml`, `__init__.py`, `vendor/`가 독립 플러그인입니다.
+Python은 Hermes 자체 관리 런타임으로 제공하며 공통 CLI 설치는 필요하지 않습니다.
 
 ```bash
 hermes plugins install pureliture/session-navigation --ref main --no-enable
@@ -188,27 +176,39 @@ hermes plugins enable session-navigation
 hermes config set plugins.entries.session-navigation.settings.enabled true
 ```
 
-설치와 활성화는 원하는 Hermes 프로필에서 수행하세요. 고정 설치는 `--ref main` 대신
-검토한 **40자리 커밋 SHA**를 지정합니다. 호스트의 플러그인 활성화와 플러그인 내부
-`settings.enabled`는 별개입니다. 내부 설정은 기본값이 `false`여서, 켜기 전에는
-도구가 `disabled`를 반환하고 요청을 기록하거나 바꾸지 않습니다.
-설정 후 새 세션을 시작하세요. 실행 중인 gateway가 있다면 해당 호스트의 재시작 안내를 따릅니다.
+원하는 Hermes 프로필에서 설치·활성화하세요. 고정 설치에는 `--ref main` 대신 검토한
+**40자리 커밋 SHA**를 사용합니다. 호스트 활성화와 내부 `settings.enabled`는 별개입니다.
+내부 설정은 기본 `false`이며 비활성 상태에서는 도구가 `disabled`를 반환하고 요청을 기록하거나
+변경하지 않습니다. 설정 후 새 세션을 시작하세요.
 
-`vendor/`에는 엔진과 어댑터의 Python 소스가 들어 있습니다.
-`python_runtime: external`이므로 Hermes의 공유 환경에 이 저장소의 `pyproject.toml`을
-설치하지 않습니다. Python wheel 설치만으로 Hermes 플러그인이 등록되지는 않습니다.
+`vendor/`는 Python 엔진과 어댑터 소스 사본입니다. `python_runtime: external`은
+루트 `pyproject.toml`을 Hermes 공유 환경에 설치하지 않습니다.
+Python wheel만 설치해서는 Hermes 플러그인이 등록되지 않습니다.
+업데이트 후 CLI와 **Hermes gateway를 완전히 재시작**해야 합니다. 단순 plugin reload는
+Python 모듈 캐시를 비우지 않습니다. 로드된 소스와 vendor의 fingerprint가 다르면 플러그인은
+로드를 거부하며 재시작을 요청하고 다른 설치본을 강제로 덮어쓰지 않습니다.
+공식 카탈로그 검증은 아직 완료되지 않았습니다.
 
-플러그인을 업데이트한 뒤에는 CLI를 다시 여는 것뿐 아니라 실행 중인 **Hermes gateway도 완전히
-재시작**해야 합니다. 플러그인 reload는 Python의 전역 `session_navigation` /
-`session_navigation_hermes` 모듈 캐시를 비우지 않습니다. 이미 로드된 엔진·어댑터의 소스
-fingerprint가 배포된 vendor 사본과 다르면 플러그인은 로드를 거부하고 재시작을 안내합니다.
-공유 환경에 설치된 다른 버전도 같은 검사 대상이며, 해당 모듈을 강제로 교체하지 않습니다.
-공식 카탈로그 등록 검증은 아직 통과하지 못했습니다. 아래 배포 항목을 참고하세요.
+### 업그레이드 / 마이그레이션
+
+1. 관련 세션을 중지하고 기존 SQLite DB를 백업하세요. `SESSION_NAVIGATION_STATE_PATH`
+   또는 기본/XDG 경로를 유지하고 DB나 호스트 원본 기록을 삭제하지 마세요.
+2. 수동 복사 OMP 확장을 모든 관련 프로필에서 제거하고 npm 형식 패키지로 교체합니다.
+   Paseo 플러그인을 갱신하고 OMP/Paseo를 재시작합니다. 이전 데몬 경로 override도 제거하세요.
+3. 이전 독립 tool 설치가 있다면 다음 명령으로 제거합니다. 새 설치의 필수 명령은 아닙니다.
+   ```bash
+   uv tool uninstall session-navigation
+   ```
+   이 명령은 Hermes 플러그인의 설치·활성화를 대신하지 않습니다.
+4. Python 플러그인을 갱신한 Hermes와 gateway를 완전히 재시작합니다.
+   OMP는 비어 있는 `omp:` scope에 legacy `pi:` 상태를 최초 한 번 복사하고 원본 행을 보존합니다.
+   이후 쓰기는 역방향 동기화하지 않습니다. item ID는 scope별이므로 다시 목록을 조회하세요.
+   이전 Python-spawning 확장과 새 패키지를 함께 실행하지 마세요.
 
 ## 사용법
 
 Paseo에서는 행의 Hide / Summarize / Unhide를 사용하고 Preview에서 원본과 대체문을 확인합니다.
-OMP의 `/nav`는 대화형 목록을 엽니다. Hermes에서는 다음 명령을 같은 대화에서 사용합니다.
+OMP의 `/session-navigation`는 대화형 목록을 엽니다. Hermes에서는 다음 명령을 같은 대화에서 사용합니다.
 
 ```text
 /nav list
@@ -242,7 +242,8 @@ manage_context({tool_call_ids: ["선택한-id-1", "선택한-id-2"], action: "hi
 - 원문·대체문·숨김 상태는 기본적으로 `~/.local/share/session-navigation/state.sqlite3`에 저장됩니다.
   `XDG_DATA_HOME` 또는 `SESSION_NAVIGATION_STATE_PATH`로 위치를 바꿀 수 있습니다.
   여러 프로세스가 같은 상태를 보려면 같은 머신에서 같은 경로를 사용해야 합니다.
-- 목록을 만들기 위해 로컬 세션 기록·모델 메타데이터를 읽고, Paseo/OMP는 Python 자식 프로세스를 실행합니다.
+- 목록을 만들기 위해 로컬 세션 기록·모델 메타데이터를 읽습니다. Paseo는 내장 Node Worker,
+  OMP는 Bun Worker에서 공통 TS 코어를 실행하며 Python 자식 프로세스를 실행하지 않습니다.
   네트워크 동기화나 자체 업데이트·런타임 소프트웨어 다운로드는 제공하지 않습니다.
 - 요약은 대상 원문을 **호스트에 설정된 세션 모델 제공자**로 보낼 수 있습니다.
   로컬 SQLite를 사용한다고 모든 데이터가 로컬에만 남는 것은 아닙니다.
@@ -250,15 +251,20 @@ manage_context({tool_call_ids: ["선택한-id-1", "선택한-id-2"], action: "hi
   Hermes는 호스트 미들웨어에 abort 계약이 없어 오류 시 원본 요청이 진행될 수 있으며,
   오류 로그와 목록의 pending 안내로 이를 알립니다. 민감정보 차단 도구로 사용하지 마세요.
 - WAL은 SQLite 3.51.3 이상 또는 수정된 3.44.6/3.50.7 계열에서 사용하고, 그 외에는 rollback journal을 사용합니다.
+- Subagent 컨텍스트는 관리하지 않습니다. 인식한 subagent 탭에서는 main outline과
+  **subagent context is not managed**를 표시하고 행 선택 시 main agent를 열어 이동합니다.
+  OMP child는 비활성이며 Hermes delegation의 child-tab 매핑은 실제 probe에서 노출되지 않았습니다.
+  [실제 검증 근거](subagent-live-verification.md)를 참고하세요.
 
 ## 구조
 
 | 경로 | 역할 |
 | --- | --- |
-| `src/session_navigation/` | 호스트 중립 엔진, CLI, SQLite 저장소 |
-| `src/session_navigation_omp/` | OMP 확장이 stdio로 호출하는 Python 데몬 |
-| `extensions/pi/session-navigation.ts` | OMP 요청 사본 처리, 도구와 UI |
-| `paseo-plugin/` | Paseo 클라이언트 패널과 CLI 기반 서버 RPC |
+| `src/session_navigation/` | Hermes용 Python 엔진과 SQLite 저장소 |
+| `packages/core/` | 공통 TS 엔진과 Node/Bun SQLite 드라이버 |
+| `packages/omp/` | 번들 OMP 확장·Worker·도구·UI |
+| `extensions/pi/session-navigation.ts` | 개발용 legacy shim |
+| `paseo-plugin/` | Paseo 패널·capability-gated RPC·내장 Node Worker |
 | `adapters/hermes/` | Hermes 도구, 미들웨어, `/nav`, 사용량 footer |
 | `plugin.yaml`, `__init__.py`, `vendor/` | Hermes가 직접 로드하는 배포 루트와 고정 소스 사본 |
 
@@ -267,7 +273,8 @@ manage_context({tool_call_ids: ["선택한-id-1", "선택한-id-2"], action: "hi
 ```bash
 uv sync --frozen --dev
 uv run pytest
-bun test extensions/pi
+bun run packages/omp/build.ts
+bun test packages/omp/test
 cd paseo-plugin
 bun install --frozen-lockfile
 bunx tsc --noEmit
@@ -275,12 +282,13 @@ bun test
 ```
 
 Python 배포물은 루트에서 `uv build`, Paseo 파일 구성은 `paseo-plugin/`에서
-`npm pack --dry-run --ignore-scripts`로 확인합니다. Paseo가 TypeScript를 컴파일하므로
-일반 배포에 별도 JS 빌드는 필요하지 않습니다.
+`npm pack --dry-run --ignore-scripts`로 확인합니다. 코어/Worker/service를 변경하면
+`paseo-plugin/`에서 `npm run build`를 실행하고 생성된 `server/worker-source.ts`를 커밋하세요.
 
 `vendor/`를 쓰는 Hermes 배포는 원본과 함께 갱신해야 합니다.
 `src/session_navigation/` ↔ `vendor/session_navigation/`,
 `adapters/hermes/` ↔ `vendor/session_navigation_hermes/`의 Python 소스 일치를 확인하세요.
+`__pycache__`를 제거한 뒤 `diff -ru`로 비교하세요.
 Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아직 없습니다.
 
 ## 배포 / 게시 계획
@@ -312,33 +320,22 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 [검토 정책](https://github.com/getpaseo/plugins/blob/main/REVIEW.md).
 영문 listing은 [OVERVIEW.md](../paseo-plugin/OVERVIEW.md)를 사용합니다.
 
-### OMP: 현재는 TS 파일, 패키지화 후 npm 또는 Git 카탈로그
+### OMP: npm 패키지 또는 Git 카탈로그
 
-1. 지금은 위의 단일 `.ts` 파일 복사 또는 `--extension` 로드가 가능한 배포 형식입니다.
-   Python 데몬 설치는 계속 별도 전제입니다.
-2. npm 배포에는 새 패키지 디렉터리의 `package.json`에 이름·버전과
-   `omp.extensions: ["./session-navigation.ts"]`를 선언하고 TS 파일·README·LICENSE를 포함해야 합니다.
-   **현재 그 패키지는 없습니다.** 새 패키지에서 `npm pack --dry-run --ignore-scripts`로
-   파일을 확인하고 `npm publish --access public`으로 게시하면
-   `omp plugin install <package-name>`로 배포할 수 있습니다.
-3. OMP의 marketplace는 `.omp-plugin/marketplace.json` 또는
-   `.claude-plugin/marketplace.json`을 가진 Git 카탈로그입니다. 패키지 폴더를 가리키는
-   항목을 만든 뒤 사용자는 `omp plugin marketplace add <catalog-source>`,
+1. `packages/omp/package.json`은 이름·버전과 `omp.extensions: ["./index.ts"]`를 선언합니다.
+   `bun pm pack`은 extension/worker를 빌드하고 `index.ts`, `dist/`, README와 LICENSE를 묶습니다.
+2. 로컬 tarball은 위의 Bun 설치 절차를 사용합니다. 게시 권한이 있는 이름/버전으로
+   `npm publish --access public`한 뒤에는 `omp plugin install @session-navigation/omp@<version>`을
+   사용할 수 있지만 현재 게시된 패키지가 있다는 뜻은 아닙니다.
+3. Git 카탈로그는 `.omp-plugin/marketplace.json` 또는 `.claude-plugin/marketplace.json`을
+   사용합니다. 항목을 만든 뒤 `omp plugin marketplace add <catalog-source>`,
    `omp plugin install <name>@<marketplace>`로 설치합니다. 현재 저장소에는 카탈로그가 없습니다.
-   marketplace 항목의 npm source는 아직 설치가 지원되지 않으므로 Git/상대 경로를 사용합니다.
-4. npm 플러그인 설치와 Git 카탈로그 설치는 별개 경로입니다. OMP 공식 문서에서
-   단일 중앙 마켓의 의무 심사 절차는 확인하지 못했습니다.
-   upstream pi 배포는 API 호환성 검증을 먼저 해야 합니다.
-5. upstream pi용으로 검증한 별도 패키지는 `pi.extensions`와
-   `keywords: ["pi-package"]`를 선언해 npm에 게시할 수 있습니다.
-   이 키워드가 공식 [Pi package gallery](https://pi.dev/packages)의 검색 대상 조건이며,
-   사용자는 `pi install npm:<package-name>@<version>`으로 설치합니다.
-   현재 OMP 확장에 이 호환성이나 배포 형식이 갖춰져 있다는 뜻은 아닙니다.
+   npm 설치와 Git 카탈로그 설치는 별개 경로입니다.
+4. upstream pi는 별도 API 호환성 검증이 필요합니다. OMP 검증을 pi 호환성으로 확대하지 마세요.
 
-공식 근거: [확장 작성/manifest](https://github.com/can1357/oh-my-pi/blob/main/docs/skills/authoring-extensions.md),
-[플러그인 설치](https://github.com/can1357/oh-my-pi/blob/main/docs/plugin-manager-installer-plumbing.md),
-[marketplace 형식](https://github.com/can1357/oh-my-pi/blob/main/docs/marketplace.md).
-upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는 OMP 호환성 보장이 아닙니다.
+[확장 작성/manifest](https://github.com/can1357/oh-my-pi/blob/main/docs/skills/authoring-extensions.md) ·
+[설치 문서](https://github.com/can1357/oh-my-pi/blob/main/docs/plugin-manager-installer-plumbing.md) ·
+[marketplace](https://github.com/can1357/oh-my-pi/blob/main/docs/marketplace.md)
 
 ### Hermes: 저장소 루트 → SHA 고정 공식 카탈로그
 
@@ -361,41 +358,38 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 [제출 절차](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/catalog-submission.md),
 [플러그인 API/의존성](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/index.md).
 
-## Evaluation
+## 평가
 
-평가 방법과 요약은 공개하지만, 실행 원본은 접근 권한이 필요한 프라이빗
-`eval/results/` submodule에 보관합니다. 일반 설치와 테스트에는 필요하지 않습니다.
-원본 접근 및 새 실행 결과 저장 방법은 [평가 실행 안내](../eval/README.md)를 참고하세요.
+평가 방법과 요약은 공개하지만 원본 자료는 접근 권한이 필요한 프라이빗 `eval/results/`
+submodule에 보관합니다. 일반 설치·테스트에는 필요하지 않습니다.
+[평가 실행 안내](../eval/README.md)에서 원본 접근과 저장 방법을 확인하세요.
 
-**Less context, without deleting history—not a claim of smarter answers.**
+**기록 삭제 없이 컨텍스트를 줄이는 기능이며, 더 똑똑한 답변을 보장하지 않습니다.**
 
-- Tool results accounted for roughly **70–81% of outgoing prompt tokens** in our
-  captured runs. For external context, JetBrains/TUM reports approximately
-  [84% observation tokens](https://kairos.jetbrains.com/research/articles/the-complexity-trap)
-  in its SWE-agent sample; the populations differ. [Measurement details](evaluation/context-share.md).
-- **v4:** the plugin removed **53–66% of final-request tool-result tokens** without
-  measured task-quality loss: **4/4 in every host/arm group**, on both final-only
-  and visible-unit checks. [Results and limitations](evaluation/results-v3.md).
-- **Synthetic focus replay:** rule-hidden histories used approximately **97–98%
-  fewer prompt tokens**, with no statistically significant accuracy difference:
-  short **15/15 vs 15/15**, long **14/15 Hide vs 15/15 RAW** (five seeds).
-  The one miss attempted recovery instead of answering. Hidden-only details were
-  **0/30 without recovery**; they must be unhidden to become available again.
-  [Full results, paired statistics and caveats](evaluation/results-focus.md).
-- **Live OMP, no native compaction:** **3/3 vs 3/3**, with **54% fewer aggregate
-  B prompt tokens**. This small autonomous comparison is **not causal**; only two
-  of three B sessions actually cleaned. [Live results](evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled).
+- 캡처한 실행에서 도구 결과는 outgoing prompt 토큰의 약 **70–81%**였습니다.
+  JetBrains/TUM의 별도 SWE-agent 표본은 약
+  [84% observation 토큰](https://kairos.jetbrains.com/research/articles/the-complexity-trap)을
+  보고하지만 모집단이 다릅니다. [측정 방법](evaluation/context-share.md).
+- **v4:** 마지막 요청의 도구 결과 토큰을 **53–66%** 줄였고, 최종 답변/표시 작업 단위
+  검사 모두 각 host/arm 그룹이 **4/4**로 측정상 품질 저하는 없었습니다.
+  [결과와 한계](evaluation/results-v3.md).
+- **합성 focus replay:** prompt 토큰은 약 **97–98%** 줄었으며 정확도 차이는 통계적으로
+  유의하지 않았습니다. 5개 seed에서 짧은 조건 **15/15 대 15/15**, 긴 조건
+  **Hide 14/15 대 RAW 15/15**였습니다. 한 실패는 답변 대신 복원을 시도했습니다.
+  숨김으로만 남은 세부사항은 복원 없이 **0/30**이므로 필요하면 Unhide해야 합니다.
+  [전체 결과와 통계](evaluation/results-focus.md).
+- **실제 OMP, native compaction 없음:** **3/3 대 3/3**, B의 총 prompt 토큰은
+  **54% 감소**했습니다. 작은 자율 실행 비교는 **인과적 근거가 아니며** B 세션 중
+  2개만 실제 정리했습니다. [실제 결과](evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled).
 
-Originals remain preserved. Rule Hide retains key lines, Unhide restores originals
-without re-executing tools, and user-visible controls/preview span **OMP, Hermes
-and Paseo**. Retention is not complete recall: inspect or recover details as needed.
+원본은 보존하며 규칙 Hide는 핵심 행을 남깁니다. Unhide는 도구 재실행 없이 원본을 복원합니다.
+OMP·Hermes·Paseo에서 사용자 제어/Preview를 제공하지만 정보 보존이 완전한 회상을 뜻하지는 않습니다.
 
-We do **not** claim improved accuracy or guaranteed cost savings. Observed OMP
-DeepSeek cost differences ranged from **+77% in v2 to −7% in v4**. Every edit
-invalidates the prompt-cache prefix from its first changed position onward;
-batching can mitigate, not eliminate, that overhead. [v2 failures/costs](evaluation/results-v2.md)
-· [v4 costs](evaluation/results-v3.md) · [reproduction harness](../eval/README.md)
-· [earlier v1 results](evaluation/results.md)
+정확도 향상이나 비용 절감을 **보장하지 않습니다**. OMP DeepSeek 비용 차이는
+**v2 +77%에서 v4 −7%**였으며 첫 변경 위치 이후 prompt-cache prefix는 무효화됩니다.
+일괄 정리는 이 비용을 완화할 수 있지만 없애지는 않습니다.
+[v2 실패/비용](evaluation/results-v2.md) · [v4 비용](evaluation/results-v3.md) ·
+[재현 도구](../eval/README.md) · [이전 v1](evaluation/results.md).
 
 ## 기여
 

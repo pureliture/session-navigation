@@ -4,7 +4,8 @@
 > the packed Paseo/OMP integration. Step 3 verified Hermes ACP mutations, resume,
 > native fork/import, in-place compression, shared-DB writers, and one real
 > session-model summary per host. See [Phase 6 live evidence](phase6-live-verification.md)
-> for observed behavior and remaining limits. The original snapshot below is historical.
+> for observed behavior and remaining limits. The status table below is current;
+> the old implementation/checkpoint sections are explicitly historical.
 >
 > Step 4: [Subagent probe and fallback evidence](subagent-live-verification.md)
 > records real OMP/Hermes delegation and the main-outline fallback. OMP children
@@ -15,11 +16,11 @@
 
 - 저장소: `/Users/devin/repos/session-navigation`
 - 인계 브랜치: `devin/1794316415-issue9-common-core`
-- 기반 HEAD: `420f78cb0c61dc1d076b829507867981f41a5347`
-- Phase 5 WIP: `1929ed496f770efd07e6ea440151c888d167a866`
-- **Phase 5는 완료가 아니다.** 중단 요청에 따라 구현을 그대로 커밋했다.
-  테스트 실패를 고치지 않고 인계한다. 실제 Paseo smoke는 아직 실행하지 않았다.
-- 이 문서는 별도 후속 커밋이다. 브랜치는 위 기반까지의 승인된 커밋을 모두 포함한다.
+- 이전 WIP 기반: `420f78c`, `1929ed4`. 아래 두 실패는 `d1fe622`에서 해결했다.
+- 후속 완료 커밋: `7a8ab16` (Paseo live), `39a83e8` (Hermes/실제 모델 live),
+  `bfe5c75` (subagent fallback). Phase 8 정리와 최종 검증은 이 문서와 같은 커밋에 포함한다.
+- 실제 Paseo/OMP/Hermes smoke와 UI 검증은 완료했다. 아래 남은 제한은 완료한 범위를
+  넘어서는 acceptance/publishing 항목이며, 과거 WIP 실패를 현재 실패로 읽지 말 것.
 - 제품 목표: 원본 보존, outgoing request 복사본만 변경, 결정론적 rule Hide,
   session LLM Summarize, 도구 재실행 없는 Unhide. 정리 대상/시점은 에이전트가 선택한다.
   작업 답변을 먼저 끝내고 필요하면 한 번에 정리한다. 정리 뒤에도 완전한 답을 다시 제공한다.
@@ -29,14 +30,56 @@
 
 | 단계 | 상태 | 내용 / 근거 |
 | --- | --- | --- |
-| 0 | 완료; 추가 probe 필요 | 실제 host feasibility gate 4개 통과. Node 22.13 및 subagent probe는 미완료 |
+| 0 | 완료 | 실제 host feasibility gate 4개 및 후속 OMP/Hermes delegation probe. Node 22.13 자체 acceptance는 별도 미검증 |
 | 1 | 완료 | `8c20187`: contract, Python schema/protocol migration, DELETE 정책, Hermes registry/targets/pending summary |
 | 2–3 | 완료 | `e26ed8e`, readability 후속 `56c43af`: shared TS core, Node/Bun drivers, differential/cross-writer harness |
 | 4 | 완료 | `420f78c`: OMP Bun Worker service, npm-style package, projection/tools/TUI, packed real-OMP test, subagent inert gate |
-| 5 | 진행 중, WIP | Paseo Node Worker 통합, history/list/mutations, DB scopes, capabilities, UI gates. 아래 잔여 작업/실패 참조 |
-| 6 | 미시작 | Hermes 남은 live ACP mapping/Hide, resume/fork/compression identity 검증. Phase 1의 synthetic 테스트와 구분 |
-| 7 | 진행 중 | core conformance/cross-writer 및 packed OMP는 통과. 최종 integration/race/failure matrix와 real-Paseo smoke는 미완료 |
-| 8 | 진행 중, 일부 앞당김 | CLI/daemon 삭제와 문서 변경을 Phase 5 요청으로 WIP에 포함. Python 잔여 의존성, migration 안내, 최종 검증 미완료 |
+| 5 | 완료: live + unit | packed Paseo 단독 설치, 폐기 Python CLI 실행 파일 없는 PATH, 실제 OMP provider의 outline/Hide/Unhide/pending Summarize 및 adapter 없는 세션 거부. UI screenshot; `7a8ab16` |
+| 6 | 완료: live + unit | Hermes ACP mapping/Hide/Unhide/Summarize, resume, native fork 후 Paseo import, ID 유지 수동 compression, 공유 DB TS/Python writers. 호스트별 실제 모델 요약 1회. [근거/제한](phase6-live-verification.md) |
+| 7 | 완료: 범위 명시 | Node/Bun differential/cross-writer, packed real-OMP request roundtrip, packed Paseo live. crash/timeout/CAS/DB 오류는 unit 중심; 모든 host 간 race를 live로 검증한 것은 아님 |
+| 8 | 완료 | 폐기 CLI 의존성 제거, 영문/한국어 설치·이관 안내, vendor parity, clean relocated package 검사, 전체 테스트. 공개 registry/catalog 게시 완료를 뜻하지 않음 |
+
+## 최종 정리 / 검증 근거와 남은 범위
+
+- Phase 5 live 자료: `/Users/devin/nav-phase0-gates/phase5-live/`, screenshot은 `screens/`.
+  packed Paseo만 설치한 daemon의 PATH에서 CLI/daemon 실행 파일은 발견되지 않았다.
+  원본 JSONL 불변과 다음 outgoing 요청의 Hide/Unhide/요약 대체를 실제 캡처로 확인했다.
+- Phase 6: [상세 근거](phase6-live-verification.md). Hermes fork는 새 scope이며 숨김 상태를
+  상속하지 않았다. 수동 압축 뒤 ID와 보존된 target은 유지됐다. eligible target 제거,
+  ID 회전, 자동 overflow 압축, compression/mutation race는 live 미검증이다.
+  실제 Hermes 모델은 영어 요약을 생성했으나 행 개수를 틀렸으므로 factual accuracy 보장은 아니다.
+- Subagent: [실제 probe와 fallback](subagent-live-verification.md). OMP focused child에서
+  main outline/영문 notice/row→main 이동을 UI로 확인했다. Hermes delegation은 실행됐지만
+  child-tab 매핑은 노출되지 않았다. SDK parent-chain fallback은 unit-only이며
+  어느 host도 per-child Hide/Unhide를 지원한다고 주장하지 않는다.
+- 최종 clean artifact 자료: `/Users/devin/nav-phase0-gates/phase8-clean/`.
+  Paseo tarball의 `server/worker-source.ts` 내장 bundle을 relocated Node Worker로 실행하고,
+  client/server entry graph가 host 라이브러리 외에 package 내부 파일만 참조함을 검사했다.
+  OMP tarball에는 `package.json`, `index.ts`, `dist/extension.js`, `dist/worker.js`, README, LICENSE만 있다.
+  relocated Bun Worker와 OMP 18.18.3 directory install, Bun tarball install 및 plugin discovery를 확인했다.
+  OMP의 로컬 tarball 직접 install 대신 문서의 Bun 절차를 사용하며 registry 버전은 아직 미게시다.
+- `__pycache__`를 지운 뒤 두 Python source/vendor 트리를 `diff -ru`로 비교해 일치를 확인했다.
+  Python 엔진과 Hermes vendor는 유지한다. 이전 `uv tool uninstall session-navigation`은
+  사용자용 이관 안내일 뿐 이 VM에서 실행하지 않았다.
+- 항목 4/6/8 재검토: single/batch(그룹 UI 포함)/manage/fork는 같은 server gate로 모인다.
+  absent/disabled/incompatible/capability-bit 거부 및 legacy Unhide는 unit으로 검증됐다.
+  canonical float 종류·큰 정수·Unicode 및 cross-writer는 conformance로 검증됐고,
+  `pi:` import는 비어 있는 `omp:` scope로만 한 번 복사하며 legacy 원본은 보존한다.
+  일반 YAML grammar 전체의 Python parity는 확립하지 않았다. 현재 model-window parser는
+  지원하는 scalar layout에 한정하며 복잡한 YAML/quoted scalar acceptance는 미검증이다.
+- eval 정리 중 실제 SDK 수집기에서 A/B 모두 context tools가 없는 것을 발견했다.
+  OMP SDK 생성만으로는 `session_start`가 발생하지 않았다. 일반 runtime 초기화와
+  event를 연결하고 오프라인 요청에서 A=0, B=5 도구를 검증하는 회귀 테스트를 추가했다.
+  과거 유료 캠페인은 재실행하지 않았으며 source API는 OMP 18.18.3에 묶여 있다.
+- 최종 검사: Paseo build/typecheck, 121 Bun + 8 Node tests; core typecheck,
+  Node 17/Bun 17; OMP typecheck/50 tests; Node/Bun conformance 4개;
+  Python 340 passed/11 skipped; eval 40 tests OK; `git diff --check` clean.
+  eval은 문서대로 `uv run --no-sync --with tiktoken` 환경에서 실행했다.
+- Node **24.21.0**에서 검사했으며 manifest floor **22.13** 자체는 미검증이다.
+  이번 정리는 새로운 UI를 추가하지 않아 이전 live screenshot을 재사용한다.
+  공식 게시에는 README의 Paseo npm/registry 준비 및 Hermes manifest/catalog validate 제한이 남는다.
+
+아래 구현 설명·실패 로그·이전 VM 환경은 최초 WIP 시점의 **역사적 기록**이다.
 
 ## Phase 0에서 확인한 사실
 
@@ -86,7 +129,7 @@ Phase 0 evidence 예: `logs/paseo-gate-final.log`, `logs/paseo-managed-layout.lo
 - 지원 경로: **OMP는 Paseo built-in OMP RPC provider**, **Hermes는 custom ACP provider**.
   title/cwd/model argument/executable 이름으로 scope identity를 추정하지 않는다.
   4-part scope의 session은 `parts[2]`다.
-- `session-navigation` CLI와 `session-navigation-daemon` entry point를 제거한다.
+- `session-navigation` CLI와 `session-navigation-daemon` entry point를 제거했다.
   `pyproject.toml` scripts, `src/session_navigation/cli.py`, vendor CLI mirror,
   `src/session_navigation_omp/`가 WIP에서 삭제됐다. Python engine/Hermes vendor mirror는 유지한다.
 - 업그레이드 안내에 **`uv tool uninstall session-navigation`**를 포함해야 한다.
@@ -156,7 +199,7 @@ Phase 0 evidence 예: `logs/paseo-gate-final.log`, `logs/paseo-managed-layout.lo
 - `README.md`, `paseo-plugin/OVERVIEW.md`에 Node Worker/no-Python 설명을 반영했다.
   `docs/README.ko.md`에는 구형 설치 설명에 대한 경고를 추가했을 뿐 전체 번역을 갱신하지 않았다.
 
-## 현재 테스트 결과: 성공/실패를 구분할 것
+## 과거 WIP 테스트 결과 (현재 결과 아님)
 
 다음은 중단 직전/인계 시의 **현재 WIP** 결과다. 과거 Phase 4의 Python `414 passed`를
 현재 성공으로 재사용하면 안 된다. 전체 suite를 green이라고 보고하지 말 것.
@@ -199,7 +242,7 @@ OMP suite에는 실제 packed-package 검증도 포함되어 통과했다:
 0 fail
 ```
 
-### 현재 실패 1: Node lifecycle runner의 TypeScript 실행 방식
+### 해결된 과거 실패 1: Node lifecycle runner의 TypeScript 실행 방식
 
 `npm test`의 후반 command:
 
@@ -224,7 +267,7 @@ esbuild를 사용하는 실제 plugin 경로가 실패했다는 증거는 아니
 아직 실행되지 않았으므로 성공으로 간주할 수 없다. 다음 세션에서 명시적 fields로 바꾸거나
 테스트용 transpilation 경로를 정하고, actual embedded Worker도 검증해야 한다.
 
-### 현재 실패 2: Python에서 삭제한 daemon test helper를 아직 import함
+### 해결된 과거 실패 2: Python에서 삭제한 daemon test helper를 아직 import함
 
 ```text
 ERROR collecting tests/test_cleanup_improvements.py
@@ -242,7 +285,7 @@ daemon 의존 test는 `test_daemon_hide_keep_lines_and_unlisted_targets`와
 이를 TS service tests로 옮기거나 유용한 oracle이면 직접 engine 호출로 바꾸고 import를 제거한다.
 그 뒤 전체 Python suite를 다시 실행해야 다른 실패 여부를 알 수 있다.
 
-## 다음 세션의 우선 작업 / 알려진 위험
+## 이전 인계 체크리스트 (최신 완료/제한은 위 표 참조)
 
 1. 위 Node runner와 Python collection 실패부터 해결한다. 요청받은 중단 이후에는 고치지 않았다.
 2. `git diff --check` EOF whitespace와 아직 format하지 않은 OMP test/benchmark 변경을 검토한다.
@@ -294,7 +337,7 @@ daemon 의존 test는 `test_daemon_hide_keep_lines_and_unlisted_targets`와
   4. Hermes delegation hook, child session ID 및 parent linkage, outgoing projection hook 실행 위치.
   5. 각 provider에서 request-copy rewrite와 capability registry가 실제로 도달 가능한지.
 
-## 이 VM에만 있는 환경 / 재현 방법
+## 이전 VM 환경 / 재현 방법 (역사적 기록)
 
 ### 설치된 runtime / 도구
 

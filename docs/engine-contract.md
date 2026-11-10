@@ -73,7 +73,7 @@ hints use JSON; `original` and `compacted` are literal text, not JSON strings.
 
 Scope keys are `adapter:profile:session:branch`. Never infer them from model
 arguments, titles, working directories or executable names. The TS OMP adapter uses
-`omp:default:<session>:default`; the legacy Python daemon uses
+`omp:default:<session>:default`; the retired Python daemon used
 `pi:default:<session>:default`. On first valid processing, the TS adapter imports
 legacy state only into an entirely empty destination scope, under one transaction.
 Item IDs and identity references are recomputed for the destination scope; original

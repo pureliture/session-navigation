@@ -43,8 +43,9 @@ directories, not local tarball specifications directly.
 2. Install the package and restart OMP. The Python daemon is not launched;
    `SESSION_NAVIGATION_DAEMON` is no longer read.
 3. Keep the same `SESSION_NAVIGATION_STATE_PATH` (or XDG/default state path).
-   Never delete the existing database. Python remains necessary for Hermes
-   and for Paseo until its separate TS integration is completed.
+   Never delete the existing database. Python remains necessary only for Hermes;
+   Paseo also uses the bundled TS core. If the standalone tool was installed,
+   remove it with `uv tool uninstall session-navigation` after migration.
 
 The repository path `extensions/pi/session-navigation.ts` remains a thin
 development shim. Build the package first; do not copy that relative-import
@@ -59,8 +60,8 @@ its legacy `pi:default:<session>:default` state, including hidden messages,
 pending summaries and identity fences. Original legacy rows are preserved;
 later mutations affect the `omp:` scope only. Old item IDs belong to the old
 scope; relist to obtain new IDs. This is a one-time import, not bidirectional
-synchronization with an old daemon. Paseo's follow-up integration must discover
-the new registered scope rather than continue mutating the old `pi:` scope.
+synchronization with an old daemon. Paseo discovers the new registered `omp:`
+scope; legacy `pi:` scopes remain display/Unhide-only.
 
 ## Runtime behavior
 
@@ -98,6 +99,7 @@ bun run build.ts
 bun test test
 ```
 
-The packed real-OMP test uses only a loopback stub provider. Other adapter tests
-retain Python CLI/Paseo interoperability as an oracle, so those tests still need
-the repository's `.venv`; the installed extension itself does not need Python.
+The packed real-OMP test uses only a loopback stub provider. Adapter tests use
+the TS service and Paseo integration. The separate cross-engine conformance
+harness uses the repository's Python engine as an oracle; only that harness
+and Hermes/Python tests need `.venv`, not the installed extension.

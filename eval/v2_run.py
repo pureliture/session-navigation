@@ -50,7 +50,6 @@ def child_environment(home, source, work, workspace):
     env.update(HOME=str(home), HERMES_HOME=str(home), PYTHONPATH=str(source / "src"),
                OMP_PACKAGE=os.environ.get("OMP_PACKAGE", "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent"),
                NODE_PATH=str(Path(os.environ.get("OMP_PACKAGE", "/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent")) / "node_modules"),
-               SESSION_NAVIGATION_DAEMON=str(ROOT / ".venv/bin/session-navigation-daemon"),
                SESSION_NAVIGATION_STATE_PATH=str(work / "navigation.sqlite3"), TERMINAL_CWD=str(workspace), HERMES_YOLO="1")
     return env
 

@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { initializeOmpExtensions } from "./omp_runtime";
 
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const sdk = await import(pathToFileURL(join(process.env.OMP_PACKAGE!, "src/index.ts")).href);
@@ -28,6 +29,7 @@ const { session } = await sdk.createAgentSession({ cwd: spec.workspace, agentDir
   getApiKey: async () => "local-eval", sessionManager: sdk.SessionManager.inMemory(), extensions,
   disableExtensionDiscovery: true, skills: [], rules: [], contextFiles: [], noContextFiles: true, promptTemplates: [], enableMCP: false, enableLsp: false,
   toolNames: ["read", "bash", "edit", "write", ...(spec.arm === "B" ? ["list_context_items", "manage_context", "hide_context", "summarize_context", "unhide_context"] : [])], hasUI: false, thinkingLevel: "off" });
+await initializeOmpExtensions(session, process.env.OMP_PACKAGE!);
 session.subscribe((event: any) => {
   if (["tool_execution_start", "tool_execution_end", "turn_start", "turn_end"].includes(event.type)) record({ kind: "host_event", event });
 });

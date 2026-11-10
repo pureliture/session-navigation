@@ -72,7 +72,6 @@ def main():
                         (output / "spec.json").write_text(json.dumps(spec, indent=2))
                         env = {k: v for k, v in os.environ.items() if k in ["PATH", "SHELL", "LANG", "LC_ALL", "TERM", "TZ", "TMPDIR", "SYSTEMROOT", "SSL_CERT_FILE", "SSL_CERT_DIR"]}
                         env.update(HOME=str(home), HERMES_HOME=str(home), OMP_PACKAGE=omp_package,
-                            SESSION_NAVIGATION_DAEMON=str(ROOT / ".venv/bin/session-navigation-daemon"),
                             SESSION_NAVIGATION_STATE_PATH=str(work / "navigation.sqlite3"), TERMINAL_CWD=str(workspace), HERMES_YOLO="1")
                         if host == "hermes":
                             plugins = home / "plugins"

@@ -1,8 +1,9 @@
 # Legacy OMP development path
 
 The implementation and tests now live in [packages/omp](../../packages/omp/README.md).
-The old Python daemon is retained only as a conformance oracle; OMP no longer
-spawns it or reads `SESSION_NAVIGATION_DAEMON`.
+The Python engine is retained for Hermes and as a conformance oracle; the old
+CLI/daemon entry points are removed. OMP neither spawns them nor reads
+`SESSION_NAVIGATION_DAEMON`.
 
 Build with `bun run packages/omp/build.ts`, then install `packages/omp` through
 OMP's plugin installer. This directory's `session-navigation.ts` remains a thin
