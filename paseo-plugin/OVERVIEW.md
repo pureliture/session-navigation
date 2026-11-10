@@ -7,7 +7,7 @@ adapter changes only the outgoing request copy. Hide is not a secret-erasure fea
 
 The session-navigation Python package and CLI must already be installed on the machine
 running the Paseo daemon, with the CLI available to that daemon's environment. Python
-3.11 or later is required. See the [project README](https://github.com/pureliture/session-navigation#설치)
+3.11 or later is required. See the [project README](https://github.com/pureliture/session-navigation#installation)
 for installation; the plugin does not download or install Python software for you.
 
 The manifest allows Paseo 0.15.0 or later; the tested SDK and host are 0.15.3.
