@@ -1,0 +1,11 @@
+{
+  "planned_sessions": 24,
+  "completed_sessions": 21,
+  "interrupted": ["v3ds-hermes-boreal-B-new-2", "v3ds-hermes-boreal-B-old-2"],
+  "not_started": ["v3ds-hermes-boreal-A-2"],
+  "reason": "Relace shared upstream pool HTTP 429 persisted after all backoff retries; affected sessions stopped rather than recording API-error final answers as product failures",
+  "qualifying_cost_subset": "All 12 OMP sessions completed before persistent 429 failures. Reuse 4 A plus 4 B-new sessions for Stage 2; no duplicate spend.",
+  "full_balanced_hermes_evaluation": false,
+  "final_config_hashes": "Compared after termination to pilot-safety.json configs_before: byte-exact",
+  "pilot_safety_json_scope": "Pilot only; full process was terminated without its finally handler, so use this final comparison and final-audit.json"
+}

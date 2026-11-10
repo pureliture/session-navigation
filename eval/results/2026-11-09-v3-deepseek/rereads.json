@@ -1,0 +1,430 @@
+{
+  "groups": {
+    "omp/A": {
+      "sessions": 4,
+      "after_compaction": 0,
+      "repeat_visible": 12,
+      "new": 106,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash_after_compaction": 0,
+      "bash_repeat_visible": 6,
+      "bash_new": 18,
+      "read_after_compaction": 0,
+      "read_repeat_visible": 6,
+      "read_new": 88
+    },
+    "omp/B-new": {
+      "sessions": 4,
+      "after_compaction": 3,
+      "repeat_visible": 16,
+      "new": 104,
+      "same_turn": 0,
+      "later_turn": 3,
+      "unhide_calls": 0,
+      "bash_after_compaction": 2,
+      "bash_repeat_visible": 0,
+      "bash_new": 28,
+      "read_after_compaction": 1,
+      "read_repeat_visible": 16,
+      "read_new": 76
+    },
+    "omp/B-old": {
+      "sessions": 4,
+      "after_compaction": 2,
+      "repeat_visible": 4,
+      "new": 104,
+      "same_turn": 0,
+      "later_turn": 2,
+      "unhide_calls": 2,
+      "bash_after_compaction": 0,
+      "bash_repeat_visible": 1,
+      "bash_new": 16,
+      "read_after_compaction": 2,
+      "read_repeat_visible": 3,
+      "read_new": 88
+    }
+  },
+  "unavailable": [
+    {
+      "id": "v3ds-hermes-atlas-A-1",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-atlas-A-2",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-new-2",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-old-1",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-atlas-B-old-2",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-boreal-A-1",
+      "host": "hermes",
+      "arm": "A",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-new-1",
+      "host": "hermes",
+      "arm": "B-new",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    },
+    {
+      "id": "v3ds-hermes-boreal-B-old-1",
+      "host": "hermes",
+      "arm": "B-old",
+      "reason": "No tool_execution_start events captured; not a zero count"
+    }
+  ],
+  "sessions": [
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 2,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v3ds-omp-atlas-A-1",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 0,
+      "new": 27,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 3
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 24
+      },
+      "id": "v3ds-omp-atlas-A-2",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 1,
+      "repeat_visible": 1,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 1,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v3ds-omp-atlas-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 29,
+      "after_compaction": 1,
+      "repeat_visible": 2,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 5
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 2,
+        "new": 21
+      },
+      "id": "v3ds-omp-atlas-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 2,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 2,
+        "new": 22
+      },
+      "id": "v3ds-omp-atlas-B-old-1",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 1,
+      "repeat_visible": 0,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 22
+      },
+      "id": "v3ds-omp-atlas-B-old-2",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 30,
+      "after_compaction": 0,
+      "repeat_visible": 4,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 2,
+        "new": 5
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 2,
+        "new": 21
+      },
+      "id": "v3ds-omp-boreal-A-1",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 33,
+      "after_compaction": 0,
+      "repeat_visible": 6,
+      "new": 27,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 3,
+        "new": 6
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 3,
+        "new": 21
+      },
+      "id": "v3ds-omp-boreal-A-2",
+      "host": "omp",
+      "arm": "A"
+    },
+    {
+      "work_calls": 39,
+      "after_compaction": 1,
+      "repeat_visible": 12,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 15
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 12,
+        "new": 11
+      },
+      "id": "v3ds-omp-boreal-B-new-1",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 0,
+      "repeat_visible": 1,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v3ds-omp-boreal-B-new-2",
+      "host": "omp",
+      "arm": "B-new"
+    },
+    {
+      "work_calls": 27,
+      "after_compaction": 1,
+      "repeat_visible": 0,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 1,
+      "unhide_calls": 0,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 0,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 1,
+        "repeat_visible": 0,
+        "new": 22
+      },
+      "id": "v3ds-omp-boreal-B-old-1",
+      "host": "omp",
+      "arm": "B-old"
+    },
+    {
+      "work_calls": 28,
+      "after_compaction": 0,
+      "repeat_visible": 2,
+      "new": 26,
+      "same_turn": 0,
+      "later_turn": 0,
+      "unhide_calls": 1,
+      "bash": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 4
+      },
+      "read": {
+        "after_compaction": 0,
+        "repeat_visible": 1,
+        "new": 22
+      },
+      "id": "v3ds-omp-boreal-B-old-2",
+      "host": "omp",
+      "arm": "B-old"
+    }
+  ],
+  "details": {
+    "v3ds-omp-atlas-A-1": [],
+    "v3ds-omp-atlas-A-2": [],
+    "v3ds-omp-atlas-B-new-1": [
+      {
+        "turn": 24,
+        "tool": "read",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 20
+      }
+    ],
+    "v3ds-omp-atlas-B-new-2": [
+      {
+        "turn": 24,
+        "tool": "bash",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 20
+      }
+    ],
+    "v3ds-omp-atlas-B-old-1": [],
+    "v3ds-omp-atlas-B-old-2": [
+      {
+        "turn": 24,
+        "tool": "read",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 22
+      }
+    ],
+    "v3ds-omp-boreal-A-1": [],
+    "v3ds-omp-boreal-A-2": [],
+    "v3ds-omp-boreal-B-new-1": [
+      {
+        "turn": 24,
+        "tool": "bash",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 20
+      }
+    ],
+    "v3ds-omp-boreal-B-new-2": [],
+    "v3ds-omp-boreal-B-old-1": [
+      {
+        "turn": 24,
+        "tool": "read",
+        "files": [
+          "audit-02"
+        ],
+        "gap": 20
+      }
+    ],
+    "v3ds-omp-boreal-B-old-2": []
+  }
+}

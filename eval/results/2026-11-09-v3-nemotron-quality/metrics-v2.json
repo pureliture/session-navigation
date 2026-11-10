@@ -1,0 +1,4629 @@
+[
+  {
+    "id": "v3nq-hermes-command-hide-B-new-1",
+    "host": "hermes",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 10,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-8642c3ab-1c97-4453-b839-a2226756e5ad",
+        "name": "hide_context",
+        "args": {
+          "tool_call_id": "call-99a3d4d7-1b58-4a7b-a34a-444b6804dbf7"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "item_id": "item_7f7482f7a2b734f4",
+          "visibility_version": 1
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-8b6f3592-357e-4391-b78d-b9f45df59691",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_7f7482f7a2b734f4"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "item_id": "item_7f7482f7a2b734f4",
+          "visibility_version": 2
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-99a3d4d7-1b58-4a7b-a34a-444b6804dbf7",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "62520e51764e46c699414253aa65e9ca",
+        "summary": false,
+        "prompt": 4527,
+        "completion": 96,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009822,
+        "gpt41_uncached_upper_usd": 0.009822
+      },
+      {
+        "id": "1de9c51c643a4800a1770d6eba6b4ecb",
+        "summary": false,
+        "prompt": 15868,
+        "completion": 225,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1842,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033536,
+        "gpt41_uncached_upper_usd": 0.033536
+      },
+      {
+        "id": "08867ba3b2c743f9aecc86a6dc24d80f",
+        "summary": false,
+        "prompt": 15995,
+        "completion": 736,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 11817,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.037878,
+        "gpt41_uncached_upper_usd": 0.037878
+      },
+      {
+        "id": "f8e5c5b25ff149d9be1f1a8bf934eeac",
+        "summary": false,
+        "prompt": 16650,
+        "completion": 1053,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11701,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.019716,
+        "gpt41_uncached_upper_usd": 0.041724
+      },
+      {
+        "id": "de2506af503b41fc81a76753f0f1ee16",
+        "summary": false,
+        "prompt": 7087,
+        "completion": 1291,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 1322,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.018214,
+        "gpt41_uncached_upper_usd": 0.024502
+      },
+      {
+        "id": "4a88284a4efb47458a7939acd59237ab",
+        "summary": false,
+        "prompt": 5620,
+        "completion": 232,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 2978,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.006808,
+        "gpt41_uncached_upper_usd": 0.013096
+      },
+      {
+        "id": "df4c44a65bfd4b3e8ee7c5867a75eb0c",
+        "summary": false,
+        "prompt": 16582,
+        "completion": 211,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 1397,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012844,
+        "gpt41_uncached_upper_usd": 0.034852
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 16650,
+      "host_peak": 16582,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 7
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-hide-B-new-2",
+    "host": "hermes",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 12,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-b1ea6c00-448d-4d56-b13d-4f3959ea0779",
+        "name": "hide_context",
+        "args": {
+          "tool_call_id": "call-8dfbbb75-d29d-41d1-8256-7f0f9e68f583"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "item_id": "item_73f1088860b7a4cb",
+          "visibility_version": 1
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-9dedf007-d3c8-4ee0-81cc-1970c93938d2",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_73f1088860b7a4cb"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "item_id": "item_73f1088860b7a4cb",
+          "visibility_version": 2
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-8dfbbb75-d29d-41d1-8256-7f0f9e68f583",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "05c2f24fe4764eb98b565b88fc6a2a7e",
+        "summary": false,
+        "prompt": 4527,
+        "completion": 101,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009862,
+        "gpt41_uncached_upper_usd": 0.009862
+      },
+      {
+        "id": "69e3cdd79d2b45a6ad10176703492f1e",
+        "summary": false,
+        "prompt": 4666,
+        "completion": 44,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 1514,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.003396,
+        "gpt41_uncached_upper_usd": 0.009684
+      },
+      {
+        "id": "a9b8135ee17a4431b35cfc9987998351",
+        "summary": false,
+        "prompt": 15949,
+        "completion": 177,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 2124,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033314,
+        "gpt41_uncached_upper_usd": 0.033314
+      },
+      {
+        "id": "8bdc3f592d1a4171b2625204500b9dcd",
+        "summary": false,
+        "prompt": 16058,
+        "completion": 996,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11964,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.018076,
+        "gpt41_uncached_upper_usd": 0.040084
+      },
+      {
+        "id": "e9c2281865e144d186fcb5292c42fd4b",
+        "summary": false,
+        "prompt": 16972,
+        "completion": 2763,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11401,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03404,
+        "gpt41_uncached_upper_usd": 0.056048
+      },
+      {
+        "id": "8e2fd3c93e6e4433a2497cb507479c46",
+        "summary": false,
+        "prompt": 9116,
+        "completion": 363,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1208,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.021136,
+        "gpt41_uncached_upper_usd": 0.021136
+      },
+      {
+        "id": "3a2b64914d2645b89da3af361569b563",
+        "summary": false,
+        "prompt": 5564,
+        "completion": 231,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 4186,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012976,
+        "gpt41_uncached_upper_usd": 0.012976
+      },
+      {
+        "id": "30dd7287fe3740559e14fd8ba60e0881",
+        "summary": false,
+        "prompt": 16527,
+        "completion": 221,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 1315,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012814,
+        "gpt41_uncached_upper_usd": 0.034822
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 16972,
+      "host_peak": 16527,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 8
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-hide-B-old-1",
+    "host": "hermes",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 15,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-6d0f4edb-bd2a-49cc-9cb2-98db31c30347",
+        "name": "hide_context",
+        "args": {
+          "item_id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+          "rules": "[\"preserve owner=component-team-1\", \"preserve audit_seal=component-9e54cadbf4\", \"preserve latency_budget_ms=151\"]"
+        },
+        "turn": 2,
+        "result": {
+          "unparsed": true
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-4e11dbac-ad47-4acb-a34c-f1cbbc074393",
+        "name": "hide_context",
+        "args": {
+          "tool_call_id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+          "keep_lines": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "error": "tool_call to 'hide_context' failed argument validation at arguments (additionalProperties): Additional properties are not allowed ('keep_lines' was unexpected). The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_id\": {\"type\": \"string\", \"description\": \"The tool call ID whose result body should be hidden.\"}}, \"required\": [\"tool_call_id\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above."
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-3e4e5240-c68f-41ae-87e1-07c6ecb3cf24",
+        "name": "manage_context",
+        "args": {
+          "hide": "rules",
+          "keep_lines": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "tool_call_ids": [
+            "call-2f64b36c-827e-422b-be43-7849237dcade"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "error": "tool_call to 'manage_context' failed argument validation at arguments (additionalProperties): Additional properties are not allowed ('hide' was unexpected). The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_ids\": {\"type\": \"array\", \"minItems\": 1, \"items\": {\"type\": \"string\"}, \"description\": \"Agent-chosen tool call IDs from the completed work; no per-call count limit.\"}, \"action\": {\"type\": \"string\", \"enum\": [\"auto\", \"hide\", \"summarize\"], \"description\": \"hide uses rules only; summarize requires a configured model; auto prefers summarize with rule fallback.\"}, \"keep_lines\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"tool_call_ids\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above."
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-9d7711b2-ba72-4f34-89d6-a39ee574c55f",
+        "name": "manage_context",
+        "args": {
+          "action": "hide",
+          "keep_lines": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "tool_call_ids": [
+            "call-2f64b36c-827e-422b-be43-7849237dcade"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "applied": 1,
+          "failed": 0,
+          "items": [
+            {
+              "tool_call_id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+              "ok": true,
+              "item_id": "item_9f2fb620ade32e29"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-a89c8da0-bc17-4b00-923e-f4a347e271cb",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_9f2fb620ade32e29"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "item_id": "item_9f2fb620ade32e29",
+          "visibility_version": 2
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+        "turn": 2,
+        "name": "manage_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-2f64b36c-827e-422b-be43-7849237dcade",
+        "turn": 2,
+        "name": "manage_context",
+        "action": "hide",
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 4,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "tool_call to 'hide_context' failed argument validation at arguments (additionalProperties): Additional properties are not allowed ('keep_lines' was unexpected). The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_id\": {\"type\": \"string\", \"description\": \"The tool call ID whose result body should be hidden.\"}}, \"required\": [\"tool_call_id\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above.": 1,
+      "tool_call to 'manage_context' failed argument validation at arguments (additionalProperties): Additional properties are not allowed ('hide' was unexpected). The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_ids\": {\"type\": \"array\", \"minItems\": 1, \"items\": {\"type\": \"string\"}, \"description\": \"Agent-chosen tool call IDs from the completed work; no per-call count limit.\"}, \"action\": {\"type\": \"string\", \"enum\": [\"auto\", \"hide\", \"summarize\"], \"description\": \"hide uses rules only; summarize requires a configured model; auto prefers summarize with rule fallback.\"}, \"keep_lines\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"tool_call_ids\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above.": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "2bdb2875a36547858d940f4f1567d2d2",
+        "summary": false,
+        "prompt": 4503,
+        "completion": 95,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009766,
+        "gpt41_uncached_upper_usd": 0.009766
+      },
+      {
+        "id": "c45f72c631374ffc8f00556b6ca87767",
+        "summary": false,
+        "prompt": 4636,
+        "completion": 45,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 1485,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.003344,
+        "gpt41_uncached_upper_usd": 0.009632
+      },
+      {
+        "id": "7f2b86b1c1804c5ba92ee0c951df9d22",
+        "summary": false,
+        "prompt": 15890,
+        "completion": 214,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 2088,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033492,
+        "gpt41_uncached_upper_usd": 0.033492
+      },
+      {
+        "id": "9c7e27b377134cab93519d25388dde9a",
+        "summary": false,
+        "prompt": 16028,
+        "completion": 492,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 11927,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.035992,
+        "gpt41_uncached_upper_usd": 0.035992
+      },
+      {
+        "id": "49f68bef6bde44ecbb577c7f58cd6969",
+        "summary": false,
+        "prompt": 16423,
+        "completion": 244,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12037,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01279,
+        "gpt41_uncached_upper_usd": 0.034798
+      },
+      {
+        "id": "15c1cd5e6b544db8ad541dadde8d7122",
+        "summary": false,
+        "prompt": 17331,
+        "completion": 449,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12661,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.016246,
+        "gpt41_uncached_upper_usd": 0.038254
+      },
+      {
+        "id": "80002694727b4f46a23907961c8fa639",
+        "summary": false,
+        "prompt": 17907,
+        "completion": 269,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13779,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015958,
+        "gpt41_uncached_upper_usd": 0.037966
+      },
+      {
+        "id": "897b6a0bc4ad41e5b7ca1ae03e330e20",
+        "summary": false,
+        "prompt": 18398,
+        "completion": 164,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 14498,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012956,
+        "gpt41_uncached_upper_usd": 0.038108
+      },
+      {
+        "id": "8a791ceaa8034acf989bb1db66acc660",
+        "summary": false,
+        "prompt": 8020,
+        "completion": 244,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1506,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.017992,
+        "gpt41_uncached_upper_usd": 0.017992
+      },
+      {
+        "id": "7addfc1ea53d488c8f0c0823022df6f0",
+        "summary": false,
+        "prompt": 7054,
+        "completion": 188,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 4700,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015612,
+        "gpt41_uncached_upper_usd": 0.015612
+      },
+      {
+        "id": "fafcaf053480455f828824703e59c82e",
+        "summary": false,
+        "prompt": 17956,
+        "completion": 210,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 1757,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015584,
+        "gpt41_uncached_upper_usd": 0.037592
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 3,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 2,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 3,
+    "literal_ids_valid": 3,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 3,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 18398,
+      "host_peak": 17956,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 11
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-hide-B-old-2",
+    "host": "hermes",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 15,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-892b46e0-ce5b-4618-ae64-cbc242c00145",
+        "name": "hide_context",
+        "args": {
+          "item_id": "call-0fdd68ad-1f7f-429d-804b-06ce9453a970",
+          "rules": [
+            "preserve owner=component-team-1",
+            "preserve audit_seal=component-9e54cadbf4",
+            "preserve latency_budget_ms=151"
+          ],
+          "keep_lines": true
+        },
+        "turn": 2,
+        "result": {
+          "error": "tool_call to 'hide_context' is missing required argument(s): tool_call_id. The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_id\": {\"type\": \"string\", \"description\": \"The tool call ID whose result body should be hidden.\"}}, \"required\": [\"tool_call_id\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above."
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-b509196e-f7e3-4490-9dd0-c4aeb8853fb9",
+        "name": "list_context_items",
+        "args": {
+          "view": "candidates"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "items": [
+            {
+              "tool_call_id": "call-0fdd68ad-1f7f-429d-804b-06ce9453a970",
+              "tool_name": "read_file",
+              "hint": "./audit-01.jsonl",
+              "bytes_size": 25247,
+              "tokens_display": "\u2014"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-6c76f6ed-5898-46a9-bc36-1bf5a65cd6d5",
+        "name": "hide_context",
+        "args": {
+          "tool_call_id": "call-0fdd68ad-1f7f-429d-804b-06ce9453a970"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "item_id": "item_042203b65decb570",
+          "visibility_version": 1
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-30233895-118f-402c-8cef-f0a2437c6028",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_042203b65decb570"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "item_id": "item_042203b65decb570",
+          "visibility_version": 2
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-0fdd68ad-1f7f-429d-804b-06ce9453a970",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-0fdd68ad-1f7f-429d-804b-06ce9453a970",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 2,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "tool_call to 'hide_context' is missing required argument(s): tool_call_id. The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_id\": {\"type\": \"string\", \"description\": \"The tool call ID whose result body should be hidden.\"}}, \"required\": [\"tool_call_id\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above.": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "b1c8d963fb644048a35b86a76ac7525c",
+        "summary": false,
+        "prompt": 4503,
+        "completion": 98,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.00979,
+        "gpt41_uncached_upper_usd": 0.00979
+      },
+      {
+        "id": "81cf18bdac59482f8104ac1117d49f02",
+        "summary": false,
+        "prompt": 4639,
+        "completion": 44,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1487,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.00963,
+        "gpt41_uncached_upper_usd": 0.00963
+      },
+      {
+        "id": "39238573bf644c5fb504a869780594a7",
+        "summary": false,
+        "prompt": 15892,
+        "completion": 262,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 2083,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03388,
+        "gpt41_uncached_upper_usd": 0.03388
+      },
+      {
+        "id": "2d11d0807ce14c1bba214a7c9ff60e96",
+        "summary": false,
+        "prompt": 16043,
+        "completion": 1005,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11887,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.018118,
+        "gpt41_uncached_upper_usd": 0.040126
+      },
+      {
+        "id": "6b809e4ace924e33808938770d888c14",
+        "summary": false,
+        "prompt": 17016,
+        "completion": 631,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11443,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.017072,
+        "gpt41_uncached_upper_usd": 0.03908
+      },
+      {
+        "id": "2cf79525dc99484eb26abb0e4508b2ae",
+        "summary": false,
+        "prompt": 17755,
+        "completion": 501,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13124,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01751,
+        "gpt41_uncached_upper_usd": 0.039518
+      },
+      {
+        "id": "092a8ccc88d04dbc9822e4832cdeabc0",
+        "summary": false,
+        "prompt": 18357,
+        "completion": 424,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 14248,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014954,
+        "gpt41_uncached_upper_usd": 0.040106
+      },
+      {
+        "id": "4dcd9520bb7c40a7b28ab10b2d4d6a4e",
+        "summary": false,
+        "prompt": 8185,
+        "completion": 1040,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1270,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.02469,
+        "gpt41_uncached_upper_usd": 0.02469
+      },
+      {
+        "id": "c7bd4e4472134b06b72fb06d0242703e",
+        "summary": false,
+        "prompt": 6183,
+        "completion": 256,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 3966,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.008126,
+        "gpt41_uncached_upper_usd": 0.014414
+      },
+      {
+        "id": "822a6915225d4463b5f6a328bf3ff784",
+        "summary": false,
+        "prompt": 6604,
+        "completion": 68,
+        "cached": 6288,
+        "cost": 0,
+        "lcp_estimated_tokens": 4926,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.00432,
+        "gpt41_uncached_upper_usd": 0.013752
+      },
+      {
+        "id": "5152b61d86a248b2a0d7cf86c905874e",
+        "summary": false,
+        "prompt": 17281,
+        "completion": 183,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 1387,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014018,
+        "gpt41_uncached_upper_usd": 0.036026
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 1,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 18357,
+      "host_peak": 17281,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 11
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-summarize-B-new-1",
+    "host": "hermes",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 15,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-48decc84-d58b-45aa-a31c-78efa440c00c",
+        "name": "summarize_context",
+        "args": {
+          "result_id": "call-b6016b27-6e95-464a-880a-8a01a5fd438a"
+        },
+        "turn": 2,
+        "result": {
+          "unparsed": true
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-b72a674d-0e59-49f2-b1b2-a246d5322732",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-b6016b27-6e95-464a-880a-8a01a5fd438a"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "verification_failed"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-2d402ad4-82c5-4a68-a8b9-af89bc4e1c2e",
+        "name": "manage_context",
+        "args": {
+          "tool_call_ids": [
+            "call-b6016b27-6e95-464a-880a-8a01a5fd438a"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "applied": 1,
+          "failed": 0,
+          "items": [
+            {
+              "tool_call_id": "call-b6016b27-6e95-464a-880a-8a01a5fd438a",
+              "ok": true,
+              "item_id": "item_1cd7f380b3d0389b"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-7d151641-03c7-4f63-bcb0-73e11f926f48",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_1cd7f380b3d0389b"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "item_id": "item_1cd7f380b3d0389b",
+          "visibility_version": 2
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-b6016b27-6e95-464a-880a-8a01a5fd438a",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-b6016b27-6e95-464a-880a-8a01a5fd438a",
+        "turn": 2,
+        "name": "manage_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 2,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "verification_failed": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "c158641627a94cdca10922fc2c947a34",
+        "summary": false,
+        "prompt": 4531,
+        "completion": 93,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009806,
+        "gpt41_uncached_upper_usd": 0.009806
+      },
+      {
+        "id": "4101c32eea9d4a5aa42de9cf4934b2b5",
+        "summary": false,
+        "prompt": 4662,
+        "completion": 46,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1519,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009692,
+        "gpt41_uncached_upper_usd": 0.009692
+      },
+      {
+        "id": "093941becbd74c23af1baaa3e0ae6f21",
+        "summary": false,
+        "prompt": 15954,
+        "completion": 215,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 2121,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033628,
+        "gpt41_uncached_upper_usd": 0.033628
+      },
+      {
+        "id": "60b7ba27722b413f8a8be1be5893843c",
+        "summary": false,
+        "prompt": 16067,
+        "completion": 504,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11948,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014158,
+        "gpt41_uncached_upper_usd": 0.036166
+      },
+      {
+        "id": "335a0f08fc8e4ce88132f394f1860d89",
+        "summary": false,
+        "prompt": 16440,
+        "completion": 278,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12010,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013096,
+        "gpt41_uncached_upper_usd": 0.035104
+      },
+      {
+        "id": "ee5f63a6ce79452fbec28ad47f151466",
+        "summary": false,
+        "prompt": 16928,
+        "completion": 50,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12712,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012248,
+        "gpt41_uncached_upper_usd": 0.034256
+      },
+      {
+        "id": "1c64d8509a0a476e9b5b23afd434b708",
+        "summary": false,
+        "prompt": 17077,
+        "completion": 150,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 13614,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.010202,
+        "gpt41_uncached_upper_usd": 0.035354
+      },
+      {
+        "id": "a54f511d514341a78d2f9d852635ee9b",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1255,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.018194,
+        "gpt41_uncached_upper_usd": 0.040202
+      },
+      {
+        "id": "a41c4f6ca014426899dc14217ba334be",
+        "summary": false,
+        "prompt": 17257,
+        "completion": 393,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 8,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012506,
+        "gpt41_uncached_upper_usd": 0.037658
+      },
+      {
+        "id": "3602bb140e66461b8f5b6201849f9041",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1092,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01689,
+        "gpt41_uncached_upper_usd": 0.038898
+      },
+      {
+        "id": "41701bc2112b41518bd699a37b348893",
+        "summary": false,
+        "prompt": 6898,
+        "completion": 313,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 6,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.010012,
+        "gpt41_uncached_upper_usd": 0.0163
+      },
+      {
+        "id": "b469c53df45b4cd1bbbe3f9d08f12bc3",
+        "summary": false,
+        "prompt": 6034,
+        "completion": 275,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3757,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014268,
+        "gpt41_uncached_upper_usd": 0.014268
+      },
+      {
+        "id": "be212fa9ac98481c8024fe4a4b6f4046",
+        "summary": false,
+        "prompt": 17191,
+        "completion": 235,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 1778,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014254,
+        "gpt41_uncached_upper_usd": 0.036262
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 2,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 2,
+    "literal_ids_valid": 2,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17257,
+      "host_peak": 17191,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 13
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-summarize-B-new-2",
+    "host": "hermes",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 19,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-10595a7b-c6de-409b-bd34-22f545bbe80c",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "verification_failed"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-ae394532-9c32-41db-b4f3-0180b82c01cb",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022"
+        },
+        "turn": 2,
+        "result": {
+          "unparsed": true
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-06b4cbf0-46cf-4bcd-9ead-1df983082ec5",
+        "name": "list_context_items",
+        "args": {
+          "view": "candidates",
+          "limit": 20
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "items": [
+            {
+              "tool_call_id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022",
+              "tool_name": "read_file",
+              "hint": "./audit-01.jsonl",
+              "bytes_size": 25247,
+              "tokens_display": "\u2014"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-9d4d257d-8f83-4f73-99ea-f7db4fc8a24a",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022"
+        },
+        "turn": 2,
+        "result": {
+          "unparsed": true
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-23af3442-96fc-4e83-a651-219ff733ba1b",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022"
+        },
+        "turn": 3,
+        "result": {
+          "ok": false,
+          "error": "not_found"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      },
+      {
+        "id": "call-78cb3286-9c0d-451f-91ef-d9cadedc24da",
+        "name": "list_context_items",
+        "args": {
+          "view": "candidates"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "items": [
+            {
+              "tool_call_id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022",
+              "tool_name": "read_file",
+              "hint": "./audit-01.jsonl",
+              "bytes_size": 25247,
+              "tokens_display": "\u2014"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      },
+      {
+        "id": "call-c53b81c9-39fc-463b-b7d1-b935e9fec898",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "0d155378-f5a7-430c-a74c-8976ee7a0022"
+        },
+        "turn": 3,
+        "result": {
+          "ok": false,
+          "error": "not_found"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-0d155378-f5a7-430c-a74c-8976ee7a0022",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 3,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "verification_failed": 1,
+      "not_found": 2
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "185aed736f2b48ee8384b71e29bf5ab9",
+        "summary": false,
+        "prompt": 4531,
+        "completion": 119,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.010014,
+        "gpt41_uncached_upper_usd": 0.010014
+      },
+      {
+        "id": "e976af55fa4f414f84738b2d9760919a",
+        "summary": false,
+        "prompt": 4688,
+        "completion": 48,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1510,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.00976,
+        "gpt41_uncached_upper_usd": 0.00976
+      },
+      {
+        "id": "6dab4da25b94446eb972591fe8d691e9",
+        "summary": false,
+        "prompt": 15953,
+        "completion": 211,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 2173,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033594,
+        "gpt41_uncached_upper_usd": 0.033594
+      },
+      {
+        "id": "beb6823e34214e8fa3aa7eae16a019f7",
+        "summary": false,
+        "prompt": 16065,
+        "completion": 361,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 11965,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.035018,
+        "gpt41_uncached_upper_usd": 0.035018
+      },
+      {
+        "id": "790bc829ce4046aaa25ba81e291ab5d3",
+        "summary": false,
+        "prompt": 16342,
+        "completion": 158,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12038,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01194,
+        "gpt41_uncached_upper_usd": 0.033948
+      },
+      {
+        "id": "bb15f04a9ad34b5cb4a4c28ed5ce8333",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1922,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.02353,
+        "gpt41_uncached_upper_usd": 0.045538
+      },
+      {
+        "id": "107eb1cd51f449ae9a02438023f3e803",
+        "summary": false,
+        "prompt": 16530,
+        "completion": 882,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 8,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.018108,
+        "gpt41_uncached_upper_usd": 0.040116
+      },
+      {
+        "id": "979cdf98a6954abf9b2eca346aed56a5",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1577,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.02077,
+        "gpt41_uncached_upper_usd": 0.042778
+      },
+      {
+        "id": "8ba95d810f7a49e386d71207af88bc80",
+        "summary": false,
+        "prompt": 17491,
+        "completion": 108,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 7,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.010694,
+        "gpt41_uncached_upper_usd": 0.035846
+      },
+      {
+        "id": "e0f1735754ba4abdb924fb586cb63289",
+        "summary": false,
+        "prompt": 17707,
+        "completion": 759,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 14313,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.016334,
+        "gpt41_uncached_upper_usd": 0.041486
+      },
+      {
+        "id": "c6814ac69dda4a2faa1ddecd3aee127f",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1491,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.020082,
+        "gpt41_uncached_upper_usd": 0.04209
+      },
+      {
+        "id": "c1dca55c64df4607ae4acf2e82770615",
+        "summary": false,
+        "prompt": 18545,
+        "completion": 421,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 7,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015306,
+        "gpt41_uncached_upper_usd": 0.040458
+      },
+      {
+        "id": "3eb644e80a0c47aa93c7ed5020233306",
+        "summary": false,
+        "prompt": 17041,
+        "completion": 651,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13742,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.017282,
+        "gpt41_uncached_upper_usd": 0.03929
+      },
+      {
+        "id": "17237dcf27654aefb34eb2030c3042f3",
+        "summary": false,
+        "prompt": 17537,
+        "completion": 94,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 14026,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.010674,
+        "gpt41_uncached_upper_usd": 0.035826
+      },
+      {
+        "id": "d52ea764f73c4115b9b04088ea063907",
+        "summary": false,
+        "prompt": 17739,
+        "completion": 298,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 15003,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01271,
+        "gpt41_uncached_upper_usd": 0.037862
+      },
+      {
+        "id": "74ba500bb4724228b15df966859a2030",
+        "summary": false,
+        "prompt": 18065,
+        "completion": 483,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 15112,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014842,
+        "gpt41_uncached_upper_usd": 0.039994
+      },
+      {
+        "id": "230da0c582e547acb4f0985bd414a779",
+        "summary": false,
+        "prompt": 18675,
+        "completion": 477,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 15240,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.016014,
+        "gpt41_uncached_upper_usd": 0.041166
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 3,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 3,
+    "literal_ids_valid": 3,
+    "successful_cleanup_boundaries": [],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 18675,
+      "host_peak": 18675,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 17
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-summarize-B-old-1",
+    "host": "hermes",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 12,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-453d5753-a16a-4ae9-8db6-223b8ffef7e7",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-6c79c608-ba75-4078-be91-9840323ba189"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "verification_failed"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-5aa6f273-88e0-4119-98fe-2ad6023aa8c4",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-6c79c608-ba75-4078-be91-9840323ba189"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "item_id": "item_5533802fe54df2e3",
+          "visibility_version": 1,
+          "compaction_source": "llm"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-67cf3523-1131-4359-a7d1-3807cb2d6042",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_5533802fe54df2e3"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "item_id": "item_5533802fe54df2e3",
+          "visibility_version": 2
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-6c79c608-ba75-4078-be91-9840323ba189",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-6c79c608-ba75-4078-be91-9840323ba189",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 2,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "verification_failed": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "21807cdcf1b948ca967930aac31ac424",
+        "summary": false,
+        "prompt": 4507,
+        "completion": 87,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.00971,
+        "gpt41_uncached_upper_usd": 0.00971
+      },
+      {
+        "id": "095687dded3c4439b408ab0923f9ccdf",
+        "summary": false,
+        "prompt": 15813,
+        "completion": 226,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1817,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033434,
+        "gpt41_uncached_upper_usd": 0.033434
+      },
+      {
+        "id": "27d0af0abfb841fc88b20fff701b291e",
+        "summary": false,
+        "prompt": 16093,
+        "completion": 200,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 12002,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.033786,
+        "gpt41_uncached_upper_usd": 0.033786
+      },
+      {
+        "id": "c0bbf03c0edc4a7094f3b2be57336581",
+        "summary": false,
+        "prompt": 16209,
+        "completion": 532,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12233,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014666,
+        "gpt41_uncached_upper_usd": 0.036674
+      },
+      {
+        "id": "b673546b66f24039af3ceebf5567bb43",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1408,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.041426,
+        "gpt41_uncached_upper_usd": 0.041426
+      },
+      {
+        "id": "36a24c04a62a4c128309f96bea38236c",
+        "summary": false,
+        "prompt": 16624,
+        "completion": 277,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 8,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013456,
+        "gpt41_uncached_upper_usd": 0.035464
+      },
+      {
+        "id": "9ebb8967867f47978e09d35271934979",
+        "summary": false,
+        "prompt": 17000,
+        "completion": 151,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13044,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.0132,
+        "gpt41_uncached_upper_usd": 0.035208
+      },
+      {
+        "id": "8788fa6e06844e4a9b610b7b8592b138",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1451,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.019762,
+        "gpt41_uncached_upper_usd": 0.04177
+      },
+      {
+        "id": "ecb5c1497bb84893bac9cc4808971d18",
+        "summary": false,
+        "prompt": 6326,
+        "completion": 366,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 6,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01558,
+        "gpt41_uncached_upper_usd": 0.01558
+      },
+      {
+        "id": "e873355f0ac84472927006ac9f67fb48",
+        "summary": false,
+        "prompt": 5765,
+        "completion": 339,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 3294,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.007954,
+        "gpt41_uncached_upper_usd": 0.014242
+      },
+      {
+        "id": "1d376604eca84b9184d6b0e04db382ed",
+        "summary": false,
+        "prompt": 16904,
+        "completion": 171,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 1668,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013168,
+        "gpt41_uncached_upper_usd": 0.035176
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 2,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 2,
+    "literal_ids_valid": 2,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17000,
+      "host_peak": 16904,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 11
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-hermes-command-summarize-B-old-2",
+    "host": "hermes",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 11,
+    "task_success": false,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          false,
+          true
+        ]
+      }
+    ],
+    "recall_correct": false,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-2a7f1263-4484-4452-b937-5c069ae7a985",
+        "name": "summarize_context",
+        "args": {
+          "item_id": "call-52ef6b02-4039-4fa6-9842-dbd66302fb9d"
+        },
+        "turn": 2,
+        "result": {
+          "error": "tool_call to 'summarize_context' is missing required argument(s): tool_call_id. The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_id\": {\"type\": \"string\", \"description\": \"The tool call ID whose result body should be summarized.\"}}, \"required\": [\"tool_call_id\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above."
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-7b827cd5-616b-402a-9c44-5baec5304c1c",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-52ef6b02-4039-4fa6-9842-dbd66302fb9d"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "verification_failed"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-bb04ce6e-9a35-4cac-8a75-383b0e35a810",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "call-52ef6b02-4039-4fa6-9842-dbd66302fb9d"
+        },
+        "turn": 3,
+        "result": {
+          "ok": false,
+          "error": "not_found"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      },
+      {
+        "id": "call-a7b57713-d873-44ce-8c0b-2d16196d1a3e",
+        "name": "list_context_items",
+        "args": {
+          "view": "candidates"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "items": [
+            {
+              "tool_call_id": "call-52ef6b02-4039-4fa6-9842-dbd66302fb9d",
+              "tool_name": "read_file",
+              "hint": "audit-01.jsonl",
+              "bytes_size": 25247,
+              "tokens_display": "\u2014"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-52ef6b02-4039-4fa6-9842-dbd66302fb9d",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-52ef6b02-4039-4fa6-9842-dbd66302fb9d",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 2,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "tool_call to 'summarize_context' is missing required argument(s): tool_call_id. The tool was NOT invoked. Parameters schema: {\"type\": \"object\", \"properties\": {\"tool_call_id\": {\"type\": \"string\", \"description\": \"The tool call ID whose result body should be summarized.\"}}, \"required\": [\"tool_call_id\"], \"additionalProperties\": false}. Retry tool_call with 'arguments' matching the parameters schema above.": 1,
+      "verification_failed": 1,
+      "not_found": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "287b87a134b746618a0b854fe472e09a",
+        "summary": false,
+        "prompt": 4507,
+        "completion": 96,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009782,
+        "gpt41_uncached_upper_usd": 0.009782
+      },
+      {
+        "id": "86a62a90508e471cb399c242d569d4f6",
+        "summary": false,
+        "prompt": 15812,
+        "completion": 328,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 1814,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.034248,
+        "gpt41_uncached_upper_usd": 0.034248
+      },
+      {
+        "id": "fd6939815e4c42448fab02d9812fd044",
+        "summary": false,
+        "prompt": 15912,
+        "completion": 994,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 11583,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.039776,
+        "gpt41_uncached_upper_usd": 0.039776
+      },
+      {
+        "id": "04c04145f8694452921438b7a07b1a6c",
+        "summary": false,
+        "prompt": 16879,
+        "completion": 250,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 11525,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01375,
+        "gpt41_uncached_upper_usd": 0.035758
+      },
+      {
+        "id": "3c23d9a1e942475dba5581f8755732f0",
+        "summary": true,
+        "prompt": 15081,
+        "completion": 1236,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.018042,
+        "gpt41_uncached_upper_usd": 0.04005
+      },
+      {
+        "id": "1dd7bda02b9c4ca1bb1b8d6c4526cb6f",
+        "summary": false,
+        "prompt": 17159,
+        "completion": 1023,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 8,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01735,
+        "gpt41_uncached_upper_usd": 0.042502
+      },
+      {
+        "id": "d4c21a7cdbe041198f14a649f99cf953",
+        "summary": false,
+        "prompt": 16569,
+        "completion": 426,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12053,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014538,
+        "gpt41_uncached_upper_usd": 0.036546
+      },
+      {
+        "id": "4b27d50a1d36436e97cd7a16003a35ea",
+        "summary": false,
+        "prompt": 16875,
+        "completion": 272,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13542,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013918,
+        "gpt41_uncached_upper_usd": 0.035926
+      },
+      {
+        "id": "da2f1769f9f04680ac180b260f46b8a6",
+        "summary": false,
+        "prompt": 17253,
+        "completion": 395,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 14054,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015658,
+        "gpt41_uncached_upper_usd": 0.037666
+      }
+    ],
+    "later_turn_rereads": 0,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 1,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": false,
+    "surprise_recall_correct": false,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17253,
+      "host_peak": 17253,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 9
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-hide-B-new-1",
+    "host": "omp",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-a2a8e26e-a33f-413c-a0d9-e51f2a38defb",
+        "name": "hide_context",
+        "args": {
+          "tool_call_id": "call-314a579e-6672-4a9b-b88d-f55c956d3eb8"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "error": null,
+          "item_id": "item_709ec14503592cd9",
+          "version": 1,
+          "id": 7
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-c2c1d993-10dd-4575-8497-a9da97f84973",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_709ec14503592cd9"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "error": null,
+          "item_id": "item_709ec14503592cd9",
+          "version": 2,
+          "id": 11
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-314a579e-6672-4a9b-b88d-f55c956d3eb8",
+        "turn": 2,
+        "name": "hide_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "dbfafb38b77d443fb2fdbc314adac8fa",
+        "summary": false,
+        "prompt": 5934,
+        "completion": 86,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012556,
+        "gpt41_uncached_upper_usd": 0.012556
+      },
+      {
+        "id": "b3d7efa1b04241c7bfdd57df98323f41",
+        "summary": false,
+        "prompt": 16552,
+        "completion": 303,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3725,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.035528,
+        "gpt41_uncached_upper_usd": 0.035528
+      },
+      {
+        "id": "c78006acb8fa4cf98f91e705f32aa94a",
+        "summary": false,
+        "prompt": 16699,
+        "completion": 824,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 12768,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03999,
+        "gpt41_uncached_upper_usd": 0.03999
+      },
+      {
+        "id": "3458351751fd41e68851aca3d8486213",
+        "summary": false,
+        "prompt": 6674,
+        "completion": 216,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3133,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015076,
+        "gpt41_uncached_upper_usd": 0.015076
+      },
+      {
+        "id": "565bf5896c6740a4942597a7c24b9bbc",
+        "summary": false,
+        "prompt": 6797,
+        "completion": 678,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 3757,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01273,
+        "gpt41_uncached_upper_usd": 0.019018
+      },
+      {
+        "id": "51e80c616929473c87bcec62d1b22b94",
+        "summary": false,
+        "prompt": 17130,
+        "completion": 174,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 3777,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013644,
+        "gpt41_uncached_upper_usd": 0.035652
+      }
+    ],
+    "later_turn_rereads": 2,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17130,
+      "host_peak": 17130,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 6
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-hide-B-new-2",
+    "host": "omp",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-c713f070-800d-4b7d-8dc7-35736ade691f",
+        "name": "manage_context",
+        "args": {
+          "keep_lines": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "tool_call_ids": [
+            "call-82ee1687-829f-4d8e-9536-d4703a0f8be6"
+          ],
+          "action": "hide"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "applied": 1,
+          "failed": 0,
+          "items": [
+            {
+              "tool_call_id": "call-82ee1687-829f-4d8e-9536-d4703a0f8be6",
+              "ok": true,
+              "item_id": "item_6ec37b9857a6918b"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-a4d9342c-8c0b-452f-a90d-a21f2fd45e81",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_6ec37b9857a6918b"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "error": null,
+          "item_id": "item_6ec37b9857a6918b",
+          "version": 2,
+          "id": 12
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-82ee1687-829f-4d8e-9536-d4703a0f8be6",
+        "turn": 2,
+        "name": "manage_context",
+        "action": "hide",
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "121bf044f18a48579f463ba8d3050421",
+        "summary": false,
+        "prompt": 5934,
+        "completion": 94,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01262,
+        "gpt41_uncached_upper_usd": 0.01262
+      },
+      {
+        "id": "c57b58424b6b4e26baffc32934522307",
+        "summary": false,
+        "prompt": 16551,
+        "completion": 306,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3726,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03555,
+        "gpt41_uncached_upper_usd": 0.03555
+      },
+      {
+        "id": "7adef3a65fa1415ea9a6488332b0ddef",
+        "summary": false,
+        "prompt": 16717,
+        "completion": 440,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 12763,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.036954,
+        "gpt41_uncached_upper_usd": 0.036954
+      },
+      {
+        "id": "ef9b4de82be54299845c9033fa275cda",
+        "summary": false,
+        "prompt": 16834,
+        "completion": 2471,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12953,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.031428,
+        "gpt41_uncached_upper_usd": 0.053436
+      },
+      {
+        "id": "33f844be68c54d2e837de4756f7fbf23",
+        "summary": false,
+        "prompt": 7085,
+        "completion": 213,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3153,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015874,
+        "gpt41_uncached_upper_usd": 0.015874
+      },
+      {
+        "id": "4c802c80c22646e6a393c5e731af1d71",
+        "summary": false,
+        "prompt": 7267,
+        "completion": 269,
+        "cached": 6288,
+        "cost": 0,
+        "lcp_estimated_tokens": 4138,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.007254,
+        "gpt41_uncached_upper_usd": 0.016686
+      },
+      {
+        "id": "45960a40c7cf47f682d815131250c8fc",
+        "summary": false,
+        "prompt": 17644,
+        "completion": 180,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 3767,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.011576,
+        "gpt41_uncached_upper_usd": 0.036728
+      }
+    ],
+    "later_turn_rereads": 3,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 1,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17644,
+      "host_peak": 17644,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 7
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-hide-B-old-1",
+    "host": "omp",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-2e628562-03c9-4015-9e1b-31b6bd4ba585",
+        "name": "manage_context",
+        "args": {
+          "action": "hide",
+          "tool_call_ids": [
+            "call-3233ab32-2f1d-4086-a8b9-3f5d39c8107b"
+          ],
+          "keep_lines": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "applied": 1,
+          "failed": 0,
+          "items": [
+            {
+              "tool_call_id": "call-3233ab32-2f1d-4086-a8b9-3f5d39c8107b",
+              "ok": true,
+              "item_id": "item_f4a8f942c6330738"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-7add7698-15cd-42af-a711-bbecfb648fc0",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_f4a8f942c6330738"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "error": null,
+          "item_id": "item_f4a8f942c6330738",
+          "version": 2,
+          "id": 11
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-3233ab32-2f1d-4086-a8b9-3f5d39c8107b",
+        "turn": 2,
+        "name": "manage_context",
+        "action": "hide",
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "68b0c152396842129b24ace42fb07560",
+        "summary": false,
+        "prompt": 5905,
+        "completion": 84,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012482,
+        "gpt41_uncached_upper_usd": 0.012482
+      },
+      {
+        "id": "d649667795e3402b9c30c32475c907a5",
+        "summary": false,
+        "prompt": 16490,
+        "completion": 225,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3690,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03478,
+        "gpt41_uncached_upper_usd": 0.03478
+      },
+      {
+        "id": "7e6cd6ae2d5041daa4aa44ec83790a90",
+        "summary": false,
+        "prompt": 16600,
+        "completion": 1297,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12750,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.021568,
+        "gpt41_uncached_upper_usd": 0.043576
+      },
+      {
+        "id": "ed9b8c014e3745b682776ae751d23c68",
+        "summary": false,
+        "prompt": 6731,
+        "completion": 136,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3131,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01455,
+        "gpt41_uncached_upper_usd": 0.01455
+      },
+      {
+        "id": "b89bf67af4d64e8a91ac89b4e720d892",
+        "summary": false,
+        "prompt": 6841,
+        "completion": 180,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3772,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015122,
+        "gpt41_uncached_upper_usd": 0.015122
+      },
+      {
+        "id": "58232d776ac84bcb95d651777fbd83de",
+        "summary": false,
+        "prompt": 17070,
+        "completion": 168,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 3744,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013476,
+        "gpt41_uncached_upper_usd": 0.035484
+      }
+    ],
+    "later_turn_rereads": 2,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 1,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17070,
+      "host_peak": 17070,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 6
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-hide-B-old-2",
+    "host": "omp",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-e70cc87b-cdeb-47b2-9838-df51a61961da",
+        "name": "manage_context",
+        "args": {
+          "keep_lines": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "action": "hide",
+          "tool_call_ids": [
+            "call-2a3bfc06-3e8c-4526-88c2-1fdc051a3e0f"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "applied": 1,
+          "failed": 0,
+          "items": [
+            {
+              "tool_call_id": "call-2a3bfc06-3e8c-4526-88c2-1fdc051a3e0f",
+              "ok": true,
+              "item_id": "item_98b04238fe28ab84"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-a3090c0d-179f-4f0d-81ee-ac96a8502708",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_98b04238fe28ab84"
+        },
+        "turn": 3,
+        "result": {
+          "ok": true,
+          "error": null,
+          "item_id": "item_98b04238fe28ab84",
+          "version": 2,
+          "id": 11
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-2a3bfc06-3e8c-4526-88c2-1fdc051a3e0f",
+        "turn": 2,
+        "name": "manage_context",
+        "action": "hide",
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "d8f4e0834c6444fd995ec4bdcf823785",
+        "summary": false,
+        "prompt": 5905,
+        "completion": 106,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012658,
+        "gpt41_uncached_upper_usd": 0.012658
+      },
+      {
+        "id": "d5be4c01ad34411ab23c60bfe1c4d005",
+        "summary": false,
+        "prompt": 16490,
+        "completion": 243,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3690,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.034924,
+        "gpt41_uncached_upper_usd": 0.034924
+      },
+      {
+        "id": "d59f567c3fd5424ea40c2e4d1c8e05f6",
+        "summary": false,
+        "prompt": 16626,
+        "completion": 862,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12757,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01814,
+        "gpt41_uncached_upper_usd": 0.040148
+      },
+      {
+        "id": "a67cafaa38e640178f21e1533bb8ee6f",
+        "summary": false,
+        "prompt": 6755,
+        "completion": 130,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3136,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01455,
+        "gpt41_uncached_upper_usd": 0.01455
+      },
+      {
+        "id": "96339494d0e041ef968f8853a2342961",
+        "summary": false,
+        "prompt": 6872,
+        "completion": 230,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 3795,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009296,
+        "gpt41_uncached_upper_usd": 0.015584
+      },
+      {
+        "id": "3d780adc907d49ba9bd173c4244b210a",
+        "summary": false,
+        "prompt": 17099,
+        "completion": 275,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 3748,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01439,
+        "gpt41_uncached_upper_usd": 0.036398
+      }
+    ],
+    "later_turn_rereads": 2,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "hide",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 1,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 1,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17099,
+      "host_peak": 17099,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 6
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-summarize-B-new-1",
+    "host": "omp",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-caab3084-ae8c-4e76-8774-9145656c598f",
+        "name": "manage_context",
+        "args": {
+          "action": "summarize",
+          "tool_call_ids": [
+            "call-93b82a50-f638-452c-b80e-1b00d02991e7"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "applied": 1,
+          "failed": 0,
+          "items": [
+            {
+              "tool_call_id": "call-93b82a50-f638-452c-b80e-1b00d02991e7",
+              "ok": true,
+              "item_id": "item_45f57ac37d01da07"
+            }
+          ]
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-58c77a83-77bd-48a0-8d16-141d25d3ceb2",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "item_45f57ac37d01da07"
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "error": null,
+          "item_id": "item_45f57ac37d01da07",
+          "version": 2,
+          "id": 10
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-3d1c6ed9-94f9-4dcd-a844-e31e21e7fddc",
+        "name": "list_context_items",
+        "args": {
+          "query": "none",
+          "view": "items",
+          "limit": 50
+        },
+        "turn": 2,
+        "result": {
+          "ok": true,
+          "items": [
+            {
+              "item_id": null,
+              "call_id": "call-93b82a50-f638-452c-b80e-1b00d02991e7",
+              "tool_call_id": "call-93b82a50-f638-452c-b80e-1b00d02991e7",
+              "content_sha256": "e9013e7cb0cf7e8038d99ebc186562c47f2dc97ec544ae3d3376bec2008e6ed6",
+              "visibility": "unhidden",
+              "status": "unhidden",
+              "version": 1,
+              "source": "unrecorded",
+              "bytes_size": 22031,
+              "tool_name": "read",
+              "tokens_display": "\u2014"
+            }
+          ],
+          "id": 12
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-93b82a50-f638-452c-b80e-1b00d02991e7",
+        "turn": 2,
+        "name": "manage_context",
+        "action": "summarize",
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {},
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "2f54d22397fb413b82318d4fffc77bb6",
+        "summary": false,
+        "prompt": 5935,
+        "completion": 106,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012718,
+        "gpt41_uncached_upper_usd": 0.012718
+      },
+      {
+        "id": "55bf666cc5ea4f57b29255de6c1db264",
+        "summary": false,
+        "prompt": 16553,
+        "completion": 350,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3728,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.035906,
+        "gpt41_uncached_upper_usd": 0.035906
+      },
+      {
+        "id": "208c0c0ad0854948951398d21c72b663",
+        "summary": false,
+        "prompt": 16683,
+        "completion": 469,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 12779,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.037118,
+        "gpt41_uncached_upper_usd": 0.037118
+      },
+      {
+        "id": "c83d62261760400fa27edc7bf12b3ffe",
+        "summary": true,
+        "prompt": 5680,
+        "completion": 1259,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 11,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.021432,
+        "gpt41_uncached_upper_usd": 0.021432
+      },
+      {
+        "id": "67a732e606884b12bf7ee276cef3fb2e",
+        "summary": false,
+        "prompt": 6573,
+        "completion": 88,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 8,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01385,
+        "gpt41_uncached_upper_usd": 0.01385
+      },
+      {
+        "id": "6945dbd2a788498b83a421bdb3d70bba",
+        "summary": false,
+        "prompt": 16835,
+        "completion": 162,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 3805,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.012958,
+        "gpt41_uncached_upper_usd": 0.034966
+      },
+      {
+        "id": "b808edc2a06348be8c04edad23e8d510",
+        "summary": false,
+        "prompt": 17114,
+        "completion": 288,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 13293,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01138,
+        "gpt41_uncached_upper_usd": 0.036532
+      },
+      {
+        "id": "afed4d5386b04e11808e9c31862b25fd",
+        "summary": false,
+        "prompt": 17505,
+        "completion": 4096,
+        "cached": 16768,
+        "cost": 0,
+        "lcp_estimated_tokens": 13503,
+        "finish_reason": "length",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.042626,
+        "gpt41_uncached_upper_usd": 0.067778
+      }
+    ],
+    "later_turn_rereads": 2,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [
+      1
+    ],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17505,
+      "host_peak": 17505,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 8
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-summarize-B-new-2",
+    "host": "omp",
+    "arm": "B-new",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-0c4b18d8-59ba-4c2f-b033-82ed1bf31621",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-6f5952b3-5fb2-4c67-91a4-9f0307ae62d1"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "summarizer_unavailable"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-6f5952b3-5fb2-4c67-91a4-9f0307ae62d1",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "summarizer_unavailable": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "beb5636d261d41ab8fb1799d752946e9",
+        "summary": false,
+        "prompt": 5935,
+        "completion": 93,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.006326,
+        "gpt41_uncached_upper_usd": 0.012614
+      },
+      {
+        "id": "81b21aaadd1543498b2e00aa6ab35bda",
+        "summary": false,
+        "prompt": 16553,
+        "completion": 232,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3728,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.034962,
+        "gpt41_uncached_upper_usd": 0.034962
+      },
+      {
+        "id": "569f84b8f04146e782e971891ec9f4cb",
+        "summary": false,
+        "prompt": 16693,
+        "completion": 307,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12780,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013834,
+        "gpt41_uncached_upper_usd": 0.035842
+      },
+      {
+        "id": "a0ef6c345de54ba88e33c260fe54e75d",
+        "summary": true,
+        "prompt": 5680,
+        "completion": 3173,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 11,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.030456,
+        "gpt41_uncached_upper_usd": 0.036744
+      },
+      {
+        "id": "efa4a986a21945a685bcab08c09754d7",
+        "summary": false,
+        "prompt": 16633,
+        "completion": 507,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.015314,
+        "gpt41_uncached_upper_usd": 0.037322
+      },
+      {
+        "id": "d6351f36468b4c1fb67499e5c77abaf9",
+        "summary": false,
+        "prompt": 17058,
+        "completion": 4096,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12997,
+        "finish_reason": "length",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.044876,
+        "gpt41_uncached_upper_usd": 0.066884
+      }
+    ],
+    "later_turn_rereads": 1,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "fc07058",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17058,
+      "host_peak": 17058,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 6
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-summarize-B-old-1",
+    "host": "omp",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 1,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-959d74fc-9b3a-4a05-a2f0-b5c7500b3c13",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-6626626c-52a3-4e78-96ff-22469eee71aa"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "summarizer_unavailable"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-6232a4d8-84ca-4dd4-81cb-9391d0535833",
+        "name": "manage_context",
+        "args": {
+          "action": "summarize",
+          "keep_lines": [],
+          "tool_call_ids": [
+            "call-6626626c-52a3-4e78-96ff-22469eee71aa"
+          ]
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "invalid_keep_lines_action"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-648d4eed-01d3-4b6f-bfaf-4792b6d786ab",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "call-6626626c-52a3-4e78-96ff-22469eee71aa"
+        },
+        "turn": 3,
+        "result": {
+          "ok": false,
+          "error": "not_found",
+          "item_id": null,
+          "version": null,
+          "id": 11
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-6626626c-52a3-4e78-96ff-22469eee71aa",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      },
+      {
+        "id": "call-6626626c-52a3-4e78-96ff-22469eee71aa",
+        "turn": 2,
+        "name": "manage_context",
+        "action": "summarize",
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 2,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "summarizer_unavailable": 1,
+      "invalid_keep_lines_action": 1,
+      "not_found": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "6c4efc67a3e043929a1fd1fa70017cea",
+        "summary": false,
+        "prompt": 5906,
+        "completion": 90,
+        "cached": 2096,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.009388,
+        "gpt41_uncached_upper_usd": 0.012532
+      },
+      {
+        "id": "e564fd57e7cf44e4afe8c680751deb42",
+        "summary": false,
+        "prompt": 16490,
+        "completion": 275,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3691,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03518,
+        "gpt41_uncached_upper_usd": 0.03518
+      },
+      {
+        "id": "43460defdcfd4c67b4b379e660d8ffa7",
+        "summary": false,
+        "prompt": 16634,
+        "completion": 231,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12756,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013108,
+        "gpt41_uncached_upper_usd": 0.035116
+      },
+      {
+        "id": "a54e9623279a4acfa9c8d04ef369b986",
+        "summary": true,
+        "prompt": 5680,
+        "completion": 3389,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 11,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.038472,
+        "gpt41_uncached_upper_usd": 0.038472
+      },
+      {
+        "id": "6c29322162e64cf7887afd0aea2f20c9",
+        "summary": false,
+        "prompt": 16627,
+        "completion": 595,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.016006,
+        "gpt41_uncached_upper_usd": 0.038014
+      },
+      {
+        "id": "8eaa75ae85f64b0b8640a67772abe266",
+        "summary": false,
+        "prompt": 16764,
+        "completion": 460,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13052,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.0152,
+        "gpt41_uncached_upper_usd": 0.037208
+      },
+      {
+        "id": "0dbd60f15d854916a672040d8e7db683",
+        "summary": false,
+        "prompt": 17184,
+        "completion": 482,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13140,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.016216,
+        "gpt41_uncached_upper_usd": 0.038224
+      },
+      {
+        "id": "558b7ee0b66b46dd8cce025a020eea0f",
+        "summary": false,
+        "prompt": 17156,
+        "completion": 235,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13498,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.014184,
+        "gpt41_uncached_upper_usd": 0.036192
+      }
+    ],
+    "later_turn_rereads": 3,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "5017b97",
+    "eligible_observed": 1,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 2,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 2,
+    "literal_ids_valid": 2,
+    "successful_cleanup_boundaries": [],
+    "keep_lines_calls": 1,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 17184,
+      "host_peak": 17156,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 8
+    },
+    "failure_kinds": {}
+  },
+  {
+    "id": "v3nq-omp-command-summarize-B-old-2",
+    "host": "omp",
+    "arm": "B-old",
+    "status": {
+      "returncode": 0
+    },
+    "state_snapshot_available": true,
+    "recorded_units": 2,
+    "task_success": true,
+    "answer_checks": [
+      {
+        "turn": 1,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "turn": 3,
+        "facts": [
+          "component-team-1",
+          "component-9e54cadbf4",
+          "151"
+        ],
+        "matched": [
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "recall_correct": true,
+    "user_turns": 3,
+    "operations": [
+      {
+        "id": "call-4eb5b142-f282-4dda-b9e2-9a93e2b660af",
+        "name": "summarize_context",
+        "args": {
+          "tool_call_id": "call-690b4368-a612-459b-8046-38a4ed56ebe0"
+        },
+        "turn": 2,
+        "result": {
+          "ok": false,
+          "error": "summarizer_unavailable"
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 1
+      },
+      {
+        "id": "call-d3b76485-3472-401b-b606-55acd1aa2de4",
+        "name": "unhide_context",
+        "args": {
+          "item_id": "call-690b4368-a612-459b-8046-38a4ed56ebe0"
+        },
+        "turn": 3,
+        "result": {
+          "ok": false,
+          "error": "not_found",
+          "item_id": null,
+          "version": null,
+          "id": 10
+        },
+        "at_subtask_boundary": true,
+        "boundary_index": 2
+      }
+    ],
+    "chosen": [
+      {
+        "id": "call-690b4368-a612-459b-8046-38a4ed56ebe0",
+        "turn": 2,
+        "name": "summarize_context",
+        "action": null,
+        "label": {
+          "label": "needed-later",
+          "protected": false,
+          "facts": [
+            "owner=component-team-1",
+            "audit_seal=component-9e54cadbf4",
+            "latency_budget_ms=151"
+          ],
+          "matches": [
+            "audit-01.jsonl"
+          ]
+        }
+      }
+    ],
+    "disposable_observed": 0,
+    "selected_disposable_unique": 0,
+    "labelled_selections": 1,
+    "disposable_selections": 0,
+    "unknown_selections": 0,
+    "rejections": {
+      "summarizer_unavailable": 1,
+      "not_found": 1
+    },
+    "hidden": 0,
+    "rereads_after_hidden_needed": 0,
+    "usage": [
+      {
+        "id": "5682228527674359af80032b1cac02ce",
+        "summary": false,
+        "prompt": 5906,
+        "completion": 113,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 0,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.006428,
+        "gpt41_uncached_upper_usd": 0.012716
+      },
+      {
+        "id": "250413b384074cdb80f42c3d010081d9",
+        "summary": false,
+        "prompt": 16490,
+        "completion": 295,
+        "cached": 0,
+        "cost": 0,
+        "lcp_estimated_tokens": 3691,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.03534,
+        "gpt41_uncached_upper_usd": 0.03534
+      },
+      {
+        "id": "21540fce31524f3a863d178bfe7d117a",
+        "summary": false,
+        "prompt": 16617,
+        "completion": 318,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 12762,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01377,
+        "gpt41_uncached_upper_usd": 0.035778
+      },
+      {
+        "id": "50977a9cfaa74368b2bf3b9206787d7d",
+        "summary": true,
+        "prompt": 5680,
+        "completion": 2024,
+        "cached": 4192,
+        "cost": 0,
+        "lcp_estimated_tokens": 11,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.021264,
+        "gpt41_uncached_upper_usd": 0.027552
+      },
+      {
+        "id": "2f7bde971d0e43e194d8151a999bb1ff",
+        "summary": false,
+        "prompt": 16590,
+        "completion": 98,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 9,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.011956,
+        "gpt41_uncached_upper_usd": 0.033964
+      },
+      {
+        "id": "6dffe5d6f128489b807adf3787ab1b81",
+        "summary": false,
+        "prompt": 16844,
+        "completion": 245,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13013,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.01364,
+        "gpt41_uncached_upper_usd": 0.035648
+      },
+      {
+        "id": "4887ef96d74647deb39e19a627455265",
+        "summary": false,
+        "prompt": 16816,
+        "completion": 250,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 13132,
+        "finish_reason": "tool_calls",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.013624,
+        "gpt41_uncached_upper_usd": 0.035632
+      },
+      {
+        "id": "16b0cf639fbb4f3484b3c8682ea1134d",
+        "summary": false,
+        "prompt": 27258,
+        "completion": 331,
+        "cached": 14672,
+        "cost": 0,
+        "lcp_estimated_tokens": 14030,
+        "finish_reason": "stop",
+        "failure_kind": null,
+        "gpt41_reference_usd": 0.035156,
+        "gpt41_uncached_upper_usd": 0.057164
+      }
+    ],
+    "later_turn_rereads": 3,
+    "missing_usage": 0,
+    "missing_cost": 0,
+    "missing_cached": 0,
+    "guard_denials": 0,
+    "retries": 0,
+    "component": "summarize",
+    "product_commit": "5017b97",
+    "eligible_observed": 2,
+    "eligible_disposable_observed": 0,
+    "eligible_selected": 1,
+    "selected_eligible_disposable": 0,
+    "explicit_hide_eligible": 0,
+    "explicit_hide_disposable": 0,
+    "eligible_disposable_unique_selected": 0,
+    "literal_ids_selected": 1,
+    "literal_ids_valid": 1,
+    "successful_cleanup_boundaries": [],
+    "keep_lines_calls": 0,
+    "native_compactions": [],
+    "native_compaction_ends": [],
+    "announced_recall_correct": true,
+    "surprise_recall_correct": true,
+    "pressure": {
+      "window": 65536,
+      "reported_peak": 27258,
+      "host_peak": 27258,
+      "reported_tiers": []
+    },
+    "response_providers": {
+      "Nvidia": 8
+    },
+    "failure_kinds": {}
+  }
+]

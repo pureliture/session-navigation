@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy import serve
 from v2_fixtures import build, component, document
-from v2_run import child_environment
+from v2_run import child_environment, STAGES
 from v2_analyze import adoption_gate, boundary_index, eligible, match_fact
 from analyze import native_operations, response_failure_kind
 from v2_cost import projection
@@ -20,10 +20,28 @@ from v2_archive import archive
 from analyze import read_wire
 from v2_cache import transitions
 from v2_rereads import session_rereads
+from v2_answer_surface import unit_answer
 import gzip
 
 
 class V2Tests(unittest.TestCase):
+    def test_answer_before_cleanup_is_visible_but_previous_turn_is_not(self):
+        turn = {"prompt": "Unit 2", "answer": "Reported above", "messages": [
+            {"role": "user", "content": "Unit 1"},
+            {"role": "assistant", "content": "old fact"},
+            {"role": "user", "content": "Unit 2"},
+            {"role": "assistant", "content": [{"type": "text", "text": "owner=Orchid"},
+                                                {"type": "toolCall", "name": "hide_context"}]},
+            {"role": "assistant", "content": "Reported above"}]}
+        answer, captured = unit_answer(turn)
+        self.assertTrue(captured)
+        self.assertIn("owner=Orchid", answer)
+        self.assertNotIn("old fact", answer)
+        self.assertEqual(unit_answer({"prompt": "absent", "answer": ""}), ("", False))
+
+    def test_nemotron_stage_has_exact_free_model_and_single_provider(self):
+        self.assertEqual(STAGES["nemotron"], ("nvidia/nemotron-3.5-lightning:free", "Nvidia"))
+
     def test_rereads_empty_events_and_rejected_cleanup(self):
         self.assertEqual(session_rereads([], [])["work_calls"], 0)
         events = [{"time": index, "turn": index, "kind": "host_event",

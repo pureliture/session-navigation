@@ -96,6 +96,15 @@ v1 설계/평가 한계는 [design-v1](../docs/evaluation/design-v1.md), 수치�
 
 ## v3 (중단) 과 Hide 이후 재접근 지표
 
+후속 사용자 승인 fallback으로 `--stage nemotron`(Nvidia)을 시도했으나 무료 일일 quota 소진으로
+해당 디렉터리는 non-qualifying이다. `--stage deepseek-quality`는 같은 pinned Relace/reasoning-off
+설정으로 A/B-old/B-new와 components를 허용한다. 3-arm pilot 후 전체 $5 예상 gate를 별도 기록했고,
+완료된 OMP A/B-new 4vs4를 비용 비교에 재사용했다. 후반 Hermes 3셀은 Relace 429로 미완료다.
+
+`v2_answer_surface.py DIR`은 기존 마지막-message 지표를 바꾸지 않고, 현재 사용자 턴 이후의
+assistant 텍스트를 합쳐 별도 `answer-surface.json`을 낸다. 답변 후 정리 확인문이 마지막에
+붙는 경우를 평가하며 도구 결과·이전 턴·reasoning은 제외한다. v2에도 같은 방법을 적용한다.
+
 `v2_rereads.py DIR`은 events의 read/bash와 성공한 정리 operation을 시간순으로 맞춰
 (a) 숨김 대상 파일 재접근, (b) 보이는 상태의 재접근, (c) 신규를 나눈다.
 (a)는 같은 턴과 이후 턴으로 쪼개고 unhide 수를 함께 낸다. `v2_analyze.py`가 자동으로 호출하며

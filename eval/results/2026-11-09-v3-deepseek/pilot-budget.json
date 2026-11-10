@@ -1,0 +1,26 @@
+{
+  "pilot_sessions": 2,
+  "completed": 2,
+  "observed_cost": 0.04724113,
+  "arms": {
+    "omp/A": {
+      "prompt_tokens": 2935222,
+      "output_tokens": 15367,
+      "cached_tokens": 2614272,
+      "cost": 0.02268056
+    },
+    "omp/B-new": {
+      "prompt_tokens": 2832521,
+      "output_tokens": 19573,
+      "cached_tokens": 2221056,
+      "cost": 0.02456057
+    }
+  },
+  "observed_output_tokens": 34940,
+  "missing_cost": 0,
+  "planned_sessions_including_pilot": 8,
+  "prior_nonqualifying_cost_usd": 0,
+  "safety_multiplier": 1.5,
+  "projected_total_usd": 0.28344678,
+  "continue": true
+}

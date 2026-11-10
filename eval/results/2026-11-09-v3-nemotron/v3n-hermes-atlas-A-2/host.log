@@ -1,0 +1,22 @@
+v3n-hermes-atlas-A-2 turn 1 complete
+v3n-hermes-atlas-A-2 turn 2 complete
+v3n-hermes-atlas-A-2 turn 3 complete
+⚠️  Attempt 1/3 failed: HTTP 429 — Error response
+⏱️ Rate limited. Waiting 2.1s (attempt 2/3)...
+⚠️  Attempt 2/3 failed: HTTP 429 — Error response
+⏱️ Rate limited. Waiting 5.5s (attempt 3/3)...
+⚠️  Attempt 3/3 failed: HTTP 429 — Error response
+❌ Rate limited after 3 retries — HTTP 429 — Error response
+   💀 Final error: HTTP 429 — Error response
+🧾 Request debug dump written to: /Users/devin/.session-navigation-eval-v2/v3n-hermes-atlas-A-2/home/sessions/request_dump_v3n-hermes-atlas-A-2_20261109_165537_676556.json
+v3n-hermes-atlas-A-2 turn 4 complete
+⚠️  Attempt 1/3 failed: HTTP 429 — Error response
+⏱️ Rate limited. Waiting 2.2s (attempt 2/3)...
+⚠️  Attempt 2/3 failed: HTTP 429 — Error response
+⏱️ Rate limited. Waiting 4.2s (attempt 3/3)...
+⚠️  Attempt 3/3 failed: HTTP 429 — Error response
+❌ Rate limited after 3 retries — HTTP 429 — Error response
+   💀 Final error: HTTP 429 — Error response
+🧾 Request debug dump written to: /Users/devin/.session-navigation-eval-v2/v3n-hermes-atlas-A-2/home/sessions/request_dump_v3n-hermes-atlas-A-2_20261109_170204_574460.json
+v3n-hermes-atlas-A-2 turn 5 complete
+🔁 Transient APIConnectionError on custom — rebuilt client, waiting 6s before one last primary attempt.

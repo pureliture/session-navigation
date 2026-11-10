@@ -287,9 +287,12 @@ OMP summary는 입력 12K 제한으로 일부 사실을 놓쳤다. 별도 DeepSe
 A $0.114316 / B-new $0.202723(**+77.3%**)로 절감은 입증하지 못했다.
 [v2 설계](docs/evaluation/design.md) · [v2 결과·실패·비용](docs/evaluation/results-v2.md)
 
-[v3 구현·재평가 차단](docs/evaluation/results-v3.md): 줄번호 주요 정보 보존과 영어·배치 정리 안내를
-구현했다. Crouton이 2026-11-09 폐기되어 재평가는 차단됐으며 DeepSeek 비용 비교는 시작하지 않았다.
-v2 로그의 Hide 이후 재접근 지표를 추가했으며, 개선 효과는 아직 미검증이다.
+[v3 DeepSeek fallback 부분 결과](docs/evaluation/results-v3.md): Nemotron 무료 일일 할당량 소진 후
+승인된 DeepSeek/Relace(reasoning off)로 21/24 장기 세션과 16 component trial을 완료했다.
+완료 B-new 7/7 사용성 gate 통과. 답변 후 정리 안내로 기존 마지막-message 채점이 일부 답변을
+놓쳐, 원래 지표와 보이는 단위 답변 채점을 함께 공개했다(후자 21/21 성공).
+완료 OMP 4vs4 비용은 A $0.087330 / B-new $0.084207(−3.58%), 큰 cache 할인 reference는 +3.19%.
+후반 Relace 429로 Hermes 마지막 3셀은 미완료다. summary 손실·지시 불이행은 여전히 남는다.
 
 **v1:** 실제 OMP/Hermes에서 **GLM 5.3 Flash**로 A/B 48세션(셀별 3회)을 실행했다.
 양 군 모두 과제·회상 24/24 성공했지만, 자발적 hide는 OMP B 한 세션뿐이고 LLM summary는 없어 요약 품질은 미평가다.

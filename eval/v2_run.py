@@ -16,6 +16,8 @@ from v2_fixtures import ROOT as FIXTURES, build, component
 
 ROOT = Path(__file__).resolve().parents[1]
 STAGES = {"crouton": ("stealth/crouton-alpha", "Stealth"),
+          "nemotron": ("nvidia/nemotron-3.5-lightning:free", "Nvidia"),
+          "deepseek-quality": ("deepseek/deepseek-v4.1-flash-1017", "Relace"),
           "deepseek": ("deepseek/deepseek-v4.1-flash-1017", "Relace")}
 COMMITS = {"A": "fc07058", "B-old": "5017b97", "B-new": "fc07058"}
 DEEPSEEK_REASONING = {"enabled": False, "exclude": True}
@@ -79,7 +81,7 @@ def main():
     if args.components:
         cases = [component(action) for action in args.component_actions.split(",")]
     cases = [case for case in cases if args.components or case["id"] in args.cases.split(",")]
-    reasoning = DEEPSEEK_REASONING if args.stage == "deepseek" else None
+    reasoning = DEEPSEEK_REASONING if model == STAGES["deepseek"][0] else None
     server = serve(args.output, model=model, provider=provider, reasoning=reasoning)
     (args.output / "stage.json").write_text(json.dumps({"model": model, "provider": {"order": [provider], "allow_fallbacks": False},
         "reasoning": reasoning, "product_commits": COMMITS, "window": 65536, "repetitions": args.repetitions,

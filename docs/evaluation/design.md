@@ -1,3 +1,20 @@
+# v3 모델 대체 및 중단 처리 (2026-11-09)
+
+- 제품: A/B-old=`5017b97`/B-new=`fc07058` (A는 plugin off). 동일 v2 fixture/25턴/2회 반복.
+- Crouton 폐기, Inkling agentic-app gate 이후 사용자 지정 Nemotron을 확인했다:
+  `nvidia/nemotron-3.5-lightning:free`, provider `Nvidia`, tool 지원/1M window/tiny tool probe 통과.
+  무료 일일 quota 0으로 지속 429가 발생해 해당 자율/component/judge 전부 non-qualifying으로 보존했다.
+- 사용자 승인 fallback: Stage 1·2 모두 `deepseek/deepseek-v4.1-flash-1017` / `Relace`,
+  reasoning disabled/excluded, no provider fallback. Stage 1 A/B-old/B-new를 새로 실행해
+  v2 Crouton과 혼합하지 않는다. 동일 설정 OMP A/B-new 자료는 gate 통과 후 비용 비교에 재사용한다.
+- 3-arm pilot 이후 전체 지출 예상 $1.7511(안전계수·component·judge 포함)로 $5 gate 통과;
+  2-arm cost pilot도 8세션 예상 $0.2834로 기존 $3 gate를 통과했다.
+- 마지막 메시지 strict 채점은 유지한다. 답변 후 cleanup 확인문 때문에 생기는 false negative를
+  분리하려고 별도 `answer-surface.json`에 **현재 사용자 턴 이후 assistant 텍스트**만 재채점한다.
+  도구 결과·reasoning·이전 턴은 제외하며, 같은 보조 지표를 v2에도 계산한다.
+- 지속 provider 429로 미완료된 셀은 0점이나 성공으로 대체하지 않고 별도 기록한다.
+  [v3 결과](results-v3.md), `completeness.json` 참조.
+
 # Session Navigation 평가 v2
 
 v1은 [보관 설계](design-v1.md)·[GLM 결과](results.md)·기존 raw data를 그대로 유지한다.
