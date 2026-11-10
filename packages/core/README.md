@@ -30,6 +30,11 @@ mutating or hashing. No scope/item migration occurs during alias lookup.
 
 ## Checks (from repository root)
 
+Core TypeScript uses Prettier 3.5.3 with the local `.prettierrc.json`, matching
+Paseo's two-space indentation, double quotes and semicolons. Run
+`npm --prefix packages/core run format` to format this package. The Python
+conformance runner is formatted with Ruff 0.11.13.
+
 ```sh
 node paseo-plugin/node_modules/typescript/bin/tsc -p packages/core/tsconfig.json
 node --test packages/core/test/core.test.ts
