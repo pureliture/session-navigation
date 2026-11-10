@@ -1,5 +1,7 @@
 # Focus effect: stale tool output without native compaction
 
+> 원자료 링크는 프라이빗 평가 저장소의 고정된 커밋을 가리키며 읽기 권한이 필요합니다.
+
 ## Conclusion
 
 **No answer-quality benefit shown.** All 30 RAW replay trials answered the eleven
@@ -15,7 +17,7 @@ was lost in the controlled Hide histories and is reported separately, not silent
 excluded from disclosure. These are synthetic structured fixtures, not normal-work
 production measurements or a general equivalence result.
 
-Evidence: [`eval/results/2026-11-10-focus`](../../eval/results/2026-11-10-focus).
+Evidence: [`eval/results/2026-11-10-focus`](https://github.com/pureliture/session-navigation-evidence/tree/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-10-focus).
 All 66 planned sessions qualified; no API-error exclusions or inference retries
 were needed. There were 210 successful responses, all Relace, all reporting zero
 reasoning tokens. Native compaction starts: **zero**.

@@ -1,6 +1,0 @@
-{
-  "files_checked": 106199,
-  "actual_key_matches": [],
-  "credential_prefix_matches": [],
-  "note": "Opaque encrypted model reasoning is not a credential; only actual key bytes and known OpenRouter prefix are checked."
-}

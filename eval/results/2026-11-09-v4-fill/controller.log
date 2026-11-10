@@ -1,4 +1,0 @@
-START v4f-hermes-boreal-A-2
-START v4f-hermes-boreal-B-old-2
-DONE v4f-hermes-boreal-B-old-2 {'returncode': 0, 'canonical_tests_pass': True}
-DONE v4f-hermes-boreal-A-2 {'returncode': 0, 'canonical_tests_pass': True}

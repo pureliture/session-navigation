@@ -1,5 +1,7 @@
 # 내비게이터(아웃라인) 단일 사용성 평가
 
+> 평가에 사용한 원본 세션 링크는 프라이빗 평가 저장소의 읽기 권한이 필요합니다.
+
 > **판정: 사용자의 불편을 부분적으로 해소한다.** 아웃라인에서는 클릭 전에
 > “어떤 프롬프트와 응답이 있었는지”를 지속적으로 훑어볼 수 있었다.
 > 기본 틱도 hover하면 프롬프트를 보여주므로 정보가 전혀 없는 것은 아니다.
@@ -16,7 +18,7 @@
 |---|---|
 | 평가 UI | [PR #8](https://github.com/pureliture/session-navigation/pull/8), **b1a524e의 navigator UI 코드** |
 | 환경 | 로컬 Paseo 웹, Chrome, 밝은 테마 |
-| 실제 대화 | [`omp-06-long-B-3`](../../eval/results/2026-11-09-glm/omp-06-long-B-3), GLM 5.3 Flash로 이미 실행된 OMP 평가 세션 |
+| 실제 대화 | [`omp-06-long-B-3`](https://github.com/pureliture/session-navigation-evidence/tree/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/omp-06-long-B-3), GLM 5.3 Flash로 이미 실행된 OMP 평가 세션 |
 | 규모 | 원본 SDK 메시지 **40개**, JSON 직렬화 약 **274 KB**, 사용자 요청 **6개** |
 | 아웃라인 | User **6행**, Assistant **7행**, Tool **14행** = **27행**; 연속 도구는 그룹으로 접힘 |
 | 숨김 상태 | 원본 snapshot의 **3개 hidden 결과**를 그대로 보존 |

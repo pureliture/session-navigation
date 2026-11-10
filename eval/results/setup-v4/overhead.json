@@ -1,6 +1,0 @@
-{
-  "method": "Offline o200k_base over identical compact JSON messages/tools serialization; not provider billing",
-  "omp": {"v3": 679, "v4": 709, "delta": 30},
-  "hermes": {"v3": 333, "v4": 364, "delta": 31},
-  "typical_note": {"v3_tokens": 185, "v4_tokens": 215, "delta": 30, "bytes": 793, "displayed": 3, "eligible": 20}
-}
