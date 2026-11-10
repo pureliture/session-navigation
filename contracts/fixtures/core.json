@@ -1,5 +1,6 @@
 {
   "scope": "hermes:default:fixture:unknown",
+  "linkage": {"parent_scope":"hermes:default:parent:unknown","tool_call_id":"delegate-fixture","subagent_id":"sa-fixture"},
   "canonical": ["{\"z\":1,\"a\":\"눈😀\"}", "{\"a\":1.0,\"b\":-0.0,\"c\":1e-7,\"d\":1e15,\"e\":9007199254740993}", "{\"𐀀\":3,\"\":4,\"escape\":\"\\t\\n\\u0001\"}", "[true,null,false,1.2345678901234567,1e16,0.0001]"],
   "policies": [
     {"name":"plain","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":""},

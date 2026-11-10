@@ -30,25 +30,81 @@ class AdapterRegistryMixin:
                 if row is not None:
                     result = dict(row)
                     result["capabilities"] = json.loads(result["capabilities"])
+                    linkage = result["capabilities"].get("linkage", {})
+                    result.update({name: linkage.get(name) for name in ("parent_scope", "tool_call_id", "subagent_id")})
                     result["enabled"] = bool(result["enabled"])
                     return result
         return None
+
+    def child_scopes(self, parent_scope: str):
+        with self._lock:
+            rows = self.connection.execute("SELECT scope_key FROM adapter_sessions ORDER BY scope_key").fetchall()
+            return [row for key in rows if (row := self.adapter_session(key[0]))["parent_scope"] == parent_scope]
 
     def adapter_can(self, scope, capability: str) -> bool:
         row = self.adapter_session(scope)
         return bool(row and row["adapter_protocol"] == ADAPTER_PROTOCOL_VERSION and
                     row["enabled"] and row["capabilities"].get(capability) is True)
 
+    def link_children(self, parent_scope: str, tool_call_id: str, subagent_ids: list[str]) -> None:
+        if not tool_call_id or any(not isinstance(value, str) or not value for value in subagent_ids):
+            raise ValueError("invalid_adapter_registration")
+        with self._lock, self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            parent = self.adapter_session(parent_scope)
+            if parent is None:
+                raise ValueError("adapter_not_detected")
+            caps = parent["capabilities"]
+            pending = dict(caps.get("pending_children", {}))
+            for subagent in subagent_ids:
+                children = [row for row in self.child_scopes(parent_scope) if row["subagent_id"] == subagent]
+                if not children:
+                    pending[subagent] = tool_call_id
+                for child in children:
+                    packed = child["capabilities"]
+                    packed["linkage"] = dict(parent_scope=parent_scope, subagent_id=subagent, tool_call_id=tool_call_id)
+                    self.connection.execute("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", (canonical(packed), child["scope_key"]))
+            if pending:
+                caps["pending_children"] = pending
+            self.connection.execute("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", (canonical(caps), parent_scope))
+
     def register_adapter(self, scope, *, adapter_id: str, instance_id: str,
                          capabilities: dict, enabled: bool = True,
-                         adapter_protocol: int = ADAPTER_PROTOCOL_VERSION, now: float | None = None) -> bool:
+                         adapter_protocol: int = ADAPTER_PROTOCOL_VERSION, now: float | None = None,
+                         parent_scope: str | None = None, tool_call_id: str | None = None,
+                         subagent_id: str | None = None) -> bool:
         key = scope.scope_key() if hasattr(scope, "scope_key") else str(scope)
         if not instance_id or key.split(":", 1)[0] != adapter_id:
             raise ValueError("invalid_adapter_registration")
-        caps = canonical({name: capabilities.get(name) is True for name in ("hide", "summarize", "unhide")})
+        packed = {name: capabilities.get(name) is True for name in ("hide", "summarize", "unhide")}
+        if any(value is not None and (not isinstance(value, str) or not value or len(value) > 1024)
+               for value in (parent_scope, tool_call_id, subagent_id)):
+            raise ValueError("invalid_adapter_registration")
+        if parent_scope == key or (parent_scope and len(parent_scope.split(":")) != 4):
+            raise ValueError("invalid_adapter_registration")
         stamp = time.time() if now is None else now
         with self._lock, self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
             row = self.connection.execute("SELECT * FROM adapter_sessions WHERE scope_key=?", (key,)).fetchone()
+            prior_caps = json.loads(row["capabilities"]) if row else {}
+            prior = prior_caps.get("linkage", {})
+            parent = parent_scope or prior.get("parent_scope")
+            subagent = subagent_id or prior.get("subagent_id")
+            parent_row = self.connection.execute("SELECT capabilities FROM adapter_sessions WHERE scope_key=?", (parent,)).fetchone() if parent else None
+            parent_caps = json.loads(parent_row["capabilities"]) if parent_row else {}
+            pending = parent_caps.get("pending_children", {})
+            pending_call = pending.pop(subagent, None)
+            if pending_call:
+                if not pending:
+                    parent_caps.pop("pending_children", None)
+                self.connection.execute("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", (canonical(parent_caps), parent))
+            if "pending_children" in prior_caps:
+                packed["pending_children"] = prior_caps["pending_children"]
+            if parent:
+                packed["linkage"] = dict(parent_scope=parent,
+                    tool_call_id=tool_call_id or prior.get("tool_call_id") or pending_call,
+                    subagent_id=subagent)
+            caps = canonical(packed)
             values = (adapter_id, adapter_protocol, caps, int(enabled), instance_id)
             if row is not None and tuple(row[k] for k in ("adapter_id", "adapter_protocol", "capabilities", "enabled", "instance_id")) == values and stamp - row["last_seen"] < HEARTBEAT_SECONDS:
                 return False

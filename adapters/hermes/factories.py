@@ -48,6 +48,8 @@ Decisions recorded here (first-version scope):
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import copy
 import hashlib
 import json
@@ -72,7 +74,7 @@ from .allowlist import AdapterRejected, filter_invocation
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.transport import Summarizer, SummarizerError
 from .llm import CtxLlmSummarizer
-from .schemas import ADAPTER_ID, BRANCH_SCOPE, SOURCE
+from .schemas import ADAPTER_ID, BRANCH_SCOPE, SOURCE, TOOL_SCHEMAS, SUPERVISION_SECTION_TEXT
 logger = logging.getLogger(__name__)
 
 def _default_count_llm_middlewares() -> int:
@@ -120,6 +122,8 @@ class PluginState:
     usage: UsageTracker = field(default_factory=UsageTracker)
     reminders: BoundaryReminders = field(default_factory=BoundaryReminders)
     instance_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    delegation_call: ContextVar = field(default_factory=lambda: ContextVar("session_navigation_delegate", default=None))
+    child_links: dict[str, dict[str, str | None]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.engine.store.scope_aliases[ADAPTER_ID] = (BRANCH_SCOPE, "default")
@@ -140,6 +144,24 @@ def scope_for(state: PluginState, session_id: Any) -> Scope | None:
         session_id=session_id.strip(),
         branch_scope=BRANCH_SCOPE,
     )
+
+
+def delegation_request(state: PluginState, **kwargs: Any) -> None:
+    if kwargs.get("tool_name") == "delegate_task":
+        state.delegation_call.set((kwargs.get("session_id", ""), kwargs.get("tool_call_id")))
+
+
+def subagent_started(state: PluginState, **kwargs: Any) -> None:
+    parent = scope_for(state, kwargs.get("parent_session_id"))
+    child = scope_for(state, kwargs.get("child_session_id"))
+    subagent = kwargs.get("child_subagent_id")
+    if parent is None or child is None or parent == child or not isinstance(subagent, str) or not subagent:
+        return
+    captured = state.delegation_call.get()
+    call = captured[1] if captured and (not captured[0] or captured[0] == parent.session_id) else None
+    state.child_links[child.session_id] = dict(parent_scope=parent.scope_key(), tool_call_id=call, subagent_id=subagent)
+    if state.is_enabled():
+        _register_adapter(state, child, True)
 
 
 def _dump(payload: dict[str, Any]) -> str:
@@ -455,6 +477,31 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
     return _track_mutation(state, manage_context)
 
 
+def _child_request(request: dict[str, Any]) -> dict[str, Any]:
+    request = copy.deepcopy(request)
+    if isinstance(request.get("tools"), list):
+        request["tools"] = [tool for tool in request["tools"]
+            if not isinstance(tool, dict) or
+            (tool.get("function", {}).get("name") if isinstance(tool.get("function"), dict) else tool.get("name")) not in TOOL_SCHEMAS]
+    if isinstance(request.get("instructions"), str):
+        request["instructions"] = request["instructions"].replace(SUPERVISION_SECTION_TEXT, "")
+    for key in ("messages", "input"):
+        messages = request.get(key)
+        if not isinstance(messages, list):
+            continue
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = content.replace(SUPERVISION_SECTION_TEXT, "")
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                        block["text"] = block["text"].replace(SUPERVISION_SECTION_TEXT, "")
+    return request
+
+
 def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
     """Build the `llm_request` middleware callback for this registration."""
 
@@ -462,8 +509,13 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
         try:
             if not state.is_enabled():
                 scope = scope_for(state, kwargs.get("session_id", ""))
-                if scope is not None and state.engine.store.adapter_session(scope) is not None:
+                registration = state.engine.store.adapter_session(scope) if scope is not None else None
+                if registration is not None:
                     _register_adapter(state, scope, False)
+                if scope is not None and (state.child_links.get(scope.session_id) or (registration and registration.get("parent_scope"))):
+                    request = kwargs.get("request")
+                    if isinstance(request, dict):
+                        return {"request": _child_request(request), "source": SOURCE}
                 return None
             request = kwargs.get("request")
             if not isinstance(request, dict):
@@ -478,6 +530,10 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             api_mode = kwargs.get("api_mode", "")
             if not isinstance(api_mode, str):
                 api_mode = ""
+            registration = state.engine.store.adapter_session(scope)
+            child = bool(state.child_links.get(scope.session_id) or (registration and registration.get("parent_scope")))
+            if child:
+                request = _child_request(request)
             state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
             if state.count_middlewares() > 0:
                 _register_adapter(state, scope, False)
@@ -537,7 +593,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 if hidden:
                     request_out = drop_messages(api_mode, request_out, hidden)
                 users = [(index, text) for _key, role, index, text in message_keys(api_mode, request) if role == "user"]
-                if users:
+                if users and not child:
                     entries = state.store.entries(scope.scope_key())
                     candidates = []
                     for entry in reversed(entries):
@@ -576,4 +632,5 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
 def _register_adapter(state: PluginState, scope: Scope, projecting: bool) -> None:
     state.engine.store.register_adapter(scope, adapter_id=ADAPTER_ID, instance_id=state.instance_id,
         capabilities={"hide": projecting, "summarize": projecting and state.summarizer is not None,
-                      "unhide": projecting}, enabled=projecting)
+                      "unhide": projecting}, enabled=projecting,
+        **state.child_links.get(scope.session_id, {}))

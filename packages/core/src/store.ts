@@ -44,6 +44,9 @@ function decodeItem(row: Row): Item {
   } as unknown as Item;
 }
 export interface Registration {
+  parent_scope?: string | null;
+  tool_call_id?: string | null;
+  subagent_id?: string | null;
   adapter_id: string;
   adapter_protocol: number;
   capabilities: {
@@ -331,16 +334,53 @@ export class Store {
     for (const key of scopeAliases(scopeKey(scope))) {
       const row = this.driver.get("SELECT * FROM adapter_sessions WHERE scope_key=?", [key]);
       if (row) {
+        const capabilities = JSON.parse(String(row.capabilities));
         return {
           ...row,
+          parent_scope: capabilities.linkage?.parent_scope ?? null,
+          tool_call_id: capabilities.linkage?.tool_call_id ?? null,
+          subagent_id: capabilities.linkage?.subagent_id ?? null,
           scope_key: key,
-          capabilities: JSON.parse(String(row.capabilities)),
+          capabilities,
           enabled: !!row.enabled,
           adapter_protocol: safeNumber(row.adapter_protocol),
           last_seen: Number(row.last_seen),
         } as unknown as Registration;
       }
     }
+  }
+
+  listScopes(parentScope?: string): Registration[] {
+    return this.driver.all("SELECT scope_key FROM adapter_sessions ORDER BY scope_key")
+      .map((row) => this.registration(String(row.scope_key))!)
+      .filter((row) => parentScope === undefined || row.parent_scope === parentScope);
+  }
+
+  childScopes(parentScope: string): Registration[] {
+    return this.listScopes(parentScope);
+  }
+
+  linkChildren(parentScope: string, toolCallId: string, subagentIds: string[]): void {
+    if (!toolCallId || subagentIds.some((id) => typeof id !== "string" || !id))
+      throw new EngineError("invalid_adapter_registration");
+    this.transaction(() => {
+      const parent = this.registration(parentScope);
+      if (!parent) throw new EngineError("adapter_not_detected");
+      const caps = { ...parent.capabilities } as Record<string, any>;
+      const pending = { ...caps.pending_children };
+      for (const id of subagentIds) {
+        const children = this.childScopes(parentScope).filter((row) => row.subagent_id === id);
+        if (!children.length) pending[id] = toolCallId;
+        for (const child of children) {
+          const capabilities = { ...child.capabilities, linkage: {
+            parent_scope: parentScope, subagent_id: id, tool_call_id: toolCallId,
+          } };
+          this.driver.run("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", [canonical(capabilities), child.scope_key!]);
+        }
+      }
+      if (Object.keys(pending).length) caps.pending_children = pending;
+      this.driver.run("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", [canonical(caps), parentScope]);
+    });
   }
 
   can(scope: ScopeLike, capability: "hide" | "summarize" | "unhide"): boolean {
@@ -363,16 +403,43 @@ export class Store {
     if (!adapterRegistration.instance_id || key.split(":")[0] !== adapterRegistration.adapter_id) {
       throw new EngineError("invalid_adapter_registration");
     }
-    const capabilitiesJson = canonical({
+    for (const field of ["parent_scope", "tool_call_id", "subagent_id"] as const) {
+      const value = adapterRegistration[field];
+      if (value != null && (typeof value !== "string" || !value || value.length > 1024))
+        throw new EngineError("invalid_adapter_registration");
+    }
+    if (adapterRegistration.parent_scope === key ||
+      (adapterRegistration.parent_scope && adapterRegistration.parent_scope.split(":").length !== 4))
+      throw new EngineError("invalid_adapter_registration");
+    const capabilitiesBase = {
       hide: adapterRegistration.capabilities.hide === true,
       summarize: adapterRegistration.capabilities.summarize === true,
       unhide: adapterRegistration.capabilities.unhide === true,
-    });
+    };
     return this.transaction(() => {
       const previousRegistration = this.driver.get(
         "SELECT * FROM adapter_sessions WHERE scope_key=?",
         [key],
       );
+      const priorCaps = previousRegistration ? JSON.parse(String(previousRegistration.capabilities)) : {};
+      const prior = priorCaps.linkage;
+      const parent = adapterRegistration.parent_scope ?? prior?.parent_scope;
+      const subagent = adapterRegistration.subagent_id ?? prior?.subagent_id ?? null;
+      const parentRow = parent ? this.driver.get("SELECT capabilities FROM adapter_sessions WHERE scope_key=?", [parent]) : undefined;
+      const parentCaps = parentRow ? JSON.parse(String(parentRow.capabilities)) : {};
+      const pendingCall = subagent ? parentCaps.pending_children?.[subagent] : undefined;
+      const capabilitiesJson = canonical({ ...capabilitiesBase,
+        ...(priorCaps.pending_children ? { pending_children: priorCaps.pending_children } : {}),
+        ...(parent ? { linkage: {
+        parent_scope: parent,
+        tool_call_id: adapterRegistration.tool_call_id ?? prior?.tool_call_id ?? pendingCall ?? null,
+        subagent_id: subagent,
+      } } : {}) });
+      if (pendingCall) {
+        delete parentCaps.pending_children[subagent!];
+        if (!Object.keys(parentCaps.pending_children).length) delete parentCaps.pending_children;
+        this.driver.run("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", [canonical(parentCaps), parent]);
+      }
       if (
         previousRegistration &&
         previousRegistration.adapter_id === adapterRegistration.adapter_id &&

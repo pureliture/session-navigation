@@ -89,7 +89,7 @@ export class PaseoService {
 
   async handle(method: string, input: Record<string, any>): Promise<Reply> {
     try {
-      if (method === "scopes") return this.scopes();
+      if (method === "scopes") return this.scopes(input.parent_scope);
       const requested = input.scope_key;
       if (typeof requested !== "string" || requested.split(":").length !== 4)
         return { ok: false, error: "invalid_scope" };
@@ -194,7 +194,9 @@ export class PaseoService {
       };
   }
 
-  private scopes(): Reply {
+  private scopes(parentScope?: unknown): Reply {
+    if (parentScope !== undefined && typeof parentScope !== "string")
+      return { ok: false, error: "invalid_params" };
     const scopes = this.store.driver
       .all(
         "SELECT scope_key FROM adapter_sessions UNION SELECT scope_key FROM items UNION SELECT scope_key FROM units ORDER BY scope_key",
@@ -204,16 +206,21 @@ export class PaseoService {
         return {
           scope_key: scope,
           items: this.store.items(scope).length,
+          parent_scope: this.store.registration(scope)?.parent_scope ?? null,
+          tool_call_id: this.store.registration(scope)?.tool_call_id ?? null,
+          subagent_id: this.store.registration(scope)?.subagent_id ?? null,
           capabilities: this.capabilities(scope),
         };
       });
-    return { ok: true, scopes: bindAgents(this.home, scopes) };
+    return { ok: true, scopes: bindAgents(this.home, scopes.filter((row) =>
+      parentScope === undefined || row.parent_scope === parentScope)) };
   }
 
   private timeline(scope: string): Timeline {
     const timeline = loadTimeline(this.home, scope);
-    if (!scope.startsWith("hermes:")) return timeline;
+    if (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope) return timeline;
     for (const target of this.store.targets(scope)) {
+      if (timeline.records.has(String(target.tool_call_id))) continue;
       const invocation = JSON.parse(String(target.invocation_snapshot));
       const record: RecordInput = {
         call_id: String(target.tool_call_id),

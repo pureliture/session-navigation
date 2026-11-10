@@ -32,6 +32,7 @@ export interface TextVector {
   summary?: string;
 }
 export interface FixtureVectors {
+  linkage: { parent_scope: string; tool_call_id: string; subagent_id: string };
   scope: string;
   canonical: string[];
   policies: TextVector[];
@@ -167,12 +168,16 @@ async function sharedStoreVectors(): Promise<{ shared: unknown; pending: unknown
   const store = new Store(makeDriver(":memory:"));
   const scope = fixtures.scope;
   const registration = {
+    ...fixtures.linkage,
+    tool_call_id: null,
     adapter_id: "hermes",
     adapter_protocol: 1,
     capabilities: { hide: true, summarize: false, unhide: true },
     enabled: true,
     instance_id: "fixture",
   };
+  store.register(fixtures.linkage.parent_scope, { ...registration, parent_scope: null, tool_call_id: null, subagent_id: null }, 100);
+  store.linkChildren(fixtures.linkage.parent_scope, fixtures.linkage.tool_call_id, [fixtures.linkage.subagent_id]);
   const registered = [
     store.register(scope, registration, 100),
     store.register(scope, registration, 101),
@@ -202,6 +207,10 @@ async function sharedStoreVectors(): Promise<{ shared: unknown; pending: unknown
     ),
   );
   const shared = {
+    children: store.childScopes(fixtures.linkage.parent_scope).map((row) => ({
+      scope_key: row.scope_key, parent_scope: row.parent_scope,
+      tool_call_id: row.tool_call_id, subagent_id: row.subagent_id,
+    })),
     registered,
     capability,
     targetCalls,

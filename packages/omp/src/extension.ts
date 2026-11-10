@@ -18,6 +18,7 @@ import {
   type ReminderItem,
 } from "./context.ts";
 import { registerOverlay } from "./overlay.ts";
+import { childLinkage } from "./subagents.ts";
 export * from "./context.ts";
 
 export interface ExtensionOptions {
@@ -27,16 +28,24 @@ export default function sessionNavigationExtension(
   pi: ExtensionAPI,
   options: ExtensionOptions = {},
 ): void {
-  pi.on("session_start", (_event, ctx) => {
-    if (ctx.agent?.kind === "sub") return;
-    activateExtension(pi, options);
+  let active = false;
+  pi.on("session_start", async (_event, ctx) => {
+    if (active) return;
+    const child = ctx.agent?.kind === "sub";
+    const linkage = child ? childLinkage(ctx) : null;
+    if (child && !linkage) return;
+    const owner = ctx.sessionManager?.getSessionId?.() ?? "main";
+    if (!acquireExtension(owner)) return;
+    active = true;
+    await activateExtension(pi, options, ctx, owner, linkage);
   });
 }
 
-function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
-  if (!acquireExtension()) return;
+async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, startContext: ExtensionContext,
+  owner: string, linkage: { parent_scope: string; subagent_id: string } | null): Promise<void> {
+  const child = linkage !== null;
   const z = pi.zod;
-  pi.on("before_agent_start", async (event) => ({
+  if (!child) pi.on("before_agent_start", async (event) => ({
     systemPrompt: [...event.systemPrompt, CLEANUP_GUIDANCE],
   }));
   let candidate: Candidate | null = null;
@@ -56,7 +65,7 @@ function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
     params: object,
     timeout: number,
     signal?: AbortSignal,
-  ): Promise<Reply> => client.request(method, params, timeout, signal) as Promise<Reply>;
+  ): Promise<Reply> => client.request(method, { ...params, ...(linkage ?? {}) }, timeout, signal) as Promise<Reply>;
   function rpc(
     method: string,
     params: object,
@@ -186,7 +195,7 @@ function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
         deadline,
         () => generation === requestGeneration && sessionId(ctx) === session,
       );
-      if (response.ok && collected.records.length && reminder.due(turn, tokens, window)) {
+      if (!child && response.ok && collected.records.length && reminder.due(turn, tokens, window)) {
         const listed = await rpcOnce(
           "list_candidates",
           { session_id: session, snapshot_id: next.token, limit: 3 },
@@ -303,7 +312,7 @@ function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
     const saved = messages
       ? Math.ceil((JSON.stringify(event.messages).length - JSON.stringify(messages).length) / 4)
       : 0;
-    note = reminder.note(turn, Math.max(0, tokens - saved), window, eligibleCount, reminderItems);
+    note = child ? null : reminder.note(turn, Math.max(0, tokens - saved), window, eligibleCount, reminderItems);
     if (note)
       messages = [
         ...(messages ?? event.messages),
@@ -326,6 +335,12 @@ function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
   );
   pi.on("session_switch", async () => {
     invalidateSnapshot();
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    const progress = (event.details as { progress?: unknown })?.progress;
+    if (event.toolName !== "task" || !Array.isArray(progress)) return;
+    await rpc("link_children", { session_id: sessionId(ctx), tool_call_id: event.toolCallId,
+      subagent_ids: progress.filter((entry) => entry && typeof entry.id === "string").map((entry) => entry.id) }, 2000);
   });
   async function tool(
     method: string,
@@ -471,6 +486,15 @@ function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
       clearTimeout(timer);
       signal.removeEventListener("abort", abort);
     }
+  }
+  pi.on("session_shutdown", async () => {
+    invalidateSnapshot();
+    client.close();
+    releaseExtension(owner);
+  });
+  if (child) {
+    await rpc("register", { session_id: sessionId(startContext) }, 2000);
+    return;
   }
   pi.registerTool({
     name: "hide_context",
@@ -628,10 +652,5 @@ function activateExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
     rpc,
     summarizeText,
     manageChosen,
-  });
-  pi.on("session_shutdown", async () => {
-    invalidateSnapshot();
-    client.close();
-    releaseExtension();
   });
 }

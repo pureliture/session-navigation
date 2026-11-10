@@ -253,7 +253,13 @@ class SQLiteContextStore(AdapterRegistryMixin):
                 ORDER BY scope_key
                 """
             ).fetchall()
-            return [{"scope_key": r["scope_key"], "items": int(r["n"])} for r in rows]
+            counts = {r["scope_key"]: int(r["n"]) for r in rows}
+            for row in self._conn.execute("SELECT scope_key FROM adapter_sessions"):
+                counts.setdefault(row["scope_key"], 0)
+            return [{"scope_key": key, "items": counts[key], **{
+                name: (self.adapter_session(key) or {}).get(name)
+                for name in ("parent_scope", "tool_call_id", "subagent_id")
+            }} for key in sorted(counts)]
 
 
     def put(

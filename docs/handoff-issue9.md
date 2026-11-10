@@ -9,8 +9,10 @@
 >
 > Step 4: [Subagent probe and fallback evidence](subagent-live-verification.md)
 > records real OMP/Hermes delegation and the main-outline fallback. OMP children
-> remain inert; Hermes child-to-Paseo mapping is unverified. Neither host now
-> claims per-child context management.
+> were inert at that checkpoint; Hermes child-to-Paseo mapping was unverified.
+> Step 6b now supports passive per-child backend scopes for both hosts: see
+> [backend evidence](subagent-backend-verification.md). The panel still uses the
+> existing fallback; following/opening child tabs is the next UI step.
 
 ## 현재 상태와 시작점
 
@@ -33,11 +35,13 @@
 | 0 | 완료 | 실제 host feasibility gate 4개 및 후속 OMP/Hermes delegation probe. Node 22.13 자체 acceptance는 별도 미검증 |
 | 1 | 완료 | `8c20187`: contract, Python schema/protocol migration, DELETE 정책, Hermes registry/targets/pending summary |
 | 2–3 | 완료 | `e26ed8e`, readability 후속 `56c43af`: shared TS core, Node/Bun drivers, differential/cross-writer harness |
-| 4 | 완료 | `420f78c`: OMP Bun Worker service, npm-style package, projection/tools/TUI, packed real-OMP test, subagent inert gate |
+| 4 | 완료 | `420f78c`: OMP Bun Worker service/package/projection/tools/TUI. Step 6b adds passive child adapters; unlinked children and depth-zero clones remain inert |
 | 5 | 완료: live + unit | packed Paseo 단독 설치, 폐기 Python CLI 실행 파일 없는 PATH, 실제 OMP provider의 outline/Hide/Unhide/pending Summarize 및 adapter 없는 세션 거부. UI screenshot; `7a8ab16` |
 | 6 | 완료: live + unit | Hermes ACP mapping/Hide/Unhide/Summarize, resume, native fork 후 Paseo import, ID 유지 수동 compression, 공유 DB TS/Python writers. 호스트별 실제 모델 요약 1회. [근거/제한](phase6-live-verification.md) |
 | 7 | 완료: 범위 명시 | Node/Bun differential/cross-writer, packed real-OMP request roundtrip, packed Paseo live. crash/timeout/CAS/DB 오류는 unit 중심; 모든 host 간 race를 live로 검증한 것은 아님 |
 | 8 | 완료 | 폐기 CLI 의존성 제거, 영문/한국어 설치·이관 안내, vendor parity, clean relocated package 검사, 전체 테스트. 공개 registry/catalog 게시 완료를 뜻하지 않음 |
+| 후속 6b | 완료: backend live + unit | OMP/Hermes 별도 child scope, parent/call/provider-child linkage, child RPC Hide/Unhide와 session-model summary. Concurrent/batch Hermes와 OMP revival은 unit-only |
+| 후속 6c | 미구현 | Panel의 child outline/Hide/Unhide, parent row→child tab 이동, 지원 provider 안내. 현재 fallback UI는 유지 |
 
 ## 최종 정리 / 검증 근거와 남은 범위
 
@@ -51,7 +55,9 @@
 - Subagent: [실제 probe와 fallback](subagent-live-verification.md). OMP focused child에서
   main outline/영문 notice/row→main 이동을 UI로 확인했다. Hermes delegation은 실행됐지만
   child-tab 매핑은 노출되지 않았다. SDK parent-chain fallback은 unit-only이며
-  어느 host도 per-child Hide/Unhide를 지원한다고 주장하지 않는다.
+  이 기록은 Step 4 당시 상태다. [Step 6b](subagent-backend-verification.md)는 두 host의
+  child scope에 직접 RPC Hide/Unhide/요약을 적용하고 outgoing request를 검증했다.
+  Panel은 아직 child scope를 따라가지 않으며 native Hermes child tab도 제공하지 않는다.
 - 최종 clean artifact 자료: `/Users/devin/nav-phase0-gates/phase8-clean/`.
   Paseo tarball의 `server/worker-source.ts` 내장 bundle을 relocated Node Worker로 실행하고,
   client/server entry graph가 host 라이브러리 외에 package 내부 파일만 참조함을 검사했다.

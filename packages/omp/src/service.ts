@@ -86,6 +86,17 @@ export class OmpService {
         return { ok: false, error: "invalid_session" };
       }
       const scope = sessionScope(session);
+      if (method === "register") {
+        this.register(scope, params);
+        return { ok: true };
+      }
+      if (method === "link_children") {
+        if (typeof params.tool_call_id !== "string" || !params.tool_call_id ||
+          !Array.isArray(params.subagent_ids) || params.subagent_ids.some((id) => typeof id !== "string"))
+          return { ok: false, error: "invalid_params" };
+        this.store.linkChildren(scope, params.tool_call_id, params.subagent_ids as string[]);
+        return { ok: true };
+      }
       if (method === "prepare") return this.prepare(scope, session, params);
       if (method === "restore") {
         if (
@@ -214,6 +225,17 @@ export class OmpService {
     };
   }
 
+  private register(scope: string, params: Record<string, unknown>): void {
+    this.store.register(scope, {
+      adapter_id: "omp", adapter_protocol: 1,
+      capabilities: { hide: true, summarize: true, unhide: true },
+      enabled: true, instance_id: this.instanceId,
+      parent_scope: params.parent_scope as string | undefined,
+      tool_call_id: params.tool_call_id as string | undefined,
+      subagent_id: params.subagent_id as string | undefined,
+    });
+  }
+
   private prepare(scope: string, session: string, params: Record<string, unknown>): Reply {
     const token = params.snapshot_id;
     const append = params.append ?? false;
@@ -239,13 +261,13 @@ export class OmpService {
       selected.set(record.call_id, record);
     }
     this.adoptLegacySession(scope, session);
-    this.store.register(scope, {
-      adapter_id: "omp",
-      adapter_protocol: 1,
-      capabilities: { hide: true, summarize: true, unhide: true },
-      enabled: true,
-      instance_id: this.instanceId,
-    });
+    this.register(scope, params);
+    if (this.store.registration(scope)?.parent_scope)
+      this.store.publishTargets(scope, [...selected.values()]
+        .filter((record) => !refusalReason(record) &&
+          !isDestructive(record.invocation.tool_name, record.invocation.arguments) &&
+          !this.identityError(scope, record))
+        .map((record) => ({ record })));
     for (const record of selected.values()) {
       this.store.upsertUnit(scope, {
         unit_id: pairUnitId(scope, record.call_id, record.content_sha256),

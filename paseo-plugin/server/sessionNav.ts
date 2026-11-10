@@ -7,6 +7,7 @@ import {
   forkScopeRpc,
   hideItemRpc,
   listItemsRpc,
+  listScopesRpc,
   manageItemsRpc,
   summarizeItemRpc,
   unhideItemRpc,
@@ -20,8 +21,8 @@ export function closeService(): void {
   client?.close();
   client = undefined;
 }
-export async function listScopes() {
-  const reply = await request("scopes");
+export async function listScopes(input: RpcInput<typeof listScopesRpc>) {
+  const reply = await request("scopes", input);
   return { scopes: [], ...reply };
 }
 export async function listItems(input: RpcInput<typeof listItemsRpc>) {

@@ -62,6 +62,31 @@ function fixture(messages: Message[] = [], registered = true) {
     service.handle(method, { scope_key: scope, ...input });
   return { home, store, service, register, call };
 }
+test("backend scope listings expose child linkage and registered child targets without a main JSONL", async () => {
+  const { store, service } = fixture();
+  const child = "omp:default:child:default";
+  const adapter = new OmpService(store);
+  await adapter.handle("prepare", { session_id: "child", snapshot_id: "child-snapshot",
+    parent_scope: scope, subagent_id: "ChildBird", tool_call_id: "parent-task",
+    records: [{ call_id: "read-child", tool_name: "read", arguments: { path: "sample.txt" }, status: "ok",
+      content: Array.from({ length: 100 }, () => "Routine catalog annotation").join("\n") }] });
+  const result = await service.handle("scopes", { parent_scope: scope });
+  expect(result.scopes).toHaveLength(1);
+  expect(result.scopes[0]).toMatchObject({ scope_key: child, parent_scope: scope, tool_call_id: "parent-task", subagent_id: "ChildBird" });
+  expect((await service.handle("scopes", { parent_scope: child })).scopes).toEqual([]);
+  expect((await service.handle("scopes", { parent_scope: 1 })).error).toBe("invalid_params");
+  const listed = await service.handle("list", { scope_key: child });
+  const row = listed.items.find((row: any) => row.tool_call_id === "read-child");
+  expect(row.manageable).toBe(true);
+  const hidden = await service.handle("hide", { scope_key: child, item_id: row.item_id, expected_version: row.version });
+  expect(hidden.ok).toBe(true);
+  const projected = await adapter.handle("prepare", { session_id: "child", snapshot_id: "next",
+    records: [...adapter.snapshots.get("child")!.records.values()].map((record) => ({
+      call_id: record.call_id, tool_name: record.invocation.tool_name,
+      arguments: record.invocation.arguments, status: record.status, content: record.content })) });
+  expect(projected.patches[0].text).toContain("[hidden:");
+});
+
 function toolMessages(
   output = "x".repeat(1500),
   name = "read",

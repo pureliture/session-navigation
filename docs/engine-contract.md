@@ -129,6 +129,37 @@ semantics apply: `scope_key TEXT PRIMARY KEY`, `adapter_id TEXT`,
 `instance_id TEXT`, `last_seen REAL`. Capabilities is canonical JSON containing
 boolean `hide`, `summarize`, `unhide` keys. Unknown capability names grant nothing.
 
+Capabilities JSON may additionally contain `linkage`, an object with nullable
+`parent_scope`, `tool_call_id` (the parent's delegation call) and `subagent_id`
+(the provider's child ID). This uses the existing extensible JSON column: no
+physical schema or engine protocol bump is needed. Old registrations expose null
+link fields. Registration, scope listings and `childScopes(parent_scope)` /
+`child_scopes(parent_scope)` return these fields. Child lookup matches the exact
+parent scope, not a branch alias. Heartbeats preserve previously bound linkage
+when fields are omitted/null, including across process restart.
+
+Native child scopes retain normal host identity formats. OMP derives the parent
+native session from the child's `parentSession` transcript header, never the
+registry label `Main`. The parent task result binds progress IDs to its exact
+tool call; before that result exists, the child's call link can be null. Parent
+and child extension ownership is session-specific. Re-emitted `session_start`
+does not clear hidden state. Children collect/project and can settle summaries
+using their own session model, but register no model tools, guidance, boundary
+reminders or TUI overlay. Depth-zero clones/advisors remain inert.
+
+Hermes binds each delegate call through a plugin-owned ContextVar and its public
+`subagent_start` hook. Batch siblings share that call ID; nested calls replace it
+only in their execution context. Child request copies omit navigation schemas,
+supervision guidance and reminders, while preserving original history. Backend
+child registration does not imply a native Paseo child tab exists.
+
+Task completion can precede child extension initialization. `linkChildren` /
+`link_children` atomically binds already registered children and retains unmatched
+IDs in the parent's capabilities `pending_children` map. Child registration
+consumes that binding in the same write transaction. Heartbeats retain pending
+bindings, so either event ordering and separate worker processes produce the
+same durable child linkage without guessing from task text.
+
 Adapters publish their own registrations, never Paseo's history scanner. Upsert
 on first sight for a scope/instance, any capability/protocol/enabled change, or
 after **300 seconds**; unchanged observations before then do not update the row.

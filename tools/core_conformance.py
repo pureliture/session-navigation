@@ -189,12 +189,17 @@ async def vectors():
             scope_aliases={"hermes": ("unknown", "default")},
         )
         owner = dict(
+            **FIXTURES["linkage"],
             adapter_id="hermes",
             adapter_protocol=1,
             capabilities=dict(hide=True, summarize=False, unhide=True),
             enabled=True,
             instance_id="fixture",
         )
+        owner["tool_call_id"] = None
+        store.register_adapter(FIXTURES["linkage"]["parent_scope"], **{
+            **owner, "parent_scope": None, "tool_call_id": None, "subagent_id": None}, now=100)
+        store.link_children(FIXTURES["linkage"]["parent_scope"], FIXTURES["linkage"]["tool_call_id"], [FIXTURES["linkage"]["subagent_id"]])
         registered = [
             store.register_adapter(scope, **owner, now=100),
             store.register_adapter(scope, **owner, now=101),
@@ -250,6 +255,8 @@ async def vectors():
             )
         }
         shared = dict(
+            children=[{name: row[name] for name in ("scope_key", "parent_scope", "tool_call_id", "subagent_id")}
+                      for row in store.child_scopes(FIXTURES["linkage"]["parent_scope"])],
             registered=registered,
             capability=capability,
             targetCalls=target_calls,
@@ -350,6 +357,8 @@ def cross_writer(runtime):
         tool_record = record(body(FIXTURES["engine"][0]))
         store = SQLiteContextStore(path)
         engine = SessionNavigationEngine(store)
+        store.register_adapter(scope, **FIXTURES["linkage"], adapter_id="hermes", instance_id="python-cross",
+            capabilities=dict(hide=True, summarize=False, unhide=True))
         item = engine.compact_sync(scope, tool_record).item
         replacement = item.compacted
         store.close()
@@ -374,6 +383,7 @@ def cross_writer(runtime):
         )
         assert saved.compacted == replacement
         assert len(store.adapter_targets(scope)) == 1
+        assert store.child_scopes(FIXTURES["linkage"]["parent_scope"])[0]["tool_call_id"] == FIXTURES["linkage"]["tool_call_id"]
         store.close()
         reverse = str(Path(directory) / "reverse.db")
         subprocess.run(
@@ -389,6 +399,7 @@ def cross_writer(runtime):
             text=True,
         )
         store = SQLiteContextStore(reverse)
+        assert store.child_scopes(FIXTURES["linkage"]["parent_scope"])[0]["subagent_id"] == FIXTURES["linkage"]["subagent_id"]
         item = store.items(scope)[0]
         assert (
             item.visibility == "hidden"

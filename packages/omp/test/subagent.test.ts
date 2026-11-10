@@ -7,7 +7,7 @@ import { releaseExtension } from "../src/registration.ts";
 
 afterEach(() => releaseExtension());
 
-test("subagents, including depth-zero clones, register no tools or rewriting hooks and never open state", async () => {
+test("unlinked subagents and depth-zero clones stay inert and never open state", async () => {
   const directory = mkdtempSync(join(tmpdir(), "omp-subagent-"));
   const oldPath = process.env.SESSION_NAVIGATION_STATE_PATH;
   const state = join(directory, "must-not-exist.sqlite3");

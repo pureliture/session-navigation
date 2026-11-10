@@ -30,6 +30,34 @@ function database(fn: (store: Store, path: string) => void | Promise<void>): Pro
       rmSync(directory, { recursive: true, force: true });
     });
 }
+test("child registrations survive reopen and old rows expose null linkage", () => database((store, path) => {
+  const registration = { adapter_id: "hermes", adapter_protocol: 1,
+    capabilities: { hide: true, summarize: false, unhide: true }, enabled: true, instance_id: "test" };
+  const parent = "hermes:default:parent:unknown", child = "hermes:default:child:unknown";
+  store.register(parent, registration);
+  assert.equal(store.registration(parent)?.parent_scope, null);
+  assert.deepEqual(store.childScopes(parent), []);
+  store.linkChildren(parent, "delegate", ["sa"]);
+  store.register(parent, registration);
+  store.register(child, { ...registration, parent_scope: parent, subagent_id: "sa" });
+  store.register(child, registration);
+  assert.throws(() => store.register(child, { ...registration, parent_scope: child }), /invalid_adapter_registration/);
+  assert.throws(() => store.register(child, { ...registration, parent_scope: "invalid" }), /invalid_adapter_registration/);
+  const reopened = new Store(makeDriver(path));
+  try {
+    const rows = reopened.childScopes(parent);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].scope_key, child);
+    assert.equal(rows[0].tool_call_id, "delegate");
+    assert.equal(rows[0].subagent_id, "sa");
+    assert.equal(reopened.can(child, "hide"), true);
+    assert.equal(reopened.can(child, "summarize"), false);
+    assert.deepEqual(reopened.childScopes(child), []);
+    reopened.linkChildren(parent, "updated-delegate", ["sa"]);
+    assert.equal(reopened.registration(child)?.tool_call_id, "updated-delegate");
+  } finally { reopened.close(); }
+}));
+
 test("canonical JSON preserves Unicode sorting, integer precision and float kinds", () => {
   assert.equal(
     canonical(parseCanonicalJson('{"𐀀":3,"":4,"n":9007199254740993,"float":1.0}')),

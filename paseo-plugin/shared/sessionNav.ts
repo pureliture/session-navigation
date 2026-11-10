@@ -113,6 +113,9 @@ export const ScopesResultSchema = z.object({
   scopes: z.array(
     z.object({
       scope_key: z.string(),
+      parent_scope: z.string().nullable().optional(),
+      tool_call_id: z.string().nullable().optional(),
+      subagent_id: z.string().nullable().optional(),
       items: z.number().int(),
       agent_id: z.string().optional(),
       capabilities: CapabilitiesSchema.optional(),
@@ -123,7 +126,7 @@ export const ScopesResultSchema = z.object({
 
 export const listScopesRpc = defineRpc({
   name: "session-nav.scopes",
-  input: z.object({}),
+  input: z.object({ parent_scope: z.string().optional() }),
   output: ScopesResultSchema,
 });
 
