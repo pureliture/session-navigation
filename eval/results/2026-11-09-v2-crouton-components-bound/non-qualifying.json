@@ -1,4 +1,0 @@
-{
-  "reason": "Model callback binding fixed, but isolated Bun fallback cache lacks pi_natives darwin-arm64 addon. Native SDK NODE_PATH fixes read-only dependency resolution. This batch is excluded.",
-  "evidence": "Actual import under exact child environment fails with Failed to load pi_natives native addon for darwin-arm64; same import with NODE_PATH pointing to installed SDK dependencies succeeds. No installed files edited."
-}

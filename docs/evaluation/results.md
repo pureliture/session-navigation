@@ -1,5 +1,7 @@
 # Session Navigation A/B 평가 결과
 
+> 원자료 링크는 프라이빗 평가 저장소의 고정된 커밋을 가리키며 읽기 권한이 필요합니다.
+
 ## 요약
 
 2026-11-09 UTC, 제품 코드 `cc00609`를 **OpenRouter `z-ai/glm-5.3-flash`만** 사용해 평가했다.
@@ -9,11 +11,11 @@ OMP B의 한 세션에서만 hide가 적용됐고 **LLM summarize는 양 호스�
 따라서 요약 품질이나 일반적인 context-window 고갈 방지 효과를 입증한 평가가 아니다.
 
 - [설계](design.md), [재실행 방법](../../eval/README.md)
-- [원자료](../../eval/results/2026-11-09-glm/), [세션별 지표](../../eval/results/2026-11-09-glm/metrics.json),
-  [호스트/사례별 집계](../../eval/results/2026-11-09-glm/summary.json)
-- [호스트 활성화·모델 검사](../../eval/results/2026-11-09-glm/capture-audit.json),
-  [설정 전후 검사](../../eval/results/2026-11-09-glm/safety.json),
-  [최종 key 검사](../../eval/results/2026-11-09-glm/final-audit.json)
+- [원자료](https://github.com/pureliture/session-navigation-evidence/tree/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/), [세션별 지표](https://github.com/pureliture/session-navigation-evidence/blob/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/metrics.json),
+  [호스트/사례별 집계](https://github.com/pureliture/session-navigation-evidence/blob/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/summary.json)
+- [호스트 활성화·모델 검사](https://github.com/pureliture/session-navigation-evidence/blob/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/capture-audit.json),
+  [설정 전후 검사](https://github.com/pureliture/session-navigation-evidence/blob/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/safety.json),
+  [최종 key 검사](https://github.com/pureliture/session-navigation-evidence/blob/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/final-audit.json)
 
 ## 실행 및 데이터 무결성
 
@@ -176,4 +178,4 @@ Hermes A/B **$0.91415 / $0.94016**이다. 이것은 다른 모델의 실제 성�
 - OMP `bun test extensions/pi`: **34 pass / 0 fail**, 273 expect.
 - `uv run --no-sync pytest`: **363 passed / 11 skipped**.
 - harness unittest: **5 tests, OK**. core/Hermes vendor diff 모두 exit 0.
-- [검사 로그](../../eval/results/2026-11-09-glm/)의 `checks-*.log` 및 audit JSON을 참고한다.
+- [검사 로그](https://github.com/pureliture/session-navigation-evidence/tree/8214151597ae6d7791bc0650d53c14075be0a0f3/2026-11-09-glm/)의 `checks-*.log` 및 audit JSON을 참고한다.

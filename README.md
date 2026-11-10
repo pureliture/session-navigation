@@ -355,6 +355,10 @@ upstream pi의 별도 [패키지 문서](https://pi.dev/docs/latest/packages)는
 
 ## Evaluation
 
+평가 방법과 요약은 공개하지만, 실행 원본은 접근 권한이 필요한 프라이빗
+`eval/results/` submodule에 보관합니다. 일반 설치와 테스트에는 필요하지 않습니다.
+원본 접근 및 새 실행 결과 저장 방법은 [평가 실행 안내](eval/README.md)를 참고하세요.
+
 **Less context, without deleting history—not a claim of smarter answers.**
 
 - Tool results accounted for roughly **70–81% of outgoing prompt tokens** in our

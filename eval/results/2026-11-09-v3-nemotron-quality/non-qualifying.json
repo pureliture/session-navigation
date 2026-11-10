@@ -1,6 +1,0 @@
-{
-  "reason": "Authorized fallback after Nemotron free-model daily quota exhausted: HTTP 429 free-models-per-day-high-balance, remaining=0, final failure after six backoff retries",
-  "replacement": "deepseek/deepseek-v4.1-flash-1017",
-  "include_in_v3_results": false,
-  "note": "Retain all partial evidence, including quality trials and judge attempts; do not mix Nemotron arms or judges into DeepSeek."
-}
