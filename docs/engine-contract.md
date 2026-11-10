@@ -72,8 +72,15 @@ hints use JSON; `original` and `compacted` are literal text, not JSON strings.
 ## Canonical identities
 
 Scope keys are `adapter:profile:session:branch`. Never infer them from model
-arguments, titles, working directories or executable names. OMP uses
-`pi:default:<session>:default`. Hermes's canonical branch remains **unknown**:
+arguments, titles, working directories or executable names. The TS OMP adapter uses
+`omp:default:<session>:default`; the legacy Python daemon uses
+`pi:default:<session>:default`. On first valid processing, the TS adapter imports
+legacy state only into an entirely empty destination scope, under one transaction.
+Item IDs and identity references are recomputed for the destination scope; original
+legacy rows are preserved. Registrations/target caches are not imported. Subsequent
+mutations use only the `omp:` scope: this is not an alias or live synchronization.
+Discovery must prefer the registered OMP scope over a legacy history-only scope.
+Hermes's canonical branch remains **unknown**:
 `hermes:<profile>:<session>:unknown`. Keeping this suffix preserves existing
 item hashes and hidden state. A compression-created session ID is a new scope.
 

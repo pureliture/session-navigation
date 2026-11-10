@@ -87,9 +87,9 @@ A Paseo session reviewing a small API with OMP and DeepSeek Flash. The outline s
 
 ## Installation
 
-### Shared CLI and daemon: required for Paseo and OMP
+### Python CLI: required for the current Paseo integration
 
-Install Python **3.11 or later**, [uv](https://docs.astral.sh/uv/), and Git. Install on the machine running the **Paseo daemon** and on each machine running OMP.
+Install Python **3.11 or later**, [uv](https://docs.astral.sh/uv/), and Git on the machine running the **Paseo daemon**. OMP now uses a bundled TypeScript core and does not require Python.
 
 ```bash
 git clone https://github.com/pureliture/session-navigation.git
@@ -99,7 +99,7 @@ export PATH="$HOME/.local/bin:$PATH"
 session-navigation --help
 ```
 
-This installs `session-navigation` and `session-navigation-daemon`. To update, obtain reviewed new source and run `uv tool install --force .`. The OMP extension launches the daemon as a child process; no separate daemon service is needed. Paseo invokes the CLI: ensure the running Paseo daemon receives the same PATH and state path, and restart it after changing its environment.
+This installs `session-navigation` and the legacy `session-navigation-daemon` oracle. To update, obtain reviewed new source and run `uv tool install --force .`. Paseo still invokes the CLI: ensure the running Paseo daemon receives the same PATH and state path, and restart it after changing its environment. The OMP package never launches the Python daemon.
 
 ### Paseo plugin
 
@@ -122,22 +122,22 @@ Choose **+ → Session navigation** in Explorer to follow the visible chat sessi
 
 ### OMP (oh-my-pi) extension
 
-Tested with `@oh-my-pi/pi-coding-agent` **18.18.3**. Install the Python CLI/daemon above and the OMP extension **separately**. Copy the extension to the default profile's autoload path:
+Tested with `@oh-my-pi/pi-coding-agent` **18.18.3**. Build the npm-style extension, then install its directory through OMP:
 
 ```bash
-mkdir -p "$HOME/.omp/agent/extensions"
-cp extensions/pi/session-navigation.ts "$HOME/.omp/agent/extensions/session-navigation.ts"
+bun run packages/omp/build.ts
+omp plugin install "$PWD/packages/omp"
 ```
 
-Start a new OMP session. To load it once without copying:
+Restart OMP. To load the built package once without installing:
 
 ```bash
-omp --extension "$PWD/extensions/pi/session-navigation.ts"
+omp --extension "$PWD/packages/omp"
 ```
 
-Named profiles use their own extension directories. The extension uses `~/.local/bin/session-navigation-daemon` by default, or the executable on PATH if that is unavailable. If it is elsewhere, set `SESSION_NAVIGATION_DAEMON` to the **absolute executable path**, not a shell command with arguments.
+Before migrating, remove/disable every old manually copied extension; an old Python-spawning copy cannot participate in the new duplicate-load guard. The repository's `extensions/pi/session-navigation.ts` is now a thin development shim, not a standalone file to copy. `SESSION_NAVIGATION_DAEMON` is no longer used.
 
-Although the directory is named `extensions/pi/`, the extension uses `@oh-my-pi/pi-*` APIs. Compatibility with upstream **pi** has not been tested, and direct installation as a pi package is not guaranteed. There is currently no OMP `package.json`; use file loading as shown above instead of npm plugin installation.
+See [OMP packaging and migration](packages/omp/README.md) for packed-archive installation, preserved `pi:` state import into `omp:` scopes and test commands. The shared core is bundled; no unpublished workspace dependency is needed. Compatibility with upstream **pi** has not been tested.
 
 ### Hermes plugin
 
@@ -186,7 +186,7 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 
 - Original host history remains intact; only the request copy changes. **Hide is not a permanent deletion or secret-erasure feature.**
 - Originals, replacements, and hide state are stored by default in `~/.local/share/session-navigation/state.sqlite3`. Override the location with `XDG_DATA_HOME` or `SESSION_NAVIGATION_STATE_PATH`. Processes sharing state must use the same path on the same machine.
-- The plugin reads local session history and model metadata to build lists; Paseo and OMP run Python child processes. It does not provide network synchronization, self-updates, or runtime software downloads.
+- The plugin reads local session history and model metadata to build lists. Paseo currently runs Python child processes; OMP runs the shared TypeScript core in a Bun Worker. It does not provide network synchronization, self-updates, or runtime software downloads.
 - Summarization may send selected original content to the **session model provider configured in the host**. Local SQLite storage does not mean all data stays local.
 - DB error behavior differs by host. OMP non-interactive execution stops the request. Hermes middleware has no abort contract, so the original request may proceed on error; error logs and pending notices in lists signal the issue. Do not use this as a sensitive-data blocking tool.
 - WAL is used with SQLite 3.51.3 or later or the fixed 3.44.6/3.50.7 lines; other versions use a rollback journal.
@@ -196,8 +196,10 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 | Path | Responsibility |
 | --- | --- |
 | `src/session_navigation/` | Host-neutral engine, CLI, and SQLite store |
-| `src/session_navigation_omp/` | Python daemon called by the OMP extension over stdio |
-| `extensions/pi/session-navigation.ts` | OMP request-copy processing, tools, and UI |
+| `src/session_navigation_omp/` | Legacy Python daemon retained as a parity oracle |
+| `packages/core/` | Shared TypeScript engine and Node/Bun SQLite drivers |
+| `packages/omp/` | Bundled OMP extension, worker service, tools and UI |
+| `extensions/pi/session-navigation.ts` | Thin legacy development shim |
 | `paseo-plugin/` | Paseo client panel and CLI-backed server RPC |
 | `adapters/hermes/` | Hermes tools, middleware, `/nav`, and usage footer |
 | `plugin.yaml`, `__init__.py`, `vendor/` | Hermes-loadable distribution root and pinned source copies |
@@ -207,7 +209,8 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 ```bash
 uv sync --frozen --dev
 uv run pytest
-bun test extensions/pi
+bun run packages/omp/build.ts
+bun test packages/omp/test
 cd paseo-plugin
 bun install --frozen-lockfile
 bunx tsc --noEmit
@@ -232,10 +235,10 @@ These are **publisher procedures**, not a claim that the project is already list
 
 See the [Paseo publishing guide](https://paseo.sh/docs/plugins/publishing) and [review policy](https://github.com/getpaseo/plugins/blob/main/REVIEW.md). The English listing uses [OVERVIEW.md](paseo-plugin/OVERVIEW.md).
 
-### OMP: TS file today; npm package or Git catalog after packaging
+### OMP: npm-style package
 
-1. The currently supported distribution is the single `.ts` file copied or loaded with `--extension` above. The Python daemon remains a separate prerequisite.
-2. For npm, create a package directory with a name, version, and `omp.extensions: ["./session-navigation.ts"]` in `package.json`, and include the TS file, README, and LICENSE. **That package does not exist yet.** Inspect it with `npm pack --dry-run --ignore-scripts` and publish with `npm publish --access public`; users can then install it with `omp plugin install <package-name>`.
+1. Build and pack `packages/omp` with `bun pm pack`. The archive bundles the core and worker, declares `omp.extensions: ["./index.ts"]`, and is tested in an isolated OMP home against a local stub provider.
+2. The package is not yet published. After review, a publisher can publish the built archive; users can then use `omp plugin install @session-navigation/omp@<version>`. Python is not an OMP runtime prerequisite.
 3. An OMP marketplace is a Git catalog containing `.omp-plugin/marketplace.json` or `.claude-plugin/marketplace.json`. Add an entry pointing to the plugin folder; users add it with `omp plugin marketplace add <catalog-source>` and install with `omp plugin install <name>@<marketplace>`. This repository does not yet contain a catalog. npm sources in marketplace entries are not currently supported; use Git or relative paths.
 4. npm plugin installation and Git marketplace installation are separate routes. No mandatory review process for a single central OMP marketplace was identified in the official documentation. Verify API compatibility before distributing for upstream pi.
 5. A separately verified upstream pi package can declare `pi.extensions` and `keywords: ["pi-package"]` and be published on npm. The keyword makes it eligible for the official [Pi package gallery](https://pi.dev/packages); users install with `pi install npm:<package-name>@<version>`. The current OMP extension has not been established as compatible or packaged for that route.
