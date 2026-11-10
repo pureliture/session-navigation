@@ -100,6 +100,7 @@ both chat-completions and responses request filtering.
 Live parked/revived OMP execution, concurrent Hermes delegation, and child
 real-provider model quality were not tested. Revival and concurrency are unit
 coverage only; live summaries used the stub. The panel remains the earlier
-fallback UI and was not visually rechecked. Hermes still has no native Paseo
-provider-child tab bridge. Provider-specific UI support documentation belongs
-with the next panel step, not this backend-only change.
+fallback UI and was not visually rechecked at this backend-only checkpoint.
+Step 6c subsequently added OMP child-tab following/opening and OMP/Hermes inline
+outlines; see the [current support table](../README.md#subagent-support).
+Hermes still has no native Paseo provider-child tab bridge.

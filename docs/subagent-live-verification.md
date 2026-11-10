@@ -1,5 +1,9 @@
 # Subagent live verification and fallback
 
+> Historical Step 4 checkpoint. Passive child backends were subsequently added in
+> [Step 6b](subagent-backend-verification.md); the current provider support table
+> and UI behavior are in [README](../README.md#subagent-support).
+
 Verified on 2026-11-10 with Paseo 0.15.3, OMP 18.18.3 and the Phase 6
 Hermes checkout. Both hosts used the loopback OpenAI-compatible stub at
 `127.0.0.1:52088`, the isolated Phase 5/6 homes and shared SQLite DB.

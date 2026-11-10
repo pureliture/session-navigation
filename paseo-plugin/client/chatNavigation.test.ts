@@ -632,3 +632,23 @@ test("visibleChatValues reports no session when no chat is on screen", () => {
   expect(values).toEqual(["m1", "agent_tool_c1"]);
   expect(values.some((v) => identityMatches(v, "c1"))).toBe(true);
 });
+
+test("child navigation never selects a hidden parent chat or guesses between visible panes", async () => {
+  const doc = new Element();
+  const hidden = new Element({ "data-testid": "agent-chat-scroll" });
+  const target = new Element({ "data-message-id": "child-message" });
+  hidden.add(target);
+  (hidden as any).getClientRects = () => [];
+  doc.add(hidden);
+  const r = row("child-message", "user");
+  expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(false);
+  expect(target.scrolled).toBe(false);
+  const active = new Element({ "data-testid": "agent-chat-scroll" });
+  const child = new Element({ "data-message-id": "child-message" });
+  active.add(child); doc.add(active);
+  expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(true);
+  doc.add(new Element({ "data-testid": "agent-chat-scroll" }));
+  child.scrolled = false;
+  expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(false);
+  expect(child.scrolled).toBe(false);
+});

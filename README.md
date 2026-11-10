@@ -208,11 +208,21 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 
 ## Data and safety
 
-Subagent context is not managed. On a recognized subagent tab, Paseo shows the
-main outline and **subagent context is not managed**; selecting a row opens the
-main agent and scrolls there. OMP children remain inert. Hermes delegation did
-not expose a child-tab binding in the live probe; no per-child management is
-claimed. See [live evidence](docs/subagent-live-verification.md).
+### Subagent support
+
+| Provider | Paseo outline and controls |
+| --- | --- |
+| OMP via Paseo | Child tab following and expandable inline child outlines under the parent task; Hide/Unhide/Summarize use each child's scope and capabilities. **Open tab** focuses or opens the native child tab. |
+| Hermes via ACP | Expandable inline child outlines under `delegate_task`, with child-scoped Hide/Unhide/Summarize. No native child tab. Selecting a child row highlights it without navigating. |
+| Others, e.g. OpenCode Go; unregistered children | Display-only main outline and **subagent context is not managed**. Selecting a row opens the main agent and scrolls there. |
+
+Child-tab identification/opening relies on **Paseo 0.15.3 UI internals** isolated
+in `client/hostCompat.ts`. Known untested host versions, ambiguous/malformed tabs,
+or missing child registrations fall back safely. When version metadata is absent,
+the guarded DOM shape is required; no public SDK child-target API exists in 0.15.3.
+If opening a child tab fails, the inline outline remains available. Children have
+separate state; navigation tools/guidance/reminders are not exposed to them by default.
+See [backend evidence](docs/subagent-backend-verification.md).
 
 - Original host history remains intact; only the request copy changes. **Hide is not a permanent deletion or secret-erasure feature.**
 - Originals, replacements, and hide state are stored by default in `~/.local/share/session-navigation/state.sqlite3`. Override the location with `XDG_DATA_HOME` or `SESSION_NAVIGATION_STATE_PATH`. Processes sharing state must use the same path on the same machine.

@@ -38,6 +38,21 @@ truncation marker. IDs and metadata remain selectable.
 
 ## Data access and limitations
 
+### Subagents
+
+| Provider | Support |
+| --- | --- |
+| OMP via Paseo | Follow native child tabs; expandable inline outlines under the parent task; child-scoped Hide/Unhide/Summarize and **Open tab**. |
+| Hermes via ACP | Expandable inline outlines under `delegate_task` with the same child-scoped controls; no native child tab. Row clicks only highlight. |
+| Other providers (e.g. OpenCode Go) or unregistered children | Display-only main outline with **subagent context is not managed**; row clicks open main and scroll. |
+
+Tab following/opening uses guarded **Paseo 0.15.3 UI internals**, isolated in
+`client/hostCompat.ts`. There is no public SDK child-target API in that version.
+Known untested versions fail closed; if version metadata is unavailable, strict DOM
+guards apply. Ambiguous/malformed identity and missing registration retain the fallback.
+Failed opening keeps the inline expansion available. Child controls use the child's
+capabilities, never the parent's. Child tools/guidance/reminders are suppressed by default.
+
 The server runs SQLite away from its event loop in an embedded Node Worker. It reads
 local session history and writes originals, replacements and hide state to
 `~/.local/share/session-navigation/state.sqlite3`, or the XDG data location or

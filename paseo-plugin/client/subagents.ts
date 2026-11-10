@@ -1,48 +1,43 @@
-export type SessionTab = { kind: "agent"; agentId: string } |
-  { kind: "provider_subagent"; parentAgentId: string; subagentId: string } |
-  { kind: "unresolved_subagent" };
+import type { SessionTab } from "./hostCompat";
+import type { Row } from "../shared/sessionNav";
 
-function lengthPrefixed(value: string): [string, string] | null {
-  const match = /^(0|[1-9]\d*)_/.exec(value);
-  if (!match) return null;
-  const length = Number(match[1]);
-  const rest = value.slice(match[0].length);
-  if (!Number.isSafeInteger(length) || length < 1 || length > rest.length) return null;
-  return [rest.slice(0, length), rest.slice(length)];
+export type ChildScope = {
+  scope_key: string;
+  parent_scope?: string | null;
+  tool_call_id?: string | null;
+  subagent_id?: string | null;
+  agent_id?: string;
+};
+
+export function scopeForAgent(scopes: readonly ChildScope[], agentId: string): string | null {
+  const matches = scopes.filter((scope) => scope.agent_id === agentId);
+  if (matches.length) return matches.length === 1 ? matches[0].scope_key : null;
+  return scopes.find((scope) => [`pi:default:${agentId}:default`, `paseo:default:${agentId}:default`].includes(scope.scope_key))?.scope_key ?? null;
 }
 
-// Paseo 0.15.3 renders target keys on tabs; provider children are not SDK agents.
-export function parseSessionTab(testId: string): SessionTab | null {
-  const agentPrefix = "workspace-tab-agent_";
-  if (testId.startsWith(agentPrefix)) {
-    const agentId = testId.slice(agentPrefix.length);
-    return agentId ? { kind: "agent", agentId } : null;
-  }
-  const prefix = "workspace-tab-provider_subagent_";
-  if (!testId.startsWith(prefix)) return null;
-  const parent = lengthPrefixed(testId.slice(prefix.length));
-  if (!parent || !parent[1].startsWith("_")) return null;
-  const child = lengthPrefixed(parent[1].slice(1));
-  return child && !child[1] ? { kind: "provider_subagent", parentAgentId: parent[0], subagentId: child[0] } : null;
+export function resolveChildScope(tab: SessionTab | null, parentScope: string | null, scopes: readonly ChildScope[]): ChildScope | null {
+  if (tab?.kind !== "provider_subagent" || !parentScope?.startsWith("omp:")) return null;
+  const children = scopes.filter((scope) => scope.parent_scope === parentScope && scope.subagent_id === tab.subagentId && scope.scope_key.startsWith("omp:"));
+  return children.length === 1 ? children[0] : null;
 }
 
-export function focusedSessionTab(doc: any): SessionTab | null {
-  const tabs = (Array.from(doc?.querySelectorAll?.('[data-testid][aria-selected="true"]') ?? []) as any[])
-    .filter((node) => typeof node.getClientRects !== "function" || node.getClientRects().length > 0)
-    .map((node): SessionTab | null => {
-      const id = node.getAttribute("data-testid") ?? "";
-      return parseSessionTab(id) ?? (id.startsWith("workspace-tab-provider_subagent_") ? { kind: "unresolved_subagent" } : null);
-    })
-    .filter((tab): tab is SessionTab => tab !== null);
-  if (tabs.length > 1 && tabs.some((tab) => tab.kind !== "agent")) return { kind: "unresolved_subagent" };
-  return tabs.length === 1 ? tabs[0] : null;
+export function childrenForCall(scopes: readonly ChildScope[], parentScope: string, callId: string): ChildScope[] {
+  return scopes.filter((scope) => scope.parent_scope === parentScope && scope.tool_call_id === callId && !!scope.subagent_id &&
+    ["omp", "hermes"].includes(scope.scope_key.split(":")[0]) && scope.scope_key !== parentScope);
+}
+
+export function mergeLinkedParentRows(rows: Row[], timeline: Row[], scopes: readonly ChildScope[], parentScope: string): Row[] {
+  const missing = timeline.filter((row) => row.kind === "tool" &&
+    !rows.some((managed) => managed.tool_call_id === row.tool_call_id) && childrenForCall(scopes, parentScope, row.tool_call_id).length > 0);
+  return [...rows, ...missing.map((row) => ({ ...row, item_id: null, manageable: false,
+    tool_name: parentScope.startsWith("hermes:") ? "delegate_task" : row.tool_name }))];
 }
 
 export async function subagentMainTarget(tab: SessionTab | null, parentId: (id: string) => Promise<string | null>): Promise<{
   agentId: string | null; subagent: boolean;
 }> {
   if (!tab) return { agentId: null, subagent: false };
-  if (tab.kind === "unresolved_subagent") return { agentId: null, subagent: true };
+  if (tab.kind === "unresolved_subagent") return { agentId: tab.parentAgentId ?? null, subagent: true };
   let id = tab.kind === "provider_subagent" ? tab.parentAgentId : tab.agentId;
   let subagent = tab.kind === "provider_subagent";
   const seen = new Set<string>();

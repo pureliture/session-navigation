@@ -11,8 +11,9 @@
 > records real OMP/Hermes delegation and the main-outline fallback. OMP children
 > were inert at that checkpoint; Hermes child-to-Paseo mapping was unverified.
 > Step 6b now supports passive per-child backend scopes for both hosts: see
-> [backend evidence](subagent-backend-verification.md). The panel still uses the
-> existing fallback; following/opening child tabs is the next UI step.
+> [backend evidence](subagent-backend-verification.md). Step 6c adds OMP child-tab
+> following/opening and OMP/Hermes inline child outlines: see
+> [UI evidence](subagent-panel-verification.md). Unsupported children retain the fallback.
 
 ## 현재 상태와 시작점
 
@@ -41,7 +42,7 @@
 | 7 | 완료: 범위 명시 | Node/Bun differential/cross-writer, packed real-OMP request roundtrip, packed Paseo live. crash/timeout/CAS/DB 오류는 unit 중심; 모든 host 간 race를 live로 검증한 것은 아님 |
 | 8 | 완료 | 폐기 CLI 의존성 제거, 영문/한국어 설치·이관 안내, vendor parity, clean relocated package 검사, 전체 테스트. 공개 registry/catalog 게시 완료를 뜻하지 않음 |
 | 후속 6b | 완료: backend live + unit | OMP/Hermes 별도 child scope, parent/call/provider-child linkage, child RPC Hide/Unhide와 session-model summary. Concurrent/batch Hermes와 OMP revival은 unit-only |
-| 후속 6c | 미구현 | Panel의 child outline/Hide/Unhide, parent row→child tab 이동, 지원 provider 안내. 현재 fallback UI는 유지 |
+| 후속 6c | 완료: UI live + unit | OMP child-tab outline/Hide/Unhide와 다음 outgoing request, OMP/Hermes inline 확장, OMP native tab 재열기, 미등록 child fallback/row→main scroll. [근거/제한](subagent-panel-verification.md) |
 
 ## 최종 정리 / 검증 근거와 남은 범위
 
@@ -57,7 +58,9 @@
   child-tab 매핑은 노출되지 않았다. SDK parent-chain fallback은 unit-only이며
   이 기록은 Step 4 당시 상태다. [Step 6b](subagent-backend-verification.md)는 두 host의
   child scope에 직접 RPC Hide/Unhide/요약을 적용하고 outgoing request를 검증했다.
-  Panel은 아직 child scope를 따라가지 않으며 native Hermes child tab도 제공하지 않는다.
+  [Step 6c](subagent-panel-verification.md)는 OMP child tab과 OMP/Hermes inline outline을
+  UI로 검증했다. Hermes native child tab은 없으며 inline으로만 관리한다.
+  미등록 OMP child로 fallback을 검증했고 실제 OpenCode Go delegation은 실행하지 않았다.
 - 최종 clean artifact 자료: `/Users/devin/nav-phase0-gates/phase8-clean/`.
   Paseo tarball의 `server/worker-source.ts` 내장 bundle을 relocated Node Worker로 실행하고,
   client/server entry graph가 host 라이브러리 외에 package 내부 파일만 참조함을 검사했다.
@@ -77,12 +80,13 @@
   OMP SDK 생성만으로는 `session_start`가 발생하지 않았다. 일반 runtime 초기화와
   event를 연결하고 오프라인 요청에서 A=0, B=5 도구를 검증하는 회귀 테스트를 추가했다.
   과거 유료 캠페인은 재실행하지 않았으며 source API는 OMP 18.18.3에 묶여 있다.
-- 최종 검사: Paseo build/typecheck, 121 Bun + 8 Node tests; core typecheck,
-  Node 17/Bun 17; OMP typecheck/50 tests; Node/Bun conformance 4개;
-  Python 340 passed/11 skipped; eval 40 tests OK; `git diff --check` clean.
-  eval은 문서대로 `uv run --no-sync --with tiktoken` 환경에서 실행했다.
+- 최종 검사: Paseo build/typecheck, 131 Bun + 8 Node tests; core typecheck,
+  Node 18/Bun 18; OMP typecheck/51 tests; Node/Bun conformance 4개;
+  Python 350 passed/11 skipped; `git diff --check` clean.
+  Phase 8의 eval 40 tests OK 기록도 유지한다. eval은 문서대로
+  `uv run --no-sync --with tiktoken` 환경에서 실행했으며 Step 6c에서 재실행하지 않았다.
 - Node **24.21.0**에서 검사했으며 manifest floor **22.13** 자체는 미검증이다.
-  이번 정리는 새로운 UI를 추가하지 않아 이전 live screenshot을 재사용한다.
+  Step 6c의 새 UI screenshot과 미검증 layout 범위는 별도 검증 문서에 기록했다.
   공식 게시에는 README의 Paseo npm/registry 준비 및 Hermes manifest/catalog validate 제한이 남는다.
 
 아래 구현 설명·실패 로그·이전 VM 환경은 최초 WIP 시점의 **역사적 기록**이다.
@@ -316,9 +320,11 @@ daemon 의존 test는 `test_daemon_hide_keep_lines_and_unlisted_targets`와
 10. 모든 필수 검사 green 후 Phase 5 완료 커밋을 별도로 만들고 결과를 보고한다.
     WIP 커밋을 release-ready로 취급하지 않는다. push는 인계 브랜치에만 요청받았다.
 
-## Subagent 요구사항 / Phase 0에 추가할 probe
+## Subagent 요구사항 / Phase 0에 추가할 probe (역사적 계획)
 
-아직 구현하지 않은 확장 범위다. 예상 **6–10시간**이며 아래 관찰/제약을 먼저 확인한다.
+아래는 Step 4 이전의 계획 기록이다. 현재 backend는 Step 6b, panel UI는 Step 6c에서
+구현·검증했다. 아래의 inert/미검증/가설 표현은 당시 상태이며 현재 지원 범위는
+[provider 표](../README.md#subagent-support)와 [UI 검증](subagent-panel-verification.md)을 따른다.
 
 - 목표: 가능하면 **subagent별 outline + Hide/Unhide**.
 - 불가능할 때 fallback: main session outline을 보여주고

@@ -1,7 +1,7 @@
 import type { Row } from "../shared/sessionNav";
 import type { TimelineHistory } from "./timelineHistory";
 import { fallbackToolPreview } from "./toolPreview";
-import { focusedSessionTab } from "./subagents";
+import { focusedSessionTab } from "./hostCompat";
 
 const GROUP = '[data-testid="tool-call-group"]';
 const BADGE = '[data-testid="tool-call-badge"]';
@@ -148,8 +148,9 @@ function visible(node: any): boolean {
 
 // Paseo keeps other agents' chats mounted (hidden); bind to the one showing this session.
 // Exact identities outrank visibility, which outranks loose snippet matches.
-function pickChatRoot(doc: any, rows: Row[], target: Row): any {
-  const roots = (Array.from(doc?.querySelectorAll?.('[data-testid="agent-chat-scroll"]') ?? []) as any[]);
+function pickChatRoot(doc: any, rows: Row[], target: Row, visibleOnly = false): any {
+  const roots = (Array.from(doc?.querySelectorAll?.('[data-testid="agent-chat-scroll"]') ?? []) as any[]).filter((root) => !visibleOnly || visible(root));
+  if (visibleOnly && roots.length !== 1) return null;
   if (roots.length <= 1) return roots[0] ?? null;
   const messages = rows.filter((candidate) => candidate.kind !== "tool");
   const ranked = roots.map((root) => [
@@ -165,6 +166,7 @@ function pickChatRoot(doc: any, rows: Row[], target: Row): any {
 let navigationVersion = 0;
 
 type NavigationOptions = {
+  visibleOnly?: boolean;
   openAgent?: { agentId: string; open: () => void };
   document?: any;
   afterExpand?: () => Promise<void>;
@@ -328,7 +330,7 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
       await (options.afterLoad ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 100))))();
     }
   }
-  const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row);
+  const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row, options.visibleOnly);
   if (!root) return false;
   if (findIdentity(root, row) || findText(root, row.summary_line)) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
