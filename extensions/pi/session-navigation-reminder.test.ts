@@ -12,6 +12,8 @@ test("model-facing guidance and notes are English and batch-cleanup oriented", (
     expect(text).not.toMatch(/[\uac00-\ud7a3]/);
     expect(text).toContain("batch cleanup in one call");
     expect(text).toContain("avoid re-verifying unchanged files");
+    expect(text).toContain("final message must restate the complete answer with all requested facts/values");
+    expect(text).toContain("never say 'reported above' or 'see above'");
   }
 });
 

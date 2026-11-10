@@ -100,6 +100,9 @@ def test_all_model_facing_text_is_english():
     for surface in surfaces:
         assert surface
         assert not any("\uac00" <= char <= "\ud7a3" for char in surface), surface
+    for guidance in (surfaces[2], SUPERVISION_SECTION_TEXT):
+        assert "final message must restate the complete answer with all requested facts/values" in guidance
+        assert "never say 'reported above' or 'see above'" in guidance
 
 
 def test_reminder_boundaries_thresholds_empty_sessions_and_literal_ids():
@@ -112,6 +115,8 @@ def test_reminder_boundaries_thresholds_empty_sessions_and_literal_ids():
     assert len(note.splitlines()) == 4
     assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
     assert "summarize facts still needed" in note
+    assert "final message must restate the complete answer with all requested facts/values" in note
+    assert "never say 'reported above' or 'see above'" in note
     assert reminders.note("s", "1", 499, 1000, items) is None
     for tokens in (500, 750, 900):
         assert reminders.note("s", "1", tokens, 1000, items)

@@ -1,5 +1,16 @@
 # 평가 후 개선 — 구현 단계
 
+## v4: 정리 후 마지막 답변 완결성
+
+작업 단위를 끝내고 먼저 답한 뒤, 필요하면 선택적으로 batch cleanup하는 순서는 유지한다.
+추가 안내는 정리 후 마지막 메시지에도 모든 요청 사실/값을 포함한 완전한 답을 다시 쓰고,
+`reported above` / `see above`로 대체하지 말라고 명시한다. 시점·대상·행동 선택은 여전히 agent가 한다.
+OMP 시스템 안내와 request-copy reminder, Hermes supervision과 공통 reminder에 적용했다.
+
+동일 offline `o200k_base`/JSON 방식: OMP 고정 overhead **679→709 (+30)**,
+Hermes **333→364 (+31)** tokens. 대표 후보 3행 reminder는 **185→215 (+30)** tokens,
+793 bytes다. 실제 OpenRouter 청구량과 구별한다. 로컬 capture는 `eval/results/setup-v4/`에 보관한다.
+
 실제 모델 재평가는 아직 하지 않았다. 기존 GLM 결과는 변경하지 않는다.
 
 ## 동작

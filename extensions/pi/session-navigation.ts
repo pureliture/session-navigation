@@ -20,7 +20,7 @@ export class BoundaryReminder {
 	note(turn: string, tokens: number, window: number | undefined, total: number, items: ReminderItem[]): string | null {
 		if (!total || !this.due(turn, tokens, window)) return null;
 		const usage = window && window > 0 ? `~${tokens}/${window} tokens (${Math.round(100 * tokens / window)}%)` : `~${tokens}/? tokens (?%)`;
-		const header = `[context-navigation] ${usage}; eligible=${total}. Finish the work unit and answer first; then, if useful, batch cleanup in one call. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].`;
+		const header = `[context-navigation] ${usage}; eligible=${total}. Finish the work unit and answer first; then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].`;
 		const rows: string[] = [];
 		for (const item of items) {
 			const row = JSON.stringify([item.tool_call_id, (item.tool_name ?? "").slice(0, 24), (item.hint ?? "").slice(0, 48), item.bytes_size, item.turn ?? 0]);
@@ -40,7 +40,7 @@ const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_CHUNK_RECORDS = 64;
 const MAX_SUMMARY_CONCURRENCY = 4;
 const SUMMARY_TIMEOUT_MS = 25_000;
-export const CLEANUP_GUIDANCE = "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
+export const CLEANUP_GUIDANCE = "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
 const hash = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 function messageText(message: any): string {

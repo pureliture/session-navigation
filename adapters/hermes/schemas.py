@@ -95,6 +95,7 @@ SUPERVISION_SECTION_ID = "session-navigation.human-supervision"
 SUPERVISION_SECTION_MAX_CHARS = 1200
 SUPERVISION_SECTION_TEXT = (
     "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. "
+    "After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. "
     "You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); "
     "auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use "
     "list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. "

@@ -27,6 +27,7 @@ class BoundaryReminders:
         usage = f"~{tokens}/{window} tokens ({percent:.0f}%)" if percent is not None else f"~{tokens}/? tokens (?%)"
         header = (f"[context-navigation] {usage}; eligible={len(candidates)}. "
                   "Finish the work unit and answer first; then, if useful, batch cleanup in one call. "
+                  "After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. "
                   "You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). "
                   "Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. "
                   "Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].")
