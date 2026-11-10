@@ -21,7 +21,8 @@ def record(**value):
 discover_plugins()
 plugins = [item for item in get_plugin_manager().list_plugins() if item["name"] == "session-navigation"]
 Path(spec["output"], "plugins.json").write_text(json.dumps(plugins, default=str, indent=2))
-assert spec["arm"] == "A" or any(p["enabled"] and p["tools"] == 5 and p["middleware"] == 1 for p in plugins)
+expected_middleware = 2 if spec.get("display_arm") == "B-current" else 1
+assert spec["arm"] == "A" or any(p["enabled"] and p["tools"] == 5 and p["middleware"] == expected_middleware for p in plugins)
 agent = AIAgent(model=spec["model"], provider="custom", api_mode="chat_completions",
     base_url=spec["proxy"] + "/" + spec["id"] + "/v1", api_key="local-eval", max_iterations=20, max_tokens=4096,
     enabled_toolsets=["file", "terminal"] + (["session_navigation"] if spec["arm"] != "A" else []),

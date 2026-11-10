@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODEL = "z-ai/glm-5.3-flash"
 
 
-def serve(directory, *, model=MODEL, provider=None, reasoning=None):
+def serve(directory, *, model=MODEL, provider=None, reasoning=None, budget=None):
     key = os.environ["OPENROUTER_API_KEY"]
     lock = threading.Lock()
 
@@ -39,10 +39,23 @@ def serve(directory, *, model=MODEL, provider=None, reasoning=None):
             upstream_body = {**body, "stream": False, "usage": {"include": True}}
             if provider:
                 upstream_body["provider"] = {"order": [provider], "allow_fallbacks": False}
+            if budget is not None:
+                if provider != "Relace":
+                    self.send_error(400, "Budget pricing requires Relace")
+                    return
+                upstream_body["provider"]["max_price"] = {"prompt": .006, "completion": .5}
             if reasoning is not None:
                 upstream_body["reasoning"] = reasoning
             upstream_body.pop("stream_options", None)
             for attempt in range(7):
+                budget_id = f"{identity}:{attempt}"
+                if budget is not None:
+                    try:
+                        budget.reserve(budget_id, upstream_body)
+                    except ValueError as error:
+                        event(kind="failure", id=identity, path=self.path, error=str(error), attempt=attempt)
+                        self.send_error(402, "Campaign budget guard")
+                        return
                 event(kind="upstream_request", id=identity, path=self.path, attempt=attempt, body=upstream_body)
                 request = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions",
                     data=json.dumps(upstream_body).encode(), headers={"Authorization": "Bearer " + key,
@@ -55,6 +68,8 @@ def serve(directory, *, model=MODEL, provider=None, reasoning=None):
                         code = int(result["error"].get("code", 502))
                         if code == 429 or code >= 500:
                             raise urllib.error.HTTPError(request.full_url, code, "provider error", {}, None)
+                    if budget is not None:
+                        budget.settle(budget_id, result.get("usage", {}))
                     event(kind="response", id=identity, path=self.path, body=result, attempt=attempt)
                     break
                 except urllib.error.HTTPError as error:

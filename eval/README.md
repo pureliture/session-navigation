@@ -1,5 +1,31 @@
 # A/B 실행기
 
+## Current-only v4 revalidation
+
+`v4_current.py` runs only product `8902a41`: eight long OMP/Hermes sessions
+and eight commanded Hide/Summarize trials. Historical A and `37348b8` are
+read-only inputs, never executed. Extract the frozen evidence with `git archive
+d3e77e6^ eval/results/2026-11-09-v4-deepseek eval/results/2026-11-09-v4-quality`
+outside the repository. `--historical` points to that extracted `eval/results`.
+
+Supply `--output`, one persistent shared `--budget` JSON path, `--hermes-source`,
+`--hermes-python`, any provisioned dependency `--python-path`, and
+`--harness-commit`. The product tree must match the approved commit. First use
+`--stub` with a dummy `OPENROUTER_API_KEY` to exercise real hosts without network
+generation. Paid execution requires the real key in the controller environment
+only. The proxy pins DeepSeek V4.1 Flash 1017/Relace/no reasoning and reserves
+worst-case costs before each attempt, including uncertain failed attempts. The
+technical ceiling is $5; crossing $3 is timestamped, not a stop condition.
+
+Use fresh output directories and the same budget ledger for API-only retries;
+select cells with `--cell omp/atlas/1` (or `hermes/command-hide/2`). Do not retry
+qualifying product outcomes. `v4_compare.py --historical ... --current ...
+--output ...` assembles separate copies and applies the shared historical
+scoring to all versions. It requires every current cell and identical prompts,
+answers and labels; original fixture hashes are retained separately. It does
+not change `v4_assemble.py` or historical evidence. Raw wires/workspaces belong
+in persistent gates directories, not this repository.
+
 ## 현재 실행기와 과거 캠페인
 
 - `run.py`는 현재 체크아웃의 OMP TS 확장/Hermes 플러그인을 사용합니다.

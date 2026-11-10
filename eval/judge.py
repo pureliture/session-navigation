@@ -9,12 +9,12 @@ from pathlib import Path
 from proxy import MODEL, serve
 
 
-def judge(directory, *, model=MODEL, provider=None, reasoning=None):
+def judge(directory, *, model=MODEL, provider=None, reasoning=None, budget=None):
     replacements = json.load(gzip.open(directory / "replacements.json.gz", "rt"))
     output = directory / "judge"
     output.mkdir(exist_ok=True)
     results = json.loads((output / "scores.json").read_text()) if (output / "scores.json").exists() else {}
-    server = serve(output, model=model, provider=provider, reasoning=reasoning)
+    server = serve(output, model=model, provider=provider, reasoning=reasoning, budget=budget)
     try:
         for item in replacements:
             if not item["actually_sent"]:
