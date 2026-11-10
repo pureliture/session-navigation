@@ -185,6 +185,15 @@ def metrics(directory, reports):
     return data
 
 
+def is_original_tool_execution(call):
+    if call.get("name") in NAV | {"tool_search", "tool_describe"}:
+        return False
+    if call.get("name") == "tool_call" and isinstance(call.get("args", {}).get("calls"), list):
+        return any(is_original_tool_execution({"name": item.get("name"), "args": item.get("arguments", {})})
+                   for item in call["args"]["calls"])
+    return is_work_call(call)
+
+
 def component_metrics(directory, host):
     reports = [r for r in read(directory / "metrics-v2.json") if r["host"] == host]
     replacements = read(directory / "replacements.json.gz")
@@ -196,7 +205,7 @@ def component_metrics(directory, host):
         spec = read(directory / report["id"] / "spec.json")
         turns = read(directory / report["id"] / "turns.json.gz")
         calls, _ = native_records(turns, spec["turns"])
-        work = [c for c in calls.values() if c["turn"] >= 3 and is_work_call(c)]
+        work = [c for c in calls.values() if c["turn"] >= 3 and is_original_tool_execution(c)]
         third_turn_work += len(work)
         restored = any(op["name"] == "unhide_context" and op["result"].get("ok") is True for op in report["operations"])
         restored_without_rerun += restored and not work

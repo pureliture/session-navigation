@@ -12,12 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from current_budget import Budget
 from proxy import serve
 from v4_current import schedule, MODEL
-from v4_compare import candidates, ratio
+from v4_compare import candidates, ratio, is_original_tool_execution
 from v4_current import SETTINGS
 from v4_stub import respond
 
 
 class CurrentTests(unittest.TestCase):
+    def test_restore_safety_excludes_deferred_discovery_not_work(self):
+        self.assertFalse(is_original_tool_execution({"name": "tool_call", "args": {"calls": []}}))
+        for name, expected in (("tool_describe", False), ("unhide_context", False), ("read_file", True)):
+            self.assertEqual(is_original_tool_execution({"name": "tool_call", "args": {"calls": [{"name": name, "arguments": {}}]}}), expected)
+
     def test_stub_json_session_summary(self):
         import urllib.request
         body = {"model": MODEL, "messages": [{"role": "system", "content": 'Summarize the tool result. Reply with JSON only: {"summary":"text"}.'},
