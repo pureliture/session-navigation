@@ -50,8 +50,8 @@ Its task call `parent-delegate` linked `GrandLeopon` to
 
 After reloading the final packed client and restarting the isolated daemon, the
 native opener was checked again with fresh child `SuperiorConstrictor` under
-Paseo parent `b19dbcf6-3c52-437b-a854-846a12f2fb0f`. This avoids mistaking the
-host's lost in-memory subagent index after restart for a client opener failure.
+Paseo parent `b19dbcf6-3c52-437b-a854-846a12f2fb0f`, rather than depending on a
+restored native child tab after the daemon restart.
 
 Hermes parent Paseo agent: `ef979ae1-5e69-456c-a8df-398a2c8d2950`.
 Its `parent-delegate` call linked `sa-0-aa09eb21` to
