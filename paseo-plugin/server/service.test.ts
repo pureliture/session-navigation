@@ -21,6 +21,7 @@ import {
   type Message,
 } from "./history.ts";
 import { bindAgents } from "./mapping.ts";
+import { MutationResultSchema } from "../shared/sessionNav.ts";
 
 const scope = "omp:default:sid:default";
 const cleanup: (() => void)[] = [];
@@ -114,6 +115,23 @@ function seed(store: Store, id: string, key = scope): Item {
   expect(store.put(key, item).ok).toBe(true);
   return item;
 }
+
+test("single tool mutations satisfy the RPC response schema, including conflicts and missing targets", async () => {
+  const { call } = fixture(toolMessages());
+  const row = (await call("list")).items.find((item: any) => item.tool_call_id === "c1");
+  for (const [method, input, ok] of [
+    ["hide", { item_id: row.item_id, expected_version: 1 }, true],
+    ["hide", { item_id: row.item_id, expected_version: 0 }, false],
+    ["unhide", { item_id: row.item_id }, true],
+    ["hide", { item_id: row.item_id, mode: "summarize" }, true],
+    ["hide", { item_id: "missing" }, false],
+    ["unhide", { item_id: "" }, false],
+  ] as const) {
+    const response = await call(method, input);
+    expect(MutationResultSchema.parse(response).ok).toBe(ok);
+    if (response.item) expect(response.item.tokens_display).toBe("—");
+  }
+});
 
 for (const mode of ["hide", "summarize"])
   test(`batch ${mode} commits independently, CAS-checks even idempotent hides and restores originals`, async () => {

@@ -267,6 +267,7 @@ export class PaseoService {
             ? "unhidden"
             : "visible",
       version: item.version,
+      tokens_display: "—",
       source: item.compaction_source,
       summary_line:
         summaryLine(
