@@ -11,8 +11,10 @@ worker-source artifact shipped with this plugin. Unsupported runtimes show an ex
 upgrade message rather than attempting to launch Python. The manifest's Node engine
 metadata is informational on Paseo 0.15.3; the server enforces the runtime check.
 
-The manifest allows Paseo 0.15.0 or later; the tested SDK and host are 0.15.3.
-Compatibility with earlier 0.15.x releases has not been separately verified.
+The manifest requires Paseo 0.15.3 or later; the tested SDK and host are 0.15.3.
+Set top-level `pluginsEnabled: true` in the daemon configuration and restart it.
+Other Paseo versions have not been separately verified. The OMP adapter requires
+Bun 1.4.4 or later; the Hermes adapter requires Hermes 0.20.1 or later.
 For OMP request rewriting, install the matching OMP extension as described in the README.
 Other providers can supply display-only timeline rows. Hide and Summarize are enabled
 only for a registered, compatible, enabled session adapter advertising that capability.

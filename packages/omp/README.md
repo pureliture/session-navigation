@@ -4,7 +4,18 @@ An npm-style extension for `@oh-my-pi/pi-coding-agent` (tested with 18.18.3).
 Hide is deterministic, Summarize uses the session model, and Unhide restores
 originals without re-execution. Only outgoing request copies are changed.
 
-## Build and install
+## Install
+
+Requires **Bun >=1.4.4** (1.4.4 is tested; older Bun releases are unverified).
+After npm publication:
+
+```sh
+omp plugin install @pureliture/session-navigation-omp@0.1.0
+```
+
+This release preparation does not claim npm publication has occurred.
+
+## Build and install from source
 
 From a checkout with Bun installed:
 
@@ -26,14 +37,12 @@ into OMP's plugin dependency directory, then restart OMP:
 ```sh
 mkdir -p "$HOME/.omp/plugins"
 cd "$HOME/.omp/plugins"
-bun add /absolute/path/to/session-navigation-omp-0.1.0.tgz
+bun add /absolute/path/to/pureliture-session-navigation-omp-0.1.0.tgz
 omp plugin list
 ```
 
 Use the appropriate OMP data/plugin directory for an XDG or named-profile
-installation. A future published release can use
-`omp plugin install @pureliture/session-navigation-omp@<version>`; this package has not
-been published. OMP 18.18.3's installer accepts package names and linked
+installation. OMP 18.18.3's installer accepts package names and linked
 directories, not local tarball specifications directly.
 
 ## Migration from the Python daemon extension
@@ -76,8 +85,13 @@ encoded envelope size and skip individual oversized records.
 
 Pending model work is bounded to four concurrent calls with a shared 25-second
 deadline before first-request patches. Cancellation/session switches discard
-stale model results; pending settlement uses version CAS. Model failure retains
-rule-hide fallback. Headless persistence failures abort; interactive requests
+stale model results; pending settlement uses version CAS. Automatic pending work
+may fall back to deterministic Hide. Explicit Summarize is different: it upgrades
+an existing rule Hide to an accepted LLM summary, reuses an accepted summary
+without another call, and retries factual validation once with English feedback.
+If that upgrade fails, it returns an explicit error and keeps the existing Hide
+replacement. Both attempts count in usage; Unhide still restores the original.
+Headless persistence failures abort; interactive requests
 require an explicit abort/originals choice. Heartbeats are published only after
 valid session processing; freshness is informational. DELETE remains the default
 journal mode under the shared contract.

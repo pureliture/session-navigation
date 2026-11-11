@@ -105,24 +105,31 @@ Hermes는 **Python 엔진과 어댑터를 포함한 Python 플러그인**을 사
 
 ### Paseo 플러그인만 설치
 
-SDK와 실제 검증 대상은 **Paseo 0.15.3**입니다. manifest는 `>=0.15.0`을 허용하지만
-다른 0.15.x 버전은 별도 검증하지 않았습니다. 데몬의 Node는 **22.13 이상**이어야 합니다.
-실제 검증은 Node 24.21.0에서 했으며 최소 버전 22.13 자체의 acceptance는 남아 있습니다.
-내장 Node Worker에 코어와 SQLite 드라이버가 포함되며 Python이나 미게시 workspace 의존성은 없습니다.
+SDK와 실제 검증 대상은 **Paseo 0.15.3**이며 manifest는 `>=0.15.3`을 요구합니다.
+다른 버전은 별도로 검증하지 않았습니다. 데몬의 Node는 **22.13 이상**이어야 합니다.
+22.13에서는 Worker 빌드·테스트를 확인했지만 전체 데몬/UI acceptance는 검증하지 않았습니다.
+내장 TypeScript Worker를 사용하므로 Python은 필요하지 않습니다.
 
-Paseo 데몬 호스트에 다음 플러그인만 설치합니다. 기록 표시는 호스트 어댑터 없이도 가능하지만
-Hide/Summarize는 세션 호스트의 OMP 확장 또는 Hermes 플러그인이 필요합니다.
+Paseo 설정 최상위에 `pluginsEnabled: true`를 지정하고 데몬을 재시작하세요.
+npm 게시와 레지스트리 승인 이후의 표준 설치는 다음과 같습니다.
 
 ```bash
-paseo plugin add "$PWD/paseo-plugin"
-paseo plugin ls
+paseo plugin add pureliture/session-navigation
 ```
 
-Git 폴더 설치도 가능합니다. 재현 가능한 설치에는 `main` 대신 검토한 커밋이나 태그를 사용하세요.
-이전 `152f63c` 커밋은 타입 의존성 문제로 깨끗한 Git 설치에 실패합니다.
+레지스트리 승인 전에는 게시된 npm 버전을 직접 지정합니다.
 
 ```bash
-paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref main
+paseo plugin add npm:@pureliture/session-navigation-paseo@0.1.0
+```
+
+이 문서는 게시·승인이 완료됐다는 뜻이 아닙니다. npm 게시 전에는 검토한 SHA로 Git 폴더를
+설치하거나 소스 체크아웃을 사용하세요. UI의 기존 상태를 보존하기 위해 내부 ID는
+`paseo-plugin`으로 유지합니다. Hide/Summarize에는 세션 호스트의 어댑터가 필요합니다.
+
+```bash
+paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref <REVIEWED_SHA>
+paseo plugin ls
 ```
 
 Explorer의 **+ → Session navigation**을 선택하고 **Follow visible session**으로 현재 대화를
@@ -133,28 +140,18 @@ Explorer의 **+ → Session navigation**을 선택하고 **Follow visible sessio
 
 ### OMP(oh-my-pi) npm 패키지 확장
 
-`@oh-my-pi/pi-coding-agent` **18.18.3**에서 검증했습니다. Bun으로 빌드한 패키지를 설치합니다.
+`@oh-my-pi/pi-coding-agent` **18.18.3**, Bun **1.4.4**에서 검증했습니다.
+Bun 최소 요구 버전은 검증된 최저 버전인 **1.4.4**입니다. npm 게시 후:
 
 ```bash
-(cd packages/omp && bun install)
-bun run packages/omp/build.ts
-omp plugin install "$PWD/packages/omp"
+omp plugin install @pureliture/session-navigation-omp@0.1.0
 ```
 
-OMP를 재시작하세요. 일회성 로드는 `omp --extension "$PWD/packages/omp"`입니다.
-로컬 tarball은 `packages/omp`에서 `bun pm pack`으로 만듭니다. OMP 18.18.3의
-`omp plugin install`은 로컬 tarball을 직접 받지 않으므로 Bun으로 설치합니다.
-
-```bash
-mkdir -p "$HOME/.omp/plugins"
-cd "$HOME/.omp/plugins"
-bun add /absolute/path/to/session-navigation-omp-0.1.0.tgz
-omp plugin list
-```
-
-XDG 또는 named profile에서는 해당 프로필의 plugin 디렉터리를 사용하세요.
-향후 게시한 릴리스는 `omp plugin install @pureliture/session-navigation-omp@<version>`으로 설치할 수
-있지만 **현재 npm 게시 완료를 주장하지 않습니다**. 공통 코어는 번들에 포함됩니다.
+게시 전 개발 설치는 `bun run packages/omp/build.ts` 후
+`omp plugin install "$PWD/packages/omp"`로 합니다. OMP 18.18.3은 로컬 tarball을
+직접 받지 않습니다. 패킹한 `pureliture-session-navigation-omp-0.1.0.tgz`는
+해당 프로필의 `~/.omp/plugins`에서 `bun add /absolute/path/to/pureliture-session-navigation-omp-0.1.0.tgz`로
+설치하고 OMP를 재시작하세요. Python과 별도 core 게시물은 필요하지 않습니다.
 
 이전 Python-spawning 사본인 **`~/.omp/agent/extensions/session-navigation.ts`를 모든 해당
 프로필에서 제거하거나 비활성화**하세요. 예전 사본은 새 중복 로딩 guard에 참여할 수 없습니다.
@@ -164,6 +161,10 @@ XDG 또는 named profile에서는 해당 프로필의 plugin 디렉터리를 사
 upstream **pi**와의 호환성은 검증하지 않았습니다.
 
 ### Hermes Python 플러그인
+
+최소 요구 버전은 **Hermes >=0.20.1**입니다(API 제공 시점 기준이며 해당 구버전의 live acceptance는 별도 검증하지 않았습니다).
+카탈로그 승인 후에는 `hermes plugins install session-navigation`으로 설치합니다.
+승인 전에는 아래 Git 설치를 사용하세요. wheel 설치만으로 호스트에 등록되지는 않습니다.
 
 실제 ACP 검증에는 Hermes 소스 `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8`을,
 이전 플러그인 검사에는 `109fd8161a509db5a00942152ba48882e446e8b0`을 사용했습니다.
@@ -306,70 +307,27 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 
 ## 배포 / 게시 계획
 
-아래는 **게시자가 수행할 절차**이며 이 저장소가 이미 등록되었다는 뜻이 아닙니다.
-릴리스에는 삭제 예정 작업 브랜치가 아닌 병합 후 커밋·태그를 사용하세요.
-현재 저장소에는 자동 테스트·릴리스용 GitHub Actions 워크플로가 없습니다.
+세 호스트의 준비 버전은 **0.1.0**입니다. 아래 경로는 게시·승인 완료를 주장하지 않습니다.
 
-### Paseo: Git 폴더 또는 npm → 공식 검토 레지스트리
+- **OMP:** npm `@pureliture/session-navigation-omp@0.1.0`.
+- **Paseo:** npm `@pureliture/session-navigation-paseo@0.1.0` 게시 후 검토 레지스트리
+  `pureliture/session-navigation`으로 제출합니다. MIT LICENSE와 내장 Worker가 tarball에 포함됩니다.
+- **Hermes:** 저장소 루트를 공식 카탈로그에 **40자리 SHA**로 고정합니다.
+  다섯 도구, `post_api_request`/`subagent_start` 훅,
+  `llm_request`/`tool_request` 미들웨어 및 `>=0.20.1`을 선언합니다.
+  의존성 준비를 포함한 validate는 통과하지만 유지한 private import 경고는 심사가 필요합니다.
 
-1. 권장 초기 형식은 공개 GitHub 저장소의 `paseo-plugin/` 폴더입니다.
-   manifest·TS 진입점·가져오는 소스·아이콘을 포함하고, 게시할 커밋에서
-   깨끗한 Git 설치를 검증하세요. `152f63c`의 직접 Git 설치는 타입 의존성 오류로 실패했습니다.
-2. 현재 `media: []`이고 플러그인 폴더에는 아이콘만 있습니다. **실제 UI 스크린샷**을
-   package 내부에 포함하거나 제출 이슈 또는 PR에 공개 PNG/JPG 등의 URL로 제공해야 합니다.
-   기존 스크린샷은 [docs/media](media/)에 있습니다.
-3. npm 경로를 택하면 `paseo-plugin/package.json`의 `private: true`를 해제하고,
-   게시 권한이 있는 이름/스코프, 릴리스 버전, GitHub `repository`를 설정하세요.
-   패키지 내부에 MIT LICENSE도 포함해야 합니다. 현재 dry-run에는 LICENSE가 없습니다.
-4. 타입 검사·테스트·`npm pack --dry-run --ignore-scripts` 후 npm 경로에서만
-   `npm publish --access public`을 실행합니다. 실제 버전을 테스트 데몬에 설치해 확인하세요.
-   호스트 제공 라이브러리는 devDependencies로 유지하며, 새로운 런타임 의존성을 추가하면
-   공식 가이드의 lock/shrinkwrap 요건도 적용됩니다.
-5. [공식 제출 양식](https://github.com/getpaseo/plugins/issues/new?template=submit-plugin.yml)에
-   GitHub 폴더 URL+검토할 커밋 또는 npm 패키지+버전을 제출합니다.
-   검토·승인 뒤 `paseo plugin add owner/slug`로 설치할 수 있습니다.
+명시적 Summarize는 기존 rule Hide를 LLM 요약으로 업그레이드합니다.
+승인된 기존 LLM 요약은 재호출 없이 반환합니다. 사실 검증 실패에는 영어 피드백으로
+한 번만 재시도하며 두 호출 모두 사용량에 포함합니다. 최종 실패는 명시적 오류를 반환하고
+기존 Hide를 유지합니다. Unhide는 도구 재실행 없이 정확한 원문을 복원합니다.
 
-요건과 갱신 절차: [Paseo 공식 배포 가이드](https://paseo.sh/docs/plugins/publishing),
-[검토 정책](https://github.com/getpaseo/plugins/blob/main/REVIEW.md).
-영문 listing은 [OVERVIEW.md](../paseo-plugin/OVERVIEW.md)를 사용합니다.
-
-### OMP: npm 패키지 또는 Git 카탈로그
-
-1. `packages/omp/package.json`은 이름·버전과 `omp.extensions: ["./index.ts"]`를 선언합니다.
-   `bun pm pack`은 extension/worker를 빌드하고 `index.ts`, `dist/`, README와 LICENSE를 묶습니다.
-2. 로컬 tarball은 위의 Bun 설치 절차를 사용합니다. 게시 권한이 있는 이름/버전으로
-   `npm publish --access public`한 뒤에는 `omp plugin install @pureliture/session-navigation-omp@<version>`을
-   사용할 수 있지만 현재 게시된 패키지가 있다는 뜻은 아닙니다.
-3. Git 카탈로그는 `.omp-plugin/marketplace.json` 또는 `.claude-plugin/marketplace.json`을
-   사용합니다. 항목을 만든 뒤 `omp plugin marketplace add <catalog-source>`,
-   `omp plugin install <name>@<marketplace>`로 설치합니다. 현재 저장소에는 카탈로그가 없습니다.
-   npm 설치와 Git 카탈로그 설치는 별개 경로입니다.
-4. upstream pi는 별도 API 호환성 검증이 필요합니다. OMP 검증을 pi 호환성으로 확대하지 마세요.
-
-[확장 작성/manifest](https://github.com/can1357/oh-my-pi/blob/main/docs/skills/authoring-extensions.md) ·
-[설치 문서](https://github.com/can1357/oh-my-pi/blob/main/docs/plugin-manager-installer-plumbing.md) ·
-[marketplace](https://github.com/can1357/oh-my-pi/blob/main/docs/marketplace.md)
-
-### Hermes: 저장소 루트 → SHA 고정 공식 카탈로그
-
-1. 공개 저장소 루트를 배포 단위로 사용합니다. 별도 npm 패키지나 Python wheel을
-   Hermes 레지스트리에 올리는 방식이 아닙니다.
-2. **현재 등록 차단:** `plugin.yaml`에 실제로 등록하는
-   `provides_hooks: [post_api_request]`, `provides_middleware: [llm_request]` 선언이 없어
-   `hermes plugins validate .`가 실패합니다. manifest 수정은 아직 하지 않았습니다.
-   private core import 경고도 검토가 필요합니다.
-3. 선언과 지원 버전 정보를 정리하고, 릴리스 커밋에서 공식 검증 절차인
-   `hermes plugins validate /path/to/session-navigation --install-deps`를 통과시킵니다.
-   이번 확인은 의존성을 설치하지 않는 기본 validate만 실행했습니다.
-4. `NousResearch/hermes-agent`에 `plugin-catalog/session-navigation.yaml`을 추가하는 PR을 엽니다.
-   공개 repo URL, **40자리 SHA**, 설명·유지관리자·실제 도구/훅/미들웨어 capabilities를 선언합니다.
-   `requires_hermes`를 선언한다면 검증한 실제 SemVer 범위를 manifest와 일치시키세요.
-5. 카탈로그 CI와 유지관리자 검토·병합 후 `hermes plugins install session-navigation`으로
-   설치합니다. 업데이트도 새 SHA를 고정하는 PR과 `hermes plugins update session-navigation`을 거칩니다.
-
-공식 근거: [카탈로그 정책·entry schema](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/README.md),
-[제출 절차](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/catalog-submission.md),
-[플러그인 API/의존성](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/index.md).
+실행 순서와 게시 명령은 [릴리스 체크리스트](release/checklist.md),
+[Paseo 제출 초안](release/paseo-submission.md), [Hermes 항목](release/hermes-catalog.yaml),
+[Hermes 심사 설명](release/hermes-pr-body.md), [Hermes 설치 안내](hermes-plugin.md)를 보세요.
+Paseo 제출에는 현재 UI 이미지가 필요합니다. 기존 `docs/media` 이미지는 심사 전에 최신 동작과
+대조해야 합니다. core 패키지는 비공개/번들 전용입니다. 자동 게시 워크플로는 없습니다.
+upstream pi 호환성은 검증하지 않았습니다.
 
 ## 평가
 

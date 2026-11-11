@@ -1,0 +1,38 @@
+# Draft: replace the SHA placeholder after the release-prep changes are merged.
+# Target file in NousResearch/hermes-agent: plugin-catalog/session-navigation.yaml
+name: session-navigation
+title: Session navigation
+repo: https://github.com/pureliture/session-navigation
+sha: <FILL_AFTER_MERGE>
+description: >-
+  Reversible request-side context management using deterministic Hide, session-model
+  Summarize and exact Unhide. Disclosure: stores selected session originals and
+  replacements in local SQLite; Summarize sends selected originals through the
+  configured Hermes model provider. Uses two guarded private read-only helpers;
+  see the review disclosure. No telemetry, credential-file access or self-updater.
+maintainer: pureliture
+tier: community
+category: memory
+requires_hermes: ">=0.20.1"
+version: "0.1.0"
+docs_url: https://github.com/pureliture/session-navigation/blob/main/docs/hermes-plugin.md
+readme: true
+platforms: []
+known_issues:
+  - Two guarded private Hermes helpers require maintainer review and may change between releases.
+  - Requires both host activation and settings.enabled true; settings default to false.
+  - Local state must be shared with Paseo; cross-machine synchronization is not provided.
+capabilities:
+  provides_tools:
+    - hide_context
+    - summarize_context
+    - list_context_items
+    - unhide_context
+    - manage_context
+  provides_hooks:
+    - post_api_request
+    - subagent_start
+  provides_middleware:
+    - llm_request
+    - tool_request
+  requires_env: []
