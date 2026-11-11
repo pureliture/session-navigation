@@ -3,6 +3,8 @@ import gzip
 import io
 import json
 import os
+import sqlite3
+import hashlib
 from pathlib import Path
 import sys
 import tempfile
@@ -32,6 +34,10 @@ class CurrentTests(unittest.TestCase):
             self.assertEqual(original_safety(root, [])['original_mismatches'], 0)
             with gzip.open(folder / "store.json.gz", "wt") as stream:
                 json.dump({"items": [{"item_id": "item", "tool_call_id": "call", "original": "corrupt", "content_sha256": "bad"}]}, stream)
+            with sqlite3.connect(root / "navigation.sqlite3") as connection:
+                connection.execute("CREATE TABLE adapter_targets (item_id TEXT, tool_call_id TEXT, original TEXT, content_sha256 TEXT)")
+                connection.execute("INSERT INTO adapter_targets VALUES (?, ?, ?, ?)",
+                                   ("item", "call", "original", hashlib.sha256(b"original").hexdigest()))
             result = original_safety(root, [{"id": "run"}])
             self.assertEqual(result["native_tool_content_transitions"], 1)
             self.assertGreater(result["original_mismatches"], 0)

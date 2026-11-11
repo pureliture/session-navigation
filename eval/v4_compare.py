@@ -117,8 +117,8 @@ def original_safety(directory, reports):
                 elif identity not in seen:
                     native_checked += 1
                 seen[identity] = original
-        items = {item["item_id"]: item for item in [*snapshot["items"], *targets]}
-        for item in items.values():
+        checked_ids = set()
+        for item in [*snapshot["items"], *targets]:
             original = item["original"]
             snapshots += 1
             digest = item.get("content_sha256")
@@ -128,7 +128,9 @@ def original_safety(directory, reports):
             if native is None:
                 unknown.append({"id": report["id"], "item": item["item_id"]})
             elif native["original"] == original:
-                checked += 1
+                if item["item_id"] not in checked_ids:
+                    checked += 1
+                    checked_ids.add(item["item_id"])
             else:
                 mutations.append({"id": report["id"], "item": item["item_id"], "kind": "native/store original mismatch"})
     return {"originals_compared": checked, "stored_items": snapshots, "original_mismatches": len(mutations),
@@ -142,7 +144,8 @@ def metrics(directory, reports):
     surfaces = {r["id"]: r for r in read(directory / "answer-surface.json")["sessions"]}
     usage = [u for r in reports for u in r["usage"]]
     status = [read(directory / r["id"] / "status.json") for r in reports]
-    data = {"sessions": len(reports), "final_only_success": sum(r["task_success"] for r in reports),
+    data = {"sessions": len(reports), "final_only_success": sum(surfaces[r["id"]]["final_message_success"] for r in reports),
+            "task_success": sum(r["task_success"] for r in reports),
             "visible_unit_success": sum(surfaces[r["id"]]["visible_unit_success"] for r in reports),
             "canonical_tests_pass": sum(s.get("canonical_tests_pass", False) for s in status),
             "canonical_tests_applicable": sum("canonical_tests_pass" in s for s in status),
