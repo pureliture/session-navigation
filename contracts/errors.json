@@ -43,6 +43,7 @@
         "invalid_keep_lines",
         "invalid_keep_lines_action",
         "keep_lines_conflict",
+        "keep_lines_too_broad",
         "invalid_max_items",
         "invalid_summaries",
         "invalid_tool_call_ids",

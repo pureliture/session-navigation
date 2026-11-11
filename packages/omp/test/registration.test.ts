@@ -31,7 +31,9 @@ test("package and legacy shim share a registration guard, in either load order",
     extensions[0](api as any);
     extensions[1](api as any);
     for (const start of events.get("session_start")!) start({}, { agent: { kind: "main" } });
-    expect(tools).toHaveLength(5);
+    expect(tools).toEqual([
+      "list_context_items", "manage_context", "hide_context", "summarize_context", "unhide_context",
+    ]);
     await events.get("session_shutdown")![0]();
   }
 });

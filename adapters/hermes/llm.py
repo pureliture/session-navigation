@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from session_navigation.policy import required_evidence_lines
-from session_navigation.summary import validate_summary_text
+from session_navigation.summary import validate_summary_text, summary_source
 from session_navigation.transport import Summarizer, SummarizerError, SummarizerUnavailable
 
 
@@ -41,6 +41,7 @@ class CtxLlmSummarizer:
         invocation: dict[str, Any] | None = None,
         context: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        original = summary_source(original)
         llm = self.ctx_llm
         if llm is None:
             raise SummarizerUnavailable("summarizer_unavailable")

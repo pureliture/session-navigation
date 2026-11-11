@@ -354,7 +354,7 @@ export class OmpService {
       bytes_size: bytes(item.original),
       tokens_display: "—",
     }));
-    const recorded = new Set(items.map((item) => item.tool_call_id));
+    const recorded = new Set(this.engine.listItems(scope).map((item) => item.tool_call_id));
     for (const record of this.confirmed(session, params.snapshot_id)?.records.values() ?? []) {
       if (!recorded.has(record.call_id))
         rows.push({

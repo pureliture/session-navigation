@@ -27,7 +27,7 @@ from session_navigation.policy import (
     normalize_keep_lines,
 )
 from session_navigation.sqlite_store import SQLiteContextStore
-from session_navigation.summary import selectable_text, validate_summary_text
+from session_navigation.summary import selectable_text, validate_summary_text, summary_source
 from session_navigation.transport import Summarizer
 
 
@@ -141,7 +141,8 @@ class SessionNavigationEngine:
         )
         baseline = selector.select(rule_source, keep_lines=tuple(keep_lines)) if keep_lines else selector.select(rule_source)
         if baseline is None:
-            return MutationResult(ok=False, error="verification_failed")
+            error = "keep_lines_too_broad" if keep_lines and selector.select(rule_source) is not None else "verification_failed"
+            return MutationResult(ok=False, error=error)
 
         # 4. Pending reservation
         token, reserve_err = self.store.reserve(scope, item_id, record.invocation_digest)
@@ -158,7 +159,7 @@ class SessionNavigationEngine:
             if summarizer is not None:
                 try:
                     summary_dict = await summarizer.summarize(
-                        record.content,
+                        summary_source(record.content),
                         required,
                         invocation=record.invocation,
                     )

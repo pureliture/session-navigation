@@ -39,6 +39,20 @@ function record(
 const call = (adapter: OmpService, method: string, params: Record<string, unknown> = {}) =>
   adapter.handle(method, { session_id: "a", ...params });
 
+test("query-excluded stored items are never relabeled unrecorded or unhidden", async () => {
+  const adapter = service();
+  await call(adapter, "prepare", { snapshot_id: "filtered", records: [record()] });
+  const compacted = await call(adapter, "compact", { snapshot_id: "filtered", tool_call_id: "call-1" });
+  expect(compacted.ok).toBe(true);
+  expect((await call(adapter, "list_items", { snapshot_id: "filtered", query: "audit-01.jsonl" })).items).toEqual([]);
+  const all = (await call(adapter, "list_items", { snapshot_id: "filtered" })).items as any[];
+  expect(all).toHaveLength(1);
+  expect(all[0].item_id).toBe(compacted.item_id);
+  expect(all[0].visibility).toBe("hidden");
+  expect((await call(adapter, "list_items", { snapshot_id: "filtered", query: compacted.item_id })).items).toHaveLength(1);
+  expect((await call(adapter, "list_items", { session_id: "empty", query: "missing" })).items).toEqual([]);
+});
+
 test("explicit IDs, invalid requests, chunk append tokens and invalidation", async () => {
   const adapter = service();
   expect((await call(adapter, "manage")).error).toBe("tool_call_ids_required");

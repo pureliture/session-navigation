@@ -9,6 +9,7 @@ import {
   type RecordInput,
 } from "./model.ts";
 import { pythonInteger, pythonTrim, pythonize } from "./python-regex.ts";
+import { equivalentSubstring } from "./numbers.ts";
 export function splitLines(text: string): string[] {
   // Python str.splitlines recognizes these separators and omits a trailing empty line.
   return text === ""
@@ -161,6 +162,7 @@ export function normalizeKeepLines(
           text = pythonTrim(match[1]);
         }
       }
+      if (text && !original.includes(text)) text = equivalentSubstring(original, text) ?? text;
       candidate = text;
       if (!text || !original.includes(text)) {
         reason =

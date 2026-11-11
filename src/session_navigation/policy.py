@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from session_navigation.numbers import equivalent_substring
 import shlex
 from typing import Any
 
@@ -33,6 +34,8 @@ def normalize_keep_lines(original: str, entries: list[Any]):
                 match = re.fullmatch(r"\d+\s*[:|]\s?(.*)", candidate)
                 if match:
                     candidate = match.group(1).strip()
+            if candidate and candidate not in original:
+                candidate = equivalent_substring(original, candidate) or candidate
             if not candidate or candidate not in original:
                 reason = "Line substring not found verbatim in target after whitespace and line-number normalization."
             elif candidate not in accepted and used + len(candidate.encode("utf-8")) > 1024:

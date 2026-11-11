@@ -229,6 +229,29 @@ assistant 텍스트를 합쳐 별도 `answer-surface.json`을 낸다. 답변 후
 v3 Crouton 실행은 모델 폐기(HTTP 404)로 중단됐다. `2026-11-09-v3-crouton`에는
 `non-qualifying.json`이 있으므로 gate/pilot으로 쓸 수 없고 통계에 섞지 않는다.
 
+## RCA repair checks (no paid calls)
+
+The matched Hermes controller puts its own interpreter directory first on terminal
+`PATH`, warms the host environment probe, and requires the resulting Python-toolchain
+line in the stock prompt before generation. Launch it with the documented project
+interpreter (`uv run --no-sync python ...`); the recorded terminal toolchain is
+Python 3.12.15 without pip. The Hermes engine can still use the separate managed
+interpreter. A different/clean terminal setup that emits no probe line now fails
+explicitly instead of silently changing the historical prompt control.
+
+Replay the external RCA evidence without modifying it or contacting a provider:
+
+```bash
+PYTHONPATH=src uv run --no-sync python tools/replay_rca_fixes.py /PATH/TO/step8-eval/rca
+bun tools/replay_rca_fixes.ts /PATH/TO/step8-eval/rca
+```
+
+These check all five captured source-prefix cases, the comma-formatted retry,
+filtered listing, and the three broad minute-substring refusals. See
+`contracts/summary-input.md` for byte budgets and explicit error semantics. No old
+daemon is used. Historical campaign metrics remain frozen; repair replays are not
+a new paid campaign or evidence of improved stochastic model retention.
+
 ## Distractor-pressure quality experiment
 
 `quality_fixtures.py` generates four matched incident-review cases with signed-live

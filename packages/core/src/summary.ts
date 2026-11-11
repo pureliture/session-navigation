@@ -2,6 +2,16 @@ import { length, type Json } from "./model.ts";
 import { exitClaim, selectableText, splitLines, verifiedFacts } from "./policy.ts";
 import { pythonInteger, pythonTrim, pythonize } from "./python-regex.ts";
 import { casefold } from "./casefold.ts";
+import { numberPattern, normalizeNumber } from "./numbers.ts";
+export const MAX_SUMMARY_INPUT_BYTES = 32768;
+export function summarySource(original: string, maxBytes = MAX_SUMMARY_INPUT_BYTES): string {
+  if (new TextEncoder().encode(original).length > maxBytes)
+    throw Object.assign(new Error("input_too_large"), { reason: "input_too_large" });
+  return original;
+}
+export function summaryPrompt(original: string, maxBytes = MAX_SUMMARY_INPUT_BYTES): string {
+  return `Summarize this tool result in one paragraph. State only facts present in the result.\n\n${summarySource(original, maxBytes)}`;
+}
 const injection = [
   /\bignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b/i,
   /\b(?:reveal|print|expose)\s+(?:the\s+)?(?:system|developer|compacted)\s+(?:prompt|message)\b/i,
@@ -22,7 +32,7 @@ const generic = [
 ];
 const identifier =
   /\b(?:[0-9a-f]{8}-[0-9a-f-]{27,}|(?:id|uuid|sha256)\s*[:=]\s*[\p{L}\p{N}_.-]+)/giu;
-const number = /(?<![0-9A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|ms|s)?(?![0-9A-Za-z_])/g;
+const number = numberPattern;
 const pathToken =
   /(?<![A-Za-z0-9_./\\:~-])(?:(?:[A-Za-z]:|~|\.\.?)[/\\]+|[/\\]+)?[A-Za-z0-9_.-]+(?:[/\\]+[A-Za-z0-9_.-]+)*/g;
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -57,13 +67,15 @@ function coversCriticalFacts(original: string, text: string): boolean {
   ) {
     return false;
   }
+  const numericSource = original.replace(numberPattern, normalizeNumber);
+  const numericText = text.replace(numberPattern, normalizeNumber);
   const checks = [
-    ...original.matchAll(pythonize(/\b(\d+)\s+(?:[A-Za-z]+\s+)?checks?\s+(passed|failed)\b/gi)),
+    ...numericSource.matchAll(pythonize(/\b(\d+)\s+(?:[A-Za-z]+\s+)?checks?\s+(passed|failed)\b/gi)),
   ];
   if (checks.length === 1) {
     const [, count, state] = checks[0];
     if (
-      !pythonize(new RegExp(`\\b${count}\\b`)).test(text) ||
+      !pythonize(new RegExp(`\\b${count}\\b`)).test(numericText) ||
       !pythonize(new RegExp(`\\b${state}\\b`, "i")).test(text)
     ) {
       return false;
@@ -166,9 +178,11 @@ export function validateSummary(
   if ([...pathClaims(text)].some((path) => !sourcePaths.has(path))) {
     return;
   }
-  for (const pattern of [identifier, number].map(pythonize)) {
-    const facts = new Set([...factual.matchAll(pattern)].map((match) => pythonTrim(match[0])));
-    if ([...text.matchAll(pattern)].some((match) => !facts.has(pythonTrim(match[0])))) {
+  for (const rawPattern of [identifier, number]) {
+    const pattern = pythonize(rawPattern);
+    const normalize = rawPattern === number ? normalizeNumber : pythonTrim;
+    const facts = new Set([...factual.matchAll(pattern)].map((match) => normalize(pythonTrim(match[0]))));
+    if ([...text.matchAll(pattern)].some((match) => !facts.has(normalize(pythonTrim(match[0]))))) {
       return;
     }
   }

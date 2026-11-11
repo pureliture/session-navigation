@@ -150,7 +150,14 @@ export function registerOverlay(
               if (!row) return;
               const toolCallId = row?.tool_call_id ?? row?.call_id;
               const target = getCandidate()?.records?.find((r: any) => r?.call_id === toolCallId);
-              const summary = target ? await summarizeText(ctx, target.content) : null;
+              let summary: string | null;
+              try {
+                summary = target ? await summarizeText(ctx, target.content) : null;
+              } catch (error) {
+                notice = (error as { reason?: string })?.reason ?? "summarizer_unavailable";
+                tui?.requestRender?.();
+                return;
+              }
               if (getCandidate() !== snapshot) {
                 notice = "unconfirmed_snapshot";
                 tui?.requestRender?.();

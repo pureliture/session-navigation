@@ -20,7 +20,7 @@ import {
   selectRule,
   selectableText,
 } from "./policy.ts";
-import { validateSummary } from "./summary.ts";
+import { validateSummary, summarySource } from "./summary.ts";
 import { Store } from "./store.ts";
 export type Summarizer = (
   original: string,
@@ -113,7 +113,8 @@ export class Engine {
     }
     const baseline = selectRule(selectableText(record.content), keepLines, this.config);
     if (!baseline) {
-      return { ok: false, error: "verification_failed" };
+      return { ok: false, error: keepLines.length && selectRule(selectableText(record.content), [], this.config)
+        ? "keep_lines_too_broad" : "verification_failed" };
     }
     const reservationKey = `${scopeKey(scope)}\0${itemIdentity}`;
     if (this.pending.has(reservationKey)) {
@@ -129,7 +130,7 @@ export class Engine {
         try {
           summary =
             (await options.summarizer(
-              record.content,
+              summarySource(record.content),
               requiredEvidence(record.content),
               record.invocation,
             )) ?? null;

@@ -19,6 +19,7 @@ import {
 } from "./context.ts";
 import { registerOverlay } from "./overlay.ts";
 import { childLinkage } from "./subagents.ts";
+import { summaryPrompt, summarySource, MAX_SUMMARY_INPUT_BYTES } from "../../core/src/summary.ts";
 export * from "./context.ts";
 
 export interface ExtensionOptions {
@@ -373,13 +374,14 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value };
   }
   // D5: session-model-only summary. Returns target text or null when no session
-  // model is available. Never throws; callers map null to summarizer_unavailable.
+  // model is available. Budget refusals propagate as input_too_large.
   async function summarizeText(
     ctx: unknown,
     content: string,
     timeout = SUMMARY_TIMEOUT_MS,
     signal?: AbortSignal,
   ): Promise<string | null> {
+    summarySource(content);
     try {
       if (!ctx || typeof ctx !== "object") return null;
       const c: Record<string, unknown> = ctx as Record<string, unknown>;
@@ -418,7 +420,10 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
           ? (mod as Record<string, unknown>)["completeSimple"]
           : undefined;
       if (typeof complete !== "function") return null;
-      const prompt = `Summarize this tool result in one paragraph. State only facts present in the result.\n\n${content.slice(0, 12000)}`;
+      const window = (model as { contextWindow?: number }).contextWindow;
+      const budget = typeof window === "number" && Number.isFinite(window)
+        ? Math.min(MAX_SUMMARY_INPUT_BYTES, Math.max(0, window - 8192)) : MAX_SUMMARY_INPUT_BYTES;
+      const prompt = summaryPrompt(content, budget);
       const params = { messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] };
       // 25s end-to-end: the RPC timeout after this covers transport, this covers the model call.
       const controller = new AbortController();
@@ -457,7 +462,8 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       }
       const text = parts.join("\n").trim();
       return text || null;
-    } catch {
+    } catch (error) {
+      if ((error as { reason?: string })?.reason === "input_too_large") throw error;
       return null;
     }
   }
@@ -496,55 +502,6 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     await rpc("register", { session_id: sessionId(startContext) }, 2000);
     return;
   }
-  pi.registerTool({
-    name: "hide_context",
-    label: "Hide Context",
-    description: "Hide one result with rule excerpts; no LLM.",
-    parameters: z.object({ tool_call_id: z.string() }),
-    async execute(_id, params, signal, _update, ctx) {
-      return result(await tool("compact", params, ctx, signal));
-    },
-  });
-  pi.registerTool({
-    name: "summarize_context",
-    label: "Summarize Context",
-    description: "Summarize one result using the session LLM; no rule fallback.",
-    parameters: z.object({ tool_call_id: z.string() }),
-    async execute(_id, params, signal, _update, ctx) {
-      const session = sessionId(ctx);
-      const snapshot = candidate;
-      if (session && candidate?.confirmed && candidate.session === session) {
-        const target = candidate.records.find(
-          (r) => r.call_id === (params as { tool_call_id: string }).tool_call_id,
-        );
-        if (target) {
-          const summary = await summarizeText(ctx, target.content, SUMMARY_TIMEOUT_MS, signal);
-          if (signal?.aborted) return result({ ok: false, error: "cancelled" });
-          if (candidate !== snapshot) return result({ ok: false, error: "unconfirmed_snapshot" });
-          if (summary)
-            return result(
-              await tool(
-                "summarize",
-                { ...(params as Record<string, unknown>), summary_text: summary },
-                ctx,
-                signal,
-              ),
-            );
-          return result({ ok: false, error: "summarizer_unavailable" });
-        }
-      }
-      return result(await tool("summarize", params, ctx, signal));
-    },
-  });
-  pi.registerTool({
-    name: "unhide_context",
-    label: "Unhide Context",
-    description: "Restore an original by item_id without re-execution.",
-    parameters: z.object({ item_id: z.string() }),
-    async execute(_id, params, signal, _update, ctx) {
-      return result(await tool("restore", params, ctx, signal));
-    },
-  });
   pi.registerTool({
     name: "list_context_items",
     label: "List Context Items",
@@ -608,7 +565,13 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
           Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, queue.length) }, async () => {
             while (queue.length && !signal?.aborted && candidate === snapshot) {
               const record = queue.shift()!;
-              const text = await summarizeText(ctx, record.content, SUMMARY_TIMEOUT_MS, signal);
+              let text: string | null;
+              try {
+                text = await summarizeText(ctx, record.content, SUMMARY_TIMEOUT_MS, signal);
+              } catch (error) {
+                if (action === "auto") continue;
+                throw error;
+              }
               if (text) summaries[record.call_id] = text;
             }
           }),
@@ -643,7 +606,69 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       keep_lines: z.array(z.string()).optional(),
     }),
     async execute(_id, params, signal, _update, ctx) {
-      return result(await manageChosen(params as Record<string, unknown>, ctx, signal));
+      try {
+        return result(await manageChosen(params as Record<string, unknown>, ctx, signal));
+      } catch (error) {
+        if ((error as { reason?: string })?.reason === "input_too_large")
+          return result({ ok: false, error: "input_too_large" });
+        throw error;
+      }
+    },
+  });
+  pi.registerTool({
+    name: "hide_context",
+    label: "Hide Context",
+    description: "Hide one result with rule excerpts; no LLM.",
+    parameters: z.object({ tool_call_id: z.string() }),
+    async execute(_id, params, signal, _update, ctx) {
+      return result(await tool("compact", params, ctx, signal));
+    },
+  });
+  pi.registerTool({
+    name: "summarize_context",
+    label: "Summarize Context",
+    description: "Summarize one result using the session LLM; no rule fallback.",
+    parameters: z.object({ tool_call_id: z.string() }),
+    async execute(_id, params, signal, _update, ctx) {
+      const session = sessionId(ctx);
+      const snapshot = candidate;
+      if (session && candidate?.confirmed && candidate.session === session) {
+        const target = candidate.records.find(
+          (r) => r.call_id === (params as { tool_call_id: string }).tool_call_id,
+        );
+        if (target) {
+          let summary: string | null;
+          try {
+            summary = await summarizeText(ctx, target.content, SUMMARY_TIMEOUT_MS, signal);
+          } catch (error) {
+            if ((error as { reason?: string })?.reason === "input_too_large")
+              return result({ ok: false, error: "input_too_large" });
+            throw error;
+          }
+          if (signal?.aborted) return result({ ok: false, error: "cancelled" });
+          if (candidate !== snapshot) return result({ ok: false, error: "unconfirmed_snapshot" });
+          if (summary)
+            return result(
+              await tool(
+                "summarize",
+                { ...(params as Record<string, unknown>), summary_text: summary },
+                ctx,
+                signal,
+              ),
+            );
+          return result({ ok: false, error: "summarizer_unavailable" });
+        }
+      }
+      return result(await tool("summarize", params, ctx, signal));
+    },
+  });
+  pi.registerTool({
+    name: "unhide_context",
+    label: "Unhide Context",
+    description: "Restore an original by item_id without re-execution.",
+    parameters: z.object({ item_id: z.string() }),
+    async execute(_id, params, signal, _update, ctx) {
+      return result(await tool("restore", params, ctx, signal));
     },
   });
   registerOverlay(pi, {

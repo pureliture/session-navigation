@@ -19,6 +19,16 @@ from session_navigation.policy import (
     verified_facts,
 )
 from session_navigation.transport import OnCall, SummarizerError, SummarizerUnavailable
+from session_navigation.numbers import NUMBER, normalize_number
+
+MAX_SUMMARY_INPUT_BYTES = 32768
+
+
+def summary_source(original: str, max_bytes: int = MAX_SUMMARY_INPUT_BYTES) -> str:
+    """Pass the whole source or refuse before making a model request."""
+    if len(original.encode("utf-8")) > max_bytes:
+        raise SummarizerUnavailable("input_too_large")
+    return original
 
 logger = logging.getLogger(__name__)
 
@@ -188,12 +198,14 @@ def _covers_critical_facts(original: str, text: str) -> bool:
         r"(?<![\w-])" + re.escape(next(iter(subjects))) + r"(?![\w-])", text, re.I,
     ):
         return False
+    numeric_source = NUMBER.sub(lambda match: normalize_number(match[0]), original)
+    numeric_text = NUMBER.sub(lambda match: normalize_number(match[0]), text)
     check_results = list(re.finditer(
-        r"(?i)\b(\d+)\s+(?:[A-Za-z]+\s+)?checks?\s+(passed|failed)\b", original,
+        r"(?i)\b(\d+)\s+(?:[A-Za-z]+\s+)?checks?\s+(passed|failed)\b", numeric_source,
     ))
     if len(check_results) == 1:
         count, state = check_results[0].groups()
-        if not re.search(r"\b" + count + r"\b", text) or not re.search(r"\b" + state + r"\b", text, re.I):
+        if not re.search(r"\b" + count + r"\b", numeric_text) or not re.search(r"\b" + state + r"\b", text, re.I):
             return False
         if verified_facts(original)["exit_code"] is not None and not _EXIT_CLAIM.search(text):
             return False
@@ -266,7 +278,7 @@ def validate_summary_text(
         return None
 
     pairs = [(text, factual_source)]
-    number = re.compile(r"(?<![0-9A-Za-z_])[-+]?\d+(?:[.,]\d+)*(?:%|ms|s)?(?![0-9A-Za-z_])")
+    number = NUMBER
 
     for t, s in pairs:
         if any(p.search(t) for p in _INJECTION_OUTPUT_PATTERNS):
@@ -276,9 +288,10 @@ def validate_summary_text(
         if not _path_claims(t).issubset(_path_claims(s)):
             return None
         for pattern in (_IDENTIFIER_PATTERN, number):
-            facts = {m.group(0).strip() for m in pattern.finditer(s)}
+            normalize = normalize_number if pattern is number else str.strip
+            facts = {normalize(m.group(0).strip()) for m in pattern.finditer(s)}
             for match in pattern.finditer(t):
-                token = match.group(0).strip()
+                token = normalize(match.group(0).strip())
                 if token in facts:
                     continue
                 return None

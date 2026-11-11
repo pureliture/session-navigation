@@ -16,8 +16,10 @@ let peak = 0;
 let unavailable = false;
 let invalid = false;
 let hanging = false;
+let inputs: string[] = [];
 mock.module("@oh-my-pi/pi-ai", () => ({
   completeSimple: async (_model: any, request: any, options: any) => {
+    inputs.push(request.messages[0].content[0].text);
     const text = request.messages[0].content[0].text.split("\n\n")[1];
     calls.push(text.split("\n")[0]);
     peak = Math.max(peak, ++active);
@@ -40,7 +42,7 @@ mock.module("@oh-my-pi/pi-ai", () => ({
   },
 }));
 
-for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
+for (const mode of ["success", "invalid", "unavailable", "timeout", "oversize"] as const) {
   test(`the actual context hook sends the ${mode === "success" ? "LLM summary" : "rule fallback"} on its first pending turn (${mode})`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "sn-pending-"));
     const state = join(dir, "state.sqlite3");
@@ -62,7 +64,7 @@ for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
     } as any);
     events.session_start({}, { agent: { kind: "main" } });
     const content = Array.from(
-      { length: 100 },
+      { length: mode === "oversize" ? 2000 : 100 },
       (_, i) => `Output row ${i.toString().padStart(3, "0")} details`,
     ).join("\n");
     const messages = [
@@ -115,7 +117,7 @@ for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
       const first = await events.context({ messages }, ctx);
       const sent = first.messages.find((message: any) => message.role === "toolResult").content[0]
         .text;
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(mode === "oversize" ? 0 : 1);
       expect(active).toBe(0);
       expect(sent).not.toBe(content);
       if (mode === "success") expect(sent).toBe(content.split("\n")[0]);
@@ -125,7 +127,7 @@ for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
       expect(
         second.messages.find((message: any) => message.role === "toolResult").content[0].text,
       ).toBe(sent);
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(mode === "oversize" ? 0 : 1);
     } finally {
       globalThis.setTimeout = originalTimeout;
       unavailable = false;
@@ -139,6 +141,45 @@ for (const mode of ["success", "invalid", "unavailable", "timeout"] as const) {
     }
   });
 }
+
+test("actual OMP summary requests retain the tail and refuse byte/window overflow without calling the model", async () => {
+  for (const mode of ["tail", "oversize", "small-window"] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "sn-summary-input-"));
+    process.env.SESSION_NAVIGATION_STATE_PATH = join(dir, "state.sqlite3");
+    const events: Record<string, Function> = {}, tools: Record<string, any> = {};
+    const optional = () => ({ optional: () => ({}) });
+    extension({
+      zod: { object: () => ({}), string: optional, array: optional, enum: optional,
+        number: () => ({ int: () => ({ min: () => ({ max: optional }) }) }) },
+      on: (name: string, handler: Function) => { events[name] = handler; },
+      registerTool: (tool: any) => { tools[tool.name] = tool; },
+    } as any);
+    events.session_start({}, { agent: { kind: "main" } });
+    const ctx = { sessionManager: { getSessionId: () => "summary-input" },
+      model: { id: "test", contextWindow: mode === "small-window" ? 8192 : 65536 },
+      modelRegistry: { resolver: () => "local-test" } };
+    const source = Array.from({ length: mode === "oversize" ? 2000 : 700 }, (_, i) => `Result row ${i} telemetry details`).join("\n") + "\nlatency_budget_ms=151";
+    expect(source.indexOf("latency_budget_ms")).toBeGreaterThan(12000);
+    const messages = [
+      { role: "assistant", content: [{ type: "toolCall", id: "input-read", name: "read", arguments: { path: "audit-01.jsonl" } }] },
+      { role: "toolResult", toolCallId: "input-read", toolName: "read", isError: false, content: [{ type: "text", text: source }] },
+    ];
+    inputs = []; calls = []; active = 0; invalid = unavailable = hanging = false;
+    try {
+      await events.context({ messages }, ctx);
+      await events.assistant_message({ message: { role: "assistant", stopReason: "stop" } }, ctx);
+      const result = (await tools.summarize_context.execute("test", { tool_call_id: "input-read" }, undefined, undefined, ctx)).details;
+      if (mode === "tail") {
+        expect(result.ok).toBe(true);
+        expect(inputs).toEqual(["Summarize this tool result in one paragraph. State only facts present in the result.\n\n" + source]);
+      } else {
+        expect(result.error).toBe("input_too_large");
+        expect(inputs).toEqual([]);
+      }
+      expect(messages[1].content[0].text).toBe(source);
+    } finally { await events.session_shutdown(); rmSync(dir, { recursive: true, force: true }); }
+  }
+});
 
 test("cleanup discovers IDs, requires explicit choices, limits model concurrency and repeats across turns without an ID cap", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sn-cleanup-"));

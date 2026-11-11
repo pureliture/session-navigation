@@ -26,7 +26,8 @@ from session_navigation.policy import (
     verified_facts,
 )
 from session_navigation.sqlite_store import SQLiteContextStore
-from session_navigation.summary import validate_summary_text
+from session_navigation.summary import validate_summary_text, summary_source
+from session_navigation.transport import SummarizerError
 from session_navigation.pending_summary import settle_summary
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,7 +161,8 @@ async def vectors():
             summary = Summary() if vector.get("summary") else None
             if summary:
                 summary.text = vector["summary"]
-            hide = await engine._apply(scope, tool_record, summarizer=summary)
+            hide = await engine._apply(scope, tool_record, summarizer=summary,
+                keep_lines=vector.get("keep"), allow_fallback=vector.get("allow_fallback", True))
             item_id = _item_id(
                 scope,
                 tool_record.call_id,
@@ -304,6 +306,7 @@ async def vectors():
                     )
                     for vector in FIXTURES["summaries"]
                 ],
+                "summary_inputs": [summary_input_view(vector) for vector in FIXTURES["summary_inputs"]],
                 "commands": [
                     is_destructive_command("bash", {"command": command})
                     for command in FIXTURES["commands"]
@@ -331,6 +334,14 @@ def differences(expected, actual, path="root"):
             differences(expected_value, actual_value, f"{path}[{index}]")
     else:
         assert expected == actual, f"{path}: {expected!r} != {actual!r}"
+
+
+def summary_input_view(vector):
+    source = vector["unit"] * vector["repeat"] + vector["tail"]
+    try:
+        return {"sha": compute_sha256(summary_source(source))}
+    except SummarizerError as exc:
+        return {"error": exc.reason}
 
 
 def main():

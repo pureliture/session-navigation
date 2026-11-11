@@ -15,6 +15,7 @@ import {
   sha256,
   splitLines,
   validateSummary,
+  summarySource,
   verifiedFacts,
   isDestructive,
   type Json,
@@ -30,6 +31,7 @@ export interface TextVector {
   numbered?: boolean;
   keep?: Json[];
   summary?: string;
+  allow_fallback?: boolean;
 }
 export interface FixtureVectors {
   linkage: { parent_scope: string; tool_call_id: string; subagent_id: string };
@@ -40,6 +42,7 @@ export interface FixtureVectors {
     source: string;
     text: string;
   }[];
+  summary_inputs: { unit: string; repeat: number; tail: string }[];
   commands: string[];
   engine: TextVector[];
 }
@@ -138,7 +141,9 @@ async function mutationVectors(): Promise<unknown[]> {
     const hide = await engine.hide(
       fixtures.scope,
       toolRecord,
-      vector.summary ? { summarizer: async () => ({ summary: vector.summary }) } : {},
+      { ...(vector.summary ? { summarizer: async () => ({ summary: vector.summary }) } : {}),
+        ...(vector.keep ? { keep_lines: vector.keep } : {}),
+        allow_fallback: vector.allow_fallback ?? true },
     );
     const itemIdentity = itemId(
       fixtures.scope,
@@ -249,6 +254,11 @@ export async function runVectors(): Promise<unknown> {
     summaries: fixtures.summaries.map(
       (vector) => validateSummary(vector.source, { summary: vector.text }, []) ?? null,
     ),
+    summary_inputs: fixtures.summary_inputs.map((vector) => {
+      const source = vector.unit.repeat(vector.repeat) + vector.tail;
+      try { return { sha: sha256(summarySource(source)) }; }
+      catch (error) { return { error: (error as { reason: string }).reason }; }
+    }),
     commands: fixtures.commands.map((command) => isDestructive("bash", { command })),
     operations,
     shared,

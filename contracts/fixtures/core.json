@@ -1,8 +1,10 @@
 {
   "scope": "hermes:default:fixture:unknown",
   "linkage": {"parent_scope":"hermes:default:parent:unknown","tool_call_id":"delegate-fixture","subagent_id":"sa-fixture"},
-  "canonical": ["{\"z\":1,\"a\":\"눈😀\"}", "{\"a\":1.0,\"b\":-0.0,\"c\":1e-7,\"d\":1e15,\"e\":9007199254740993}", "{\"𐀀\":3,\"\":4,\"escape\":\"\\t\\n\\u0001\"}", "[true,null,false,1.2345678901234567,1e16,0.0001]"],
+  "canonical": ["{\"z\":1,\"a\":\"눈😀\"}","{\"a\":1.0,\"b\":-0.0,\"c\":1e-7,\"d\":1e15,\"e\":9007199254740993}","{\"𐀀\":3,\"\":4,\"escape\":\"\\t\\n\\u0001\"}","[true,null,false,1.2345678901234567,1e16,0.0001]"],
   "policies": [
+    {"name":"grouped-keep","line":"Routine catalog annotation","repeat":80,"suffix":"Count 1234","keep":["Count 1,234","Count 1,235","Count 1,23"]},
+    {"name":"ungrouped-keep","line":"Routine catalog annotation","repeat":80,"suffix":"Count 1,234","keep":["Count 1234"]},
     {"name":"plain","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":""},
     {"name":"high-signal","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"metric: 42\nname = alpha\nlast line"},
     {"name":"protected","line":"Routine catalog annotation","repeat":80,"suffix":"ERROR permission denied"},
@@ -12,11 +14,18 @@
     {"name":"unicode-boundaries","line":"éerroré 일상적인 기록 데이터 문장 내용","repeat":80,"suffix":"WARNİNG: annotation"},
     {"name":"unicode-evidence-boundary","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"épassedé\n/문서/결과.txt\nexit code ٠"},
     {"name":"numbered-envelope","line":"Routine catalog annotation","repeat":80,"suffix":"tail","envelope":true,"numbered":true},
-    {"name":"keep-lines","line":"Routine catalog annotation","repeat":80,"suffix":"specific middle result\nlast line","keep":["  88: specific middle result  ","missing",null,"", "last line"]},
+    {"name":"keep-lines","line":"Routine catalog annotation","repeat":80,"suffix":"specific middle result\nlast line","keep":["  88: specific middle result  ","missing",null,"","last line"]},
     {"name":"short","line":"tiny","repeat":1,"suffix":""},
     {"name":"many-evidence","line":"/known/result.json","repeat":20,"suffix":""}
   ],
   "summaries": [
+    {"source":"1234 checks passed; exit code 0.","text":"1,234 checks passed; exit code 0."},
+    {"source":"1,234 checks passed; exit code 0.","text":"1234 checks passed; exit code 0."},
+    {"source":"Count 1234; latency 1256ms.","text":"Count 1,234; latency 1,256ms."},
+    {"source":"Count 1234.","text":"Count 1,235."},
+    {"source":"Count 1234.","text":"Count 1,23."},
+    {"source":"id: 1234","text":"id: 1,234"},
+    {"source":"Read /logs/1234.txt.","text":"Read /logs/1,234.txt."},
     {"source":"2 synthetic checks passed; exit code 0.","text":"2 checks passed (return code 0)."},
     {"source":"2 synthetic checks passed; exit code 0.","text":"2 checks passed."},
     {"source":"The violet-module catalog uses exact-name matching.\nWarning: optional descriptions are omitted.","text":"violet-module matches exact names; optional descriptions omitted."},
@@ -42,6 +51,16 @@
     {"name":"evidence","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"Created /known/result.json\nexit code 0"},
     {"name":"summary","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"tail","summary":"Routine catalog annotation with no special facts."},
     {"name":"summary-invalid","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"tail","summary":"Read /invented/result.json."},
-    {"name":"refused","line":"tiny","repeat":1,"suffix":""}
+    {"name":"refused","line":"tiny","repeat":1,"suffix":""},
+    {"name":"summary-oversize","line":"Routine annotation detail","repeat":2000,"suffix":"tail","summary":"Routine annotation detail.","allow_fallback":false},
+    {"name":"keep-broad","line":"minute routine annotation detail","repeat":300,"suffix":"tail","keep":["minute"]}
+  ],
+  "summary_inputs": [
+    {"unit":"","repeat":1,"tail":""},
+    {"unit":"x","repeat":12000,"tail":"\nlatency_budget_ms=151"},
+    {"unit":"x","repeat":32768,"tail":""},
+    {"unit":"x","repeat":32769,"tail":""},
+    {"unit":"😀","repeat":8192,"tail":""},
+    {"unit":"😀","repeat":8193,"tail":""}
   ]
 }

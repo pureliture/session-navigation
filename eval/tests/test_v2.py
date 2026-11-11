@@ -39,6 +39,9 @@ class V2Tests(unittest.TestCase):
             names = lambda arm: {tool["function"]["name"] for tool in requests[arm]["tools"]}
             self.assertFalse(any("context" in name for name in names("A")))
             self.assertTrue({"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"} <= names("B"))
+            self.assertEqual([tool["function"]["name"] for tool in requests["B"]["tools"]
+                              if tool["function"]["name"] in names("B") - names("A")],
+                             ["list_context_items", "manage_context", "hide_context", "summarize_context", "unhide_context"])
 
     @unittest.skipUnless(shutil.which("bun"), "Bun required")
     def test_sdk_runtime_propagates_extension_errors(self):

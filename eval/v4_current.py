@@ -61,12 +61,15 @@ def run_one(base, server, host, case, rep, attempt, args):
                 home=str(home), workspace=str(workspace), output=str(output), model=MODEL,
                 provider="Relace", proxy=f"http://127.0.0.1:{server.server_port}", window=65536,
                 hermes_source=str(args.hermes_source))
+    if host == "hermes":
+        spec["require_toolchain_probe"] = True
     write(output / "spec.json", spec)
     env = child_environment(home, ROOT, work, workspace)
     env["OMP_PACKAGE"] = str(args.omp_package)
     env["NODE_PATH"] = str(args.omp_package / "node_modules")
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), *args.python_paths])
     if host == "hermes":
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
         plugin = home / "plugins/session-navigation"
         plugin.mkdir(parents=True)
         for name in ("__init__.py", "plugin.yaml"):
