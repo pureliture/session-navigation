@@ -1,5 +1,12 @@
 {
   "scope": "hermes:default:fixture:unknown",
+  "summary_upgrades": [
+    {"name":"upgrade","early_hide":true,"responses":["Count 42."],"race":false},
+    {"name":"retry-success","early_hide":true,"responses":["Count 100.","Count 42."],"race":false},
+    {"name":"retry-failure","early_hide":true,"responses":["Count 100.","Count 101."],"race":false},
+    {"name":"fresh-retry","early_hide":false,"responses":["Count 100.","Count 42."],"race":false},
+    {"name":"cas-race","early_hide":true,"responses":["Count 42."],"race":true}
+  ],
   "linkage": {"parent_scope":"hermes:default:parent:unknown","tool_call_id":"delegate-fixture","subagent_id":"sa-fixture"},
   "canonical": ["{\"z\":1,\"a\":\"눈😀\"}","{\"a\":1.0,\"b\":-0.0,\"c\":1e-7,\"d\":1e15,\"e\":9007199254740993}","{\"𐀀\":3,\"\":4,\"escape\":\"\\t\\n\\u0001\"}","[true,null,false,1.2345678901234567,1e16,0.0001]"],
   "policies": [

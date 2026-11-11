@@ -20,12 +20,13 @@ import {
   selectRule,
   selectableText,
 } from "./policy.ts";
-import { validateSummary, summarySource } from "./summary.ts";
+import { validateSummary, summarySource, summaryWithRetry } from "./summary.ts";
 import { Store } from "./store.ts";
 export type Summarizer = (
   original: string,
   evidence: string[],
   invocation: Json,
+  feedback?: string,
 ) => Promise<unknown>;
 
 export interface HideOptions {
@@ -108,9 +109,12 @@ export class Engine {
       record.result_position,
     );
     const existing = this.store.get(scope, itemIdentity);
-    if (existing) {
+    const upgrade = existing && options.summarizer && options.allow_fallback === false && !["llm", "llm_summary"].includes(existing.compaction_source);
+    if (existing && !upgrade) {
       return this.rehideExisting(scope, record, existing, keepLines);
     }
+    if (existing && existing.invocation_digest !== record.invocation_digest)
+      return { ok: false, error: "invocation_conflict" };
     const baseline = selectRule(selectableText(record.content), keepLines, this.config);
     if (!baseline) {
       return { ok: false, error: keepLines.length && selectRule(selectableText(record.content), [], this.config)
@@ -129,11 +133,9 @@ export class Engine {
       if (options.summarizer) {
         try {
           summary =
-            (await options.summarizer(
-              summarySource(record.content),
-              requiredEvidence(record.content),
-              record.invocation,
-            )) ?? null;
+            (await summaryWithRetry(summarySource(record.content), requiredEvidence(record.content),
+              feedback => options.summarizer!(record.content, requiredEvidence(record.content), record.invocation, feedback),
+              record.invocation)) ?? null;
         } catch (error) {
           if (options.allow_fallback === false) {
             return {
@@ -164,6 +166,14 @@ export class Engine {
         evaluated.rendered,
         options,
       );
+      if (existing) {
+        const updated = { ...existing, compacted: item.compacted, excerpt_lines: item.excerpt_lines,
+          compaction_source: item.compaction_source, invocation_snapshot: item.invocation_snapshot,
+          invocation_options_omitted: item.invocation_options_omitted, visibility: "hidden" as const,
+          version: existing.version + 1 };
+        const result = this.store.put(scope, updated, existing.version);
+        return result.ok ? { ...result, plan: this.replacementPlan(updated, record) } : result;
+      }
       if (this.store.get(scope, itemIdentity)) {
         return { ok: false, error: "version_conflict" };
       }

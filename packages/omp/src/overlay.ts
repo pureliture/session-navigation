@@ -11,7 +11,7 @@ interface OverlayActions {
 
 export function registerOverlay(
   pi: ExtensionAPI,
-  { sessionId, getCandidate, rpc, summarizeText, manageChosen }: OverlayActions,
+  { sessionId, getCandidate, rpc, manageChosen }: OverlayActions,
 ): void {
   if (typeof pi.registerCommand === "function") {
     pi.registerCommand("session-navigation", {
@@ -145,40 +145,11 @@ export function registerOverlay(
               );
             };
             const summarizeSelected = async () => {
-              const snapshot = getCandidate();
               const row = rows[selected];
               if (!row) return;
               const toolCallId = row?.tool_call_id ?? row?.call_id;
-              const target = getCandidate()?.records?.find((r: any) => r?.call_id === toolCallId);
-              let summary: string | null;
-              try {
-                summary = target ? await summarizeText(ctx, target.content) : null;
-              } catch (error) {
-                notice = (error as { reason?: string })?.reason ?? "summarizer_unavailable";
-                tui?.requestRender?.();
-                return;
-              }
-              if (getCandidate() !== snapshot) {
-                notice = "unconfirmed_snapshot";
-                tui?.requestRender?.();
-                return;
-              }
-              if (!summary) {
-                notice = "summarizer_unavailable";
-                tui?.requestRender?.();
-                return;
-              }
               await finishMutation(
-                await rpc(
-                  "summarize",
-                  {
-                    tool_call_id: toolCallId,
-                    summary_text: summary,
-                    session_id: session,
-                    snapshot_id: snapshotId(),
-                  },
-                  25000,
-                ),
+                await manageChosen({ tool_call_ids: [toolCallId], action: "summarize" }, ctx),
               );
             };
             const unhideSelected = async () => {

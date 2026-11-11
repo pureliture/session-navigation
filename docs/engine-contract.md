@@ -213,6 +213,27 @@ Successful transitions increment version exactly once. Callers that omit an
 expected version still perform an optimistic CAS against their observed version.
 Unhide changes visibility, not originals, and never re-executes a tool.
 
+Explicit Summarize upgrades an existing rule/Hide replacement using the complete
+stored original. An accepted summary (`llm` or settled `llm_summary`) is cached:
+return it without a new model call. A successful upgrade replaces only the
+compaction fields and increments the captured version once. Validation failure
+returns `verification_failed` while leaving the Hide replacement and version
+unchanged. Never label a cached rule replacement as an accepted summary.
+An intervening Unhide or other mutation wins: return `version_conflict`, not a
+retry against the newer version. Model calls run outside SQLite transactions.
+
+For a returned summary that fails factual validation, make exactly one additional
+request using the same complete original and English feedback identifying the
+unsupported numeric tokens, identifiers, paths and required/critical source facts.
+Do not infer counts, convert units, or relax validation. Validate the second result
+with the same checks; a second failure returns the existing failure status. No
+retry for transport errors, unavailable models, input budget refusal, compression
+insufficiency or CAS conflicts. Record usage/cost for both returned model calls,
+including rejected responses. Generic Python summarizers receive feedback in
+`context.validation_feedback`; TS summarizers receive an optional fourth argument.
+Host adapters that validate their own responses own that single retry; the engine
+must not multiply attempts after an adapter reports its final failure.
+
 An explicit cross-surface Summarize first stores a valid rule hide with source
 `summarize_pending` and its filtered invocation snapshot. The owning adapter
 fulfils pending entries seen in its current verified request, using its existing

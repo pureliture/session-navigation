@@ -213,7 +213,7 @@ test("candidates are newest eligible first and display limits do not limit manag
   ]);
   expect((await call(adapter, "list_candidates", { snapshot_id: "one" })).items).toEqual([]);
   const skipped = await call(adapter, "manage", { snapshot_id: "one", tool_call_ids: ["r79", "short", "danger"], action: "summarize" });
-  expect((skipped.items as any[]).map((item) => item.error)).toEqual(["already_hidden", "not_long", "destructive_command"]);
+  expect((skipped.items as any[]).map((item) => item.error)).toEqual(["summarizer_unavailable", "not_long", "destructive_command"]);
   expect(
     (
       await call(adapter, "manage", {

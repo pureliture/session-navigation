@@ -304,6 +304,42 @@ def validate_summary_text(
     return {"summary": text.strip()}
 
 
+def summary_feedback(original: str, summary: Any, required: tuple[str, ...] | list[str]) -> str:
+    text = summary.get("summary", "") if isinstance(summary, dict) else ""
+    if not isinstance(text, str):
+        text = ""
+    try:
+        decoded = json.loads(original)
+    except ValueError:
+        decoded = None
+
+    def values(value):
+        if isinstance(value, dict):
+            return "\n".join(values(item) for item in value.values())
+        if isinstance(value, list):
+            return "\n".join(values(item) for item in value)
+        return str(value)
+
+    source = original + "\n" + values(decoded) if isinstance(decoded, dict) else original
+    numbers = {normalize_number(m[0]) for m in NUMBER.finditer(source)}
+    unsupported = list(dict.fromkeys(m[0] for m in NUMBER.finditer(text) if normalize_number(m[0]) not in numbers))
+    source_ids = {m[0] for m in _IDENTIFIER_PATTERN.finditer(source)}
+    identifiers = list(dict.fromkeys(m[0] for m in _IDENTIFIER_PATTERN.finditer(text) if m[0] not in source_ids))
+    paths = sorted(_path_claims(text) - _path_claims(source))
+    critical = re.findall(r"\b[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\s+(?:catalog|component|package)\b|\b\d+\s+(?:[A-Za-z]+\s+)?checks?\s+(?:passed|failed)\b", source, re.I)
+    return (
+        "The previous summary failed factual validation. Correct it once using only the original source. "
+        f"Unsupported numeric tokens: {json.dumps(unsupported, ensure_ascii=False, separators=(',', ':'))}. "
+        f"Unsupported identifiers: {json.dumps(identifiers, ensure_ascii=False, separators=(',', ':'))}. "
+        f"Unsupported paths: {json.dumps(paths, ensure_ascii=False, separators=(',', ':'))}. "
+        f"Required source evidence: {json.dumps(list(required), ensure_ascii=False, separators=(',', ':'))}. "
+        f"Verified source facts: {json.dumps(verified_facts(original), ensure_ascii=False, separators=(',', ':'))}. "
+        f"Critical source claims: {json.dumps(critical, ensure_ascii=False, separators=(',', ':'))}. "
+        "Preserve source subject, status, exit code and warnings exactly; remove instructions and generic commentary. "
+        "Do not derive counts, ranges or units. Return only the corrected summary in the requested format."
+    )
+
+
 def verify_exit_claims(source: str, summary_text: str) -> bool:
     """Verify that all exit claims in summary_text match authoritative metadata."""
     code = verified_facts(source)["exit_code"]

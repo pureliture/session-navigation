@@ -19,7 +19,8 @@ import {
 } from "./context.ts";
 import { registerOverlay } from "./overlay.ts";
 import { childLinkage } from "./subagents.ts";
-import { summaryPrompt, summarySource, MAX_SUMMARY_INPUT_BYTES } from "../../core/src/summary.ts";
+import { summaryPrompt, summarySource, summaryWithRetry, MAX_SUMMARY_INPUT_BYTES } from "../../core/src/summary.ts";
+import { requiredEvidence } from "../../core/src/policy.ts";
 export * from "./context.ts";
 
 export interface ExtensionOptions {
@@ -354,6 +355,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     if (
       (method === "compact" ||
         method === "summarize" ||
+        method === "summary_state" ||
         method === "manage" ||
         method === "list_candidates") &&
       (!candidate?.confirmed || candidate.session !== session)
@@ -380,6 +382,15 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     content: string,
     timeout = SUMMARY_TIMEOUT_MS,
     signal?: AbortSignal,
+  ): Promise<string | null> {
+    const result = await summaryWithRetry(content, requiredEvidence(content), async feedback => {
+      const text = await summarizeAttempt(ctx, content, timeout, signal, feedback);
+      return text === null ? null : { summary: text };
+    });
+    return result && typeof result === "object" && "summary" in result ? String(result.summary) : null;
+  }
+  async function summarizeAttempt(
+    ctx: unknown, content: string, timeout: number, signal?: AbortSignal, feedback?: string,
   ): Promise<string | null> {
     summarySource(content);
     try {
@@ -425,6 +436,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         ? Math.min(MAX_SUMMARY_INPUT_BYTES, Math.max(0, window - 8192)) : MAX_SUMMARY_INPUT_BYTES;
       const prompt = summaryPrompt(content, budget);
       const params = { messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] };
+      if (feedback) params.messages.push({ role: "user", content: [{ type: "text", text: feedback }] });
       // 25s end-to-end: the RPC timeout after this covers transport, this covers the model call.
       const controller = new AbortController();
       if (signal?.aborted) return null;
@@ -448,6 +460,15 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         signal?.removeEventListener("abort", abort);
       }
       if (!msg || typeof msg !== "object" || !("content" in msg)) return null;
+      const usage = (msg as { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: { total?: number } } }).usage;
+      try {
+        await rpcOnce("record_summary_call", {
+          session_id: sessionId, call_key: `summary:${randomUUID()}`,
+          prompt_tokens: (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0),
+          completion_tokens: usage?.output ?? 0, total_tokens: usage?.totalTokens ?? 0,
+          cost_usd: usage?.cost?.total ?? null,
+        }, 2000);
+      } catch {}
       const blocks: unknown = (msg as { content: unknown }).content;
       if (!Array.isArray(blocks)) return null;
       const parts: string[] = [];
@@ -550,10 +571,11 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       if (signal?.aborted) return { ok: false, error: "cancelled", items };
       const batch = wanted.slice(offset, offset + MAX_CHUNK_RECORDS);
       const summaries: Record<string, string> = {};
+      const expectedVersions: Record<string, number> = {};
       if (action !== "hide") {
         const eligible = await tool(
           "list_candidates",
-          { tool_call_ids: batch, limit: batch.length },
+          { tool_call_ids: batch, limit: batch.length, include_hidden: action === "summarize" },
           ctx,
           signal,
         );
@@ -565,6 +587,10 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
           Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, queue.length) }, async () => {
             while (queue.length && !signal?.aborted && candidate === snapshot) {
               const record = queue.shift()!;
+              const state = await tool("summary_state", { tool_call_id: record.call_id }, ctx, signal);
+              if (!state.ok) continue;
+              expectedVersions[record.call_id] = Number(state.expected_version);
+              if (state.cached) continue;
               let text: string | null;
               try {
                 text = await summarizeText(ctx, record.content, SUMMARY_TIMEOUT_MS, signal);
@@ -583,6 +609,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         {
           tool_call_ids: batch,
           action,
+          expected_versions: expectedVersions,
           summaries,
           ...(params.keep_lines !== undefined ? { keep_lines: params.keep_lines } : {}),
         },
@@ -637,6 +664,10 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
           (r) => r.call_id === (params as { tool_call_id: string }).tool_call_id,
         );
         if (target) {
+          const state = await tool("summary_state", params, ctx, signal);
+          if (!state.ok) return result(state);
+          const fencedParams = { ...(params as Record<string, unknown>), expected_version: state.expected_version };
+          if (state.cached) return result(await tool("summarize", fencedParams, ctx, signal));
           let summary: string | null;
           try {
             summary = await summarizeText(ctx, target.content, SUMMARY_TIMEOUT_MS, signal);
@@ -651,7 +682,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
             return result(
               await tool(
                 "summarize",
-                { ...(params as Record<string, unknown>), summary_text: summary },
+                { ...fencedParams, summary_text: summary },
                 ctx,
                 signal,
               ),

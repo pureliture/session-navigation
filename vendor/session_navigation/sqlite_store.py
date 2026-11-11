@@ -441,6 +441,7 @@ class SQLiteContextStore(AdapterRegistryMixin):
         scope: Any,
         item_id: str,
         digest: str | None = None,
+        *, expected_version: int | None = None,
     ) -> tuple[object | None, str | None]:
         sk = _scope_key(scope)
         with self._lock:
@@ -448,11 +449,13 @@ class SQLiteContextStore(AdapterRegistryMixin):
             # check existing item
             try:
                 row = self._conn.execute(
-                    "SELECT 1 FROM items WHERE scope_key=? AND item_id=?", (sk, item_id)
+                    "SELECT version FROM items WHERE scope_key=? AND item_id=?", (sk, item_id)
                 ).fetchone()
             except sqlite3.Error as exc:
                 raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
-            if row is not None:
+            if expected_version is not None and (row is None or row[0] != expected_version):
+                return None, "version_conflict"
+            if row is not None and expected_version is None:
                 return None, "already_exists"
             if key in self._pending:
                 return None, "in_progress"

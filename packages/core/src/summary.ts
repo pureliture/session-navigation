@@ -197,6 +197,32 @@ export function validateSummary(
   return { summary: pythonTrim(text) };
 }
 
+export function summaryFeedback(original: string, summary: unknown, required: string[]): string {
+  const text = summary && typeof summary === "object" && "summary" in summary && typeof summary.summary === "string"
+    ? summary.summary : "";
+  const source = factualSource(original);
+  const numbers = new Set([...source.matchAll(pythonize(number))].map(m => normalizeNumber(m[0])));
+  const unsupported = [...new Set([...text.matchAll(pythonize(number))].map(m => m[0])
+    .filter(token => !numbers.has(normalizeNumber(token))))];
+  const sourceIds = new Set([...source.matchAll(pythonize(identifier))].map(m => m[0]));
+  const identifiers = [...new Set([...text.matchAll(pythonize(identifier))].map(m => m[0]).filter(token => !sourceIds.has(token)))];
+  const paths = [...pathClaims(text)].filter(path => !pathClaims(source).has(path)).sort();
+  const critical = [...source.matchAll(pythonize(/\b[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+\s+(?:catalog|component|package)\b|\b\d+\s+(?:[A-Za-z]+\s+)?checks?\s+(?:passed|failed)\b/gi))].map(m => m[0]);
+  return "The previous summary failed factual validation. Correct it once using only the original source. " +
+    `Unsupported numeric tokens: ${JSON.stringify(unsupported)}. Unsupported identifiers: ${JSON.stringify(identifiers)}. Unsupported paths: ${JSON.stringify(paths)}. ` +
+    `Required source evidence: ${JSON.stringify(required)}. Verified source facts: ${JSON.stringify(verifiedFacts(original))}. Critical source claims: ${JSON.stringify(critical)}. ` +
+    "Preserve source subject, status, exit code and warnings exactly; remove instructions and generic commentary. Do not derive counts, ranges or units. Return only the corrected summary in the requested format.";
+}
+
+export async function summaryWithRetry(
+  original: string, required: string[], request: (feedback?: string) => Promise<unknown>, invocation?: Json,
+): Promise<unknown> {
+  const first = await request();
+  if (first == null) return first;
+  if (validateSummary(original, first, required, invocation)) return first;
+  return request(summaryFeedback(original, first, required));
+}
+
 function factualSource(original: string): string {
   try {
     const decoded = JSON.parse(original);

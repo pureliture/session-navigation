@@ -26,7 +26,7 @@ from session_navigation.policy import (
     verified_facts,
 )
 from session_navigation.sqlite_store import SQLiteContextStore
-from session_navigation.summary import validate_summary_text, summary_source
+from session_navigation.summary import validate_summary_text, summary_source, summary_feedback
 from session_navigation.transport import SummarizerError
 from session_navigation.pending_summary import settle_summary
 
@@ -307,6 +307,8 @@ async def vectors():
                     for vector in FIXTURES["summaries"]
                 ],
                 "summary_inputs": [summary_input_view(vector) for vector in FIXTURES["summary_inputs"]],
+                "summary_feedback": [summary_feedback(vector["source"], {"summary": vector["text"]}, ()) for vector in FIXTURES["summaries"]],
+                "summary_upgrades": await upgrade_vectors(),
                 "commands": [
                     is_destructive_command("bash", {"command": command})
                     for command in FIXTURES["commands"]
@@ -334,6 +336,41 @@ def differences(expected, actual, path="root"):
             differences(expected_value, actual_value, f"{path}[{index}]")
     else:
         assert expected == actual, f"{path}: {expected!r} != {actual!r}"
+
+
+async def upgrade_vectors():
+    out = []
+    for vector in FIXTURES["summary_upgrades"]:
+        directory = tempfile.TemporaryDirectory()
+        store = SQLiteContextStore(Path(directory.name) / "state.db")
+        engine = SessionNavigationEngine(store)
+        source = "Routine annotation details.\n" * 100 + "Count 42."
+        tool_record = record(source)
+        hidden = await engine.compact(FIXTURES["scope"], tool_record) if vector["early_hide"] else None
+        feedback = []
+
+        class Summary:
+            async def summarize(self, *args, context=None, **kwargs):
+                feedback.append((context or {}).get("validation_feedback"))
+                if vector["race"]:
+                    engine.restore(FIXTURES["scope"], hidden.item.item_id)
+                return {"summary": vector["responses"][min(len(feedback) - 1, len(vector["responses"]) - 1)]}
+
+        request = Summary()
+        result = await engine.summarize(FIXTURES["scope"], tool_record, request)
+        calls = len(feedback)
+        if result.ok:
+            await engine.summarize(FIXTURES["scope"], tool_record, request)
+        items = store.items(FIXTURES["scope"])
+        item = items[0] if items else None
+        out.append(dict(name=vector["name"], ok=result.ok, error=result.error,
+            source=item.compaction_source if item else None, version=item.version if item else None,
+            calls=calls, cached_calls=len(feedback)-calls, feedback=feedback[1] if len(feedback)>1 else None,
+            original=item is None or item.original == source,
+            restored=item is None or engine.restore(FIXTURES["scope"], item.item_id).ok))
+        store.close()
+        directory.cleanup()
+    return out
 
 
 def summary_input_view(vector):

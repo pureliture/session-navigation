@@ -86,6 +86,14 @@ export class OmpService {
         return { ok: false, error: "invalid_session" };
       }
       const scope = sessionScope(session);
+      if (method === "record_summary_call") {
+        if (typeof params.call_key !== "string" || !params.call_key || params.call_key.length > 256 ||
+          ![params.prompt_tokens, params.completion_tokens, params.total_tokens].every(value => Number.isSafeInteger(value) && Number(value) >= 0) ||
+          !(params.cost_usd === null || (typeof params.cost_usd === "number" && Number.isFinite(params.cost_usd) && params.cost_usd >= 0)))
+          return { ok: false, error: "invalid_params" };
+        this.store.recordCall(scope, params.call_key, Number(params.prompt_tokens), Number(params.completion_tokens), Number(params.total_tokens), params.cost_usd as number | null);
+        return { ok: true };
+      }
       if (method === "register") {
         this.register(scope, params);
         return { ok: true };
@@ -119,7 +127,7 @@ export class OmpService {
       if (method === "list_items") return this.listItems(scope, session, params);
       if (method === "list_candidates") return this.listCandidates(scope, session, params);
       if (method === "manage") return this.manage(scope, session, params);
-      if (method === "compact" || method === "summarize")
+      if (method === "compact" || method === "summarize" || method === "summary_state")
         return this.compact(scope, session, method, params);
       return { ok: false, error: "unknown_method" };
     } catch (error) {
@@ -331,10 +339,10 @@ export class OmpService {
       return "identity_expired";
   }
 
-  private cleanupError(scope: string, record: RecordInput): string | undefined {
+  private cleanupError(scope: string, record: RecordInput, allowHidden = false): string | undefined {
     const conflict = this.identityError(scope, record);
     if (conflict) return conflict;
-    if (this.store.get(scope, identity(scope, record))?.visibility === "hidden")
+    if (!allowHidden && this.store.get(scope, identity(scope, record))?.visibility === "hidden")
       return "already_hidden";
     if (isDestructive(record.invocation.tool_name, record.invocation.arguments))
       return "destructive_command";
@@ -391,7 +399,7 @@ export class OmpService {
       .filter(
         (record) =>
           (!Array.isArray(wanted) || wanted.includes(record.call_id)) &&
-          !this.cleanupError(scope, record),
+          !this.cleanupError(scope, record, params.include_hidden === true),
       );
     return {
       ok: true,
@@ -415,13 +423,19 @@ export class OmpService {
     summarize: boolean,
     text: unknown,
     keepLines?: unknown,
+    expectedVersion?: unknown,
   ): Promise<Result> {
+    const existing = this.store.get(scope, identity(scope, record));
+    if (expectedVersion !== undefined && expectedVersion !== (existing?.version ?? 0))
+      return { ok: false, error: "version_conflict" };
     if (!summarize)
       return this.engine.hide(
         scope,
         record,
         keepLines === undefined ? {} : { keep_lines: keepLines as Json },
       );
+    if (existing && ["llm", "llm_summary"].includes(existing.compaction_source))
+      return this.engine.summarize(scope, record, async () => { throw new Error("cached summary"); });
     if (typeof text !== "string" || !text.trim())
       return { ok: false, error: "summarizer_unavailable" };
     const validated = validateSummary(
@@ -446,8 +460,14 @@ export class OmpService {
     if (!record) return { ok: false, error: "not_found" };
     const conflict = this.identityError(scope, record);
     if (conflict) return { ok: false, error: conflict };
+    if (method === "summary_state") {
+      const error = this.cleanupError(scope, record, true);
+      if (error) return { ok: false, error };
+      const existing = this.store.get(scope, identity(scope, record));
+      return { ok: true, cached: !!existing && ["llm", "llm_summary"].includes(existing.compaction_source), expected_version: existing?.version ?? 0 };
+    }
     return mutationReply(
-      await this.apply(scope, record, method === "summarize", params.summary_text),
+      await this.apply(scope, record, method === "summarize", params.summary_text, undefined, params.expected_version),
     );
   }
 
@@ -496,7 +516,7 @@ export class OmpService {
     const items: Record<string, unknown>[] = [];
     for (const callId of new Set<string>(wanted)) {
       const record = snapshot.records.get(callId);
-      const error = record ? this.cleanupError(scope, record) : "not_found";
+      const error = record ? this.cleanupError(scope, record, action === "summarize") : "not_found";
       if (!record || error) {
         items.push({ tool_call_id: callId, ok: false, error });
         continue;
@@ -504,7 +524,9 @@ export class OmpService {
       const text = object(summaries) ? summaries[callId] : undefined;
       const summarize =
         action === "summarize" || (action === "auto" && typeof text === "string" && !!text.trim());
-      const result = await this.apply(scope, record, summarize, text, params.keep_lines);
+      const versions = params.expected_versions;
+      const result = await this.apply(scope, record, summarize, text, params.keep_lines,
+        object(versions) ? versions[callId] : undefined);
       items.push({
         tool_call_id: callId,
         ok: result.ok,

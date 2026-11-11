@@ -469,6 +469,9 @@ export class PaseoService {
     let item = this.store.get(scope, id);
     if (item && expected !== undefined && item.version !== expected)
       return this.result({ ok: false, error: "version_conflict", item });
+    if (item && mode === "summarize" && ["llm", "llm_summary"].includes(item.compaction_source))
+      return this.result(item.visibility === "hidden" ? { ok: true, item } :
+        this.store.put(scope, { ...item, visibility: "hidden", version: item.version + 1 }, item.version));
     if (!item) {
       const record = [...this.timeline(scope).records.values()].find(
         (record) =>

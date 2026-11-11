@@ -29,3 +29,17 @@ Python/Hermes and the TypeScript core/OMP/Paseo use the same source contract:
 `fixtures/core.json` supplies byte-boundary, Unicode, late-fact, grouped-number,
 malformed-number and broad-retention vectors to both Node and Bun differential
 conformance against Python.
+
+Explicit Summarize upgrades an existing Hide from its authoritative original;
+accepted LLM summaries are reused without a model call. Commit only against the
+captured version. A rejected upgrade leaves the prior Hide unchanged and returns
+an explicit failure. Unhide always restores the same original bytes.
+
+Factual validation failure permits exactly one correction request. Supply the
+whole original again with English feedback identifying unsupported numeric,
+identifier and path claims and required/critical source facts. Both requests
+count toward usage/cost even when rejected. Do not retry transport, budget,
+compression or CAS failures. The host adapter owns retries when it validates
+responses itself; otherwise the engine owns them. `summary_upgrades` fixture
+vectors cover upgrade, retry success/failure, fresh summary and a concurrent
+Unhide, including idempotent reuse and version preservation.

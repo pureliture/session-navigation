@@ -16,6 +16,7 @@ import {
   splitLines,
   validateSummary,
   summarySource,
+  summaryFeedback,
   verifiedFacts,
   isDestructive,
   type Json,
@@ -36,6 +37,7 @@ export interface TextVector {
 export interface FixtureVectors {
   linkage: { parent_scope: string; tool_call_id: string; subagent_id: string };
   scope: string;
+  summary_upgrades: { name: string; early_hide: boolean; responses: string[]; race: boolean }[];
   canonical: string[];
   policies: TextVector[];
   summaries: {
@@ -259,9 +261,38 @@ export async function runVectors(): Promise<unknown> {
       try { return { sha: sha256(summarySource(source)) }; }
       catch (error) { return { error: (error as { reason: string }).reason }; }
     }),
+    summary_feedback: fixtures.summaries.map(vector => summaryFeedback(vector.source, { summary: vector.text }, [])),
+    summary_upgrades: await upgradeVectors(),
     commands: fixtures.commands.map((command) => isDestructive("bash", { command })),
     operations,
     shared,
     pending,
   };
+}
+
+export async function upgradeVectors() {
+  const out = [];
+  for (const vector of fixtures.summary_upgrades) {
+    const store = new Store(makeDriver(":memory:")), engine = new Engine(store);
+    const source = "Routine annotation details.\n".repeat(100) + "Count 42.";
+    const input = record(source);
+    const hidden = vector.early_hide ? await engine.hide(fixtures.scope, input) : undefined;
+    const feedback: (string | undefined)[] = [];
+    const request = async (_source: string, _evidence: string[], _invocation: Json, correction?: string) => {
+      feedback.push(correction);
+      if (vector.race) engine.unhide(fixtures.scope, hidden!.item!.item_id);
+      return { summary: vector.responses[Math.min(feedback.length - 1, vector.responses.length - 1)] };
+    };
+    const result = await engine.summarize(fixtures.scope, input, request);
+    const calls = feedback.length;
+    if (result.ok) await engine.summarize(fixtures.scope, input, request);
+    const item = store.items(fixtures.scope)[0];
+    out.push({ name: vector.name, ok: result.ok, error: result.error ?? null,
+      source: item?.compaction_source ?? null, version: item?.version ?? null,
+      calls, cached_calls: feedback.length - calls, feedback: feedback[1] ?? null,
+      original: !item || item.original === source,
+      restored: !item || engine.unhide(fixtures.scope, item.item_id).ok });
+    store.close();
+  }
+  return out;
 }

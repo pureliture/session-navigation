@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from session_navigation.policy import required_evidence_lines
-from session_navigation.summary import validate_summary_text, summary_source
+from session_navigation.summary import validate_summary_text, summary_source, summary_feedback
 from session_navigation.transport import Summarizer, SummarizerError, SummarizerUnavailable
 
 
@@ -72,39 +72,42 @@ class CtxLlmSummarizer:
             },
         ]
 
-        if on_call is not None:
-            on_call()
+        if context and context.get("validation_feedback"):
+            messages.append({"role": "user", "content": context["validation_feedback"]})
+        for attempt in range(2):
+            if on_call is not None:
+                on_call()
+            try:
+                result = llm.complete(
+                    messages=list(messages), timeout=self._timeout, max_tokens=self._max_tokens,
+                    purpose="session-navigation-summarize",
+                )
+            except Exception as exc:
+                reason = getattr(exc, "reason", None) or getattr(exc, "code", None)
+                if not isinstance(reason, str) or not reason:
+                    reason = "request_failed"
+                raise SummarizerUnavailable(reason) from exc
+            self._record_usage(result, scope_key)
+            text = getattr(result, "text", None)
+            if not isinstance(text, str):
+                raise SummarizerUnavailable("missing_text")
+            try:
+                decoded = json.loads(text)
+            except (ValueError, TypeError):
+                raise SummarizerUnavailable("invalid_json") from None
+            if not isinstance(decoded, dict) or set(decoded) != {"summary"}:
+                raise SummarizerUnavailable("invalid_schema")
+            summary = validate_summary_text(original, decoded, required_evidence, invocation=invocation)
+            if summary is not None:
+                return summary
+            if attempt == 0:
+                messages.extend([
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": summary_feedback(original, decoded, required_evidence)},
+                ])
+        raise SummarizerUnavailable("verification_failed")
 
-        try:
-            result = llm.complete(
-                messages=messages,
-                timeout=self._timeout,
-                max_tokens=self._max_tokens,
-                purpose="session-navigation-summarize",
-            )
-        except Exception as exc:
-            reason = getattr(exc, "reason", None) or getattr(exc, "code", None)
-            if not isinstance(reason, str) or not reason:
-                reason = "request_failed"
-            raise SummarizerUnavailable(reason) from exc
-
-        text = getattr(result, "text", None)
-        if not isinstance(text, str):
-            raise SummarizerUnavailable("missing_text")
-
-        try:
-            decoded = json.loads(text)
-        except (ValueError, TypeError):
-            raise SummarizerUnavailable("invalid_json") from None
-        if not isinstance(decoded, dict) or set(decoded) != {"summary"}:
-            raise SummarizerUnavailable("invalid_schema")
-
-        summary = validate_summary_text(
-            original, decoded, required_evidence, invocation=invocation,
-        )
-        if summary is None:
-            raise SummarizerUnavailable("verification_failed")
-
+    def _record_usage(self, result: Any, scope_key: str | None) -> None:
         usage = getattr(result, "usage", None)
         if self._store is not None and hasattr(self._store, "record_call"):
             prompt_tokens = getattr(usage, "input_tokens", 0) if usage is not None else 0
@@ -142,5 +145,3 @@ class CtxLlmSummarizer:
                     pass
             except Exception:
                 pass
-
-        return summary

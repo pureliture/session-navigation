@@ -27,7 +27,7 @@ from session_navigation.policy import (
     normalize_keep_lines,
 )
 from session_navigation.sqlite_store import SQLiteContextStore
-from session_navigation.summary import selectable_text, validate_summary_text, summary_source
+from session_navigation.summary import selectable_text, validate_summary_text, summary_source, summary_feedback
 from session_navigation.transport import Summarizer
 
 
@@ -102,13 +102,15 @@ class SessionNavigationEngine:
 
         # 2. Re-compaction / Cache check (Re-summary exclusion)
         existing = self.store.get(scope, item_id)
-        if existing is not None:
+        upgrade = existing is not None and summarizer is not None and not allow_fallback and existing.compaction_source not in ("llm", "llm_summary")
+        if upgrade and existing.invocation_digest is not None and existing.invocation_digest != record.invocation_digest:
+            return MutationResult(ok=False, error="invocation_conflict")
+        if existing is not None and not upgrade:
             if keep_lines and any(line not in existing.compacted for line in keep_lines):
                 return MutationResult(ok=False, error="keep_lines_conflict")
             if existing.invocation_digest is not None and existing.invocation_digest != record.invocation_digest:
                 return MutationResult(ok=False, error="invocation_conflict")
             if existing.visibility != "hidden":
-                from dataclasses import replace
                 updated = replace(existing, visibility="hidden", version=existing.version + 1)
                 put_res = self.store.put(scope, updated, expected_version=existing.version)
                 if not put_res.ok:
@@ -145,7 +147,8 @@ class SessionNavigationEngine:
             return MutationResult(ok=False, error=error)
 
         # 4. Pending reservation
-        token, reserve_err = self.store.reserve(scope, item_id, record.invocation_digest)
+        token, reserve_err = self.store.reserve(scope, item_id, record.invocation_digest,
+            expected_version=existing.version if upgrade else None)
         if reserve_err is not None:
             return MutationResult(ok=False, error=reserve_err)
 
@@ -163,6 +166,11 @@ class SessionNavigationEngine:
                         required,
                         invocation=record.invocation,
                     )
+                    if validate_summary_text(record.content, summary_dict, required, invocation=record.invocation) is None:
+                        summary_dict = await summarizer.summarize(
+                            record.content, required, invocation=record.invocation,
+                            context={"validation_feedback": summary_feedback(record.content, summary_dict, required)},
+                        )
                     choice = SpanChoice(required, "llm", summary_dict)
                 except Exception as exc:
                     model_error = getattr(exc, "reason", None)
@@ -216,7 +224,13 @@ class SessionNavigationEngine:
                 invocation_options_omitted=options_omitted if choice.source == "llm" else False,
                 result_position=record.result_position,
             )
-            put_res = self.store.put(scope, item, reservation=token)
+            if upgrade:
+                item = replace(existing, compacted=rendered, excerpt_lines=choice.lines,
+                    visibility="hidden", version=existing.version + 1,
+                    compaction_source=choice.source, invocation_snapshot=copy.deepcopy(record.invocation),
+                    invocation_options_omitted=options_omitted)
+            put_res = self.store.put(scope, item, reservation=token,
+                expected_version=existing.version if upgrade else None)
             if not put_res.ok:
                 return put_res
 

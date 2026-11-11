@@ -572,6 +572,27 @@ test("scope counts are real and include zero-item registrations; absent/disabled
   ).toBe(true);
 });
 
+test("Paseo upgrades a Hide through the owning session and never requeues an accepted summary", async () => {
+  const {store,call,register}=fixture();
+  const key="hermes:default:upgrade:unknown";
+  register(key);
+  const invocation={tool_name:"read_file",arguments:{path:"sample.txt"}};
+  const source="Routine annotation details.\n".repeat(100)+"Count 42.";
+  const record={call_id:"upgrade",content:source,content_sha256:sha256(source),invocation,invocation_digest:invocationDigest(invocation),result_position:0,status:"ok"};
+  store.publishTargets(key,[{record}]);
+  expect((await call("hide",{scope_key:key,item_id:"upgrade"})).ok).toBe(true);
+  const item=store.items(key)[0];
+  expect((await call("hide",{scope_key:key,item_id:item.item_id,mode:"summarize",expected_version:item.version})).ok).toBe(true);
+  const pending=store.items(key)[0];
+  const engine=new (await import("../../packages/core/src/engine.ts")).Engine(store);
+  expect(engine.settlePending(key,pending.item_id,pending.version,"Count 42.").ok).toBe(true);
+  const accepted=store.items(key)[0];
+  expect(accepted.compaction_source).toBe("llm_summary");
+  expect((await call("hide",{scope_key:key,item_id:item.item_id,mode:"summarize"})).ok).toBe(true);
+  expect(store.items(key)[0].version).toBe(accepted.version);
+  expect(store.items(key)[0].original).toBe(source);
+});
+
 test("Hermes targets and unknown/default discovery aliases use verified identity and queue session-model summaries", async () => {
   const { store, call, register } = fixture();
   const key = "hermes:default:hermes-session:unknown";
