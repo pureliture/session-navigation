@@ -76,6 +76,13 @@ class CurrentTests(unittest.TestCase):
             selected, excluded = candidates(root)
             self.assertEqual(selected, [])
             self.assertIn("not product failure", excluded[0]["reason"])
+            spec["product_commit"] = "df47548"
+            (folder / "spec.json").write_text(json.dumps(spec))
+            with self.assertRaises(AssertionError):
+                candidates(root)
+            selected, excluded = candidates(root, product_commit="df47548")
+            self.assertEqual(selected, [])
+            self.assertIn("not product failure", excluded[0]["reason"])
     def test_schedule_only_current_cells_and_identical_turn_counts(self):
         with tempfile.TemporaryDirectory() as folder:
             jobs = schedule(Path(folder) / "fixtures")

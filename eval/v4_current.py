@@ -57,7 +57,7 @@ def run_one(base, server, host, case, rep, attempt, args):
         shutil.copytree(base / "fixtures" / case["id"], workspace)
     spec = {k: v for k, v in case.items() if k != "content"}
     spec.update(id=identity, host=host, arm="B-new", display_arm="B-current", repetition=rep,
-                repo=str(ROOT), product_commit=PRODUCT, harness_commit=args.harness_commit,
+                repo=str(ROOT), product_commit=args.product_commit, harness_commit=args.harness_commit,
                 home=str(home), workspace=str(workspace), output=str(output), model=MODEL,
                 provider="Relace", proxy=f"http://127.0.0.1:{server.server_port}", window=65536,
                 hermes_source=str(args.hermes_source))
@@ -105,7 +105,7 @@ def run_one(base, server, host, case, rep, attempt, args):
 
 def campaign(args):
     product_paths = ["src", "adapters", "vendor", "packages/core", "packages/omp", "extensions/pi", "__init__.py", "plugin.yaml"]
-    if subprocess.check_output(["git", "diff", PRODUCT, "--", *product_paths], cwd=ROOT):
+    if subprocess.check_output(["git", "diff", args.product_commit, "--", *product_paths], cwd=ROOT):
         raise ValueError("Product differs from approved commit")
     if args.output.exists():
         raise ValueError("Never overwrite an invocation; use a fresh output and shared budget")
@@ -134,13 +134,13 @@ def campaign(args):
             raise ValueError("Unknown or duplicate cell")
     budget = Budget(args.budget, "5")
     before = hashes()
-    write(args.output / "provenance.json", {"product_commit": PRODUCT, "harness_commit": args.harness_commit,
+    write(args.output / "provenance.json", {"product_commit": args.product_commit, "harness_commit": args.harness_commit,
           "started": time.time(), "stub": args.stub, "fingerprints": fingerprint(args.hermes_source, args.omp_package),
           "hermes_python": str(args.hermes_python), "python_paths": args.python_paths,
           "host_hermes_commit": subprocess.check_output(["git", "-C", str(args.hermes_source), "rev-parse", "HEAD"], text=True).strip(),
           "budget": str(args.budget), "cells": [[h, c['id'], r] for h, c, r in jobs]})
     for kind in ("long", "components"):
-        write(args.output / kind / "stage.json", {**SETTINGS, "product_commits": {"B-new": PRODUCT},
+        write(args.output / kind / "stage.json", {**SETTINGS, "product_commits": {"B-new": args.product_commit},
               "display_arms": {"B-new": "B-current"}, "repetitions": 2, "components": kind == "components"})
     manifests = []
     try:
@@ -179,6 +179,7 @@ def main():
     parser.add_argument("--python-path", action="append", dest="python_paths", default=[])
     parser.add_argument("--omp-package", type=Path, default=Path("/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent"))
     parser.add_argument("--harness-commit", required=True)
+    parser.add_argument("--product-commit", default=PRODUCT)
     parser.add_argument("--historical", type=Path)
     parser.add_argument("--cell", action="append")
     parser.add_argument("--attempt", type=int, default=1)

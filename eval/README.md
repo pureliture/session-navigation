@@ -8,7 +8,8 @@ read-only inputs, never executed. Extract the frozen evidence with `git archive
 d3e77e6^ eval/results/2026-11-09-v4-deepseek eval/results/2026-11-09-v4-quality`
 outside the repository. `--historical` points to that extracted `eval/results`.
 
-Supply `--output`, one persistent shared `--budget` JSON path, `--hermes-source`,
+Supply `--product-commit` (default `8902a41`; fixed revalidation `df47548`),
+`--output`, one persistent shared `--budget` JSON path, `--hermes-source`,
 `--hermes-python`, any provisioned dependency `--python-path`, and
 `--harness-commit`. The product tree must match the approved commit. First use
 `--stub` with a dummy `OPENROUTER_API_KEY` to exercise real hosts without network
@@ -25,6 +26,12 @@ scoring to all versions. It requires every current cell and identical prompts,
 answers and labels; original fixture hashes are retained separately. It does
 not change `v4_assemble.py` or historical evidence. Raw wires/workspaces belong
 in persistent gates directories, not this repository.
+
+Fixed revalidation uses separate output and budget paths. Pass the same
+`--product-commit df47548` to `v4_compare.py`; the default continues to validate
+the frozen pre-fix campaign. `v4_fixed_report.py --pre-fix OLD/comparison.json
+--fixed NEW/comparison.json --output TABLES.md` joins the four columns without
+executing or relabeling the frozen cells. Archival `v4_assemble.py` stays unchanged.
 
 ## 현재 실행기와 과거 캠페인
 

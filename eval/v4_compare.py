@@ -16,7 +16,7 @@ from v2_cache import transitions
 from v4_current import SETTINGS, PRODUCT, write
 
 
-def candidates(source, historical=False, components=False):
+def candidates(source, historical=False, components=False, product_commit=PRODUCT):
     wire = read_wire(source)
     failures = {r["path"].split("/")[1] for r in wire if r["kind"] == "failure"}
     responses = {r["id"]: r for r in wire if r["kind"] == "response"}
@@ -27,7 +27,7 @@ def candidates(source, historical=False, components=False):
             continue
         if historical and components and spec["arm"] == "A":
             continue
-        expected = "37348b8" if historical and spec["arm"] != "A" else PRODUCT
+        expected = "37348b8" if historical and spec["arm"] != "A" else product_commit
         assert historical and spec["arm"] == "A" or spec["product_commit"].startswith(expected)
         assert spec["model"] == SETTINGS["model"] and spec["provider"] == "Relace" and spec["window"] == 65536
         folder = path.parent
@@ -52,13 +52,13 @@ def candidates(source, historical=False, components=False):
     return selected, excluded
 
 
-def assemble(destination, sources, historical=False, components=False):
+def assemble(destination, sources, historical=False, components=False, product_commit=PRODUCT):
     destination.mkdir()
     all_selected, excluded, cells, fixture_settings, fixture_hashes = [], [], set(), {}, {}
     for source in sources:
         stage = read(source / "stage.json")
         assert all(stage[k] == SETTINGS[k] for k in SETTINGS)
-        selected, rejected = candidates(source, historical, components)
+        selected, rejected = candidates(source, historical, components, product_commit)
         excluded += rejected
         for folder, spec in selected:
             case = spec["component"] if components else next(c for c in ("atlas", "boreal") if f"-{c}-" in spec["id"])
@@ -257,13 +257,13 @@ def ratio(numerator, denominator):
     return numerator / denominator if numerator is not None and denominator not in (None, 0) else None
 
 
-def compare(output, historical, currents):
+def compare(output, historical, currents, product_commit=PRODUCT):
     output.mkdir()
     selection = {}
     for kind in ("long", "components"):
         old = historical / ("2026-11-09-v4-deepseek" if kind == "long" else "2026-11-09-v4-quality")
         selection["historical-" + kind] = assemble(output / ("historical-" + kind), [old], True, kind == "components")
-        selection["current-" + kind] = assemble(output / ("current-" + kind), [p / kind for p in currents], False, kind == "components")
+        selection["current-" + kind] = assemble(output / ("current-" + kind), [p / kind for p in currents], False, kind == "components", product_commit)
         assert selection["historical-" + kind]["fixtures"] == selection["current-" + kind]["fixtures"], "Fixture drift"
         cases = ("hide", "summarize") if kind == "components" else ("atlas", "boreal")
         expected = set(itertools.product(("omp", "hermes"), ("B-new",), cases, (1, 2)))
@@ -296,10 +296,11 @@ if __name__ == "__main__":
     parser.add_argument("--historical", type=Path)
     parser.add_argument("--current", type=Path, action="append")
     parser.add_argument("--refresh", action="store_true", help="Recompute tables on assembled inputs, e.g. after judging")
+    parser.add_argument("--product-commit", default=PRODUCT)
     args = parser.parse_args()
     if args.refresh:
         refresh(args.output)
     elif args.historical and args.current:
-        compare(args.output, args.historical, args.current)
+        compare(args.output, args.historical, args.current, args.product_commit)
     else:
         parser.error("Supply frozen/current inputs, or --refresh for an assembled comparison")
