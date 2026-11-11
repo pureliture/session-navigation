@@ -611,6 +611,66 @@ all additional experiments were deterministic, local and network-free. No old OM
 daemon was restored or run. Old Python engine/validator modules were extracted
 solely for in-process counterfactuals.
 
+### RCA repairs — fixed in `164655f`
+
+The verified product/prompt-control defects below are **fixed in `164655f`**
+(`164655f2218523f19c737ada7cf09d34595ca819`). The historical campaign tables and
+wire-derived diagnoses remain unchanged: these are deterministic repair replays,
+not replacement campaign cells or newly measured stochastic retention rates.
+
+| Finding | Repair and replay result |
+| --- | --- |
+| 12,000-character summary prefix | Python/Hermes and TS core/OMP/Paseo now use a whole-source contract: send every byte up to 32,768 UTF-8 bytes; refuse larger sources with `input_too_large` before any LLM call. OMP also lowers the limit for known small model windows. All five captured old/current summary-prefix cases now include the complete 21,697-byte source, including `latency_budget_ms=151` after offset 15,601. Explicit Summarize never silently falls back. |
+| Grouped-number retry | The captured retry is accepted in both languages. Only valid thousands-comma spelling is normalized; paths, identifiers, units, exit claims, warnings and injection checks remain strict. Keep-lines resolves back to the exact source spelling. Originals remain unchanged. |
+| Broad `minute` keep-lines | All three captured requests now return the specific `keep_lines_too_broad` error in both languages, not generic `verification_failed`. They are **not successful hides**: the requested matching rows exceed the existing safe excerpt budget. The fix preserves those caps and refuses explicitly rather than silently discarding requested rows. |
+| Misleading filtered listing | OMP constructs its recorded-call set from the full stored listing before applying the display query. The captured query no longer invents an unrecorded/unhidden row. Python/Hermes did not have this snapshot-merge defect; engine and actual adapter regression tests pin their already-correct filtered behavior. |
+| Tool-order parity | Registration and actual local SDK request tests pin list, manage, hide, summarize, unhide, matching captured `37348b8` exposure. This is distinct from the old source registration sequence. |
+| Hermes toolchain prompt | The evaluator uses its terminal interpreter on `PATH`, warms the host probe and verifies the resulting line in the stock prompt before generation. An offline real-Hermes prompt check reproduced the exact historical Python 3.12.15/no-pip line; Hermes's isolated 3.14.9 engine was unchanged. Missing probe/prompt text now fails closed. No machine fact is hard-coded into the plugin prompt. |
+
+The repeated model-facing audit against **both `37348b8` and `origin/main`** is in
+`docs/model-facing-text-audit.md`. It explicitly corrects the previous audit's
+missed exposure-order and environment-line differences. Names, labels, schema
+tokens, guidance, reminder header and Hermes supervision text match, apart from
+the intended `270353f` manage-description difference against `37348b8` and the
+documented new summary/error semantics. Native compression and stochastic output
+or adoption variation have not been changed or claimed eliminated.
+
+Checks (builds/typechecks exited 0; complete logs are under external
+`step8-eval/rca/fix-*.log`):
+
+```text
+375 passed, 11 skipped in 31.38s                         # Python
+core Node: tests 23; pass 23; fail 0                    # plus typecheck
+core Bun: 23 pass; 0 fail
+OMP: 57 pass; 0 fail; 580 expect() calls               # plus build/typecheck
+Paseo: 131 pass; 0 fail; 562 expect() calls            # plus build/typecheck
+Paseo Node worker: tests 8; pass 8; fail 0              # regenerated worker-source
+PASS differential Python vs TS+node: canonical, policy, summaries, mutations, replacements and final rows
+PASS cross-writer Python -> TS+node -> Python and reverse
+PASS differential Python vs TS+bun: canonical, policy, summaries, mutations, replacements and final rows
+PASS cross-writer Python -> TS+bun -> Python and reverse
+Ran 54 tests in 40.139s; OK                            # eval offline suite
+Ran 3 tests in 1.404s; OK                              # final SDK-order/probe regressions
+PASS Python engine and Hermes source/vendor parity
+PASS candidate files contain no provisioned API-key value
+PASS git diff --check
+```
+
+The first Python run exposed a test-only empty-tuple/list assertion mismatch;
+the core typecheck exposed an optional assertion-message type mismatch. Both new
+tests were corrected and their checks passed. The bare repository Python lacked
+the optional eval `tiktoken` dependency; the documented
+`uv run --no-sync --with tiktoken` environment completed the offline suite. No
+shared Hermes environment or dependencies were modified.
+
+Replays are reproducible with `tools/replay_rca_fixes.py` and
+`tools/replay_rca_fixes.ts` over the external RCA directory; see `eval/README.md`.
+Contract/fixtures and four-way differential/persistence conformance cover UTF-8
+boundaries, empty source, late facts, grouped/invalid numbers, strict nonnumeric
+claims and broad retention. **New spend: $0.00.** The optional paid summary was
+not used, so actual post-fix LLM fact retention and full-campaign resource ratios
+have not been remeasured. Markdown/UI was not visually rendered.
+
 ### Evidence and limits of causal identification
 
 Historical wire/stage files were checked against **12 original git blobs at
