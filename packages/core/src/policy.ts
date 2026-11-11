@@ -333,7 +333,7 @@ export function isDestructive(tool: unknown, args: unknown): boolean {
   const wrapperOptionsWithArguments: {
     [key: string]: string[];
   } = {
-    [["su", "do"].join("")]: [
+    sudo: [
       "-u",
       "--user",
       "-g",
