@@ -40,14 +40,14 @@ test("packed OMP package projects original, hidden and restored outgoing request
     return stdout;
   }
   await command([process.execPath, "pm", "pack", "--destination", dir], packageDirectory);
-  const tarball = join(dir, "session-navigation-omp-0.1.0.tgz");
+  const tarball = join(dir, "pureliture-session-navigation-omp-0.1.0.tgz");
   expect(existsSync(tarball)).toBe(true);
   await command([process.execPath, "add", "--ignore-scripts", tarball], pluginsDirectory);
-  const installed = join(pluginsDirectory, "node_modules/@session-navigation/omp");
+  const installed = join(pluginsDirectory, "node_modules/@pureliture/session-navigation-omp");
   expect(existsSync(join(installed, "dist/worker.js"))).toBe(true);
   expect(existsSync(join(installed, "src"))).toBe(false);
   const registered = await command([omp!, "plugin", "list", "--json"], dir);
-  expect(registered).toContain("@session-navigation/omp");
+  expect(registered).toContain("@pureliture/session-navigation-omp");
   const requests: any[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",

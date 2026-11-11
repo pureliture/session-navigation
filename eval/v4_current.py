@@ -73,8 +73,8 @@ def run_one(base, server, host, case, rep, attempt, args):
         plugin = home / "plugins/session-navigation"
         plugin.mkdir(parents=True)
         for name in ("__init__.py", "plugin.yaml"):
-            shutil.copyfile(ROOT / name, plugin / name)
-        shutil.copytree(ROOT / "vendor", plugin / "vendor", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copyfile(ROOT / "hermes-plugin" / name, plugin / name)
+        shutil.copytree(ROOT / "hermes-plugin/vendor", plugin / "vendor", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         (home / "config.yaml").write_text("plugins:\n  enabled: [session-navigation]\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n")
     command = (["bun", str(ROOT / "eval/v2_omp.ts")] if host == "omp" else
                [str(args.hermes_python), str(ROOT / "eval/v2_hermes.py")]) + [str(output / "spec.json")]
@@ -104,7 +104,7 @@ def run_one(base, server, host, case, rep, attempt, args):
 
 
 def campaign(args):
-    product_paths = ["src", "adapters", "vendor", "packages/core", "packages/omp", "extensions/pi", "__init__.py", "plugin.yaml"]
+    product_paths = ["src", "adapters", "hermes-plugin", "packages/core", "packages/omp", "extensions/pi"]
     if subprocess.check_output(["git", "diff", args.product_commit, "--", *product_paths], cwd=ROOT):
         raise ValueError("Product differs from approved commit")
     if args.output.exists():

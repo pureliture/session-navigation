@@ -29,6 +29,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+PLUGIN = REPO / "hermes-plugin"
 PLUGIN_ID = "session-navigation"
 SESSION = "probe-human-supervision"
 
@@ -55,10 +56,10 @@ def main() -> int:
     home = Path(tempfile.mkdtemp(prefix="hermes-supervision-probe-"))
     plugin_dir = home / "plugins" / PLUGIN_ID
     plugin_dir.mkdir(parents=True)
-    for item in REPO.iterdir():
+    for item in PLUGIN.iterdir():
         if item.name in ("__init__.py", "plugin.yaml"):
             shutil.copy2(item, plugin_dir / item.name)
-    shutil.copytree(REPO / "vendor", plugin_dir / "vendor")
+    shutil.copytree(PLUGIN / "vendor", plugin_dir / "vendor")
     (home / "config.yaml").write_text(
         "plugins:\n"
         "  enabled: [session-navigation]\n"

@@ -94,11 +94,27 @@ instead of installing standalone CLI executables.
 
 ### Paseo plugin
 
-The SDK and runtime were tested with **Paseo 0.15.3**. The manifest accepts `>=0.15.0`, but earlier 0.15.x versions have not been separately tested. The daemon must run **Node >=22.13**. An embedded Node worker ships the core and SQLite driver; no Python package or unpublished workspace dependency is needed.
+The SDK and runtime were tested with **Paseo 0.15.3**. The manifest requires `>=0.15.3`; other host versions have not been separately verified. The daemon must run **Node >=22.13**. An embedded Node worker ships the core and SQLite driver; no Python package or unpublished workspace dependency is needed.
 
 Install only the Paseo plugin on the daemon host; do not install a Python CLI.
 Display works without a host adapter. Hide/Summarize require the OMP extension
-or Hermes plugin in the session host. Install from a source checkout:
+or Hermes plugin in the session host. Set top-level `pluginsEnabled: true` in the
+Paseo daemon configuration and restart the daemon before installing.
+
+After npm publication and registry approval, use the reviewed listing:
+
+```bash
+paseo plugin add pureliture/session-navigation
+```
+
+Until registry approval, install the published npm version directly:
+
+```bash
+paseo plugin add npm:@pureliture/session-navigation-paseo@0.1.0
+```
+
+These are release channels, not a claim that publication/approval has happened.
+Before npm publication, use the Git command below or a source checkout:
 
 ```bash
 paseo plugin add "$PWD/paseo-plugin"
@@ -115,7 +131,14 @@ Choose **+ → Session navigation** in Explorer to follow the visible chat sessi
 
 ### OMP (oh-my-pi) extension
 
-Tested with `@oh-my-pi/pi-coding-agent` **18.18.3**. Build the npm-style extension, then install its directory through OMP:
+Tested with `@oh-my-pi/pi-coding-agent` **18.18.3** and **Bun 1.4.4**.
+Requires Bun **>=1.4.4**, the oldest verified Bun runtime. After npm publication:
+
+```bash
+omp plugin install @pureliture/session-navigation-omp@0.1.0
+```
+
+Before publication or for development, build and install the checkout:
 
 ```bash
 (cd packages/omp && bun install)
@@ -130,11 +153,10 @@ omp --extension "$PWD/packages/omp"
 ```
 
 For a packed local archive, run `bun pm pack` in `packages/omp`, then
-`bun add /absolute/path/to/session-navigation-omp-0.1.0.tgz` in `~/.omp/plugins` (create
+`bun add /absolute/path/to/pureliture-session-navigation-omp-0.1.0.tgz` in `~/.omp/plugins` (create
 that directory first). Restart OMP and check `omp plugin list`. OMP 18.18.3
-does **not** accept local tarballs via `omp plugin install`. A future registry
-release can use `omp plugin install @session-navigation/omp@<version>`; the
-package is not currently published.
+does **not** accept local tarballs via `omp plugin install`. No npm publication
+is claimed by these preparation instructions.
 
 Before migrating, remove/disable the old manually copied
 `~/.omp/agent/extensions/session-navigation.ts` in every affected profile; an
@@ -146,19 +168,29 @@ See [OMP packaging and migration](packages/omp/README.md) for packed-archive ins
 
 ### Hermes plugin
 
-Live ACP verification used Hermes source commit `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8` (earlier plugin tests used `109fd8161a509db5a00942152ba48882e446e8b0`). The repository-root `plugin.yaml`, `__init__.py`, and `vendor/` form a standalone Python plugin. Hermes requires Python through its own managed runtime; Paseo and OMP do not. No shared CLI installation is needed.
+Requires **Hermes >=0.20.1** (API-availability floor; live verification used the
+newer source below). After catalog approval:
 
 ```bash
-hermes plugins install pureliture/session-navigation --ref main --no-enable
+hermes plugins install session-navigation
+```
+
+Until approval, install the public Git repository as below. The catalog and Git
+routes both use `hermes-plugin/`, not the repository root or the Python wheel.
+
+Live ACP verification used Hermes source commit `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8` (earlier plugin tests used `109fd8161a509db5a00942152ba48882e446e8b0`). The `hermes-plugin/` directory contains the standalone manifest, loader, MIT LICENSE and vendored Python engine/adapter. Hermes requires Python through its own managed runtime; Paseo and OMP do not. No shared CLI installation is needed.
+
+```bash
+hermes plugins install pureliture/session-navigation/hermes-plugin --ref main --no-enable
 hermes plugins enable session-navigation
 hermes config set plugins.entries.session-navigation.settings.enabled true
 ```
 
 Install and enable it in the intended Hermes profile. For a pinned installation, replace `--ref main` with a reviewed **40-character commit SHA**. Host-level plugin activation and the plugin's `settings.enabled` are separate. The latter defaults to `false`: until enabled, tools return `disabled` and do not record or modify requests. Start a new session after configuration. If a gateway is running, follow the host's restart instructions.
 
-`vendor/` contains the engine and adapter's Python source. With `python_runtime: external`, the repository's `pyproject.toml` is not installed into Hermes's shared environment. Installing a Python wheel alone does not register the Hermes plugin.
+`hermes-plugin/vendor/` contains the engine and adapter's runtime copies. With `python_runtime: external`, the repository's `pyproject.toml` is not installed into Hermes's shared environment. Installing a Python wheel alone does not register the Hermes plugin.
 
-After updating, restart any running **Hermes gateway completely**, as well as reopening the CLI. Plugin reload does not clear Python's global `session_navigation` / `session_navigation_hermes` module cache. If the fingerprint of already loaded engine or adapter source differs from the deployed vendor copy, the plugin refuses to load and asks for a restart. Other versions installed in the shared environment are subject to the same check; the plugin does not forcibly replace those modules. Official catalog validation has not yet passed; see [distribution](#hermes-repository-root-to-the-sha-pinned-official-catalog).
+After updating, restart any running **Hermes gateway completely**, as well as reopening the CLI. Plugin reload does not clear Python's global `session_navigation` / `session_navigation_hermes` module cache. If the fingerprint of already loaded engine or adapter source differs from the deployed vendor copy, the plugin refuses to load and asks for a restart. Other versions installed in the shared environment are subject to the same check; the plugin does not forcibly replace those modules. Subdirectory admission validation passes, but catalog approval is still pending; see [distribution](#distribution-and-publication). For an older root installation, preserve state and reinstall from the subdirectory as described in [the Hermes guide](docs/hermes-plugin.md).
 
 ### Upgrade / migration
 
@@ -206,6 +238,7 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 - A nonempty list of IDs is required, with no count limit. This is not a tool for summarizing an entire session at once.
 - The candidate list is a discovery tool that shows visible eligible results newest first. Eligible IDs outside the list can also be selected.
 - `hide` is rule-based, `summarize` uses the current session model, and `auto` prefers model summarization with a rule-based fallback. OMP runs at most four model calls concurrently and first excludes hidden or ineligible results.
+- Explicit Summarize upgrades an existing rule Hide replacement to an accepted LLM summary. An accepted LLM summary is idempotent. A failed upgrade returns an explicit error and keeps the existing Hide replacement; it is not silently reported as a successful summary. Factual validation retries once with English feedback, counts both calls, and keeps CAS/version fences.
 - OMP manages `read` / `bash` results; Hermes manages permitted `terminal` / `read_file` / `search_files` results. Destructive commands are excluded from automatic management. Without a session model, summarization fails with `summarizer_unavailable`.
 
 ## Data and safety
@@ -243,7 +276,7 @@ See [backend evidence](docs/subagent-backend-verification.md).
 | `extensions/pi/session-navigation.ts` | Thin legacy development shim |
 | `paseo-plugin/` | Paseo client panel, capability-gated server RPC and embedded Node worker |
 | `adapters/hermes/` | Hermes tools, middleware, `/nav`, and usage footer |
-| `plugin.yaml`, `__init__.py`, `vendor/` | Hermes-loadable distribution root and pinned source copies |
+| `hermes-plugin/` | Hermes-only distribution: manifest, loader, LICENSE and vendored Python packages |
 
 ## Development and testing
 
@@ -260,41 +293,50 @@ bun test
 
 Check Python distributions with `uv build` from the root and Paseo package contents with `npm pack --dry-run --ignore-scripts` in `paseo-plugin/`. After changing the core or Paseo worker/service, run `npm run build` in `paseo-plugin/` and commit the generated embedded worker before release.
 
-Update the Hermes `vendor/` copies with their sources: check Python source parity between `src/session_navigation/` and `vendor/session_navigation/`, and between `adapters/hermes/` and `vendor/session_navigation_hermes/`. The Python package builds as wheel/sdist, but PyPI publication is not automated.
+Canonical Python sources stay in `src/session_navigation/` and `adapters/hermes/`.
+Run `uv run python tools/sync_hermes_vendor.py` to synchronize both into
+`hermes-plugin/vendor/`; `uv run python tools/sync_hermes_vendor.py --check`
+is the single read-only parity check also used by the Python suite. The Python package builds as wheel/sdist, but PyPI publication is not automated.
 
 ## Distribution and publication
 
-These are **publisher procedures**, not a claim that the project is already listed. Release a merged commit or tag rather than a disposable task branch. The repository currently has no GitHub Actions workflow for automated tests or releases.
+Version **0.1.0** is prepared for these canonical channels; this is not a claim
+that packages are published or catalog entries approved. Release only a reviewed,
+merged commit. There is no automated GitHub Actions publishing workflow.
 
-### Paseo: Git folder or npm to the reviewed registry
+| Host | Release channel | Installation after publication/approval |
+| --- | --- | --- |
+| OMP | Public npm `@pureliture/session-navigation-omp@0.1.0` | `omp plugin install @pureliture/session-navigation-omp@0.1.0` |
+| Paseo | Public npm `@pureliture/session-navigation-paseo@0.1.0`, then reviewed registry slug `pureliture/session-navigation` | `paseo plugin add pureliture/session-navigation` |
+| Hermes | Official plugin catalog, `subdir: hermes-plugin` at a full 40-character SHA | `hermes plugins install session-navigation` |
 
-1. The recommended initial artifact is the public GitHub repository's `paseo-plugin/` folder. It contains the manifest, TS entry points, imported sources, and icon. Verify a clean Git installation at the commit being released; direct installation of `152f63c` fails with a type dependency error.
-2. The manifest currently has `media: []` and the plugin folder contains only an icon. Supply an **actual UI screenshot** inside the package or a public PNG/JPG URL in the submission or review PR. Existing screenshots are in [docs/media](docs/media/).
-3. For npm, remove `private: true` from `paseo-plugin/package.json`, choose a package name/scope you can publish, set a release version and GitHub `repository`, and include the MIT LICENSE. The current dry run does not include LICENSE.
-4. Run type checking, tests, and `npm pack --dry-run --ignore-scripts`; only for the npm route, run `npm publish --access public`. Verify the published version on a test daemon. Host-provided libraries remain devDependencies; new runtime dependencies must satisfy the official lock/shrinkwrap requirements.
-5. Submit the GitHub folder URL and reviewed commit, or npm package and version, through the [official submission form](https://github.com/getpaseo/plugins/issues/new?template=submit-plugin.yml). After review and approval, users can install with `paseo plugin add owner/slug`.
+Both npm packages bundle their worker/core and include MIT LICENSE. The core
+workspace package stays private. Paseo's runtime plugin ID remains `paseo-plugin`
+to preserve installed state; it is distinct from the npm name and registry slug.
+Paseo's host libraries stay in devDependencies; adding runtime dependencies would
+require a publishable locked dependency tree under its publishing policy.
 
-See the [Paseo publishing guide](https://paseo.sh/docs/plugins/publishing) and [review policy](https://github.com/getpaseo/plugins/blob/main/REVIEW.md). The English listing uses [OVERVIEW.md](paseo-plugin/OVERVIEW.md).
+Hermes now declares all five tools, both observer hooks and both middleware
+registrations, with `requires_hermes: ">=0.20.1"`. Admission validation with
+dependency preparation passes against the committed `hermes-plugin/` distribution;
+the intentionally retained runtime private-import warnings still need maintainer review.
+The repository root is no longer a plugin installation unit. Its fixture corpus
+still produces dangerous scanner findings; no strings were concealed or scanner
+rules bypassed to obtain the subdirectory result. A passing validator does not guarantee catalog admission.
 
-### OMP: npm-style package
+See [the release checklist](docs/release/checklist.md),
+[Paseo submission draft](docs/release/paseo-submission.md),
+[Hermes catalog entry](docs/release/hermes-catalog.yaml),
+[Hermes review disclosure](docs/release/hermes-pr-body.md), and
+[Hermes installation details](docs/hermes-plugin.md).
+Paseo requires a current UI image for listing review; the submission draft links
+existing repository screenshots for the reviewer to check.
 
-1. Build and pack `packages/omp` with `bun pm pack`. The archive bundles the core and worker, declares `omp.extensions: ["./index.ts"]`, and is tested in an isolated OMP home against a local stub provider.
-2. The package is not yet published. After review, a publisher can publish the built archive; users can then use `omp plugin install @session-navigation/omp@<version>`. Python is not an OMP runtime prerequisite.
-3. An OMP marketplace is a Git catalog containing `.omp-plugin/marketplace.json` or `.claude-plugin/marketplace.json`. Add an entry pointing to the plugin folder; users add it with `omp plugin marketplace add <catalog-source>` and install with `omp plugin install <name>@<marketplace>`. This repository does not yet contain a catalog. npm sources in marketplace entries are not currently supported; use Git or relative paths.
-4. npm plugin installation and Git marketplace installation are separate routes. No mandatory review process for a single central OMP marketplace was identified in the official documentation. Verify API compatibility before distributing for upstream pi.
-5. A separately verified upstream pi package can declare `pi.extensions` and `keywords: ["pi-package"]` and be published on npm. The keyword makes it eligible for the official [Pi package gallery](https://pi.dev/packages); users install with `pi install npm:<package-name>@<version>`. The current OMP extension has not been established as compatible or packaged for that route.
-
-Official references: [extension authoring and manifest](https://github.com/can1357/oh-my-pi/blob/main/docs/skills/authoring-extensions.md), [plugin installation](https://github.com/can1357/oh-my-pi/blob/main/docs/plugin-manager-installer-plumbing.md), [marketplace format](https://github.com/can1357/oh-my-pi/blob/main/docs/marketplace.md), and the separate upstream [pi package documentation](https://pi.dev/docs/latest/packages). The latter does not guarantee OMP compatibility.
-
-### Hermes: repository root to the SHA-pinned official catalog
-
-1. The public repository root is the distribution unit. This is not an npm package or Python wheel uploaded to the Hermes registry.
-2. **Current catalog blocker:** `plugin.yaml` omits `provides_hooks: [post_api_request]` and `provides_middleware: [llm_request]`, although the plugin registers them, so `hermes plugins validate .` fails. The manifest has not yet been corrected; private core import warnings also require review.
-3. Correct the declarations and supported-version information, then pass the official validation at the release commit: `hermes plugins validate /path/to/session-navigation --install-deps`. The prior check used basic validation without installing dependencies.
-4. Open a PR adding `plugin-catalog/session-navigation.yaml` to `NousResearch/hermes-agent`. Declare the public repository URL, **40-character SHA**, description, maintainer, and actual tool/hook/middleware capabilities. If declaring `requires_hermes`, match the manifest to a verified SemVer range.
-5. After catalog CI and maintainer review and merge, install with `hermes plugins install session-navigation`. Updates require a PR pinning the new SHA and `hermes plugins update session-navigation`.
-
-Official references: [catalog policy and entry schema](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/README.md), [submission process](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/catalog-submission.md), and [plugin API and dependencies](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/plugins/index.md).
+Official policies: [Paseo publishing](https://paseo.sh/docs/plugins/publishing),
+[Paseo review](https://github.com/getpaseo/plugins/blob/main/REVIEW.md),
+[OMP installation](https://github.com/can1357/oh-my-pi/blob/main/docs/plugin-manager-installer-plumbing.md),
+[Hermes catalog](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/README.md).
+Upstream pi is a different host and is not a verified release target.
 
 ## Evaluation
 

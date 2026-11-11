@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from _adapter_loader import hermes_adapter
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.model import (
     Scope,
@@ -44,7 +45,7 @@ def test_list_1000_under_1s(tmp_path):
 
 
 def test_summarize_timeout_is_25s(tmp_path):
-    from adapters.hermes.llm import CtxLlmSummarizer
+    CtxLlmSummarizer = hermes_adapter().llm.CtxLlmSummarizer
 
     import inspect
 

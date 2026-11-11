@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+PLUGIN = REPO / "hermes-plugin"
 PLUGIN_FILES = ("__init__.py", "plugin.yaml")
 PLUGIN_ID = "session-navigation"
 
@@ -32,12 +33,12 @@ def main() -> int:
     plugin_dir = home / "plugins" / PLUGIN_ID
     plugin_dir.mkdir(parents=True)
     for name in PLUGIN_FILES:
-        source = REPO / name
+        source = PLUGIN / name
         if not source.is_file():
             print(f"MISSING CANDIDATE FILE: {source}")
             return 2
         (plugin_dir / name).write_bytes(source.read_bytes())
-    vendor = REPO / "vendor"
+    vendor = PLUGIN / "vendor"
     if not vendor.is_dir():
         print(f"MISSING CANDIDATE DIR: {vendor}")
         return 2

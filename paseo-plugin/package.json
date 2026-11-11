@@ -1,8 +1,7 @@
 {
-  "name": "paseo-plugin",
-  "private": true,
+  "name": "@pureliture/session-navigation-paseo",
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "engines": {
     "node": ">=22.13"
   },
@@ -17,7 +16,10 @@
     "assets/",
     "client/",
     "server/",
-    "shared/"
+    "shared/",
+    "LICENSE",
+    "!**/*.test.ts",
+    "!**/*.node.ts"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -33,5 +35,19 @@
     "react-native": "0.81.5",
     "typescript": "^5.9.3",
     "zod": "^4.4.3"
+  },
+  "description": "Browse, hide, summarize and restore session context from Paseo Explorer.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pureliture/session-navigation.git",
+    "directory": "paseo-plugin"
+  },
+  "homepage": "https://github.com/pureliture/session-navigation#readme",
+  "bugs": {
+    "url": "https://github.com/pureliture/session-navigation/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

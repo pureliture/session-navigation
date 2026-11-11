@@ -314,6 +314,6 @@ def test_rules_mode_default_does_not_create_local_transport(monkeypatch):
 
 
 def test_manifest_has_no_local_summarizer_settings():
-    manifest = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text()
+    manifest = (Path(__file__).resolve().parents[1] / "hermes-plugin" / "plugin.yaml").read_text()
     for removed in ("summary_mode", "base_url", "model:", "timeout_seconds", "max_input_bytes", "max_output_tokens"):
         assert removed not in manifest

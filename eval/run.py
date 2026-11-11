@@ -80,8 +80,8 @@ def main():
                                 plugin = plugins / "session-navigation"
                                 plugin.mkdir()
                                 for name in ["__init__.py", "plugin.yaml"]:
-                                    shutil.copyfile(ROOT / name, plugin / name)
-                                shutil.copytree(ROOT / "vendor", plugin / "vendor", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                                    shutil.copyfile(ROOT / "hermes-plugin" / name, plugin / name)
+                                shutil.copytree(ROOT / "hermes-plugin/vendor", plugin / "vendor", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
                             (home / "config.yaml").write_text("plugins:\n  enabled: " + ("[session-navigation]" if arm == "B" else "[]") + "\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n")
                         command = ["bun", str(ROOT / "eval/omp.ts"), str(output.resolve() / "spec.json")] if host == "omp" else [hermes_python, str(ROOT / "eval/hermes.py"), str(output.resolve() / "spec.json")]
                         print("START", identity, flush=True)
