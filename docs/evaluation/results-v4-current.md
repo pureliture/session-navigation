@@ -2,6 +2,10 @@
 
 Date: 2026-11-10. **B-current only was executed.** Historical A/B-old were never rerun.
 
+**Latest:** [fixed-product live revalidation](#fixed-product-live-revalidation-df47548)
+adds `df47548` as a fourth column. Earlier campaign/RCA sections remain historical;
+the fixed run has its own evidence, ledger and acceptance limitations.
+
 ## Decision
 
 - **Task correctness: no observed regression.** Both hosts remain 4/4 on final-only, visible-unit, canonical tests, announced recall and surprise recovery.
@@ -1288,3 +1292,660 @@ host, fixture, harness or test file was edited, and no new model call was made.
 The requested unique historical counterfactual for every model-choice difference
 is not obtainable from these records; that limitation is explicit rather than
 turning plausible causes into confirmed findings.
+
+## Fixed-product live revalidation (`df47548`)
+
+### Provenance, scope and verdict
+
+- Product **`df475484de0123746d2357c5e3893773c68fd982`**; collection/comparison
+  harness **`7504c7d538757d6367df88bff0d6c4a36c2c6858`**. No product changes were
+  made during this campaign. The controller and current-only assembler now accept
+  an explicit product commit, defaulting to the frozen pre-fix `8902a41`; their
+  product guards remain enforced. Archival `v4_assemble.py` is unchanged.
+- Exactly **8 fixed long sessions** (OMP/Hermes × Atlas/Boreal × two repetitions),
+  **8 fixed commanded trials**, and **8 distinct replacement judges**. No A,
+  `37348b8` or pre-fix `8902a41` cells or judges were rerun. Their original selected
+  results and precomputed comparison are read-only inputs.
+- The same DeepSeek V4.1 Flash 1017 model, **Relace only**, no fallback, reasoning
+  off, 65,536-token window, fixtures, turns and host limits were used. All seven
+  recorded host source/package fingerprints match pre-fix: OMP **18.18.3**,
+  Hermes `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8`, and the same isolated
+  **Python 3.14.9** interpreter/dependency directory. The approved prompt-parity
+  fix intentionally restores the terminal Python/PATH probe line; it does not
+  replace the Hermes engine interpreter. Full historical transitive-runtime
+  identity remains subject to the earlier report's limitation.
+- Evidence: `/Users/devin/nav-phase0-gates/step8-eval/fixed/paid/`; separate
+  assembled comparison, judges, audits and ledger under `step8-eval/fixed/`.
+  The two-host summary stub completed offline before any paid call.
+- **All long-task final-only/visible-unit correctness, canonical checks, announced
+  recall and surprise recovery remain 4/4 per host. Stored-original mismatches
+  remain zero.** There were no incomplete cells or API exclusions.
+- **Not an unqualified acceptance pass:** whole-source input and live late-fact
+  inclusion are demonstrated, but commanded OMP **pure LLM replacement coverage
+  regressed from 2/2 to 0/2 trials**. Both models hid early with rules; validation
+  and idempotent reuse then prevented conversion to an LLM replacement. The
+  apparent OMP 6/6 retained facts belong to rule replacements, not successful
+  LLM Summarize. Resource totals are close to pre-fix, with significant per-fixture
+  redistribution; n=4 per host does not establish statistical equivalence.
+
+### Key long-session totals
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre |
+|---|---:|---:|---:|---:|---:|---:|
+| Requests | 586 | 537 | 548 | 550 | 1.0242 | 1.0036 |
+| Prompt tokens | 23,211,328 | 19,019,480 | 19,659,349 | 18,862,991 | 0.9918 | 0.9595 |
+| Cached tokens | 20,004,352 | 15,760,640 | 15,820,544 | 15,150,592 | 0.9613 | 0.9577 |
+| Output tokens | 287,668 | 198,169 | 251,896 | 253,815 | 1.2808 | 1.0076 |
+| Reported USD | 0.263097616 | 0.197440740 | 0.228083550 | 0.224934854 | 1.1393 | 0.9862 |
+
+All detailed long, component and per-fixture metrics follow below, including
+correctness, adoption, literal IDs, cleanup boundaries, rereads, Unhide,
+replacements, cache transitions and safety. Component A is N/A. Counters describe
+what happened, not a universal success/failure gate. In particular, retained-fact
+fractions must be read together with replacement-source/pure-trial coverage.
+
+### Live late-fact evidence and commanded Summarize limitation
+
+Every fixed component summary request on both paths exercised the previously
+truncated case, so **no additional targeted live call was needed**:
+
+| Path | Requests/responses with late fact | Complete source bytes | Fact offset | Accepted pure LLM trials |
+|---|---:|---:|---:|---:|
+| OMP | 4/4 | 21,697 | 15,601 | **0/2** |
+| Hermes | 2/2 | 25,247 (host-wrapped) | 18,068 | **2/2** |
+
+All six raw model responses contain `latency_budget_ms=151`. OMP source SHA-256
+`6a38bb208da0aff2402e4bbdab1a6fe827e7d2103b7f88a32b12a4e31fd29867`
+matches the captured source. Hermes's source includes its normal file-result
+wrapper, with the same fact beyond the old cutoff. Accepted Hermes summaries
+retain **6/6** key facts, unchanged from old/pre-fix. Rule Hide retains **12/12**
+facts across both hosts. OMP's commanded-summary replacements also retain 6/6,
+but **both are rule-source replacements** and are counted as wrong-source outcomes.
+
+The OMP trial mechanism is directly observed, not inferred solely from code:
+
+1. Both trials call `manage_context(action=hide, keep_lines=...)` at **turn 1**,
+   before the turn-2 Summarize instruction. Stored items therefore already have
+   `compaction_source=rule`.
+2. Trial 1 requests `b05ee74316f840d39b7f080095c86a0d` and
+   `88d387a93f71449fb61150099e192003` are rejected for unsupported literal numeric
+   claims **`100`** and **`15%`**, respectively. Counting records or interpreting a
+   `_pct` field as a percent is not licensed by the existing exact-token validator.
+   This is not a grouping-comma failure or missing-tail failure. The model briefly
+   restores, retries, and emits diagnostic echo/write work, without rereading the
+   original audit tool.
+3. Trial 2's `57f0644cf86d4ed5bb08f29fd4ed2bee` passes both Python and TS summary
+   validators, and `summarize_context` returns `ok=true`; the immediately following
+   listing still shows **source=rule**. `Engine.apply` finds the existing item and
+   takes `rehideExisting`, preserving its original rule compaction. The retry
+   `2a9a208208a0495db2dbd3e10c38ff2c` is rejected for **`100`**.
+4. Deterministic replay of that valid response yields **source=llm on a fresh
+   item**, but **source=rule after an early Hide**, both with `ok=true`. Thus numeric
+   rejection alone cannot explain the coverage loss. The existing-item branch is
+   unchanged from `8902a41`; replaying all four responses through that commit's
+   validator produces the same reject/reject/accept/reject results.
+
+**Verdict:** observed commanded source-coverage regression, caused mechanically by
+early model Hide plus pre-existing strict validation and existing-item reuse.
+The input fix is working, but that does not make the end-to-end OMP Summarize
+acceptance gate pass. The separate effects of changed order/full input versus
+stochastic choices are not uniquely identified. A follow-up should decide explicit
+Hide-to-Summarize conversion/error semantics and how to instruct the summarizer
+about derived counts/units, without silently loosening factual checks. No such
+product redesign or outcome-selected rerun was made here.
+
+The filtered read item was not re-emitted as an unrecorded ghost. Trial 2 does
+show an **actual separate bash result** (`call_33c8018f7a5641518465f201`) in the
+unrecorded listing: the snapshot merge still does not apply the display query to
+genuinely unrecorded rows. This is residual listing noise, distinct from the fixed
+known-record set-construction bug; the read row remains separately recorded/hidden.
+
+### Autonomous errors, adoption and restoration
+
+- **`input_too_large`: 0; `keep_lines_too_broad`: 0** in observed autonomous
+  operations. Neither refusal demonstrably hurt adoption here. These runs do not
+  replace the boundary/error unit and conformance tests that actually trigger them.
+- Successful two-boundary session coverage improves **4/8 → 5/8** versus pre-fix,
+  still below historical B-old **6/8**. OMP improves **3/4 → 4/4**; Hermes remains
+  **1/4 → 1/4**. Cleanup boundaries move OMP **17→20**, Hermes **8→13**. Hermes
+  Atlas falls **7→1** boundaries while Boreal rises **1→12**: task correctness is
+  unchanged, but adoption is uneven and not an unqualified improvement.
+- OMP Boreal repetition 2 reaches five explicit-Summarize batches with one
+  `verification_failed` item in each (unsupported `100` in the captured model
+  summary); valid sibling summaries are applied. The run still achieves five
+  cleanup boundaries. Boreal repetition 1 twice supplies keep-lines with auto,
+  receiving the unchanged `invalid_keep_lines_action`; three stale/not-found
+  targets occur across OMP long sessions. These are distinct from the new budget
+  and broad-retention errors. No tool text/error policy was altered to improve
+  the observed results.
+- **9/9 successful restore operations** (including one early diagnostic restore)
+  match stored/native original bytes under their **original tool-call IDs** in
+  final outgoing requests. All **8 requested turn-3 restore turns** have **zero
+  work-tool calls**. The extra turn-2 restore shares a turn with diagnostic echo
+  and write calls; they are not re-executions of the original read. Stored-original
+  mismatches remain **0** in both long and component runs.
+
+### Brief RCA of new >25% deviations versus pre-fix
+
+| Surface | Observed change and reachable mechanism | Verdict / limit |
+|---|---|---|
+| OMP commanded source coverage | Pure LLM trials **2→0** and replacements **2→0**; apparent retained-fact count **4→6** is rule-source retention. Raw responses and deterministic cache/validator replays above isolate both failure mechanisms. | Coverage regression; pre-existing semantics newly exercised by early Hide. Full-input success must not mask it. |
+| Hermes Atlas resources | Prompt **3,987,334→5,001,893** (1.254×), cached **3,097,856→3,901,696** (1.259×), output **74,584→108,835** (1.459×), cost **$0.058118148→$0.080527162** (1.386×). Native compression **11→14** calls, output **60,168→91,821**; its +31,653 tokens explain most of the +34,251 total. Native compression cost increases $0.016045572 of the total $0.022409014 increase. | Host-native compression is the verified output/cost mechanism, not product-summary overhead (231 output tokens). Atlas adoption falls, but a unique causal attribution of that choice change to prompt parity versus model variance is unverified. |
+| Hermes Boreal output | **99,251→72,310** (0.729×); compression **12→9**, output **81,738→54,845** (−26,893), explaining nearly all −26,941 total. Boundaries **1→12**, navigation **2→19**, no product summaries versus five pre-fix. | Native work and changed model cleanup choices redistribute pressure; no isolated causal claim that the fix alone produced savings. |
+| OMP native trigger count | **89→151** overall, Atlas **31→87**. The metric counts start events, including skipped attempts: skipped ends **79→146**. Actual captured handoff LLM requests **14→8**, handoff output **22,836→15,666**. | Host trigger/skip accounting, **not** 62 extra native LLM calls. Overall OMP output falls **78,061→72,670**, despite **21** product-summary calls (3,528 output tokens) versus none pre-fix. |
+| Adoption/selection and reread counters | OMP valid/selected IDs, unique disposable selection, Atlas keep-lines/cleanup/store counts increase with its extra boundaries; explicit Hide drops on Boreal as the model chooses Summarize. OMP list calls **3→0**, repeat-visible rereads **23→10**, later hidden rereads **3→1**, new bash calls **15→36** (Boreal **7→28**) as inspection shifts from read to bash. Hermes selection/list/explicit-hide counters move with the Atlas/Boreal boundary redistribution above. | Verified changed tool-choice mix, not a standalone efficiency/safety gate. Commands remain in raw wires. The fix/order/environment and stochastic effects on those choices remain confounded. |
+| Cache transitions, sensitivity/reference pricing, and comparison counts | Transition counts follow successful cleanup (e.g. Atlas OMP **6→10**, Hermes **7→1**, Boreal Hermes **2→12**). Signed uncached-growth/cost deltas and their hypothetical reference/native sensitivity values change with those selected boundaries and different histories. Native-original comparison counts vary with rereads/history and component diagnostics; fewer comparisons do not establish corruption or missing restore proof. | Descriptive derived metrics, not extra billed spend or independent regressions. All originals actually checked agree; exact restore proofs are separate. Near-zero/signed-denominator ratios should not be interpreted as percentage savings. |
+
+All scalar metrics and both requested ratios are retained below, including the
+large positive/negative transition ratios; the explanations above cover their
+underlying event/selection families rather than treating each derived price or
+counter as a separate causal experiment. Fixed combined output is still **1.281×
+B-old**, but only **1.008× pre-fix**. Hermes aggregate output is **1.042× pre-fix**;
+the Atlas increase is largely offset by Boreal. No statistical-equivalence claim.
+
+### Spend, guard audit and checks
+
+| New fixed-run category | Reported USD |
+|---|---:|
+| Eight long sessions | 0.224934854 |
+| Eight component trials | 0.011324742 |
+| Eight distinct judges | 0.001109398 |
+| **Total** | **0.237368994** |
+
+The fresh ledger limit was **$5**; **$3 was not crossed**. No unresolved reserve,
+missing billed usage, upstream failure or upstream retry occurred. All **649**
+upstream attempts/responses reconcile to **649** settled ledger charges. Eight
+optional local Hermes `/api/show` capability probes were blocked before upstream
+dispatch, as in pre-fix; they are not generation failures. Three fully billed OMP
+responses arrived after client-close (pre-fix had four); those costs/tokens remain
+included under the unchanged protocol. No qualifying outcome was rerun.
+
+```text
+Ran 57 tests in 39.933s
+OK
+PASS exactly 8 long + 8 component fixed-product cells; all complete/canonical tests pass; no exclusions
+PASS 649 upstream attempts/responses/ledger charges reconciled; Relace/no fallback/reasoning off pinned; no upstream retries/failures
+PASS total paid spend $0.237368994; no unresolved reservation; $3 not crossed
+PASS 9/9 successful restores match stored/native originals under original tool-call IDs in final outgoing requests; all 8 commanded restore turns have zero work calls
+PASS autonomous observed input_too_large=0 and keep_lines_too_broad=0 (not evidence of refusal behavior when triggered)
+PASS omp 4/4 live component summary responses retain the late latency fact; input <=32768 bytes
+PASS hermes 2/2 live component summary responses retain the late latency fact; input <=32768 bytes
+PASS 8/8 distinct replacement judges returned valid scores
+PASS all new campaign/reporting artifacts contain no provisioned API-key value
+```
+
+Offline suite includes fixed-version guard and four-column normal/empty/error
+reporting coverage. No product/build inputs changed since the prior implementation
+checks, so those unchanged suites were not rerun. Raw validation traces, cache
+counterfactuals, native event accounting and restore proofs remain outside git in
+`step8-eval/fixed/`. Markdown/UI was not visually rendered.
+
+## Fixed-product four-version metrics
+
+Historical and pre-fix cells are reused, not rerun. Ratios are descriptive with two repetitions per fixture, not equivalence estimates. N/A denotes unavailable metrics or zero denominators. Component A is N/A because the plugin was off. Retention verdicts compare fractions, not raw retained-fact counts.
+
+### Long sessions
+
+#### OMP
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sessions` | 4 | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `final_only_success` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `task_success` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `visible_unit_success` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_pass` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_applicable` | 4 | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `announced_recall` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `surprise_recovery` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `navigation_calls` | 0 | 31 | 24 | 25 | 0.806452 | 1.041667 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `sessions_using_navigation` | 0 | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `list_calls` | 0 | 1 | 3 | 0 | 0 | 0 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `literal_ids_valid` | 0 | 73 | 52 | 63 | 0.863014 | 1.211538 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `literal_ids_selected` | 0 | 75 | 52 | 66 | 0.88 | 1.269231 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `cleanup_boundaries` | 0 | 19 | 17 | 20 | 1.052632 | 1.176471 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `sessions_with_2_boundaries` | 0 | 4 | 3 | 4 | 1 | 1.333333 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `native_compactions` | 40 | 126 | 89 | 151 | 1.198413 | 1.696629 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `requests` | 244 | 251 | 272 | 273 | 1.087649 | 1.003676 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | 11,314,570 | 10,212,293 | 11,160,702 | 10,029,112 | 0.982063 | 0.898609 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | 10,010,624 | 8,695,552 | 9,194,240 | 8,308,992 | 0.955545 | 0.903717 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | 58,906 | 57,083 | 78,061 | 72,670 | 1.273059 | 0.930939 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `peak_prompt` | 78,572 | 77,381 | 78,166 | 73,778 | 0.953438 | 0.943863 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | 0.08733 | 0.08112 | 0.0968 | 0.088201 | 1.08729 | 0.91116 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `missing_cost` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `missing_cached` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summary_requests` | 0 | 0 | 0 | 21 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `reference_cost` | 8.084452 | 7.837922 | 9.154532 | 8.176096 | 1.043146 | 0.89312 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reference_no_cache` | 23.100388 | 20.88125 | 22.945892 | 20.639584 | 0.988427 | 0.899489 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `final_backreferences` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_observed` | 68 | 69 | 69 | 68 | 0.985507 | 0.985507 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_unique_selected` | 0 | 44 | 36 | 52 | 1.181818 | 1.444444 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `eligible_selected` | 0 | 73 | 52 | 63 | 0.863014 | 1.211538 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `selected_eligible_disposable` | 0 | 62 | 43 | 57 | 0.919355 | 1.325581 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_eligible` | 0 | 71 | 49 | 36 | 0.507042 | 0.734694 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_disposable` | 0 | 61 | 40 | 33 | 0.540984 | 0.825 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `keep_lines_calls` | 0 | 28 | 15 | 17 | 0.607143 | 1.133333 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `successful_unhide` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_after_compaction` | 0 | 1 | 3 | 1 | 1 | 0.333333 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_repeat_visible` | 12 | 3 | 23 | 10 | 3.333333 | 0.434783 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `rereads_same_turn` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_later_turn` | 0 | 1 | 3 | 1 | 1 | 0.333333 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_unhide_calls` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_read_after_compaction` | 0 | 0 | 2 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_read_repeat_visible` | 6 | 3 | 7 | 3 | 1 | 0.428571 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_read_new` | 88 | 68 | 88 | 69 | 1.014706 | 0.784091 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_bash_after_compaction` | 0 | 1 | 1 | 1 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_bash_repeat_visible` | 6 | 0 | 16 | 7 | N/A | 0.4375 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_bash_new` | 18 | 36 | 15 | 36 | 1 | 2.4 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `cache_transitions` | 0 | 19 | 18 | 21 | 1.105263 | 1.166667 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `transition_uncached_growth` | 0 | -43,681 | 12,832 | -82,411 | 1.886656 | -6.422304 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_reported_cost_delta` | 0 | -0.002162 | 0.000055 | -0.002945 | 1.362629 | -53.775396 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_native_growth_sensitivity_usd` | 0 | 0.000055 | 0.00008 | 0.000051 | 0.93003 | 0.640117 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_reference_growth_sensitivity_usd` | 0 | 0.082686 | 0.120135 | 0.076901 | 0.93003 | 0.640117 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `originals_compared` | 0 | 46 | 43 | 52 | 1.130435 | 1.209302 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `stored_items` | 0 | 46 | 43 | 52 | 1.130435 | 1.209302 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `original_mismatches` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | 122 | 112 | 133 | 120 | 1.071429 | 0.902256 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_tool_content_transitions` | 83 | 63 | 81 | 49 | 0.777778 | 0.604938 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+
+#### HERMES
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sessions` | 4 | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `final_only_success` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `task_success` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `visible_unit_success` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_pass` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_applicable` | 4 | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `announced_recall` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `surprise_recovery` | 4 | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `navigation_calls` | 0 | 28 | 18 | 21 | 0.75 | 1.166667 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `sessions_using_navigation` | 0 | 3 | 2 | 3 | 1 | 1.5 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `list_calls` | 0 | 3 | 2 | 3 | 1 | 1.5 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `literal_ids_valid` | 0 | 28 | 17 | 18 | 0.642857 | 1.058824 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `literal_ids_selected` | 0 | 28 | 17 | 18 | 0.642857 | 1.058824 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `cleanup_boundaries` | 0 | 20 | 8 | 13 | 0.65 | 1.625 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `sessions_with_2_boundaries` | 0 | 2 | 1 | 1 | 0.5 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `native_compactions` | 28 | 18 | 23 | 23 | 1.277778 | 1 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `requests` | 342 | 286 | 276 | 277 | 0.968531 | 1.003623 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | 11,896,758 | 8,807,187 | 8,498,647 | 8,833,879 | 1.003031 | 1.039445 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | 9,993,728 | 7,065,088 | 6,626,304 | 6,841,600 | 0.968367 | 1.032491 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | 228,762 | 141,086 | 173,835 | 181,145 | 1.283933 | 1.042051 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `peak_prompt` | 54,992 | 54,549 | 54,632 | 54,841 | 1.005353 | 1.003826 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | 0.175768 | 0.116321 | 0.131283 | 0.136734 | 1.17549 | 1.041522 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `missing_cost` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `missing_cached` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summary_requests` | 0 | 8 | 5 | 2 | 0.25 | 0.4 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `reference_cost` | 10.63302 | 8.14543 | 8.448518 | 8.854518 | 1.087053 | 1.048056 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reference_no_cache` | 25.623612 | 18.743062 | 18.387974 | 19.116918 | 1.019946 | 1.039642 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `final_backreferences` | 0 | 0 | 1 | 1 | N/A | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_observed` | 69 | 68 | 70 | 68 | 1 | 0.971429 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_unique_selected` | 0 | 24 | 16 | 15 | 0.625 | 0.9375 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `eligible_selected` | 0 | 28 | 17 | 18 | 0.642857 | 1.058824 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `selected_eligible_disposable` | 0 | 24 | 16 | 15 | 0.625 | 0.9375 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `explicit_hide_eligible` | 0 | 20 | 12 | 16 | 0.8 | 1.333333 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_disposable` | 0 | 17 | 11 | 14 | 0.823529 | 1.272727 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `keep_lines_calls` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `successful_unhide` | 0 | 2 | 0 | 0 | 0 | N/A | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `rereads_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_same_turn` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_later_turn` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_unhide_calls` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_new` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_new` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `cache_transitions` | 0 | 20 | 9 | 13 | 0.65 | 1.444444 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_uncached_growth` | 0 | -167,288 | -81,522 | -131,428 | 0.785639 | 1.612178 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_reported_cost_delta` | 0 | -0.002585 | -0.000412 | -0.001201 | 0.464792 | 2.913069 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_native_growth_sensitivity_usd` | 0 | 0.00001 | 0.000005 | 0.000003 | 0.3461 | 0.669526 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_reference_growth_sensitivity_usd` | 0 | 0.014883 | 0.007694 | 0.005151 | 0.3461 | 0.669526 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `originals_compared` | 0 | 28 | 85 | 83 | 2.964286 | 0.976471 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `stored_items` | 0 | 28 | 102 | 101 | 3.607143 | 0.990196 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `original_mismatches` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | 239 | 140 | 143 | 141 | 1.007143 | 0.986014 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_tool_content_transitions` | 12 | 29 | 24 | 23 | 0.793103 | 0.958333 | old: Descriptive / coverage; pre: Descriptive / coverage |
+
+### Commanded components
+
+#### OMP
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `trials` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `strict_success` | N/A | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `successful_unhide` | N/A | 3 | 4 | 5 | 1.666667 | 1.25 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `restores_without_work_rerun` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `restored_original_in_final_request` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `third_turn_work_calls` | N/A | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_pure_replacement_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_sent_replacements` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_pure_replacements` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_facts_present` | N/A | 6 | 6 | 6 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_facts_retained` | N/A | 6 | 6 | 6 | 1 | 1 | old: PASS: retained fraction; pre: PASS: retained fraction |
+| `hide_wrong_source` | N/A | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `summarize_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summarize_pure_replacement_trials` | N/A | 1 | 2 | 0 | 0 | 0 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `summarize_sent_replacements` | N/A | 1 | 2 | 2 | 2 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `summarize_pure_replacements` | N/A | 1 | 2 | 0 | 0 | 0 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `summarize_facts_present` | N/A | 3 | 6 | 6 | 2 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `summarize_facts_retained` | N/A | 2 | 4 | 6 | 3 | 1.5 | old: PASS: retained fraction; pre: PASS: retained fraction |
+| `summarize_wrong_source` | N/A | 0 | 0 | 2 | N/A | N/A | old: REVIEW; pre: REVIEW |
+| `sent_replacements` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `wrong_source` | N/A | 0 | 0 | 2 | N/A | N/A | old: REVIEW; pre: REVIEW |
+| `originals_compared` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `stored_items` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `original_mismatches` | N/A | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | N/A | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | N/A | 8 | 24 | 10 | 1.25 | 0.416667 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `native_tool_content_transitions` | N/A | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `requests` | N/A | 31 | 54 | 42 | 1.354839 | 0.777778 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | N/A | 305,499 | 556,936 | 490,998 | 1.6072 | 0.881606 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | N/A | 238,336 | 458,240 | 349,440 | 1.466165 | 0.76257 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | N/A | 4,426 | 8,560 | 6,887 | 1.556033 | 0.804556 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | N/A | 0.003808 | 0.007163 | 0.00604 | 1.58629 | 0.843185 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `judge_distinct_eligible` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `judge_scored` | N/A | 3 | 4 | 4 | 1.333333 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `judge_mean` | N/A | 2 | 2.25 | 1.75 | 0.875 | 0.777778 | old: Descriptive / coverage; pre: Descriptive / coverage |
+
+#### HERMES
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `trials` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `strict_success` | N/A | 4 | 4 | 4 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `successful_unhide` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `restores_without_work_rerun` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `restored_original_in_final_request` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `third_turn_work_calls` | N/A | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_pure_replacement_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_sent_replacements` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_pure_replacements` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_facts_present` | N/A | 6 | 6 | 6 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `hide_facts_retained` | N/A | 6 | 6 | 6 | 1 | 1 | old: PASS: retained fraction; pre: PASS: retained fraction |
+| `hide_wrong_source` | N/A | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `summarize_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summarize_pure_replacement_trials` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summarize_sent_replacements` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summarize_pure_replacements` | N/A | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summarize_facts_present` | N/A | 6 | 6 | 6 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summarize_facts_retained` | N/A | 6 | 6 | 6 | 1 | 1 | old: PASS: retained fraction; pre: PASS: retained fraction |
+| `summarize_wrong_source` | N/A | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `sent_replacements` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `wrong_source` | N/A | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `originals_compared` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `stored_items` | N/A | 4 | 8 | 8 | 2 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `original_mismatches` | N/A | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | N/A | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | N/A | 7 | 10 | 7 | 1 | 0.7 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `native_tool_content_transitions` | N/A | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `requests` | N/A | 56 | 50 | 49 | 0.875 | 0.98 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | N/A | 674,177 | 607,695 | 565,217 | 0.838381 | 0.9301 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | N/A | 540,672 | 494,592 | 452,608 | 0.837121 | 0.915114 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | N/A | 4,743 | 5,293 | 4,692 | 0.989247 | 0.886454 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | N/A | 0.005876 | 0.005798 | 0.005285 | 0.899386 | 0.911456 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `judge_distinct_eligible` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `judge_scored` | N/A | 4 | 4 | 4 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `judge_mean` | N/A | 3 | 3.25 | 3 | 1 | 0.923077 | old: Descriptive / coverage; pre: Descriptive / coverage |
+
+### Per-fixture metrics
+
+#### OMP/atlas
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sessions` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `final_only_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `task_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `visible_unit_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_pass` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_applicable` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `announced_recall` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `surprise_recovery` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `navigation_calls` | 0 | 19 | 9 | 11 | 0.578947 | 1.222222 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `sessions_using_navigation` | 0 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `list_calls` | 0 | 1 | 2 | 0 | 0 | 0 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `literal_ids_valid` | 0 | 43 | 17 | 28 | 0.651163 | 1.647059 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `literal_ids_selected` | 0 | 44 | 17 | 30 | 0.681818 | 1.764706 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `cleanup_boundaries` | 0 | 10 | 5 | 10 | 1 | 2 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `sessions_with_2_boundaries` | 0 | 2 | 1 | 2 | 1 | 2 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `native_compactions` | 22 | 57 | 31 | 87 | 1.526316 | 2.806452 | old: RCA: >25% difference; pre: RCA: >25% difference |
+| `requests` | 122 | 127 | 127 | 127 | 1 | 1 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | 5,955,763 | 5,177,919 | 5,525,949 | 4,830,268 | 0.932859 | 0.874107 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | 5,261,056 | 4,367,104 | 4,537,088 | 4,090,112 | 0.936573 | 0.901484 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | 32,699 | 31,263 | 41,130 | 37,333 | 1.194159 | 0.907683 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `peak_prompt` | 77,059 | 77,381 | 78,166 | 73,778 | 0.953438 | 0.943863 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | 0.046823 | 0.042332 | 0.049184 | 0.043558 | 1.028964 | 0.88562 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `missing_cost` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `missing_cached` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summary_requests` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `reference_cost` | 4.281534 | 4.055286 | 4.575306 | 3.824032 | 0.942975 | 0.835798 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reference_no_cache` | 12.173118 | 10.605942 | 11.380938 | 9.9592 | 0.939021 | 0.875077 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `final_backreferences` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_observed` | 34 | 34 | 34 | 34 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_unique_selected` | 0 | 25 | 14 | 25 | 1 | 1.785714 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `eligible_selected` | 0 | 43 | 17 | 28 | 0.651163 | 1.647059 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `selected_eligible_disposable` | 0 | 36 | 17 | 25 | 0.694444 | 1.470588 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_eligible` | 0 | 41 | 14 | 28 | 0.682927 | 2 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_disposable` | 0 | 35 | 14 | 25 | 0.714286 | 1.785714 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `keep_lines_calls` | 0 | 16 | 6 | 10 | 0.625 | 1.666667 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `successful_unhide` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_after_compaction` | 0 | 1 | 0 | 1 | 1 | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_repeat_visible` | 2 | 1 | 4 | 6 | 6 | 1.5 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `rereads_same_turn` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_later_turn` | 0 | 1 | 0 | 1 | 1 | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_unhide_calls` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_read_after_compaction` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_read_repeat_visible` | 1 | 1 | 2 | 2 | 2 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `rereads_read_new` | 46 | 23 | 44 | 45 | 1.956522 | 1.022727 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `rereads_bash_after_compaction` | 0 | 1 | 0 | 1 | 1 | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_bash_repeat_visible` | 1 | 0 | 2 | 4 | N/A | 2 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_bash_new` | 7 | 28 | 8 | 8 | 0.285714 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `cache_transitions` | 0 | 10 | 6 | 10 | 1 | 1.666667 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_uncached_growth` | 0 | -32,181 | 857 | -71,933 | 2.235263 | -83.935823 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_reported_cost_delta` | 0 | -0.001543 | 0.000981 | -0.001974 | 1.279305 | -2.011652 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_native_growth_sensitivity_usd` | 0 | 0.000031 | 0.000016 | 0.000007 | 0.212988 | 0.421151 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_reference_growth_sensitivity_usd` | 0 | 0.04608 | 0.023304 | 0.009815 | 0.212988 | 0.421151 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `originals_compared` | 0 | 23 | 14 | 28 | 1.217391 | 2 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `stored_items` | 0 | 23 | 14 | 28 | 1.217391 | 2 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `original_mismatches` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | 57 | 55 | 58 | 62 | 1.127273 | 1.068966 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_tool_content_transitions` | 39 | 30 | 35 | 28 | 0.933333 | 0.8 | old: Descriptive / coverage; pre: Descriptive / coverage |
+
+#### OMP/boreal
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sessions` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `final_only_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `task_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `visible_unit_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_pass` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_applicable` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `announced_recall` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `surprise_recovery` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `navigation_calls` | 0 | 12 | 15 | 14 | 1.166667 | 0.933333 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `sessions_using_navigation` | 0 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `list_calls` | 0 | 0 | 1 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `literal_ids_valid` | 0 | 30 | 35 | 35 | 1.166667 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `literal_ids_selected` | 0 | 31 | 35 | 36 | 1.16129 | 1.028571 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `cleanup_boundaries` | 0 | 9 | 12 | 10 | 1.111111 | 0.833333 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `sessions_with_2_boundaries` | 0 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_compactions` | 18 | 69 | 58 | 64 | 0.927536 | 1.103448 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `requests` | 122 | 124 | 145 | 146 | 1.177419 | 1.006897 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | 5,358,807 | 5,034,374 | 5,634,753 | 5,198,844 | 1.032669 | 0.922639 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | 4,749,568 | 4,328,448 | 4,657,152 | 4,218,880 | 0.974687 | 0.905893 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | 26,207 | 25,820 | 36,931 | 35,337 | 1.36859 | 0.956838 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `peak_prompt` | 78,572 | 73,578 | 73,928 | 70,753 | 0.961605 | 0.957053 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | 0.040507 | 0.038788 | 0.047617 | 0.044643 | 1.150947 | 0.937539 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `missing_cost` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `missing_cached` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summary_requests` | 0 | 0 | 0 | 21 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `reference_cost` | 3.802918 | 3.782636 | 4.579226 | 4.352064 | 1.150537 | 0.950393 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reference_no_cache` | 10.92727 | 10.275308 | 11.564954 | 10.680384 | 1.039422 | 0.923513 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `final_backreferences` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_observed` | 34 | 35 | 35 | 34 | 0.971429 | 0.971429 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_unique_selected` | 0 | 19 | 22 | 27 | 1.421053 | 1.227273 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `eligible_selected` | 0 | 30 | 35 | 35 | 1.166667 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `selected_eligible_disposable` | 0 | 26 | 26 | 32 | 1.230769 | 1.230769 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `explicit_hide_eligible` | 0 | 30 | 35 | 8 | 0.266667 | 0.228571 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_disposable` | 0 | 26 | 26 | 8 | 0.307692 | 0.307692 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `keep_lines_calls` | 0 | 12 | 9 | 7 | 0.583333 | 0.777778 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `successful_unhide` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_after_compaction` | 0 | 0 | 3 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_repeat_visible` | 10 | 2 | 19 | 4 | 2 | 0.210526 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `rereads_same_turn` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_later_turn` | 0 | 0 | 3 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_unhide_calls` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_read_after_compaction` | 0 | 0 | 2 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_read_repeat_visible` | 5 | 2 | 5 | 1 | 0.5 | 0.2 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `rereads_read_new` | 42 | 45 | 44 | 24 | 0.533333 | 0.545455 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `rereads_bash_after_compaction` | 0 | 0 | 1 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_bash_repeat_visible` | 5 | 0 | 14 | 3 | N/A | 0.214286 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `rereads_bash_new` | 11 | 8 | 7 | 28 | 3.5 | 4 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `cache_transitions` | 0 | 9 | 12 | 11 | 1.222222 | 0.916667 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `transition_uncached_growth` | 0 | -11,500 | 11,975 | -10,478 | 0.91113 | -0.87499 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_reported_cost_delta` | 0 | -0.000618 | -0.000927 | -0.000971 | 1.570527 | 1.048306 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `transition_native_growth_sensitivity_usd` | 0 | 0.000024 | 0.000065 | 0.000045 | 1.83265 | 0.692815 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_reference_growth_sensitivity_usd` | 0 | 0.036606 | 0.096831 | 0.067086 | 1.83265 | 0.692815 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `originals_compared` | 0 | 23 | 29 | 24 | 1.043478 | 0.827586 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `stored_items` | 0 | 23 | 29 | 24 | 1.043478 | 0.827586 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `original_mismatches` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | 65 | 57 | 75 | 58 | 1.017544 | 0.773333 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_tool_content_transitions` | 44 | 33 | 46 | 21 | 0.636364 | 0.456522 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+
+#### HERMES/atlas
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sessions` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `final_only_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `task_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `visible_unit_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_pass` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_applicable` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `announced_recall` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `surprise_recovery` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `navigation_calls` | 0 | 1 | 16 | 2 | 2 | 0.125 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `sessions_using_navigation` | 0 | 1 | 1 | 2 | 2 | 2 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `list_calls` | 0 | 1 | 2 | 1 | 1 | 0.5 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `literal_ids_valid` | 0 | 0 | 12 | 2 | N/A | 0.166667 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `literal_ids_selected` | 0 | 0 | 12 | 2 | N/A | 0.166667 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `cleanup_boundaries` | 0 | 0 | 7 | 1 | N/A | 0.142857 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `sessions_with_2_boundaries` | 0 | 0 | 1 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `native_compactions` | 15 | 14 | 11 | 14 | 1 | 1.272727 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `requests` | 169 | 121 | 130 | 147 | 1.214876 | 1.130769 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | 5,907,516 | 4,204,382 | 3,987,334 | 5,001,893 | 1.189686 | 1.254445 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `cached_tokens` | 4,924,160 | 3,285,760 | 3,097,856 | 3,901,696 | 1.187456 | 1.259483 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `output_tokens` | 126,414 | 105,215 | 74,584 | 108,835 | 1.034406 | 1.459227 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `peak_prompt` | 54,663 | 54,549 | 54,178 | 54,841 | 1.005353 | 1.012237 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | 0.093728 | 0.074548 | 0.058118 | 0.080527 | 1.080205 | 1.385577 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `missing_cost` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `missing_cached` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summary_requests` | 0 | 0 | 0 | 2 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `reference_cost` | 5.440104 | 4.321844 | 3.924556 | 5.021922 | 1.161986 | 1.279615 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `reference_no_cache` | 12.826344 | 9.250484 | 8.57134 | 10.874466 | 1.175556 | 1.268701 | old: Reported ratio; no equivalence claim; pre: RCA: >25% difference |
+| `final_backreferences` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_observed` | 34 | 34 | 36 | 34 | 1 | 0.944444 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_unique_selected` | 0 | 0 | 11 | 1 | N/A | 0.090909 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `eligible_selected` | 0 | 0 | 12 | 2 | N/A | 0.166667 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `selected_eligible_disposable` | 0 | 0 | 11 | 1 | N/A | 0.090909 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_eligible` | 0 | 0 | 12 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_disposable` | 0 | 0 | 11 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `keep_lines_calls` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `successful_unhide` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `rereads_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_same_turn` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_later_turn` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_unhide_calls` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_new` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_new` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `cache_transitions` | 0 | 0 | 7 | 1 | N/A | 0.142857 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_uncached_growth` | 0 | 0 | -41,231 | -24,525 | N/A | 0.594819 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_reported_cost_delta` | 0 | 0 | -0.000132 | -0.000169 | N/A | 1.283429 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_native_growth_sensitivity_usd` | 0 | 0 | 0.000005 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `transition_reference_growth_sensitivity_usd` | 0 | 0 | 0.007694 | 0 | N/A | 0 | old: Descriptive / coverage; pre: Behavior differs >25%; see discussion |
+| `originals_compared` | 0 | 0 | 44 | 41 | N/A | 0.931818 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `stored_items` | 0 | 0 | 56 | 43 | N/A | 0.767857 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `original_mismatches` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | 123 | 57 | 62 | 83 | 1.45614 | 1.33871 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `native_tool_content_transitions` | 6 | 16 | 11 | 10 | 0.625 | 0.909091 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+
+#### HERMES/boreal
+
+| Metric | A | B-old `37348b8` | Pre-fix `8902a41` | Fixed `df47548` | Fixed/old | Fixed/pre | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sessions` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `final_only_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `task_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `visible_unit_success` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_pass` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `canonical_tests_applicable` | 2 | 2 | 2 | 2 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `announced_recall` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `surprise_recovery` | 2 | 2 | 2 | 2 | 1 | 1 | old: PASS: no observed regression; pre: PASS: no observed regression |
+| `navigation_calls` | 0 | 27 | 2 | 19 | 0.703704 | 9.5 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `sessions_using_navigation` | 0 | 2 | 1 | 1 | 0.5 | 1 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `list_calls` | 0 | 2 | 0 | 2 | 1 | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `literal_ids_valid` | 0 | 28 | 5 | 16 | 0.571429 | 3.2 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `literal_ids_selected` | 0 | 28 | 5 | 16 | 0.571429 | 3.2 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `cleanup_boundaries` | 0 | 20 | 1 | 12 | 0.6 | 12 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `sessions_with_2_boundaries` | 0 | 2 | 0 | 1 | 0.5 | N/A | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `native_compactions` | 13 | 4 | 12 | 9 | 2.25 | 0.75 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `requests` | 173 | 165 | 146 | 130 | 0.787879 | 0.890411 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `prompt_tokens` | 5,989,242 | 4,602,805 | 4,511,313 | 3,831,986 | 0.832533 | 0.849417 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `cached_tokens` | 5,069,568 | 3,779,328 | 3,528,448 | 2,939,904 | 0.777891 | 0.8332 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `output_tokens` | 102,348 | 35,871 | 99,251 | 72,310 | 2.015835 | 0.728557 | old: RCA: >25% difference; pre: RCA: >25% difference |
+| `peak_prompt` | 54,992 | 53,106 | 54,632 | 54,166 | 1.01996 | 0.99147 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reported_usd` | 0.08204 | 0.041773 | 0.073165 | 0.056207 | 1.345534 | 0.768223 | old: RCA: >25% difference; pre: Reported ratio; no equivalence claim |
+| `missing_cost` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS; pre: PASS |
+| `missing_cached` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `summary_requests` | 0 | 8 | 5 | 0 | 0 | 0 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `reference_cost` | 5.192916 | 3.823586 | 4.523962 | 3.832596 | 1.002356 | 0.847177 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `reference_no_cache` | 12.797268 | 9.492578 | 9.816634 | 8.242452 | 0.868305 | 0.839641 | old: Reported ratio; no equivalence claim; pre: Reported ratio; no equivalence claim |
+| `final_backreferences` | 0 | 0 | 1 | 1 | N/A | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_observed` | 35 | 34 | 34 | 34 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `eligible_disposable_unique_selected` | 0 | 24 | 5 | 14 | 0.583333 | 2.8 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `eligible_selected` | 0 | 28 | 5 | 16 | 0.571429 | 3.2 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `selected_eligible_disposable` | 0 | 24 | 5 | 14 | 0.583333 | 2.8 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `explicit_hide_eligible` | 0 | 20 | 0 | 16 | 0.8 | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `explicit_hide_disposable` | 0 | 17 | 0 | 14 | 0.823529 | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `keep_lines_calls` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `successful_unhide` | 0 | 2 | 0 | 0 | 0 | N/A | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `rereads_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_same_turn` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_later_turn` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_unhide_calls` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_read_new` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_after_compaction` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_repeat_visible` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `rereads_bash_new` | N/A | N/A | N/A | N/A | N/A | N/A | old: Unavailable; not zero; pre: Unavailable; not zero |
+| `cache_transitions` | 0 | 20 | 2 | 12 | 0.6 | 6 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_uncached_growth` | 0 | -167,288 | -40,291 | -106,903 | 0.639036 | 2.653272 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_reported_cost_delta` | 0 | -0.002585 | -0.000281 | -0.001032 | 0.399469 | 3.676433 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `transition_native_growth_sensitivity_usd` | 0 | 0.00001 | 0 | 0.000003 | 0.3461 | N/A | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `transition_reference_growth_sensitivity_usd` | 0 | 0.014883 | 0 | 0.005151 | 0.3461 | N/A | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `originals_compared` | 0 | 28 | 41 | 42 | 1.5 | 1.02439 | old: Behavior differs >25%; see discussion; pre: Descriptive / coverage |
+| `stored_items` | 0 | 28 | 46 | 58 | 2.071429 | 1.26087 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `original_mismatches` | 0 | 0 | 0 | 0 | N/A | N/A | old: PASS: no observed mutation; pre: PASS: no observed mutation |
+| `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
+| `native_originals_checked` | 116 | 83 | 81 | 58 | 0.698795 | 0.716049 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
+| `native_tool_content_transitions` | 6 | 13 | 13 | 13 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
