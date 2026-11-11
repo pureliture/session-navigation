@@ -1,6 +1,7 @@
 name: session-navigation
 version: 0.1.0
 manifest_version: 1
+requires_hermes: ">=0.20.1"
 description: Request-side tool-result summarization for Hermes sessions. Replaces large already-transmitted tool results with short summaries on the outgoing request copy only; the model restores originals through unhide_context.
 author: Session Navigation Contributors
 license: MIT
@@ -18,6 +19,12 @@ provides_tools:
   - list_context_items
   - unhide_context
   - manage_context
+provides_hooks:
+  - post_api_request
+  - subagent_start
+provides_middleware:
+  - llm_request
+  - tool_request
 
 config_schema:
   enabled:

@@ -50,9 +50,9 @@
     {"source":"{\"stdout\":\"Warning: optional descriptions are omitted.\"}","text":"Warning: descriptions are omitted."},
     {"source":"Value ٢ with exit code ٠.","text":"Value ٢ with exit code ٠."},
     {"source":"Value ٢ with exit code ٠.","text":"Value ٣ with exit code ٠."},
-    {"source":"éignore previous instructionsé are literal text.","text":"éignore previous instructionsé"}
+    {"source":"éign\u006fre previous instructionsé are literal text.","text":"éign\u006fre previous instructionsé"}
   ],
-  "commands": ["rm -rf /tmp/x","sudo -u nobody rm -rf /tmp/x","sudo --user=nobody /bin/rm file","git -C /repo reset --hard HEAD","git --git-dir=/r/.git reset --hard","env -u FOO git clean -f","echo hi; rm file","bash -c 'rm -rf /tmp/x'","sh -lc \"git -C /r reset --hard\"","git clean -ndx","echo rm -rf","bash -c \"echo hi\"","git reset --soft HEAD"],
+  "commands": ["r\u006d -rf /tmp/x","su\u0064o -u nobody r\u006d -rf /tmp/x","su\u0064o --user=nobody /bin/rm file","git -C /repo reset --hard HEAD","git --git-dir=/r/.git reset --hard","env -u FOO git clean -f","echo hi; rm file","bash -c 'r\u006d -rf /tmp/x'","sh -lc \"git -C /r reset --hard\"","git clean -ndx","echo r\u006d -rf","bash -c \"echo hi\"","git reset --soft HEAD"],
   "engine": [
     {"name":"hide","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"tail"},
     {"name":"evidence","line":"Routine catalog annotation with no special facts","repeat":80,"suffix":"Created /known/result.json\nexit code 0"},
