@@ -1949,3 +1949,188 @@ Historical and pre-fix cells are reused, not rerun. Ratios are descriptive with 
 | `unmatched_native_items` | 0 | 0 | 0 | 0 | N/A | N/A | old: Descriptive / coverage; pre: Descriptive / coverage |
 | `native_originals_checked` | 116 | 83 | 81 | 58 | 0.698795 | 0.716049 | old: Behavior differs >25%; see discussion; pre: Behavior differs >25%; see discussion |
 | `native_tool_content_transitions` | 6 | 13 | 13 | 13 | 1 | 1 | old: Descriptive / coverage; pre: Descriptive / coverage |
+
+## Summary upgrade and factual-retry revalidation (`fe75673`)
+
+### Scope and implementation
+
+Product **`fe7567323a697d526215296ddb149d00efff6c09`** implements the two
+approved changes. The invocation/harness checkout is the same commit; the
+collection/controller and common scoring code are unchanged from `7504c7d`.
+This section supersedes the OMP summary-source coverage caveat above, not the
+frozen long-session or Hermes measurements.
+
+- Explicit Summarize upgrades a rule/Hide replacement to an accepted LLM
+  replacement. Accepted `llm` and `llm_summary` items are reused without another
+  model call. Failed upgrades return an explicit error and retain the Hide.
+- A factual-validation rejection gets exactly one correction request with the
+  complete original and English feedback identifying unsupported numbers,
+  identifiers, paths and required/critical facts. The validator is unchanged.
+  Transport, budget, compression and CAS failures are not correction triggers.
+- Both engines retain originals and version fences. Hermes owns retries for its
+  validated model interface; generic engine summarizers own their retry. OMP
+  records every returned model attempt, including rejected text. Paseo's worker
+  is regenerated, and accepted cross-surface summaries are not requeued.
+
+Only **four OMP commanded cells** ran: Hide/Summarize × two repetitions, three
+turns each, followed by four distinct replacement judges. Setup remains DeepSeek
+`deepseek/deepseek-v4.1-flash-1017`, Relace only, no fallback, reasoning off,
+65,536-token window, OMP 18.18.3 and the same fixtures/host limits. All seven
+recorded host-file fingerprints match the `df47548` campaign. The proxy technical
+ceiling was **$5**. A, B-old, pre-fix, fixed long sessions and Hermes were **not
+rerun**. An offline four-cell stub run preceded paid generation.
+
+Raw evidence, analysis and the fresh budget ledger are outside git under
+`/Users/devin/nav-phase0-gates/step8-eval/summary-upgrade/`; prior evidence is
+read-only. `analysis.json`, `analysis.log`, `analyze_campaign.py`, `paid/` and
+`components/` contain the audit, captured wires, native histories, store snapshots
+and judges. The new comparison reuses `v4_compare.assemble` and
+`component_metrics`; it does not weaken the full-campaign archival assertions.
+
+### OMP component comparison
+
+Component resources below exclude judges, consistently with the existing tables.
+Ratios are new/fixed. There are only two trials per action; no equivalence or
+unique counterfactual attribution is claimed.
+
+| Metric | Pre-fix `8902a41` | Fixed `df47548` | Upgrade/retry `fe75673` | New/fixed | Verdict |
+|---|---:|---:|---:|---:|---|
+| Complete/strict-success trials | 4/4 | 4/4 | 4/4 | 1.000× | No observed regression |
+| Accepted pure LLM Summarize trials | 2/2 | **0/2** | **2/2** | N/A | Accepted LLM coverage restored in these trials |
+| Facts in sent Summarize replacements | 4/6, LLM | 6/6, **rule** | **6/6, LLM** | 1.000× | Source distinction matters |
+| Facts in accepted LLM replacements | 4/6 | N/A, none accepted | **6/6** | N/A | All labelled facts retained |
+| Hide trials / retained facts | 2/2; 6/6 | 2/2; 6/6 | 2/2; 6/6 | 1.000× | No observed regression |
+| Wrong-source Summarize replacements | 0 | 2 | **0** | 0.000× | No rule replacement reported as a summary |
+| Summary-model calls | 3 | 4 | 3 | 0.750× | Includes rejected responses |
+| Automatic factual-correction requests | 0 | 0 | **1** | N/A | One first rejection corrected successfully |
+| Summarize trials using that retry | 0/2 | 0/2 | **1/2** | N/A | No second retry |
+| Successful Unhide operations | 4 | 5 | 4 | 0.800× | Fixed run had one extra turn-2 restore |
+| Commanded restores exact / without work calls | 4/4 | 4/4 | **4/4** | 1.000× | Original IDs and exact original bytes |
+| Work-tool calls in commanded restore turns | 0 | 0 | **0** | N/A | No tool re-execution |
+| Stored-original mismatches | 0 | 0 | **0** | N/A | Compared to first native originals and hashes |
+| Requests | 54 | 42 | **33** | 0.786× | Descriptive decrease |
+| Prompt tokens | 556,936 | 490,998 | **297,955** | 0.607× | >25% decrease; decomposition below |
+| Cached tokens | 458,240 | 349,440 | **226,816** | 0.649× | Fewer prompt tokens, not worse cache-hit fraction |
+| Output tokens | 8,560 | 6,887 | **4,320** | 0.627× | >25% decrease; decomposition below |
+| Reported USD | $0.007163376 | $0.006040048 | **$0.003720914** | 0.616× | Both summary attempts included |
+| Distinct eligible judges / scored | 4/4 | 4/4 | **4/4** | 1.000× | No missing judgement |
+| Mean judge score | 2.25 | 1.75 | **2.00** | 1.143× | Descriptive; not an unqualified quality pass |
+
+### Live retry evidence and limits
+
+Repetition 1 produced unsupported **`100`** in request
+`e608d70b978645ffb1aa4cedeb9a30ca`: “contains 100 distinct minute/region
+measurements”. The original contains individual rows but no literal `100`.
+The automatic correction request `fb92ffdcb4ef434aadb0c1937df3aa96` included:
+
+> The previous summary failed factual validation. Correct it once using only the
+> original source. Unsupported numeric tokens: ["100"]. Unsupported identifiers:
+> []. Unsupported paths: [].
+
+It also included the required source evidence, verified facts, critical claims,
+the unchanged complete source, and instructions not to derive counts/ranges/units.
+The corrected text removed the unsupported count and retained
+`owner=component-team-1`, `audit_seal=component-9e54cadbf4` and
+`latency_budget_ms=151`. It passed unchanged validation. Repetition 2's initial
+response `341cf86252c24035a8ef37491961e7dc` passed without a retry. All **3/3**
+model responses contained the late latency fact, beyond character 12,000 in the
+source; accepted replacements retain **6/6** labelled facts.
+
+**Neither new live Summarize trial performed an early Hide.** Thus the live run
+directly demonstrates factual retry and accepted LLM replacements, but does not
+itself demonstrate an upgrade of an already-hidden item. Do not attribute all
+coverage improvement to the upgrade branch. That branch is verified by the
+cross-language unit/CAS tests and deterministic replay of all four captured
+`df47548` OMP responses: the previously valid response upgrades after Hide in one
+call; each of the three numeric rejections takes the feedback path and upgrades
+in two calls when supplied the captured valid response on correction. This is a
+counterfactual replay using captured responses, not three historical live retries.
+Invalid-then-invalid tests preserve the Hide and return `verification_failed`;
+concurrent Unhide tests return `version_conflict` and retain the visible original.
+
+SQLite recorded **all three returned summary attempts**, with **24,738 prompt +
+455 output = 25,193 total tokens**. The unchanged evaluation model descriptor in
+`eval/v2_omp.ts` declares zero SDK prices, so its host-estimated SQLite summary
+cost is $0. The authoritative billed amounts are the proxy/OpenRouter ledger:
+**$0.000130754 rejected + $0.000112484 correction** for repetition 1, and
+**$0.000116818** for repetition 2; **$0.000360056** across summary attempts.
+Zero SDK pricing is not evidence of free calls, and neither rejected usage nor
+cost is excluded from the resource totals.
+
+Judges remain conservative: scores are **1, 2, 3, 2**. They penalize omitted
+telemetry rows and restore-wrapper text. One judge also claims the three metadata
+facts were omitted, contrary to the captured replacement and deterministic
+fact-retention check. Preserve that score rather than relabel it. Labelled-fact
+retention and exact restoration pass; semantic replacement quality is not thereby
+proven equivalent or universally satisfactory.
+
+### Resource differences versus `df47548`
+
+The >25% prompt/cache/output/cost decreases are reachable, directly counted
+trajectory differences, not a host-version change:
+
+- Ordinary model requests decrease **38→30**, and summary requests **4→3**.
+  Fixed trials both hid early and issued two explicit Summarize operations each;
+  new trials each issue one explicit Summarize (one automatically corrected).
+  The fixed run also includes a turn-2 Unhide and more listing/diagnostic steps.
+- Of **193,043 fewer prompt tokens**, **184,945** are ordinary requests and
+  **8,098** are summary requests. Cached-token fraction actually increases
+  **71.2%→76.1%** while absolute cached tokens fall.
+- Of **2,567 fewer output tokens**, **2,292** are ordinary requests and **275**
+  are summary responses. Ordinary billed cost falls
+  **$0.005501840→$0.003360858**, summary cost
+  **$0.000538208→$0.000360056**.
+- Hide per-trial requests/output are **7/907** and **6/575**, versus fixed
+  **7/1,015** and **7/950**. Summarize per-trial requests/output are
+  **11/1,525** and **9/1,313**, versus **13/2,365** and **15/2,557**.
+
+These counts explain the resource concentration. The retry's extra request is
+directly evidenced; how much of the changed ordinary tool/answer trajectory is
+caused by product behavior rather than stochastic model choice is not isolated.
+There were no upstream failures/retries, budget denials, `input_too_large` or
+`keep_lines_too_broad` outcomes in these four cells. Automatic factual correction
+is a successful product retry, not an API retry or excluded product outcome.
+
+### Spend and verification
+
+| New paid calls | Requests | Reported USD |
+|---|---:|---:|
+| Four OMP component cells, including rejected/corrected summaries | 33 | $0.003720914 |
+| Four replacement judges | 4 | $0.000494086 |
+| **Total** | **37** | **$0.004215000** |
+
+All 37 upstream attempts, costed responses and ledger charges reconcile. No
+unresolved reservation or failed-attempt estimate remains. **$3 was not crossed**.
+
+Final implementation checks (before paid generation):
+
+```text
+382 passed, 11 skipped in 31.25s
+Core Node: ℹ tests 26; ℹ pass 26; ℹ fail 0
+Core Bun: 26 pass; 0 fail
+OMP build/typecheck/tests: 61 pass; 0 fail; 625 expect() calls
+Paseo build/typecheck/tests: 132 pass; 0 fail
+Node worker: ℹ tests 8; ℹ pass 8; ℹ fail 0
+PASS differential Python vs TS+node: canonical, policy, summaries, mutations, replacements and final rows
+PASS cross-writer Python -> TS+node -> Python and reverse
+PASS differential Python vs TS+bun: canonical, policy, summaries, mutations, replacements and final rows
+PASS cross-writer Python -> TS+bun -> Python and reverse
+PASS Python engine and Hermes source/vendor parity
+Ran 57 tests in 39.947s
+OK
+```
+
+The core-only package has no local TypeScript compiler dependency; its typecheck
+used the already-installed OMP `tsc` against the core tsconfig, without changing
+dependencies. Offline evaluation used the documented `uv --with tiktoken`
+environment. Both captured-response replays pass 4/4, with call counts **2,2,1,2**
+in each language and exact restores. `git diff --check` passes. Markdown/UI was
+not visually rendered.
+
+```text
+PASS offline stub: exactly four OMP component cells, three turns each; no host/config mutation or key exposure
+PASS exactly four OMP component cells, three completed turns each; no historical/long/Hermes generation
+PASS seven host fingerprints unchanged from fixed df47548 campaign
+PASS 37 upstream attempts/responses/ledger charges reconciled; Relace/no fallback/reasoning off; spend $0.004215000
+PASS 4 successful restores exact under original IDs; zero work calls in restore turns; no key in artifacts
+```
