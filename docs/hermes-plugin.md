@@ -18,7 +18,7 @@ hermes config set plugins.entries.session-navigation.settings.enabled true
 Until catalog approval, install the public repository at a reviewed commit:
 
 ```sh
-hermes plugins install pureliture/session-navigation --ref <REVIEWED_40_CHAR_SHA> --no-enable
+hermes plugins install pureliture/session-navigation/hermes-plugin --ref <REVIEWED_40_CHAR_SHA> --no-enable
 hermes plugins enable session-navigation
 hermes config set plugins.entries.session-navigation.settings.enabled true
 ```
@@ -28,8 +28,16 @@ Do this in the intended Hermes profile. Host activation and the plugin's
 session after enabling. Fully restart Hermes **and its gateway** after updating:
 a reload cannot replace already imported Python modules.
 
-The Git repository root (`plugin.yaml`, `__init__.py`, `vendor/`) is the catalog
-distribution unit. Do not move it to a subdirectory. The Python wheel can be
+The catalog distribution unit is `hermes-plugin/`, selected with
+`subdir: hermes-plugin` at the pinned repository SHA. It contains only the
+manifest, loader, MIT LICENSE and vendor Python packages. The adapter's runtime
+equivalent is `vendor/session_navigation_hermes/`; the canonical adapter source
+stays in `adapters/hermes/` outside the distribution.
+
+For an existing repository-root installation, stop Hermes/gateway, preserve the
+shared SQLite database, remove the old plugin through Hermes's plugin manager,
+and install the new subdirectory source. Updating the old root URL alone does
+not switch its installation unit. Re-enable the plugin/settings and restart. The Python wheel can be
 imported independently but does not automatically register a Hermes plugin.
 `python_runtime: external` keeps this repository out of Hermes's shared
 buildable workspace; use Hermes's managed Python runtime for host operation.
@@ -63,11 +71,18 @@ Registered surfaces:
 
 ## Admission and private dependencies
 
-Run the actual host admission check against the release checkout:
+Run the actual host admission check against the subdirectory in a clean
+checkout of the release commit:
 
 ```sh
-hermes plugins validate --install-deps /path/to/session-navigation
+hermes plugins validate --install-deps /path/to/session-navigation/hermes-plugin
 ```
+
+Validation of the committed subdirectory passes with `security scan — safe`.
+The unchanged Python policy still produces three medium `sudo_usage` notes
+(comment and quoted command-parser literals); medium notes are verdict-neutral.
+The repository-wide fixture corpus and TypeScript artifacts are not part of
+this Python runtime distribution. No scanner rules or detection strings changed.
 
 The manifest matches actual registrations. Private-import warnings remain
 intentionally: `_delivery_manager` counts competing middleware and
@@ -77,10 +92,17 @@ feature-identical: a failed manager lookup assumes zero competing middleware,
 and token estimation falls back to character-count/4.
 
 Evaluation harnesses and developer probes also import private APIs but are
-not loaded by the installed plugin. See the
+outside the installed subdirectory and are not loaded or scanned as runtime
+plugin files. The two warnings inside the distribution are the vendor adapter
+imports; their canonical adapter sources remain identical. See the
 [review disclosure](release/hermes-pr-body.md) for all review implications.
 A warning-only validator result does not waive the catalog's public-surface
 policy or guarantee acceptance.
+
+Canonical engine/adapter sources remain in `src/session_navigation/` and
+`adapters/hermes/`. Synchronize with `uv run python tools/sync_hermes_vendor.py`;
+verify without writing with `uv run python tools/sync_hermes_vendor.py --check`.
+Do not edit vendor copies independently.
 
 For human-facing supervision examples, see
 [the Hermes supervision guide](hermes-human-supervision.md).

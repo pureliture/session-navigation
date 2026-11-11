@@ -34,6 +34,7 @@ the pre-preparation `da8fd46` pin.
 (cd packages/omp && bun install && npm run typecheck && npm test)
 (cd paseo-plugin && npm ci && npm run typecheck && npm run build && npm test)
 (cd packages/core && npm test && bun run test:bun)
+uv run python tools/sync_hermes_vendor.py --check
 uv run pytest
 PYTHONPATH=src uv run python tools/core_conformance.py
 uv build --out-dir "$RELEASE_DIR/python"
@@ -41,7 +42,7 @@ uv build --out-dir "$RELEASE_DIR/python"
 (cd paseo-plugin && npm pack --dry-run --ignore-scripts && npm pack --ignore-scripts --pack-destination "$RELEASE_DIR")
 git diff --check
 git status --short
-hermes plugins validate --install-deps "$PWD"
+hermes plugins validate --install-deps "$PWD/hermes-plugin"
 ```
 
 - [ ] Investigate any generated-source drift; do not publish stale workers.
@@ -51,7 +52,11 @@ hermes plugins validate --install-deps "$PWD"
 - [ ] Keep `@session-navigation/core` private/bundled; do not publish it.
 - [ ] Verify source/vendor parity and fresh wheel plugin-root/engine/adapter
   imports in an isolated venv. The Python suite includes that packaging smoke.
-- [ ] Review retained private-import warnings; safe scanner output is not a
+- [ ] Validate `hermes-plugin/` from a clean clone/archive of the committed SHA,
+  not a worktree with build outputs. The catalog entry must retain
+  `subdir: hermes-plugin`. Confirm the local Git subdirectory installation loads
+  all five tools, two hooks and both middleware callbacks in an isolated home.
+- [ ] Review retained runtime private-import warnings; safe scanner output is not a
   waiver of the Hermes catalog's public-surface policy.
 - [ ] Use a clean host profile to load the OMP tarball via Bun in its plugin
   dependency directory; OMP 18.18.3 does not install local tarballs directly.
@@ -116,7 +121,7 @@ git switch -c add-session-navigation-0.1.0
 sed "s/<FILL_AFTER_MERGE>/$RELEASE_SHA/g" \
   "$SESSION_NAVIGATION_REPO/docs/release/hermes-catalog.yaml" \
   > plugin-catalog/session-navigation.yaml
-hermes plugins validate --install-deps "$SESSION_NAVIGATION_REPO"
+hermes plugins validate --install-deps "$SESSION_NAVIGATION_REPO/hermes-plugin"
 git diff --check
 git add plugin-catalog/session-navigation.yaml
 git commit -m "Add session-navigation 0.1.0 to catalog"
@@ -125,7 +130,10 @@ gh pr create --repo NousResearch/hermes-agent --title "Add session-navigation 0.
   --body-file "$SESSION_NAVIGATION_REPO/docs/release/hermes-pr-body.md"
 ```
 
-Attach exact-SHA validation evidence and disclose both retained private APIs.
+Attach exact-SHA subdirectory validation and isolated install/load evidence,
+and disclose both retained private APIs in the canonical adapter and vendor
+mirror. The catalog disables inline README rendering because its runtime-only
+subdirectory has no README; `docs_url` links the repository's installation guide.
 Wait for CI and maintainer review; never self-mark the entry verified/official.
 A maintainer may require public replacements before admission.
 

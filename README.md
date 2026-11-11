@@ -176,21 +176,21 @@ hermes plugins install session-navigation
 ```
 
 Until approval, install the public Git repository as below. The catalog and Git
-routes both use the repository root, not the Python wheel.
+routes both use `hermes-plugin/`, not the repository root or the Python wheel.
 
-Live ACP verification used Hermes source commit `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8` (earlier plugin tests used `109fd8161a509db5a00942152ba48882e446e8b0`). The repository-root `plugin.yaml`, `__init__.py`, and `vendor/` form a standalone Python plugin. Hermes requires Python through its own managed runtime; Paseo and OMP do not. No shared CLI installation is needed.
+Live ACP verification used Hermes source commit `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8` (earlier plugin tests used `109fd8161a509db5a00942152ba48882e446e8b0`). The `hermes-plugin/` directory contains the standalone manifest, loader, MIT LICENSE and vendored Python engine/adapter. Hermes requires Python through its own managed runtime; Paseo and OMP do not. No shared CLI installation is needed.
 
 ```bash
-hermes plugins install pureliture/session-navigation --ref main --no-enable
+hermes plugins install pureliture/session-navigation/hermes-plugin --ref main --no-enable
 hermes plugins enable session-navigation
 hermes config set plugins.entries.session-navigation.settings.enabled true
 ```
 
 Install and enable it in the intended Hermes profile. For a pinned installation, replace `--ref main` with a reviewed **40-character commit SHA**. Host-level plugin activation and the plugin's `settings.enabled` are separate. The latter defaults to `false`: until enabled, tools return `disabled` and do not record or modify requests. Start a new session after configuration. If a gateway is running, follow the host's restart instructions.
 
-`vendor/` contains the engine and adapter's Python source. With `python_runtime: external`, the repository's `pyproject.toml` is not installed into Hermes's shared environment. Installing a Python wheel alone does not register the Hermes plugin.
+`hermes-plugin/vendor/` contains the engine and adapter's runtime copies. With `python_runtime: external`, the repository's `pyproject.toml` is not installed into Hermes's shared environment. Installing a Python wheel alone does not register the Hermes plugin.
 
-After updating, restart any running **Hermes gateway completely**, as well as reopening the CLI. Plugin reload does not clear Python's global `session_navigation` / `session_navigation_hermes` module cache. If the fingerprint of already loaded engine or adapter source differs from the deployed vendor copy, the plugin refuses to load and asks for a restart. Other versions installed in the shared environment are subject to the same check; the plugin does not forcibly replace those modules. Official catalog validation has not yet passed; see [distribution](#hermes-repository-root-to-the-sha-pinned-official-catalog).
+After updating, restart any running **Hermes gateway completely**, as well as reopening the CLI. Plugin reload does not clear Python's global `session_navigation` / `session_navigation_hermes` module cache. If the fingerprint of already loaded engine or adapter source differs from the deployed vendor copy, the plugin refuses to load and asks for a restart. Other versions installed in the shared environment are subject to the same check; the plugin does not forcibly replace those modules. Subdirectory admission validation passes, but catalog approval is still pending; see [distribution](#distribution-and-publication). For an older root installation, preserve state and reinstall from the subdirectory as described in [the Hermes guide](docs/hermes-plugin.md).
 
 ### Upgrade / migration
 
@@ -276,7 +276,7 @@ See [backend evidence](docs/subagent-backend-verification.md).
 | `extensions/pi/session-navigation.ts` | Thin legacy development shim |
 | `paseo-plugin/` | Paseo client panel, capability-gated server RPC and embedded Node worker |
 | `adapters/hermes/` | Hermes tools, middleware, `/nav`, and usage footer |
-| `plugin.yaml`, `__init__.py`, `vendor/` | Hermes-loadable distribution root and pinned source copies |
+| `hermes-plugin/` | Hermes-only distribution: manifest, loader, LICENSE and vendored Python packages |
 
 ## Development and testing
 
@@ -293,7 +293,10 @@ bun test
 
 Check Python distributions with `uv build` from the root and Paseo package contents with `npm pack --dry-run --ignore-scripts` in `paseo-plugin/`. After changing the core or Paseo worker/service, run `npm run build` in `paseo-plugin/` and commit the generated embedded worker before release.
 
-Update the Hermes `vendor/` copies with their sources: check Python source parity between `src/session_navigation/` and `vendor/session_navigation/`, and between `adapters/hermes/` and `vendor/session_navigation_hermes/`. The Python package builds as wheel/sdist, but PyPI publication is not automated.
+Canonical Python sources stay in `src/session_navigation/` and `adapters/hermes/`.
+Run `uv run python tools/sync_hermes_vendor.py` to synchronize both into
+`hermes-plugin/vendor/`; `uv run python tools/sync_hermes_vendor.py --check`
+is the single read-only parity check also used by the Python suite. The Python package builds as wheel/sdist, but PyPI publication is not automated.
 
 ## Distribution and publication
 
@@ -305,7 +308,7 @@ merged commit. There is no automated GitHub Actions publishing workflow.
 | --- | --- | --- |
 | OMP | Public npm `@pureliture/session-navigation-omp@0.1.0` | `omp plugin install @pureliture/session-navigation-omp@0.1.0` |
 | Paseo | Public npm `@pureliture/session-navigation-paseo@0.1.0`, then reviewed registry slug `pureliture/session-navigation` | `paseo plugin add pureliture/session-navigation` |
-| Hermes | Official plugin catalog, repository root pinned to a full 40-character SHA | `hermes plugins install session-navigation` |
+| Hermes | Official plugin catalog, `subdir: hermes-plugin` at a full 40-character SHA | `hermes plugins install session-navigation` |
 
 Both npm packages bundle their worker/core and include MIT LICENSE. The core
 workspace package stays private. Paseo's runtime plugin ID remains `paseo-plugin`
@@ -315,8 +318,11 @@ require a publishable locked dependency tree under its publishing policy.
 
 Hermes now declares all five tools, both observer hooks and both middleware
 registrations, with `requires_hermes: ">=0.20.1"`. Admission validation with
-dependency preparation passes; the intentionally retained private-import warnings
-still need maintainer review. A passing validator does not guarantee catalog admission.
+dependency preparation passes against the committed `hermes-plugin/` distribution;
+the intentionally retained runtime private-import warnings still need maintainer review.
+The repository root is no longer a plugin installation unit. Its fixture corpus
+still produces dangerous scanner findings; no strings were concealed or scanner
+rules bypassed to obtain the subdirectory result. A passing validator does not guarantee catalog admission.
 
 See [the release checklist](docs/release/checklist.md),
 [Paseo submission draft](docs/release/paseo-submission.md),

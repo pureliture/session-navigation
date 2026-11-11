@@ -2,7 +2,12 @@
 
 **Draft only. No catalog PR has been opened.**
 Replace `<FILL_AFTER_MERGE>` with the full reviewed merge SHA in the entry.
-The distribution unit is the public repository root; there is no `subdir`.
+The distribution unit is `hermes-plugin/`, selected by `subdir: hermes-plugin`.
+It contains the manifest, loader, MIT LICENSE and vendored Python runtime only.
+Canonical engine/adapter sources remain in `src/session_navigation/` and
+`adapters/hermes/`; `tools/sync_hermes_vendor.py --check` verifies both mirrors.
+The runtime adapter equivalent is `vendor/session_navigation_hermes/` within
+that subdirectory. No duplicate editable adapter tree is shipped.
 
 ## Purpose and declared surfaces
 
@@ -19,7 +24,8 @@ We intentionally retain these dependencies, with no claim that warning-level
 validation waives catalog rule 9:
 
 1. **`hermes_cli.plugins._delivery_manager`** in
-   `adapters/hermes/factories.py:100` and its vendor mirror. It reads the
+   canonical `adapters/hermes/factories.py:100` and its identical runtime mirror
+   `hermes-plugin/vendor/session_navigation_hermes/factories.py:100`. It reads the
    active manager's middleware list to count other `llm_request` callbacks.
    If another callback exists, the plugin records results but leaves requests
    untouched instead of claiming sole rewrite ownership. No public middleware
@@ -28,7 +34,8 @@ validation waives catalog rule 9:
    guaranteed equivalent behavior. We would adopt a public enumeration seam.
 
 2. **`agent.model_metadata.estimate_tokens_rough`** in
-   `adapters/hermes/usage.py:13` and its vendor mirror. It supplies Hermes's
+   canonical `adapters/hermes/usage.py:13` and its identical runtime mirror
+   `hermes-plugin/vendor/session_navigation_hermes/usage.py:13`. It supplies Hermes's
    Unicode-aware token estimates for item allocation, savings/footer information
    and pressure reminders. No public token-estimation helper is documented.
    ImportError falls back to ceiling(character count/4), which is less accurate
@@ -43,7 +50,10 @@ Other warnings are from `eval/{hermes,quality_hermes,v2_hermes}.py`
 (`AIAgent`, discovery and manager access) and
 `tools/probe_{plugin_manager,supervision}.py` (`PluginManager`).
 Those are development-only evaluation/probe programs, not imports performed
-by plugin registration or session handling. They remain visible for review.
+by plugin registration or session handling. They remain in the public repository
+for review but are outside the installed/scanned subdirectory. Admission reports
+two runtime import sites, both in the vendor adapter; their canonical sources
+are retained outside the distribution.
 
 Public-surface references in the Hermes source:
 `hermes_cli/data/plugin_api.json`,
@@ -51,20 +61,25 @@ Public-surface references in the Hermes source:
 `hermes_cli/plugins_context.py` and
 `website/docs/developer-guide/plugin-llm-access.md`.
 
-## Scanner remediation
+## Distribution boundary and scan result
 
-The conformance JSON includes deliberately hostile command/instruction examples.
-Their source spellings now use JSON Unicode escapes; the decoded test values
-are byte-for-byte unchanged, and both engines' differential vectors still pass.
-No fixtures were excluded and no scanner rule was disabled.
+The repository-wide scan is dangerous because the conformance corpus contains
+literal hostile instruction/command examples; the TypeScript policy also
+contains a bare command-wrapper key. Those strings remain unmodified.
+We do not escape, split or otherwise conceal detection strings, and no scanner
+rule or exclusion setting has been changed.
 
-The TypeScript policy's command-wrapper lookup key uses
-`["su", "do"].join("")` in a computed property instead of a bare literal token.
-It still recognizes exactly the same wrapper and options; this is recognition
-code, not command execution. The regenerated Paseo worker and rebuilt OMP worker
-preserve that construction. This removes the prior `sudo_usage` false positives
-without weakening policy. Reviewer inspection of both source and generated
-JavaScript is requested rather than treating a clean scan as proof of safety.
+The catalog installs only the Python runtime at `hermes-plugin/`. It does not
+install the repository's tests, evaluation harnesses, TypeScript hosts, build
+outputs or documentation. The committed subdirectory passes the real admission
+validator with dependency preparation and a safe security verdict.
+
+Three medium `sudo_usage` notes remain in
+`vendor/session_navigation/policy.py:350,352,368` (paths relative to the plugin
+directory). These are a flag-parser comment, a quoted wrapper-option key and
+quoted wrapper-name membership. They are legitimate detection logic, not
+execution. The unmodified scanner's comment/whole-literal context rules demote
+them to medium; they are retained in the scan report and are verdict-neutral.
 
 ## Risk/data disclosure
 
@@ -85,10 +100,10 @@ JavaScript is requested rather than treating a clean scan as proof of safety.
 ## Evidence to attach at the pinned release SHA
 
 ```sh
-hermes plugins validate --install-deps /path/to/session-navigation
+hermes plugins validate --install-deps /path/to/session-navigation/hermes-plugin
 ```
 
-Release-preparation validation passed with `security scan — safe`, matching
+Clean committed-subdirectory release-preparation validation passed with `security scan — safe`, matching
 capabilities and the expected private-import warnings. Attach a fresh log at
 the exact merged SHA before submission. See the release checklist for wheel,
 parity, conformance and host checks. Catalog admission still requires human

@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
+PLUGIN = REPO / "hermes-plugin"
 HERMES_REPO = Path(
     os.environ.get("HERMES_REPO", str(Path.home() / ".hermes" / "hermes-agent"))
 ).resolve()
@@ -52,17 +53,17 @@ def host_modules():
 
 
 def _load_root_by_path():
-    """Import the repo root the way ``_load_directory_module`` does."""
+    """Import the plugin root the way ``_load_directory_module`` does."""
     import importlib.util
 
     name = "session_navigation_plugin_root_host_test"
     spec = importlib.util.spec_from_file_location(
-        name, REPO / "__init__.py", submodule_search_locations=[str(REPO)]
+        name, PLUGIN / "__init__.py", submodule_search_locations=[str(PLUGIN)]
     )
     assert spec is not None and spec.loader is not None, "no spec for plugin root"
     module = importlib.util.module_from_spec(spec)
     module.__package__ = name
-    module.__path__ = [str(REPO)]  # type: ignore[attr-defined]
+    module.__path__ = [str(PLUGIN)]  # type: ignore[attr-defined]
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
@@ -92,7 +93,7 @@ class _HostCtx:
 
 def test_host_manifest_parser_accepts_this_repository(host_modules) -> None:
     manifest_mod = host_modules[0]
-    root = REPO
+    root = PLUGIN
     manifest = manifest_mod.parse_manifest_file(
         root / "plugin.yaml", root, "user", ""
     )

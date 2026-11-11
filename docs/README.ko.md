@@ -168,11 +168,11 @@ upstream **pi**와의 호환성은 검증하지 않았습니다.
 
 실제 ACP 검증에는 Hermes 소스 `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8`을,
 이전 플러그인 검사에는 `109fd8161a509db5a00942152ba48882e446e8b0`을 사용했습니다.
-루트 `plugin.yaml`, `__init__.py`, `vendor/`가 독립 플러그인입니다.
+`hermes-plugin/`의 manifest, loader, MIT LICENSE와 vendor Python 트리가 독립 배포 단위입니다.
 Python은 Hermes 자체 관리 런타임으로 제공하며 공통 CLI 설치는 필요하지 않습니다.
 
 ```bash
-hermes plugins install pureliture/session-navigation --ref main --no-enable
+hermes plugins install pureliture/session-navigation/hermes-plugin --ref main --no-enable
 hermes plugins enable session-navigation
 hermes config set plugins.entries.session-navigation.settings.enabled true
 ```
@@ -182,13 +182,14 @@ hermes config set plugins.entries.session-navigation.settings.enabled true
 내부 설정은 기본 `false`이며 비활성 상태에서는 도구가 `disabled`를 반환하고 요청을 기록하거나
 변경하지 않습니다. 설정 후 새 세션을 시작하세요.
 
-`vendor/`는 Python 엔진과 어댑터 소스 사본입니다. `python_runtime: external`은
+`hermes-plugin/vendor/`는 Python 엔진과 어댑터 소스 사본입니다. `python_runtime: external`은
 루트 `pyproject.toml`을 Hermes 공유 환경에 설치하지 않습니다.
 Python wheel만 설치해서는 Hermes 플러그인이 등록되지 않습니다.
 업데이트 후 CLI와 **Hermes gateway를 완전히 재시작**해야 합니다. 단순 plugin reload는
 Python 모듈 캐시를 비우지 않습니다. 로드된 소스와 vendor의 fingerprint가 다르면 플러그인은
 로드를 거부하며 재시작을 요청하고 다른 설치본을 강제로 덮어쓰지 않습니다.
-공식 카탈로그 검증은 아직 완료되지 않았습니다.
+`hermes-plugin/`의 admission 검증은 통과하지만 카탈로그 승인은 아직 대기 중입니다.
+이전 루트 설치는 상태 DB를 보존하고 하위 디렉터리 경로로 다시 설치하세요([안내](hermes-plugin.md)).
 
 ### 업그레이드 / 마이그레이션
 
@@ -280,7 +281,7 @@ reminder를 받지 않습니다. [백엔드 검증 근거](subagent-backend-veri
 | `extensions/pi/session-navigation.ts` | 개발용 legacy shim |
 | `paseo-plugin/` | Paseo 패널·capability-gated RPC·내장 Node Worker |
 | `adapters/hermes/` | Hermes 도구, 미들웨어, `/nav`, 사용량 footer |
-| `plugin.yaml`, `__init__.py`, `vendor/` | Hermes가 직접 로드하는 배포 루트와 고정 소스 사본 |
+| `hermes-plugin/` | Hermes 전용 manifest·loader·LICENSE·vendor Python 배포 단위 |
 
 ## 개발과 테스트
 
@@ -299,9 +300,9 @@ Python 배포물은 루트에서 `uv build`, Paseo 파일 구성은 `paseo-plugi
 `npm pack --dry-run --ignore-scripts`로 확인합니다. 코어/Worker/service를 변경하면
 `paseo-plugin/`에서 `npm run build`를 실행하고 생성된 `server/worker-source.ts`를 커밋하세요.
 
-`vendor/`를 쓰는 Hermes 배포는 원본과 함께 갱신해야 합니다.
-`src/session_navigation/` ↔ `vendor/session_navigation/`,
-`adapters/hermes/` ↔ `vendor/session_navigation_hermes/`의 Python 소스 일치를 확인하세요.
+Python 원본은 `src/session_navigation/`와 `adapters/hermes/`에 유지합니다.
+`uv run python tools/sync_hermes_vendor.py`로 두 소스를 `hermes-plugin/vendor/`에 동기화하고,
+`uv run python tools/sync_hermes_vendor.py --check`로 검사합니다. Python suite도 같은 검사를 사용합니다.
 `__pycache__`를 제거한 뒤 `diff -ru`로 비교하세요.
 Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아직 없습니다.
 
@@ -312,10 +313,12 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 - **OMP:** npm `@pureliture/session-navigation-omp@0.1.0`.
 - **Paseo:** npm `@pureliture/session-navigation-paseo@0.1.0` 게시 후 검토 레지스트리
   `pureliture/session-navigation`으로 제출합니다. MIT LICENSE와 내장 Worker가 tarball에 포함됩니다.
-- **Hermes:** 저장소 루트를 공식 카탈로그에 **40자리 SHA**로 고정합니다.
+- **Hermes:** 공식 카탈로그에서 `subdir: hermes-plugin`과 **40자리 SHA**를 고정합니다.
   다섯 도구, `post_api_request`/`subagent_start` 훅,
   `llm_request`/`tool_request` 미들웨어 및 `>=0.20.1`을 선언합니다.
-  의존성 준비를 포함한 validate는 통과하지만 유지한 private import 경고는 심사가 필요합니다.
+  커밋된 `hermes-plugin/`에 대한 의존성 준비 포함 validate는 통과하지만 runtime private import 경고는 심사가 필요합니다.
+  저장소 루트는 더 이상 설치 단위가 아니며 fixture의 dangerous scanner 결과도 그대로입니다.
+  탐지 문자열을 숨기거나 scanner 규칙을 우회하지 않았습니다.
 
 명시적 Summarize는 기존 rule Hide를 LLM 요약으로 업그레이드합니다.
 승인된 기존 LLM 요약은 재호출 없이 반환합니다. 사실 검증 실패에는 영어 피드백으로

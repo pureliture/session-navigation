@@ -21,8 +21,8 @@ def test_wheel_plugin_root_imports_in_fresh_processes(tmp_path: Path) -> None:
         names = archive.namelist()
         assert not any(name.endswith((".pyc", ".pyo")) for name in names)
         for source, package in [
-            (repo / "vendor/session_navigation", "session_navigation"),
-            (repo / "vendor/session_navigation_hermes", "session_navigation_hermes"),
+            (repo / "hermes-plugin/vendor/session_navigation", "session_navigation"),
+            (repo / "hermes-plugin/vendor/session_navigation_hermes", "session_navigation_hermes"),
         ]:
             for path in source.rglob("*.py"):
                 bundled = f"session_navigation_plugin_root/vendor/{package}/{path.relative_to(source).as_posix()}"

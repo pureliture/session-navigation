@@ -4,6 +4,7 @@ name: session-navigation
 title: Session navigation
 repo: https://github.com/pureliture/session-navigation
 sha: <FILL_AFTER_MERGE>
+subdir: hermes-plugin
 description: >-
   Reversible request-side context management using deterministic Hide, session-model
   Summarize and exact Unhide. Disclosure: stores selected session originals and
@@ -16,7 +17,7 @@ category: memory
 requires_hermes: ">=0.20.1"
 version: "0.1.0"
 docs_url: https://github.com/pureliture/session-navigation/blob/main/docs/hermes-plugin.md
-readme: true
+readme: false
 platforms: []
 known_issues:
   - Two guarded private Hermes helpers require maintainer review and may change between releases.

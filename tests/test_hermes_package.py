@@ -3,9 +3,9 @@
 These tests deliberately DO NOT use the ``_adapter_loader`` shim. They exercise
 the packaging contract the installed Hermes plugin manager actually reads:
 
-- ``plugin.yaml`` exists at the repo root and parses as a Hermes plugin manifest
+- ``plugin.yaml`` exists in hermes-plugin/ and parses as a Hermes plugin manifest
   (manifest_version must be an int <= the supported version).
-- the repo-root ``__init__.py`` exports ``register``
+- the plugin-directory ``__init__.py`` exports ``register``
 - importing the package root pulls the engine and the adapter together, so a
   wheel built from ``pyproject.toml`` cannot ship a plugin whose ``register``
   fails on ``import session_navigation``
@@ -25,8 +25,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-MANIFEST = REPO / "plugin.yaml"
-PACKAGE_INIT = REPO / "__init__.py"
+PLUGIN = REPO / "hermes-plugin"
+MANIFEST = PLUGIN / "plugin.yaml"
+PACKAGE_INIT = PLUGIN / "__init__.py"
 
 
 def _yaml_loader():
@@ -75,8 +76,6 @@ def test_root_package_exports_register() -> None:
 
 
 def test_root_import_brings_engine_and_adapter(tmp_path: Path) -> None:
-    # The plugin root lives at the repo top level, where pytest would also try
-    # to import it as a test package. Load it by path, the way Hermes does.
     assert PACKAGE_INIT.is_file()
     module = _load_plugin_root()
     from session_navigation.engine import SessionNavigationEngine
@@ -90,7 +89,7 @@ def _load_plugin_root():
 
     name = "session_navigation_plugin_root_under_test"
     spec = importlib.util.spec_from_file_location(
-        name, PACKAGE_INIT, submodule_search_locations=[str(REPO / "src")]
+        name, PACKAGE_INIT, submodule_search_locations=[str(PLUGIN)]
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -116,7 +115,7 @@ def test_engine_stays_host_neutral() -> None:
 def test_root_rejects_preloaded_unverified_packages(stale, tmp_path):
     code = f"""
 import importlib.util, sys, types
-sys.path.insert(0, {str(REPO / 'vendor')!r})
+sys.path.insert(0, {str(PLUGIN / 'vendor')!r})
 import session_navigation
 if {stale!r} == 'session_navigation_hermes':
     import session_navigation_hermes
@@ -143,7 +142,7 @@ def test_root_detects_in_place_bundle_update_on_reload(tmp_path):
     import shutil
 
     shutil.copy(PACKAGE_INIT, tmp_path / "__init__.py")
-    shutil.copytree(REPO / "vendor", tmp_path / "vendor", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(PLUGIN / "vendor", tmp_path / "vendor", ignore=shutil.ignore_patterns("__pycache__"))
     code = """
 import importlib.util
 from pathlib import Path
@@ -227,29 +226,8 @@ def test_plugin_registers_through_root_export_default_off() -> None:
 
 
 def test_vendored_packages_match_source_trees() -> None:
-    pairs = (
-        (REPO / "src" / "session_navigation", REPO / "vendor" / "session_navigation"),
-        (REPO / "adapters" / "hermes", REPO / "vendor" / "session_navigation_hermes"),
+    result = subprocess.run(
+        [sys.executable, str(REPO / "tools/sync_hermes_vendor.py"), "--check"],
+        capture_output=True, text=True,
     )
-    for source_dir, vendor_dir in pairs:
-        def file_bytes(directory: Path) -> dict[Path, bytes]:
-            return {
-                path.relative_to(directory): path.read_bytes()
-                for path in directory.rglob("*")
-                if path.is_file()
-                and "__pycache__" not in path.parts
-                and path.suffix not in {".pyc", ".pyo"}
-            }
-
-        source = file_bytes(source_dir)
-        vendored = file_bytes(vendor_dir)
-        missing = sorted(str(path) for path in source.keys() - vendored.keys())
-        extra = sorted(str(path) for path in vendored.keys() - source.keys())
-        different = sorted(
-            str(path) for path in source.keys() & vendored.keys()
-            if source[path] != vendored[path]
-        )
-        assert not (missing or extra or different), (
-            f"vendor drift for {source_dir.name}: "
-            f"missing={missing}, extra={extra}, different={different}"
-        )
+    assert result.returncode == 0, result.stdout + result.stderr

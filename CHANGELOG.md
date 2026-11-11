@@ -10,7 +10,8 @@ Publication and registry/catalog approval are separate steps; see
 - Prepare public npm packages `@pureliture/session-navigation-omp` and
   `@pureliture/session-navigation-paseo`, both version 0.1.0.
 - Prepare Paseo reviewed-registry slug `pureliture/session-navigation` and
-  the Hermes `session-navigation` catalog entry, pinned to a reviewed full SHA.
+  the Hermes `session-navigation` catalog entry, pinned to a reviewed full SHA
+  with `subdir: hermes-plugin`.
 - Retire the standalone Python CLI and OMP Python daemon. OMP and Paseo use
   the bundled TypeScript core and need no Python installation. Hermes keeps
   the Python engine and synchronized vendor mirror.
@@ -20,6 +21,12 @@ Publication and registry/catalog approval are separate steps; see
   only to remove an existing legacy uv tool installation.
 - Import preserved legacy `pi:` state into new `omp:` scopes once, without
   deleting or modifying the original legacy rows.
+- Distribute Hermes from `hermes-plugin/`, containing only its loader, manifest,
+  MIT LICENSE and unchanged vendored Python runtime. Preserve all detection
+  strings; repository fixtures and TypeScript packages remain outside that unit.
+  Canonical engine/adapter sources stay in `src/session_navigation/` and
+  `adapters/hermes/`; `tools/sync_hermes_vendor.py` synchronizes both mirrors and
+  `--check` supplies the parity gate. Direct Git installs must select the subdir.
 - Include the plugin root's adjacent vendor tree in Python wheels so fresh
   wheel imports work. A wheel alone does not register a Hermes plugin.
 
