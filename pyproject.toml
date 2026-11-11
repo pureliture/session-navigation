@@ -56,6 +56,7 @@ packages = ["src/session_navigation", "adapters/hermes"]
 "__init__.py" = "session_navigation_plugin_root/__init__.py"
 "plugin.yaml" = "session_navigation_plugin_root/plugin.yaml"
 "adapters/hermes" = "session_navigation_hermes"
+"vendor" = "session_navigation_plugin_root/vendor"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
