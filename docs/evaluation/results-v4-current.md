@@ -2134,3 +2134,108 @@ PASS seven host fingerprints unchanged from fixed df47548 campaign
 PASS 37 upstream attempts/responses/ledger charges reconciled; Relace/no fallback/reasoning off; spend $0.004215000
 PASS 4 successful restores exact under original IDs; zero work calls in restore turns; no key in artifacts
 ```
+
+## Targeted live Hide → Summarize upgrades (`a9c2ee5`, product code `fe75673`)
+
+The preceding live coverage limitation is now closed by **two real OMP sessions
+and one real Hermes session**. All three execute the already-hidden upgrade
+branch, not a fresh-item summary. Evaluated checkout:
+`a9c2ee50c89cd81d3039b651ea2ca80064070018`; its product paths are byte-identical
+to `fe75673`. No product or installed-host code changed for this check.
+
+### Deterministic setup and gates
+
+Each session reads the same complete `audit-01.jsonl` component fixture through
+its actual native read tool. After turn 1, an external gate uses the shared
+Python engine's deterministic `compact` mutation on that verified tool-call/result
+identity, in the session's existing SQLite scope. OMP identity/content comes from
+the native paired history; Hermes uses its verified published target. This is
+the approved **engine mutation path**, not a fabricated model tool call or a raw
+SQL replacement write. It preserves the three labelled facts with `keep_lines`.
+
+Before allowing turn 2, the gate asserts **source=`rule`, hidden, version=1**.
+The user then explicitly instructs the actual host to call `summarize_context`
+on that same literal tool-call ID, without Unhide or work-tool execution first.
+After turn 2, a second gate requires **source=`llm`, hidden, version=2**. Turn 3
+instructs the host to Unhide the same literal item ID; the final gate requires
+**source=`llm`, visible, version=3** and unchanged original identity/hash/content.
+The gates stop a trial rather than let a missing upgrade be counted as success.
+
+An offline real-host/stub run passed all three gated flows before paid calls.
+The external host runners derive from the existing `eval/v2_omp.ts` and
+`eval/v2_hermes.py`, with only between-turn gates and explicit target IDs added.
+Controller/host/gate hashes, raw wires, native histories, per-stage item snapshots,
+the final audit and budget remain outside git at
+`/Users/devin/nav-phase0-gates/step8-eval/targeted-upgrade/`.
+
+Setup remains **DeepSeek V4.1 Flash 1017 / Relace only / no fallback / reasoning
+off**, 65,536-token window and the same hosts. All seven host-file fingerprints
+match the earlier campaign. The guarded proxy limit is **$5**. No historical,
+long-session or previous component trial was rerun; no additional judges were
+requested or run for these narrowly targeted checks.
+
+### Results
+
+| Targeted live trial | Source / version / visibility | Original bytes | Late-fact character offset | Facts in outgoing LLM replacement | Read calls total | Restore exact / restore work calls | Requests | Billed USD |
+|---|---|---:|---:|---:|---:|---|---:|---:|
+| OMP 1 | rule/v1/hidden → llm/v2/hidden → llm/v3/visible | 21,697 | 15,601 | 3/3 | 1 | Yes / 0 | 8 | $0.000858772 |
+| OMP 2 | rule/v1/hidden → llm/v2/hidden → llm/v3/visible | 21,698 | 15,601 | 3/3 | 1 | Yes / 0 | 9 | $0.001047692 |
+| Hermes 1 | rule/v1/hidden → llm/v2/hidden → llm/v3/visible | 25,247 | 18,068 | 3/3 | 1 | Yes / 0 | 9 | $0.000989158 |
+| **Total** | **3/3 live upgrades** | — | **All >12,000** | **9/9** | **3** | **3/3 / 0** | **26** | **$0.002895622** |
+
+Lengths refer to authoritative native result strings, including host formatting,
+not file bytes: Hermes includes its JSON/line-number wrapper, and the two OMP
+results differ by one byte of native formatting. Each is compared against its
+own first native original; neither is normalized for restoration.
+
+There was **one LLM summary call per trial, zero factual retries**. The complete
+stored original is verified byte-for-byte against the summarizer input in every
+case. The accepted replacements all contain `owner=component-team-1`,
+`audit_seal=component-9e54cadbf4` and the late `latency_budget_ms=151`.
+For example, OMP 1's live response includes:
+
+> Embedded metadata lines state owner=component-team-1,
+> audit_seal=component-9e54cadbf4, latency_budget_ms=151, and
+> audited_regions=us-east,eu-west,ap-south; document=component-1.
+
+Hermes's live JSON summary likewise includes:
+
+> It also contains metadata lines: owner=component-team-1,
+> audit_seal=component-9e54cadbf4, latency_budget_ms=151, and
+> audited_regions=us-east,eu-west,ap-south; document=component-1.
+
+### Wire-level proof
+
+For each trial the first outgoing turn-2 request contains the exact stored rule
+replacement under the original tool-call ID. The **first ordinary model request
+after the accepted summary response** contains the exact stored LLM replacement
+under that same ID—not the old Hide or the original. The final post-Unhide
+request contains the exact first native original under that ID. Each session
+executes its native read only once and has **zero work-tool calls in the restore
+turn**.
+
+| Trial / stored item | Rule-projected request | Summary-model response | First LLM-projected request | Restored-original request |
+|---|---|---|---|---|
+| OMP 1 / `item_5d516f97d715b27e` | `bf38bda949854bfa9131a7195100f230` | `933febe26fc74ba799934d44ade56357` | `07598cc166394ba694a896c867a3a51d` | `839432153c834256b16daf3859778d9c` |
+| OMP 2 / `item_36c5b9e23d632f64` | `148e0c72f4134430ac763ded75857255` | `af1c00c2812540c78edb4d14defb2a62` | `1e441b3461c84fe6bfc85d8ec584357b` | `fa0f21d66e284bbd90a99e35939dc54a` |
+| Hermes 1 / `item_cd716664d5a66925` | `29cb1cee121748eaa26c5b9688efef2a` | `ee7ee5ab01294ca8ab68ef0ab8628af7` | `124ae6c9eac84c879acf53abf056875a` | `8fc0335971de49c9a4a1deb7f5480786` |
+
+All **26 upstream attempts, responses and billed ledger entries reconcile**:
+224,189 prompt tokens, 160,512 cached tokens, 3,422 output tokens and
+**$0.002895622** additional spend. No upstream failure/retry, unresolved
+reservation or $3 crossing occurred. Billed summary calls alone total
+$0.000400754; all surrounding real-host model requests are included above.
+
+```text
+PASS targeted-omp-upgrade-1 : rule v1 -> llm v2 -> visible v3; next request carries LLM; facts 3/3; restore exact; work reruns 0
+PASS targeted-omp-upgrade-2 : rule v1 -> llm v2 -> visible v3; next request carries LLM; facts 3/3; restore exact; work reruns 0
+PASS targeted-hermes-upgrade-1 : rule v1 -> llm v2 -> visible v3; next request carries LLM; facts 3/3; restore exact; work reruns 0
+PASS three real-host live trials; pinned DeepSeek/Relace/no fallback/reasoning off; seven host fingerprints unchanged
+PASS 26 requests/responses/ledger charges reconciled; spend $0.002895622; no upstream failure/retry or unresolved reservation
+```
+
+**Verdict:** the requested live upgrade branch, next-request LLM projection,
+late-fact retention and exact no-rerun restoration pass **3/3** targeted trials.
+This closes the branch-coverage gap; it does not establish stochastic quality
+equivalence or change the earlier frozen campaign metrics. Only this report is
+changed in git. Markdown was not visually rendered.
