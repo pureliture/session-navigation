@@ -9,6 +9,7 @@ spec = json.loads(Path(sys.argv[1]).read_text())
 sys.path.insert(0, spec["hermes_source"])
 from hermes_cli.plugins import discover_plugins, get_plugin_manager
 from run_agent import AIAgent
+from hermes_prompt import require_toolchain_probe, verify_toolchain_prompt
 
 turn = 0
 
@@ -21,12 +22,20 @@ def record(**value):
 discover_plugins()
 plugins = [item for item in get_plugin_manager().list_plugins() if item["name"] == "session-navigation"]
 Path(spec["output"], "plugins.json").write_text(json.dumps(plugins, default=str, indent=2))
-assert spec["arm"] == "A" or any(p["enabled"] and p["tools"] == 5 and p["middleware"] == 1 for p in plugins)
+expected_middleware = 2 if spec.get("display_arm") == "B-current" else 1
+assert spec["arm"] == "A" or any(p["enabled"] and p["tools"] == 5 and p["middleware"] == expected_middleware for p in plugins)
+toolchain_line = None
+if spec.get("require_toolchain_probe"):
+    from tools import env_probe
+    toolchain_line = require_toolchain_probe(env_probe)
 agent = AIAgent(model=spec["model"], provider="custom", api_mode="chat_completions",
     base_url=spec["proxy"] + "/" + spec["id"] + "/v1", api_key="local-eval", max_iterations=20, max_tokens=4096,
     enabled_toolsets=["file", "terminal"] + (["session_navigation"] if spec["arm"] != "A" else []),
     skip_context_files=True, skip_memory=True, skip_background_review=True, load_soul_identity=False,
     reasoning_config={"enabled": True}, quiet_mode=True, cwd=spec["workspace"], session_id=spec["id"], run_budget_seconds=600)
+if toolchain_line is not None:
+    verify_toolchain_prompt(agent, toolchain_line)
+    record(kind="toolchain_probe", line=toolchain_line)
 compressor = agent.context_compressor
 compressor.context_length = spec["window"]
 record(kind="compressor_config", context_length=compressor.context_length, threshold_percent=compressor.threshold_percent)

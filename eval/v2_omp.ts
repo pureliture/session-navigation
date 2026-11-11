@@ -52,6 +52,7 @@ session.extensionRunner?.initialize({
   getSystemPrompt: () => session.systemPrompt, runEphemeralTurn: (args: any) => session.runEphemeralTurn(args),
 });
 const extensionContext = session.extensionRunner?.createContext();
+await session.extensionRunner?.emit({ type: "session_start" });
 if (enabled && (extensionContext?.model?.id !== spec.model || extensionContext.model.contextWindow !== spec.window)) {
   throw new Error("Extension session model/window is not bound");
 }

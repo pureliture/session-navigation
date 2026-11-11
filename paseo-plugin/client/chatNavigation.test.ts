@@ -46,6 +46,37 @@ class Element {
   scrollIntoView() { this.scrolled = true; }
 }
 
+test("subagent fallback opens the main agent before waiting for its chat and scrolling the row", async () => {
+  const target = row("main-message", "user");
+  const node = new Element({ "data-message-id": "main-message" });
+  const root = new Element({ "data-testid": "agent-chat-scroll" }).add(node);
+  let mounted = false, opened = false, waits = 0;
+  const doc = { querySelectorAll: (selector: string) => selector.includes("aria-selected")
+    ? [new Element({ "data-testid": mounted ? "workspace-tab-agent_main" : "workspace-tab-provider_subagent_4_main_5_child" })]
+    : mounted ? [root] : [] };
+  expect(await scrollToMessageInChat(target, [target], {
+    document: doc,
+    openAgent: { agentId: "main", open: () => { opened = true; expect(node.scrolled).toBe(false); } },
+    afterLoad: async () => { expect(opened).toBe(true); waits++; mounted = true; },
+  })).toBe(true);
+  expect(waits).toBe(1);
+  expect(node.scrolled).toBe(true);
+});
+
+test("failed or unavailable main navigation reports failure without scrolling the child", async () => {
+  const f = fixture();
+  let missing = 0;
+  const options = { document: f.doc, onNotFound: () => { missing++; } };
+  expect(await scrollToMessageInChat(f.rows[0], f.rows, {
+    ...options, openAgent: { agentId: "main", open: () => { throw new Error("offline"); } },
+  })).toBe(false);
+  expect(await scrollToMessageInChat(f.rows[0], f.rows, {
+    ...options, openAgent: { agentId: "main", open: () => {} }, timeoutMs: 5,
+  })).toBe(false);
+  expect(missing).toBe(2);
+  expect(f.root.scrolled).toBe(false);
+});
+
 test("loads older history over multiple rounds in the chosen chat root", async () => {
   const f = fixture();
   const target = row("old-message", "user");
@@ -600,4 +631,24 @@ test("visibleChatValues reports no session when no chat is on screen", () => {
   const values = visibleChatValues(doc)!;
   expect(values).toEqual(["m1", "agent_tool_c1"]);
   expect(values.some((v) => identityMatches(v, "c1"))).toBe(true);
+});
+
+test("child navigation never selects a hidden parent chat or guesses between visible panes", async () => {
+  const doc = new Element();
+  const hidden = new Element({ "data-testid": "agent-chat-scroll" });
+  const target = new Element({ "data-message-id": "child-message" });
+  hidden.add(target);
+  (hidden as any).getClientRects = () => [];
+  doc.add(hidden);
+  const r = row("child-message", "user");
+  expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(false);
+  expect(target.scrolled).toBe(false);
+  const active = new Element({ "data-testid": "agent-chat-scroll" });
+  const child = new Element({ "data-message-id": "child-message" });
+  active.add(child); doc.add(active);
+  expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(true);
+  doc.add(new Element({ "data-testid": "agent-chat-scroll" }));
+  child.scrolled = false;
+  expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(false);
+  expect(child.scrolled).toBe(false);
 });

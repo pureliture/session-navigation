@@ -5,17 +5,21 @@ adapter changes only the outgoing request copy. Hide is not a secret-erasure fea
 
 ## Setup
 
-The session-navigation Python package and CLI must already be installed on the machine
-running the Paseo daemon, with the CLI available to that daemon's environment. Python
-3.11 or later is required. See the [project README](https://github.com/pureliture/session-navigation#installation)
-for installation; the plugin does not download or install Python software for you.
+The Paseo daemon must run Node **22.13 or later** (`node:sqlite`). Python and a separate
+CLI are not required. The shared TypeScript engine and Node driver are embedded in a
+worker-source artifact shipped with this plugin. Unsupported runtimes show an explicit
+upgrade message rather than attempting to launch Python. The manifest's Node engine
+metadata is informational on Paseo 0.15.3; the server enforces the runtime check.
 
 The manifest allows Paseo 0.15.0 or later; the tested SDK and host are 0.15.3.
 Compatibility with earlier 0.15.x releases has not been separately verified.
 For OMP request rewriting, install the matching OMP extension as described in the README.
-Other providers can supply display-only timeline rows; a visible row does not imply
-that its provider supports context mutation. Summarization needs a compatible session
-model; without one, it reports summarizer_unavailable.
+Other providers can supply display-only timeline rows. Hide and Summarize are enabled
+only for a registered, compatible, enabled session adapter advertising that capability.
+Existing hidden items can always be restored without an adapter. The panel distinguishes
+missing adapters (with an installation hint), incompatible protocols, disabled adapters,
+database failures and engine/runtime errors. Summarize queues work for the session
+adapter's own model; Paseo never substitutes a separate model.
 
 ## Explorer and preview
 
@@ -34,11 +38,37 @@ truncation marker. IDs and metadata remain selectable.
 
 ## Data access and limitations
 
-The server launches the session-navigation CLI as a local child process. It reads
+### Subagents
+
+| Provider | Support |
+| --- | --- |
+| OMP via Paseo | Follow native child tabs; expandable inline outlines under the parent task; child-scoped Hide/Unhide/Summarize and **Open tab**. |
+| Hermes via ACP | Expandable inline outlines under `delegate_task` with the same child-scoped controls; no native child tab. Row clicks only highlight. |
+| Other providers (e.g. OpenCode Go) or unregistered children | Display-only main outline with **subagent context is not managed**; row clicks open main and scroll. |
+
+Tab following/opening uses guarded **Paseo 0.15.3 UI internals**, isolated in
+`client/hostCompat.ts`. There is no public SDK child-target API in that version.
+Known untested versions fail closed; if version metadata is unavailable, strict DOM
+guards apply. Ambiguous/malformed identity and missing registration retain the fallback.
+Failed opening keeps the inline expansion available. Child controls use the child's
+capabilities, never the parent's. Child tools/guidance/reminders are suppressed by default.
+
+The server runs SQLite away from its event loop in an embedded Node Worker. It reads
 local session history and writes originals, replacements and hide state to
 `~/.local/share/session-navigation/state.sqlite3`, or the XDG data location or
 `SESSION_NAVIGATION_STATE_PATH` override. The adapter doing request rewriting must
 use the same local state file; there is no cross-machine state synchronization.
+
+Scopes come from persisted registrations and state, including zero-item registered
+sessions. OMP binds to registered `omp:` scopes through explicit provider/session
+metadata. Legacy `pi:` scopes are display/restore-only. Custom ACP providers bind to
+published Hermes scopes with their explicit session/profile (`unknown` branch, with
+legacy `default` discovery). Hermes mutable originals come from `adapter_targets`.
+Manage requires explicit tool-call IDs; it never chooses cleanup targets automatically.
+
+For source changes, run `npm ci`, `npm run build`, `npm run typecheck` and `npm test`
+in `paseo-plugin/`. Commit the regenerated `server/worker-source.ts`; git-folder and
+npm installations need neither sibling workspace packages nor a build tool at runtime.
 
 The panel itself does not require an account or separate API key. Session-model
 summarization may send the selected original tool output to the model provider

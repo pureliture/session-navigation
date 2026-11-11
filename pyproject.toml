@@ -26,10 +26,6 @@ dependencies = [
     "cachetools>=5.5,<8",
 ]
 
-[project.scripts]
-session-navigation = "session_navigation.cli:main"
-session-navigation-daemon = "session_navigation_omp.daemon:main"
-
 [project.optional-dependencies]
 dev = [
     "pytest>=9.1.1",
@@ -45,7 +41,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/session_navigation", "src/session_navigation_omp"]
+packages = ["src/session_navigation"]
 
 # The wheel ships ``adapters/hermes`` under the ``session_navigation_hermes`` import
 # name so a bare ``hermes`` package never shadows another provider's package.

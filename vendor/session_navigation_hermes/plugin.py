@@ -76,6 +76,8 @@ from .factories import (
     make_middleware,
     make_summarize_handler,
     make_unhide_handler,
+    delegation_request,
+    subagent_started,
     scope_for,
 )
 from .llm import CtxLlmSummarizer
@@ -162,9 +164,11 @@ def register(ctx: Any) -> PluginState:
         description=TOOL_SCHEMAS[MANAGE_TOOL]["description"],
     )
     ctx.register_middleware("llm_request", make_middleware(state))
+    ctx.register_middleware("tool_request", lambda **kwargs: delegation_request(state, **kwargs))
     register_hook = getattr(ctx, "register_hook", None)
     if callable(register_hook):
         register_hook("post_api_request", state.usage.observe)
+        register_hook("subagent_start", lambda **kwargs: subagent_started(state, **kwargs))
 
     # Optional host capability: freeze the human-supervision protocol into
     # each new session prompt. Absent API, disabled plugin, or a duplicate

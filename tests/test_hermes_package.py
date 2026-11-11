@@ -208,7 +208,8 @@ def test_plugin_registers_through_root_export_default_off() -> None:
     ctx = _FakeCtx()
     state = module.register(ctx)
     assert set(ctx.tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
-    assert list(ctx.middlewares) == ["llm_request"]
+    assert list(ctx.middlewares) == ["llm_request", "tool_request"]
+    assert len(ctx.middlewares["tool_request"]) == 1
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():
         assert entry["toolset"] == "session_navigation"

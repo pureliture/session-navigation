@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from proxy import serve
 from v2_fixtures import build, component, document
-from v2_run import child_environment, STAGES, positive_int
+from campaign_support import child_environment, STAGES, positive_int
 from v2_analyze import adoption_gate, boundary_index, eligible, match_fact
 from analyze import native_operations, response_failure_kind
 from v2_cost import projection
@@ -27,6 +27,36 @@ import gzip
 
 
 class V2Tests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("bun") and Path("/opt/homebrew/lib/node_modules/@oh-my-pi/pi-coding-agent").exists(), "Installed OMP SDK required")
+    def test_current_sdk_capture_advertises_context_tools_only_in_b(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = Path(__file__).resolve().parents[2]
+            result = subprocess.run(["bun", str(repo / "eval/capture_overhead.ts"), str(root / "requests.json")],
+                cwd=repo, env=child_environment(root / "home", repo, root, root), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            requests = json.loads((root / "requests.json").read_text())
+            names = lambda arm: {tool["function"]["name"] for tool in requests[arm]["tools"]}
+            self.assertFalse(any("context" in name for name in names("A")))
+            self.assertTrue({"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"} <= names("B"))
+            self.assertEqual([tool["function"]["name"] for tool in requests["B"]["tools"]
+                              if tool["function"]["name"] in names("B") - names("A")],
+                             ["list_context_items", "manage_context", "hide_context", "summarize_context", "unhide_context"])
+
+    @unittest.skipUnless(shutil.which("bun"), "Bun required")
+    def test_sdk_runtime_propagates_extension_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "src/modes"
+            runtime.mkdir(parents=True)
+            (runtime / "runtime-init.ts").write_text(
+                'export function initializeExtensions(session, options) { options.reportRuntimeError({error:"extension failed"}); }')
+            helper = Path(__file__).resolve().parents[1] / "omp_runtime.ts"
+            script = f'import {{ initializeOmpExtensions }} from {json.dumps(str(helper))}; await initializeOmpExtensions({{}}, {json.dumps(str(root))});'
+            result = subprocess.run(["bun", "-e", script], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("extension failed", result.stderr)
+
     def test_reuse_requires_identical_settings_and_recognizes_case(self):
         check_settings(dict(SETTINGS))
         for field, value in (("model", "wrong"), ("provider", {"order": ["Other"]}),
@@ -238,10 +268,12 @@ class V2Tests(unittest.TestCase):
             self.assertIn("Do not clean", component("hide")["turns"][0])
 
     def test_child_does_not_receive_key_and_uses_versioned_core(self):
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-secret", "OTHER_KEY": "other-secret"}):
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-secret", "OTHER_KEY": "other-secret",
+                                     "SESSION_NAVIGATION_DAEMON": "/obsolete/executable"}):
             env = child_environment(Path("home"), Path("versioned"), Path("work"), Path("workspace"))
             self.assertNotIn("OPENROUTER_API_KEY", env)
             self.assertNotIn("OTHER_KEY", env)
+            self.assertNotIn("SESSION_NAVIGATION_DAEMON", env)
             self.assertEqual(env["PYTHONPATH"], "versioned/src")
             self.assertTrue(env["NODE_PATH"].endswith("pi-coding-agent/node_modules"))
 

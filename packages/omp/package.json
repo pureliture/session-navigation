@@ -1,0 +1,30 @@
+{
+  "name": "@session-navigation/omp",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "omp": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "@oh-my-pi/pi-coding-agent": "18.18.3",
+    "@oh-my-pi/pi-ai": "18.18.3",
+    "@oh-my-pi/pi-tui": "18.18.3"
+  },
+  "scripts": {
+    "build": "bun run build.ts",
+    "prepack": "bun run build.ts",
+    "test": "bun test test",
+    "typecheck": "tsc --noEmit"
+  }
+}

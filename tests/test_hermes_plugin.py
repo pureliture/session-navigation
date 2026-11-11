@@ -93,11 +93,12 @@ def _gc_collect():
 def _isolated_db(tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.sqlite3"))
 
-def test_register_wires_three_tools_and_one_middleware():
+def test_register_wires_tools_and_request_and_delegation_middleware():
     ctx = FakeCtx()
     plugin.register(ctx)
     assert set(ctx.tools) == {"hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"}
-    assert set(ctx.middlewares) == {"llm_request"}
+    assert set(ctx.middlewares) == {"llm_request", "tool_request"}
+    assert len(ctx.middlewares["tool_request"]) == 1
     assert len(ctx.middlewares["llm_request"]) == 1
     for name, entry in ctx.tools.items():
         schema = entry["schema"]
@@ -316,4 +317,3 @@ def test_manifest_has_no_local_summarizer_settings():
     manifest = (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text()
     for removed in ("summary_mode", "base_url", "model:", "timeout_seconds", "max_input_bytes", "max_output_tokens"):
         assert removed not in manifest
-

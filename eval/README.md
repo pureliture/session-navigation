@@ -1,5 +1,51 @@
 # A/B 실행기
 
+## Current-only v4 revalidation
+
+`v4_current.py` runs only product `8902a41`: eight long OMP/Hermes sessions
+and eight commanded Hide/Summarize trials. Historical A and `37348b8` are
+read-only inputs, never executed. Extract the frozen evidence with `git archive
+d3e77e6^ eval/results/2026-11-09-v4-deepseek eval/results/2026-11-09-v4-quality`
+outside the repository. `--historical` points to that extracted `eval/results`.
+
+Supply `--product-commit` (default `8902a41`; fixed revalidation `df47548`),
+`--output`, one persistent shared `--budget` JSON path, `--hermes-source`,
+`--hermes-python`, any provisioned dependency `--python-path`, and
+`--harness-commit`. The product tree must match the approved commit. First use
+`--stub` with a dummy `OPENROUTER_API_KEY` to exercise real hosts without network
+generation. Paid execution requires the real key in the controller environment
+only. The proxy pins DeepSeek V4.1 Flash 1017/Relace/no reasoning and reserves
+worst-case costs before each attempt, including uncertain failed attempts. The
+technical ceiling is $5; crossing $3 is timestamped, not a stop condition.
+
+Use fresh output directories and the same budget ledger for API-only retries;
+select cells with `--cell omp/atlas/1` (or `hermes/command-hide/2`). Do not retry
+qualifying product outcomes. `v4_compare.py --historical ... --current ...
+--output ...` assembles separate copies and applies the shared historical
+scoring to all versions. It requires every current cell and identical prompts,
+answers and labels; original fixture hashes are retained separately. It does
+not change `v4_assemble.py` or historical evidence. Raw wires/workspaces belong
+in persistent gates directories, not this repository.
+
+Fixed revalidation uses separate output and budget paths. Pass the same
+`--product-commit df47548` to `v4_compare.py`; the default continues to validate
+the frozen pre-fix campaign. `v4_fixed_report.py --pre-fix OLD/comparison.json
+--fixed NEW/comparison.json --output TABLES.md` joins the four columns without
+executing or relabeling the frozen cells. Archival `v4_assemble.py` stays unchanged.
+
+## 현재 실행기와 과거 캠페인
+
+- `run.py`는 현재 체크아웃의 OMP TS 확장/Hermes 플러그인을 사용합니다.
+- `capture_overhead.ts`는 현재 확장의 요청을 loopback으로만 수집합니다.
+- `tools/benchmark_omp_prepare.ts`는 현재 Bun worker와 SQLite를 측정합니다.
+- 과거 커밋의 OMP Python 확장을 실행하던 `v2_run.py`는 제거했습니다.
+  재현에는 `b12db47` 또는 해당 캠페인 당시 커밋 전체와 당시 격리 runtime이 필요합니다.
+  현재 패키지의 검증 명령으로 사용하지 마세요. 아래에는 기존 결과 분석 명령만 남깁니다.
+  분석/오프라인 테스트가 쓰는 고정 metadata와 순수 helper는 `campaign_support.py`에 있습니다.
+- `focus_run.py`/`quality_run.py`도 고정된 과거 제품 커밋을 사용하는 연구 실행기입니다.
+  특히 과거 OMP live arm은 당시 runtime을 복원해야 합니다. 현재 제품 acceptance가 아니며
+  이번 정리에서는 유료 캠페인을 실행하지 않았습니다.
+
 ## 평가 원본 접근과 새 결과 저장
 
 기존 실행 원본은 프라이빗 `session-navigation-evidence` 저장소의
@@ -53,11 +99,6 @@ B-old=`5017b97`, B-new=`37348b8`. OMP/Hermes 각각 atlas/boreal × 2회다.
 `setup-v4/budget-before.json`과 `observed-budget.json`에 $5 gate를 보관한다.
 
 ```bash
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --arms B-new --label v4n- --output eval/results/2026-11-09-v4-new
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A,B-old --cases boreal --repetitions 1 --repetition-start 2 --label v4f- --output eval/results/2026-11-09-v4-fill
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --components --arms B-old,B-new --label v4q- --output eval/results/2026-11-09-v4-quality
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A --cases atlas --repetitions 1 --repetition-start 2 --label v4r- --output eval/results/2026-11-09-v4-retry
-uv run --no-sync python eval/v2_run.py --stage deepseek-quality --hosts hermes --arms A --cases atlas --repetitions 1 --repetition-start 2 --label v4r2- --output eval/results/2026-11-09-v4-retry2
 uv run --no-sync python eval/v4_assemble.py --reuse eval/results/2026-11-09-v3-deepseek --source eval/results/2026-11-09-v4-new --source eval/results/2026-11-09-v4-fill --source eval/results/2026-11-09-v4-retry --source eval/results/2026-11-09-v4-retry2 --output eval/results/2026-11-09-v4-deepseek
 uv run --no-sync python eval/v2_analyze.py eval/results/2026-11-09-v4-deepseek
 uv run --no-sync python eval/v2_answer_surface.py eval/results/2026-11-09-v4-deepseek
@@ -80,8 +121,8 @@ judge는 v3와 동일하게 component에서 실제 전송된 replacement를 평�
 ## v2 (Crouton 품질 → 조건부 DeepSeek 비용)
 
 [설계](../docs/evaluation/design.md). 제품은 `git archive`로 B-old=`b1a524e`,
-B-new=`5017b97`를 격리한다. 설치본은 바꾸지 않는다. `v2_run.py`는 모델과 provider를
-한 쌍으로 고정하고 65,536 effective window에서 실제 OMP SDK/Hermes를 실행한다.
+B-new=`5017b97`를 격리했다. 설치본은 바꾸지 않았다. 제거된 과거 실행기는 모델과 provider를
+한 쌍으로 고정하고 65,536 effective window에서 실제 OMP SDK/Hermes를 실행했다.
 명령형 trial은 자율 실행과 다른 디렉터리에 둔다.
 
 OMP headless host는 `extensionRunner.initialize`로 실제 세션 callback을 연결한다.
@@ -93,15 +134,10 @@ pilot 분석/stage/safety는 본 실행 전에 `pilot-*`로 복사해 보존한�
 있으면 `v2_cost.py DIR PRIOR_COST`로 예산 예상에 더한다. [최종 결과](../docs/evaluation/results-v2.md).
 
 ```bash
-uv run --no-sync python eval/v2_run.py --stage crouton --output eval/results/DATE-crouton
-uv run --no-sync python eval/v2_run.py --stage crouton --components --arms B-old,B-new --output eval/results/DATE-components
 uv run --no-sync python eval/v2_analyze.py eval/results/DATE-crouton
-uv run --no-sync python eval/v2_run.py --stage deepseek --hosts omp --arms A,B-new --cases atlas --repetitions 1 --pilot --adoption-report eval/results/DATE-crouton/summary-v2.json --output eval/results/DATE-deepseek
 uv run --no-sync python eval/v2_analyze.py eval/results/DATE-deepseek
 uv run --no-sync python eval/v2_cost.py eval/results/DATE-deepseek
 uv run --no-sync python eval/v2_cache.py eval/results/DATE-deepseek
-# pilot-budget.json의 출력 토큰과 예상 비용을 보고한 뒤 continue=true일 때만:
-uv run --no-sync python eval/v2_run.py --stage deepseek --hosts omp --arms A,B-new --adoption-report eval/results/DATE-crouton/summary-v2.json --pilot-report eval/results/DATE-deepseek/pilot-budget.json --output eval/results/DATE-deepseek
 ```
 
 판정·심판은 stage 모델/provider를 명시한다. Crouton judge는
@@ -144,7 +180,17 @@ uv run --no-sync python eval/audit.py eval/results/YYYY-MM-DD
 기존 결과의 실패를 삭제하고 성공으로 교체하지 않는다.
 작업공간은 `~/.session-navigation-eval/`에 남고, 정답은 에이전트에 전달하지 않는다.
 
-필수: Python 3.11+, Bun, 저장소 `.venv/bin/session-navigation-daemon`, 설치된 OMP SDK 및 Hermes Python 환경.
+필수: 분석용 Python 3.11+, Bun, 설치된 OMP SDK 및 Hermes Python 환경.
+현재 OMP 수집기는 `bun run packages/omp/build.ts`로 빌드한 TS 확장을 사용하며
+별도 Python CLI/데몬을 실행하지 않는다. `eval/capture_overhead.ts`도 같은 확장을 사용한다.
+SDK 수집기는 OMP의 일반 extension runtime을 초기화하고 `session_start`를 보낸 뒤
+prompt를 실행한다. 그렇지 않으면 main-session guard 때문에 도구가 노출되지 않는다.
+오프라인 A/B 수집은 B에만 컨텍스트 도구 5개가 모두 있는지 검사한다.
+runtime 초기화는 설치된 OMP 18.18.3의 source API를 사용하며 다른 버전의 SDK 호환성을 보장하지 않는다.
+과거 캠페인의 고정된 커밋은 당시 Python 기반 확장을 포함한다. 현재 체크아웃의
+삭제된 실행 파일 경로를 주입하지 않는다. 과거 캠페인의 실제 재실행에는 해당 커밋의
+원래 격리 환경을 복원해야 하며, 현재 TS 엔진으로 바꿔 실행한 수치를 과거 결과로 취급하면 안 된다.
+이번 이관에서는 과거 유료 캠페인을 재실행하지 않았다.
 분석은 반드시 프로젝트 `uv` 환경을 사용한다. 이 VM의 시스템 Python(SQLite 3.51.0)은 Hermes가 만든
 WAL DB의 read-only 조회에 `unable to open database file`을 냈고, 프로젝트 SQLite 3.53.4에서는 정상 조회됐다.
 `OMP_PACKAGE`, `HERMES_SOURCE`, `HERMES_PYTHON`으로 호스트 위치를 바꿀 수 있다.
@@ -189,6 +235,29 @@ assistant 텍스트를 합쳐 별도 `answer-surface.json`을 낸다. 답변 후
 `tool_execution_start`가 없는 호스트(현재 Hermes)는 0이 아니라 `unavailable`로 남긴다.
 v3 Crouton 실행은 모델 폐기(HTTP 404)로 중단됐다. `2026-11-09-v3-crouton`에는
 `non-qualifying.json`이 있으므로 gate/pilot으로 쓸 수 없고 통계에 섞지 않는다.
+
+## RCA repair checks (no paid calls)
+
+The matched Hermes controller puts its own interpreter directory first on terminal
+`PATH`, warms the host environment probe, and requires the resulting Python-toolchain
+line in the stock prompt before generation. Launch it with the documented project
+interpreter (`uv run --no-sync python ...`); the recorded terminal toolchain is
+Python 3.12.15 without pip. The Hermes engine can still use the separate managed
+interpreter. A different/clean terminal setup that emits no probe line now fails
+explicitly instead of silently changing the historical prompt control.
+
+Replay the external RCA evidence without modifying it or contacting a provider:
+
+```bash
+PYTHONPATH=src uv run --no-sync python tools/replay_rca_fixes.py /PATH/TO/step8-eval/rca
+bun tools/replay_rca_fixes.ts /PATH/TO/step8-eval/rca
+```
+
+These check all five captured source-prefix cases, the comma-formatted retry,
+filtered listing, and the three broad minute-substring refusals. See
+`contracts/summary-input.md` for byte budgets and explicit error semantics. No old
+daemon is used. Historical campaign metrics remain frozen; repair replays are not
+a new paid campaign or evidence of improved stochastic model retention.
 
 ## Distractor-pressure quality experiment
 

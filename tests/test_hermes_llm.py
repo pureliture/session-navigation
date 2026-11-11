@@ -31,6 +31,39 @@ class CapturingLlm:
         return SimpleNamespace(text=json.dumps({"summary": self.summary}), usage=None)
 
 
+def test_whole_source_includes_late_fact_and_oversize_never_calls_host():
+    source = "\n".join(f"Routine telemetry row {i}" for i in range(700)) + "\nlatency_budget_ms=151"
+    assert source.index("latency_budget_ms") > 12000
+    llm = CapturingLlm("latency_budget_ms=151")
+    summarizer = hermes_adapter().llm.CtxLlmSummarizer(SimpleNamespace(llm=llm))
+    assert asyncio.run(summarizer.summarize(source, [])) == {"summary": "latency_budget_ms=151"}
+    assert json.loads(llm.requests[0]["messages"][1]["content"])["source"] == source
+    for oversized in ["x" * 32769, "😀" * 8193]:
+        with pytest.raises(SummarizerUnavailable, match="input_too_large"):
+            asyncio.run(summarizer.summarize(oversized, []))
+    assert len(llm.requests) == 1
+
+
+def test_filtered_hermes_listing_does_not_invent_unrecorded_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "state.db"))
+    ctx = FakeCtx(config={"enabled": True})
+    hermes_adapter().plugin.register(ctx)
+    source = "\n".join(f"Output row {i} details" for i in range(100))
+    request = {"messages": [
+        {"role": "assistant", "tool_calls": [{"id": "listed", "type": "function", "function": {
+            "name": "read_file", "arguments": '{"path":"audit-01.jsonl"}'}}]},
+        {"role": "tool", "tool_call_id": "listed", "content": source},
+    ]}
+    ctx.middlewares["llm_request"][0](request=request, session_id="filtered", api_mode="chat_completions")
+    hidden = json.loads(ctx.tools["hide_context"]["handler"]({"tool_call_id": "listed"}, session_id="filtered"))
+    assert hidden["ok"]
+    handler = ctx.tools["list_context_items"]["handler"]
+    assert json.loads(handler({"query": "audit-01.jsonl"}, session_id="filtered"))["items"] == []
+    items = json.loads(handler({}, session_id="filtered"))["items"]
+    assert len(items) == 1 and items[0]["visibility"] == "hidden"
+    assert items[0]["item_id"] == hidden["item_id"]
+
+
 @pytest.mark.parametrize("evidence", [(), ("WARNING: constraints apply", "results/report.json", "3 tests passed", "left | right")])
 @pytest.mark.parametrize("incoming", ["raw-envelope", "empty", "canonical"])
 def test_actual_summary_request_recomputes_decoded_evidence(evidence, incoming):

@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Store, summaryPrompt, validateSummary, requiredEvidence } from "../packages/core/src/index.ts";
+import { BunDriver } from "../packages/core/src/drivers/bun.ts";
+import { OmpService } from "../packages/omp/src/service.ts";
+
+const directory = process.argv[2];
+const load = (name: string) => JSON.parse(readFileSync(join(directory, name), "utf8"));
+const input = load("replay-input.json"), requests = load("summary.json");
+assert.equal(requests.length, 5);
+for (const request of requests) {
+  assert.equal(request.prompt_length, 12086);
+  assert.equal(request.prompt_sha, "3ddbb298cf90241284560feb5b0dd76f92386b031c4cc1ddbe8ad67c54c5c871");
+  assert.equal(input.source.indexOf("latency_budget_ms="), 15601);
+  const prompt = summaryPrompt(input.source);
+  assert.equal(prompt.slice(86), input.source);
+  assert.ok(prompt.includes("latency_budget_ms=151"));
+}
+console.log("PASS TS/OMP: 5/5 captured summary inputs now include the complete source and latency_budget_ms=151 beyond offset 12000");
+const store = new Store(new BunDriver(":memory:")), service = new OmpService(store);
+const call = (method: string, params: object = {}) => service.handle(method, { session_id: "replay", snapshot_id: "same", ...params });
+const record = { call_id: "actual-read", tool_name: "read", arguments: { path: "audit-01.jsonl" }, status: "ok", content: input.source };
+assert.ok((await call("prepare", { records: [record] })).ok);
+const first = await call("summarize", { tool_call_id: record.call_id, summary_text: input.summary });
+assert.ok(first.ok);
+assert.deepEqual((await call("list_items", { query: "audit-01" })).items, []);
+assert.equal((await call("list_items")).items[0].visibility, "hidden");
+assert.ok(validateSummary(input.source, { summary: input.retry_summary }, requiredEvidence(input.source)));
+assert.ok((await call("summarize", { tool_call_id: record.call_id, summary_text: input.retry_summary })).ok);
+assert.equal(store.items("omp:default:replay:default")[0].original, input.source);
+console.log("PASS TS/OMP: misleading filtered unrecorded/unhidden row gone; captured comma-formatted retry accepted; original unchanged");
+const keep = load("keep-failed-replay.json");
+assert.ok((await service.handle("prepare", { session_id: "keep", snapshot_id: "same", records: keep.records })).ok);
+const result = await service.handle("manage", { session_id: "keep", snapshot_id: "same", tool_call_ids: keep.records.map((r: any) => r.call_id), action: "hide", keep_lines: keep.keep_lines });
+assert.equal(result.applied, 0);
+assert.equal(result.items.length, 3);
+assert.ok(result.items.every((r: any) => r.error === "keep_lines_too_broad"));
+console.log("PASS TS/OMP: 3/3 captured minute-substring requests return explicit keep_lines_too_broad, not verification_failed");
+store.close();

@@ -10,6 +10,7 @@ Tool flow (model calls): look the tool call ID up in the session record by
 scope + ID. Reject when absent or duplicated, otherwise call the engine.
 """
 
+from collections import Counter
 from typing import Any
 
 from .allowlist import AdapterRejected, filter_invocation
@@ -21,9 +22,12 @@ from session_navigation.model import (
     Scope,
     ToolResultRecord,
     compute_invocation_digest,
+    _item_id,
     pair_unit_id,
 )
 from session_navigation.transport import Summarizer
+from session_navigation.pending_summary import settle_summary
+from session_navigation.policy import is_destructive_command, refusal_reason, required_evidence_lines
 
 
 def compact(
@@ -127,6 +131,9 @@ def middleware_step(
     scope: Scope,
     api_mode: str,
     payload: dict[str, Any],
+    *,
+    publish_targets: bool = False,
+    summarizer: Any = None,
 ) -> dict[str, Any]:
     """Run one middleware pass: record, plan, apply to a copy (fail-open)."""
     stored, skipped, record_error = store.record_request(
@@ -146,6 +153,9 @@ def middleware_step(
             "trace": trace,
         }
     records: list[ToolResultRecord] = []
+    targets = []
+    unique_calls = _unique_calls(api_mode, payload)
+    result_counts = Counter(entry.call_id for entry in stored)
     record_skipped: list[dict[str, Any]] = list(skipped)
     handle_by_call_id: dict[str, dict[str, Any]] = {}
     for entry in stored:
@@ -178,6 +188,14 @@ def middleware_step(
                 host_handle=entry.host_handle,
             )
         )
+        if (entry.call_id in unique_calls and result_counts[entry.call_id] == 1 and
+                refusal_reason(records[-1], engine.config) is None and
+                not is_destructive_command(entry.tool_name, invocation.get("arguments"))):
+            targets.append((records[-1], omitted))
+    if publish_targets:
+        engine.store.publish_targets(scope, targets)
+        _consume_pending(engine, scope, [record for record in records
+            if record.call_id in unique_calls and result_counts[record.call_id] == 1], summarizer)
     plans = engine.project(scope, records)
     # Pair-atomic units: one pair_ row per transmitted record (call+result).
     try:
@@ -208,3 +226,32 @@ def middleware_step(
         "skipped": record_skipped + apply_skipped,
         "trace": trace,
     }
+
+
+def _unique_calls(api_mode, payload) -> set[str]:
+    if api_mode == "codex_responses":
+        calls = [item for item in payload.get("input", [])
+                 if isinstance(item, dict) and item.get("type") == "function_call"]
+    else:
+        calls = [call for message in payload.get("messages", []) if isinstance(message, dict)
+                 for call in (message.get("tool_calls") or []) if isinstance(call, dict)]
+    counts = Counter(str(call.get("call_id", call.get("id", ""))).strip() for call in calls)
+    return {call_id for call_id, count in counts.items() if call_id and count == 1}
+
+
+def _consume_pending(engine, scope, records, summarizer) -> None:
+    for record in records:
+        item_id = _item_id(scope.scope_key(), record.call_id, record.content_sha256,
+                           record.invocation_digest, record.result_position)
+        item = engine.store.get(scope, item_id)
+        if item is None or item.visibility != "hidden" or item.compaction_source != "summarize_pending":
+            continue
+        text = None
+        if summarizer is not None:
+            try:
+                summary = _run_sync(summarizer.summarize(item.original, required_evidence_lines(item.original),
+                    invocation=item.invocation_snapshot, context={"scope_key": scope.scope_key()}))
+                text = summary.get("summary") if isinstance(summary, dict) else None
+            except Exception:
+                text = None
+        settle_summary(engine.store, scope, item.item_id, item.version, text)

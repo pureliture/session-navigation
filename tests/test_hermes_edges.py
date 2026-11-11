@@ -11,6 +11,8 @@ import os, tempfile
 
 import copy
 import json
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 
 from _adapter_loader import hermes_adapter as _load_hermes_adapter
 from session_navigation.engine import SessionNavigationEngine
@@ -51,6 +53,10 @@ class FakeCtx:
         self.config = dict(config or {})
         self.tools: dict[str, dict] = {}
         self.middlewares: dict[str, list] = {}
+        self.hooks: dict[str, object] = {}
+
+    def register_hook(self, name, callback):
+        self.hooks[name] = callback
 
     def get_config(self, key: str, default=None):
         return self.config.get(key, default)
@@ -111,7 +117,7 @@ def test_compression_rotation_starts_fresh_scope():
         "output"] != body
 
 
-def test_subagent_sessions_stay_isolated():
+def test_subagent_scopes_are_managed_and_linked_but_isolated():
     ctx, state = _enabled_pair()
     compact = ctx.tools["hide_context"]["handler"]
     body = _long_body()
@@ -120,9 +126,15 @@ def test_subagent_sessions_stay_isolated():
     parent_item = json.loads(compact({"tool_call_id": "call_1"},
                                    session_id="sess-parent"))["item_id"]
 
-    # The child scope starts restored even for the same body.
+    ctx.middlewares["tool_request"][0](tool_name="delegate_task", tool_call_id="delegate", session_id="sess-parent")
+    ctx.hooks["subagent_start"](parent_session_id="sess-parent", child_session_id="sess-child", child_subagent_id="sa-child")
     child = _mw(state, body, "sess-child")
     assert child["request"]["input"][1]["output"] == body
+    rows = state.engine.store.child_scopes("hermes:default:sess-parent:unknown")
+    assert len(rows) == 1
+    assert rows[0]["scope_key"] == "hermes:default:sess-child:unknown"
+    assert rows[0]["tool_call_id"] == "delegate"
+    assert rows[0]["subagent_id"] == "sa-child"
 
     # Each scope compacts its own copy under its own item id.
     child_item = json.loads(compact({"tool_call_id": "call_1"},
@@ -131,6 +143,52 @@ def test_subagent_sessions_stay_isolated():
 
     parent = _mw(state, body, "sess-parent")
     assert parent["request"]["input"][1]["output"] != body
+
+
+def test_delegation_context_isolated_across_concurrent_batch_and_nested_children():
+    ctx, state = _enabled_pair()
+    capture = ctx.middlewares["tool_request"][0]
+    start = ctx.hooks["subagent_start"]
+    def batch(index):
+        capture(tool_name="delegate_task", tool_call_id=f"call-{index}", session_id=f"parent-{index}")
+        contexts = [copy_context() for _ in range(2)]
+        for child, context in enumerate(contexts):
+            context.run(start, parent_session_id=f"parent-{index}",
+                child_session_id=f"child-{index}-{child}", child_subagent_id=f"sa-{index}-{child}")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(batch, range(4)))
+    for index in range(4):
+        rows = state.engine.store.child_scopes(f"hermes:default:parent-{index}:unknown")
+        assert len(rows) == 2
+        assert {row["tool_call_id"] for row in rows} == {f"call-{index}"}
+    capture(tool_name="delegate_task", tool_call_id="nested", session_id="child-0-0")
+    start(parent_session_id="child-0-0", child_session_id="grandchild", child_subagent_id="sa-nested")
+    assert state.engine.store.child_scopes("hermes:default:child-0-0:unknown")[0]["tool_call_id"] == "nested"
+    start(parent_session_id="unrelated", child_session_id="unbound", child_subagent_id="sa-unbound")
+    assert state.engine.store.child_scopes("hermes:default:unrelated:unknown")[0]["tool_call_id"] is None
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_child_requests_have_no_navigation_tools_guidance_or_reminders(mode, enabled):
+    ctx, state = _enabled_pair()
+    state.is_enabled = lambda: enabled
+    ctx.hooks["subagent_start"](parent_session_id="parent", child_session_id="child", child_subagent_id="sa")
+    SUPERVISION_SECTION_TEXT = _adapter.schemas.SUPERVISION_SECTION_TEXT
+    request = {"tools": [{"type": "function", "function": {"name": "manage_context"}},
+                         {"type": "function", "name": "hide_context"},
+                         {"type": "function", "function": {"name": "read_file"}}],
+               "instructions": SUPERVISION_SECTION_TEXT,
+               "messages": [{"role": "system", "content": SUPERVISION_SECTION_TEXT}, {"role": "user", "content": "go"}],
+               "input": [{"role": "user", "content": "go"}]}
+    original = copy.deepcopy(request)
+    state.reminders.note = lambda *args: (_ for _ in ()).throw(AssertionError("child reminder"))
+    result = plugin.make_middleware(state)(request=request, session_id="child", api_mode=mode)
+    assert request == original
+    assert len(result["request"]["tools"]) == 1
+    assert result["request"]["instructions"] == ""
+    assert result["request"]["messages"][0]["content"] == ""
+    assert len(result["request"]["messages"]) == 2
 
 
 def test_session_expiry_forgets_quiet_scopes():

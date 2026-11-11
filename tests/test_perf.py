@@ -44,9 +44,6 @@ def test_list_1000_under_1s(tmp_path):
 
 
 def test_summarize_timeout_is_25s(tmp_path):
-    from session_navigation_omp.daemon import Daemon
-
-    assert Daemon  # importable; timeout enforced extension-side (25s RPC)
     from adapters.hermes.llm import CtxLlmSummarizer
 
     import inspect

@@ -14,7 +14,7 @@ from proxy import serve
 from quality_fixtures import fixture, SEEDS, WINDOW
 from quality_score import analyze, campaign_wire, total_cost, MODEL, PROVIDER, REASONING
 from run import hashes
-from v2_run import child_environment, source_snapshot, HERMES
+from campaign_support import child_environment, source_snapshot, HERMES
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = "37348b89faf82ced7510fe09e2a97a893fbcc8a3"

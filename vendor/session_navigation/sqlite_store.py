@@ -9,6 +9,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from session_navigation.adapter_registry import AdapterRegistryMixin
 from session_navigation.db import (
     DBError,
     DBFullError,
@@ -127,7 +128,7 @@ class ForkCounts:
         }
 
 
-class SQLiteContextStore:
+class SQLiteContextStore(AdapterRegistryMixin):
     """SQLite-backed, durable context store with version CAS."""
 
     def __init__(
@@ -137,6 +138,7 @@ class SQLiteContextStore:
         db_path: Any = None,
         state_path: Any = None,
         path_override: Any = None,
+        scope_aliases: dict[str, tuple[str, ...]] | None = None,
         **_kwargs: Any,
     ) -> None:
         resolved = path if path is not None else None
@@ -149,6 +151,7 @@ class SQLiteContextStore:
         self.path = resolve_path(resolved)
         self._lock = threading.RLock()
         self._pending: dict[tuple[str, str], tuple[object, str]] = {}
+        self.scope_aliases = dict(scope_aliases or {})
         self._conn = open_db(self.path)
 
     @property
@@ -250,7 +253,13 @@ class SQLiteContextStore:
                 ORDER BY scope_key
                 """
             ).fetchall()
-            return [{"scope_key": r["scope_key"], "items": int(r["n"])} for r in rows]
+            counts = {r["scope_key"]: int(r["n"]) for r in rows}
+            for row in self._conn.execute("SELECT scope_key FROM adapter_sessions"):
+                counts.setdefault(row["scope_key"], 0)
+            return [{"scope_key": key, "items": counts[key], **{
+                name: (self.adapter_session(key) or {}).get(name)
+                for name in ("parent_scope", "tool_call_id", "subagent_id")
+            }} for key in sorted(counts)]
 
 
     def put(
@@ -276,7 +285,8 @@ class SQLiteContextStore:
                         return MutationResult(ok=False, error="reservation_invalid")
 
                 if existing is None:
-                    pass  # insert path below; no CAS needed
+                    if expected_version is not None:
+                        return MutationResult(ok=False, error="version_conflict")
                 elif expected_version is not None:
                     # Atomic CAS: the UPDATE below carries WHERE version=? and the
                     # rowcount decides; the pre-read only builds the conflict payload.
@@ -318,7 +328,7 @@ class SQLiteContextStore:
                         return MutationResult(ok=False, error="version_conflict",
                                               item=_row_to_item(current) if current else existing)
                 else:
-                    self._conn.execute(
+                    cur = self._conn.execute(
                         """
                         INSERT INTO items (
                             scope_key, item_id, tool_call_id, result_position, content_sha256,
@@ -326,25 +336,13 @@ class SQLiteContextStore:
                             version, tool_name, compaction_source, invocation_snapshot, context_hint,
                             invocation_options_omitted, created_at, updated_at
                         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(scope_key,item_id) DO UPDATE SET
-                            tool_call_id=excluded.tool_call_id,
-                            result_position=excluded.result_position,
-                            content_sha256=excluded.content_sha256,
-                            invocation_digest=excluded.invocation_digest,
-                            original=excluded.original,
-                            compacted=excluded.compacted,
-                            excerpt_lines=excluded.excerpt_lines,
-                            visibility=excluded.visibility,
-                            version=excluded.version,
-                            tool_name=excluded.tool_name,
-                            compaction_source=excluded.compaction_source,
-                            invocation_snapshot=excluded.invocation_snapshot,
-                            context_hint=excluded.context_hint,
-                            invocation_options_omitted=excluded.invocation_options_omitted,
-                            updated_at=excluded.updated_at
+                        ON CONFLICT(scope_key,item_id) DO NOTHING
                         """,
                         values,
                     )
+                    if cur.rowcount == 0:
+                        self._conn.rollback()
+                        return MutationResult(ok=False, error="version_conflict")
                 # identities fence upsert
                 self._conn.execute(
                     """
@@ -443,6 +441,7 @@ class SQLiteContextStore:
         scope: Any,
         item_id: str,
         digest: str | None = None,
+        *, expected_version: int | None = None,
     ) -> tuple[object | None, str | None]:
         sk = _scope_key(scope)
         with self._lock:
@@ -450,11 +449,13 @@ class SQLiteContextStore:
             # check existing item
             try:
                 row = self._conn.execute(
-                    "SELECT 1 FROM items WHERE scope_key=? AND item_id=?", (sk, item_id)
+                    "SELECT version FROM items WHERE scope_key=? AND item_id=?", (sk, item_id)
                 ).fetchone()
             except sqlite3.Error as exc:
                 raise DBFullError(str(exc)) if self._is_full(exc) else DBError(str(exc))
-            if row is not None:
+            if expected_version is not None and (row is None or row[0] != expected_version):
+                return None, "version_conflict"
+            if row is not None and expected_version is None:
                 return None, "already_exists"
             if key in self._pending:
                 return None, "in_progress"
