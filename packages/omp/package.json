@@ -1,5 +1,5 @@
 {
-  "name": "@session-navigation/omp",
+  "name": "@pureliture/session-navigation-omp",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
@@ -26,5 +26,16 @@
     "prepack": "bun run build.ts",
     "test": "bun test test",
     "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pureliture/session-navigation.git",
+    "directory": "packages/omp"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "bun": ">=1.4.4"
   }
 }

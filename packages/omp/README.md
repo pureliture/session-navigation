@@ -32,7 +32,7 @@ omp plugin list
 
 Use the appropriate OMP data/plugin directory for an XDG or named-profile
 installation. A future published release can use
-`omp plugin install @session-navigation/omp@<version>`; this package has not
+`omp plugin install @pureliture/session-navigation-omp@<version>`; this package has not
 been published. OMP 18.18.3's installer accepts package names and linked
 directories, not local tarball specifications directly.
 

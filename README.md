@@ -133,7 +133,7 @@ For a packed local archive, run `bun pm pack` in `packages/omp`, then
 `bun add /absolute/path/to/session-navigation-omp-0.1.0.tgz` in `~/.omp/plugins` (create
 that directory first). Restart OMP and check `omp plugin list`. OMP 18.18.3
 does **not** accept local tarballs via `omp plugin install`. A future registry
-release can use `omp plugin install @session-navigation/omp@<version>`; the
+release can use `omp plugin install @pureliture/session-navigation-omp@<version>`; the
 package is not currently published.
 
 Before migrating, remove/disable the old manually copied
@@ -279,7 +279,7 @@ See the [Paseo publishing guide](https://paseo.sh/docs/plugins/publishing) and [
 ### OMP: npm-style package
 
 1. Build and pack `packages/omp` with `bun pm pack`. The archive bundles the core and worker, declares `omp.extensions: ["./index.ts"]`, and is tested in an isolated OMP home against a local stub provider.
-2. The package is not yet published. After review, a publisher can publish the built archive; users can then use `omp plugin install @session-navigation/omp@<version>`. Python is not an OMP runtime prerequisite.
+2. The package is not yet published. After review, a publisher can publish the built archive; users can then use `omp plugin install @pureliture/session-navigation-omp@<version>`. Python is not an OMP runtime prerequisite.
 3. An OMP marketplace is a Git catalog containing `.omp-plugin/marketplace.json` or `.claude-plugin/marketplace.json`. Add an entry pointing to the plugin folder; users add it with `omp plugin marketplace add <catalog-source>` and install with `omp plugin install <name>@<marketplace>`. This repository does not yet contain a catalog. npm sources in marketplace entries are not currently supported; use Git or relative paths.
 4. npm plugin installation and Git marketplace installation are separate routes. No mandatory review process for a single central OMP marketplace was identified in the official documentation. Verify API compatibility before distributing for upstream pi.
 5. A separately verified upstream pi package can declare `pi.extensions` and `keywords: ["pi-package"]` and be published on npm. The keyword makes it eligible for the official [Pi package gallery](https://pi.dev/packages); users install with `pi install npm:<package-name>@<version>`. The current OMP extension has not been established as compatible or packaged for that route.

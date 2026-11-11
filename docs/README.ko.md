@@ -153,7 +153,7 @@ omp plugin list
 ```
 
 XDG 또는 named profile에서는 해당 프로필의 plugin 디렉터리를 사용하세요.
-향후 게시한 릴리스는 `omp plugin install @session-navigation/omp@<version>`으로 설치할 수
+향후 게시한 릴리스는 `omp plugin install @pureliture/session-navigation-omp@<version>`으로 설치할 수
 있지만 **현재 npm 게시 완료를 주장하지 않습니다**. 공통 코어는 번들에 포함됩니다.
 
 이전 Python-spawning 사본인 **`~/.omp/agent/extensions/session-navigation.ts`를 모든 해당
@@ -338,7 +338,7 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 1. `packages/omp/package.json`은 이름·버전과 `omp.extensions: ["./index.ts"]`를 선언합니다.
    `bun pm pack`은 extension/worker를 빌드하고 `index.ts`, `dist/`, README와 LICENSE를 묶습니다.
 2. 로컬 tarball은 위의 Bun 설치 절차를 사용합니다. 게시 권한이 있는 이름/버전으로
-   `npm publish --access public`한 뒤에는 `omp plugin install @session-navigation/omp@<version>`을
+   `npm publish --access public`한 뒤에는 `omp plugin install @pureliture/session-navigation-omp@<version>`을
    사용할 수 있지만 현재 게시된 패키지가 있다는 뜻은 아닙니다.
 3. Git 카탈로그는 `.omp-plugin/marketplace.json` 또는 `.claude-plugin/marketplace.json`을
    사용합니다. 항목을 만든 뒤 `omp plugin marketplace add <catalog-source>`,
