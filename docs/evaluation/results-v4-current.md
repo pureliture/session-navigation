@@ -604,10 +604,12 @@ Two repetitions per host/fixture. No new A or B-old model calls were made.
 
 ## Root-cause analysis
 
-This follow-up supersedes the attribution limits in the initial root-cause review
-where it provides stronger evidence. It changes no outcome, selection, metric,
-product implementation or original campaign evidence. **New model spend: $0.00**;
-all additional experiments were deterministic, local and network-free. No old OMP
+The original investigation below supersedes the initial attribution limits where
+it provides stronger evidence. That investigation changed no outcome, selection,
+metric, product implementation or original campaign evidence; the subsequent
+implementation repairs are identified separately in the next section.
+**New model spend: $0.00**; all additional experiments were deterministic, local
+and network-free. No old OMP
 daemon was restored or run. Old Python engine/validator modules were extracted
 solely for in-process counterfactuals.
 
