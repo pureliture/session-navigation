@@ -27,6 +27,8 @@ async function seedDb() {
 }
 
 function makePi() {
+  // Other test files also configure this process-wide variable.
+  process.env.SESSION_NAVIGATION_STATE_PATH = DB;
   const events: Record<string, Function> = {};
   const tools: Record<string, any> = {};
   const commands: Record<string, any> = {};
@@ -82,21 +84,26 @@ test("OMP overlay factory renders rows and unhides via worker", async () => {
   expect(lines).toContain("Session navigation");
   expect(lines).toContain("c0");
   expect(lines).toContain("hidden");
+  // The newest record can vary with the clock resolution: verify the row
+  // actually selected by the overlay rather than assuming it is c0.
+  const selected = lines.split("\n").find((line: string) => line.startsWith("> "));
+  const selectedCall = selected?.match(/\b(c[0-9]+)\b/)?.[1];
+  expect(selectedCall).toBeTruthy();
   // Drive unhide on the selected row through the live worker RPC.
   // Integration against a worker service process: poll render until the async
   // mutation lands (deterministic timers cannot apply to a child process).
   await component.handleInput("u");
   let after = "";
+  const database = new Database(DB, { readonly: true });
+  let row: any;
   for (let i = 0; i < 50; i++) {
     after = component.render(100).join("\n");
-    if (after.includes("visible") || after.includes("version_conflict")) break;
+    row = database.query("SELECT visibility, version FROM items WHERE tool_call_id=? AND scope_key='omp:default:s3:default'").get(selectedCall) as any;
+    if (row?.visibility === "visible" && after.includes(`visible ${selectedCall}`)) break;
     await Bun.sleep(50);
   }
-  expect(after).toContain("c0");
-  expect(after).toMatch(/visible|version_conflict/);
-  // Prove the stored state actually flipped, not just the render text.
-  const database = new Database(DB);
-  const row = database.query("SELECT visibility, version FROM items WHERE tool_call_id='c0' AND scope_key='omp:default:s3:default'").get() as any;
+  expect(after).toContain(`visible ${selectedCall}`);
+  // Prove the selected row actually flipped, not just the render text.
   expect(row.visibility).toBe("visible");
   expect(row.version).toBeGreaterThan(1);
   database.close();

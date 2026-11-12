@@ -7,6 +7,15 @@ originals without re-execution. Only outgoing request copies are changed.
 ## Install
 
 Requires **Bun >=1.4.4** (1.4.4 is tested; older Bun releases are unverified).
+OMP가 실제로 로드한 SQLite **3.51.3 이상**이 필요합니다. 상태 DB가 DELETE
+모드여도 같은 기준을 적용합니다. WAL 수정이 백포트된 SQLite 3.44.6과 3.50.7도
+이 최소 버전 정책에서는 허용하지 않습니다. 버전을 확인할 수 없거나 지원하지
+않으면 session-navigation은 활성화되지 않으며 모델 요청을 차단합니다. 이전에
+숨긴 컨텍스트를 동의 없이 원문으로 전송하지 않기 위한 동작입니다.
+macOS에서 Bun은 기본적으로 시스템 SQLite를 사용합니다. 새 SQLite를 설치하는
+것만으로는 선택되지 않으며, OMP가 첫 SQLite DB를 열기 전에 지정해야 합니다.
+session-navigation Worker에서는 나중에 바꿀 수 없습니다. 플랫폼별 동작은
+https://bun.sh/docs/runtime/sqlite 를 참조하세요.
 After npm publication:
 
 ```sh
