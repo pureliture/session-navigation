@@ -21,10 +21,12 @@ import { registerOverlay } from "./overlay.ts";
 import { childLinkage } from "./subagents.ts";
 import { summaryPrompt, summarySource, summaryWithRetry, MAX_SUMMARY_INPUT_BYTES } from "../../core/src/summary.ts";
 import { requiredEvidence } from "../../core/src/policy.ts";
+import { MINIMUM_SQLITE_VERSION, runtimeSqliteVersion, supportedSqliteVersion } from "./sqlite-runtime.ts";
 export * from "./context.ts";
 
 export interface ExtensionOptions {
   client?: (invalidateSnapshot: () => void) => ServiceClient;
+  sqliteVersion?: () => string;
 }
 export default function sessionNavigationExtension(
   pi: ExtensionAPI,
@@ -36,6 +38,23 @@ export default function sessionNavigationExtension(
     const child = ctx.agent?.kind === "sub";
     const linkage = child ? childLinkage(ctx) : null;
     if (child && !linkage) return;
+    let version: string;
+    try {
+      version = (options.sqliteVersion ?? runtimeSqliteVersion)();
+    } catch {
+      version = "unknown";
+    }
+    if (!supportedSqliteVersion(version)) {
+      const message = `session-navigation: SQLite ${version}은 지원되지 않습니다. SQLite ${MINIMUM_SQLITE_VERSION} 이상이 필요합니다. 숨긴 컨텍스트를 보호할 수 없어 요청을 중단합니다.`;
+      try { ctx.ui?.notify?.(message, "error"); } catch { /* report through the hook too */ }
+      console.error(message);
+      // A prior session may contain hidden context. Never send originals silently.
+      pi.on("context", async (_event, requestContext) => {
+        try { requestContext.abort?.(); } catch { /* surface the explicit error below */ }
+        throw new Error(message);
+      });
+      return;
+    }
     const owner = ctx.sessionManager?.getSessionId?.() ?? "main";
     if (!acquireExtension(owner)) return;
     active = true;
