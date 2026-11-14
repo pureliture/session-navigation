@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { focusedSessionTab, parseSessionTab } from "./hostCompat";
+import { selectMainOrFallbackAgent } from "./sessionFollowing";
 import { childrenForCall, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget } from "./subagents";
 import type { Row } from "../shared/sessionNav";
 
@@ -78,4 +79,25 @@ test("missing parents and cycles fail closed instead of displaying another scope
   const tab = { kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" } as const;
   expect(await subagentMainTarget(tab, async () => { throw new Error("offline"); })).toEqual({ agentId: null, subagent: true });
   expect(await subagentMainTarget(tab, async (id) => id === "parent" ? "other" : "parent")).toEqual({ agentId: null, subagent: true });
+});
+
+test("Paseo-orchestrated OMP subagents with their own registered scope keep their own outline instead of parent fallback", async () => {
+  const tab = { kind: "agent", agentId: "paseo-omp-child" } as const;
+  const scopes = [
+    { scope_key: "omp:default:parent-sid:default", agent_id: "paseo-omp-parent" },
+    { scope_key: "omp:default:child-sid:default", agent_id: "paseo-omp-child" },
+  ];
+  const fallback = await subagentMainTarget(tab, async (id) => (id === "paseo-omp-child" ? "paseo-omp-parent" : null));
+  expect(fallback).toEqual({ agentId: "paseo-omp-parent", subagent: true });
+  const managed = scopes.some((scope) => scope.agent_id === tab.agentId);
+  const routedManaged = selectMainOrFallbackAgent({
+    tab,
+    managed,
+    fallback,
+    followVisible: true,
+    resolvedTarget: null,
+    lastMainAgentId: "previous",
+  });
+  expect(routedManaged).toEqual({ agentId: "paseo-omp-child", subagentFallback: false, inView: true });
+  expect(scopeForAgent(scopes, routedManaged.agentId ?? "")).toBe("omp:default:child-sid:default");
 });

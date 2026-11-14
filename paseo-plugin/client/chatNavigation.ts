@@ -320,6 +320,7 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 
 async function navigate(row: Row, rows: Row[], version: number, options: NavigationOptions): Promise<boolean> {
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
+  if (!doc || typeof doc.querySelectorAll !== "function") return false;
   if (options.openAgent) {
     options.openAgent.open();
     for (;;) {

@@ -132,11 +132,7 @@ paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref <REVIEWED_
 paseo plugin ls
 ```
 
-Explorer의 **+ → Session navigation**을 선택하고 **Follow visible session**으로 현재 대화를
-따라가거나 선택기로 에이전트를 고정합니다. 비어 있거나 일치하지 않는 화면, 세션이 아닌 화면에는
-**No session in view**를 표시합니다. **Cmd/Ctrl+K → Open session navigation**, **/nav**도
-사용할 수 있습니다. 닫은 패널은 강제로 다시 열지 않으며 열려 있던 배치는 Paseo가 복원합니다.
-갱신 뒤 이전 화면이 남으면 페이지 전체를 새로고침하세요.
+Explorer의 **+ → Session navigation**을 선택하면 데스크톱, 모바일 컴팩트 웹, Paseo 0.15.3 모바일 클라이언트에서 **Follow visible session**으로 현재 워크스페이스의 활성 대화를 따라가거나 선택기로 에이전트를 고정할 수 있습니다. 네이티브 모바일에서 포커스된 세션이 없거나 검증되지 않은 호스트 버전인 경우 바인딩된 세션 선택기를 표시하며, 네이티브에서 행을 탭하면 채팅 스크롤 대신 **Preview**를 바로 엽니다. 웹의 비어 있거나 세션이 아닌 화면에는 **No session in view**를 표시합니다. **Cmd/Ctrl+K → Open session navigation**, **/nav**도 사용할 수 있습니다. 닫은 패널은 강제로 다시 열지 않으며 열려 있던 배치는 Paseo가 복원합니다. 갱신 뒤 이전 화면이 남으면 페이지 전체를 새로고침하세요.
 
 ### OMP(oh-my-pi) npm 패키지 확장
 
@@ -264,10 +260,12 @@ manage_context({tool_call_ids: ["선택한-id-1", "선택한-id-2"], action: "hi
 | ACP의 Hermes | `delegate_task` 아래에서 자식 outline을 펼쳐 Hide/Unhide/Summarize를 사용합니다. 네이티브 자식 탭은 없으며 자식 행 선택은 강조만 합니다. |
 | OpenCode Go 등 기타 제공자, 미등록 자식 | 읽기 전용 main outline과 **subagent context is not managed** 안내를 표시합니다. 행을 선택하면 main agent를 열고 해당 위치로 이동합니다. |
 
-자식 탭 식별·열기는 `client/hostCompat.ts`에 격리된 **Paseo 0.15.3 UI 내부 구조**에
-의존합니다. 확인되지 않은 호스트 버전, 모호하거나 잘못된 탭 정보, 미등록 자식은 안전한
-fallback으로 전환합니다. 버전 메타데이터가 없으면 엄격한 DOM 구조 검사를 적용합니다.
-0.15.3의 공개 SDK에는 자식 탭 식별 API가 없습니다. 탭 열기가 실패해도 inline outline은
+모바일/컴팩트 활성 세션 추적과 자식 탭 식별·열기는 `client/hostCompat.ts`에 격리된
+**Paseo 0.15.3 런타임/UI 내부 구조**에 의존합니다. 확인되지 않은 호스트 버전, 모호하거나
+잘못된 탭 정보, 미등록 자식은 세션 선택기나 부모/inline outline 등 안전한 fallback으로
+전환합니다. 자체 어댑터 scope가 등록된 Paseo 생성 서브에이전트는 부모가 아닌 자신의
+outline을 표시합니다. 웹에서 버전 메타데이터가 없으면 엄격한 DOM 구조 검사를 적용하며,
+0.15.3 공개 SDK에는 활성 탭·자식 탭 식별 API가 없습니다. 탭 열기가 실패해도 inline outline은
 계속 사용할 수 있습니다. 자식은 별도 상태를 사용하며 기본적으로 navigation 도구·지침·
 reminder를 받지 않습니다. [백엔드 검증 근거](subagent-backend-verification.md)를 참고하세요.
 

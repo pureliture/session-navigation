@@ -512,6 +512,20 @@ test("missing document/chat/target is safe, non-tool direct and snippet navigati
   expect(await scrollToMessageInChat(unmatched, [], f.options)).toBe(true);
 });
 
+test("a document-less host fails immediately without opening the agent or waiting", async () => {
+  let opened = 0, waits = 0;
+  const started = Date.now();
+  expect(await scrollToMessageInChat(row("message", "user"), [row("message", "user")], {
+    document: undefined,
+    openAgent: { agentId: "a", open() { opened++; throw new Error("must not open"); } },
+    afterLoad: async () => { waits++; },
+    timeoutMs: 50,
+  })).toBe(false);
+  expect(opened).toBe(0);
+  expect(waits).toBe(0);
+  expect(Date.now() - started).toBeLessThan(1000);
+});
+
 test("expands Paseo's folded turn-summary after the user message, then highlights the tool badge", async () => {
   const root = new Element({ "data-testid": "agent-chat-scroll" });
   const doc = new Element().add(root);
