@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   Store,
@@ -717,4 +717,52 @@ test("agent binding uses explicit provider, profile and third scope component, p
     undefined,
     "hermes-agent",
   ]);
+});
+
+test("PASEO_HOME redirects only the real home, never an isolated fixture home", () => {
+  const { home } = fixture();
+  const agents = join(home, ".paseo/agents/workspace");
+  mkdirSync(agents, { recursive: true });
+  writeFileSync(
+    join(agents, "isolated.json"),
+    JSON.stringify({
+      id: "isolated-agent",
+      provider: "omp",
+      persistence: { provider: "omp", sessionId: "sid", metadata: {} },
+    }),
+  );
+  const redirectedHome = mkdtempSync(join(tmpdir(), "paseo-redirected-"));
+  const redirectedAgents = join(redirectedHome, "agents", "workspace");
+  mkdirSync(redirectedAgents, { recursive: true });
+  writeFileSync(
+    join(redirectedAgents, "redirected.json"),
+    JSON.stringify({
+      id: "redirected-agent",
+      provider: "omp",
+      persistence: { provider: "omp", sessionId: "other", metadata: {} },
+    }),
+  );
+  cleanup.push(() => rmSync(redirectedHome, { recursive: true, force: true }));
+  const scopes = (session: string): {
+    scope_key: string;
+    items: number;
+    capabilities: { state: string; unhide: boolean };
+    agent_id?: string;
+  }[] => [{
+    scope_key: `omp:default:${session}:default`,
+    items: 0,
+    capabilities: { state: "ready", unhide: false },
+  }];
+  const previous = process.env.PASEO_HOME;
+  process.env.PASEO_HOME = redirectedHome;
+  try {
+    expect(bindAgents(home, scopes("sid"))[0].agent_id).toBe("isolated-agent");
+    expect(bindAgents(home, scopes("other"))[0].agent_id).toBeUndefined();
+    expect(bindAgents(homedir(), scopes("other"))[0].agent_id).toBe("redirected-agent");
+    expect(bindAgents("/unused-home", scopes("other"), redirectedHome)[0].agent_id).toBe("redirected-agent");
+    expect(bindAgents("/unused-home", scopes("sid"))[0].agent_id).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.PASEO_HOME;
+    else process.env.PASEO_HOME = previous;
+  }
 });

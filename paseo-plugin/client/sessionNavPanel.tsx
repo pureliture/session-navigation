@@ -1,9 +1,9 @@
 import type { PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { useAgent, usePaseo, useRpc, useTabState } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/ui";
+import { FlatList as UiFlatList, Icon, ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { FlatList as RnFlatList, Pressable, ScrollView as RnScrollView, Text, TextInput as RnTextInput, View } from "react-native";
 import { z } from "zod";
 import {
   dbChoiceRpc,
@@ -16,12 +16,12 @@ import {
   type Row,
 } from "../shared/sessionNav";
 import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
-import { readSessionTimelineIds, resolveSessionTarget, sessionFollowCandidates } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
-import { focusedSessionTab, openProviderSubagent, type SessionTab } from "./hostCompat";
+import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { childrenForCall, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 
 import {
@@ -105,6 +105,10 @@ function ActionSvgIcon({
   );
 }
 
+const FlatList = UiFlatList ?? RnFlatList;
+const ScrollView = UiScrollView ?? RnScrollView;
+const TextInput = UiTextInput ?? RnTextInput;
+
 export function SessionNavPanel({ theme, layout, params, navigation, tab, followVisible = true, candidateAgentIds, childScope, ancestry = [], ...panelProps }: PluginAgentPanelProps & {
   followVisible?: boolean;
   candidateAgentIds?: readonly string[];
@@ -145,6 +149,13 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const [searchOpen, setSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
+    setFollowedId(null);
+    setInView(!!params.agentId);
+    lastMainAgent.current = params.agentId || null;
+    setFocusedTab(null);
+    setSubagentFallback(false);
+  }, [params.agentId]);
+  useEffect(() => {
     if (notice !== "Not loaded in chat") return;
     const timer = setTimeout(() => setNotice((current) => current === notice ? null : current), 4000);
     return () => clearTimeout(timer);
@@ -164,28 +175,31 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   });
 
   const scopes = scopesQuery.data ?? [];
+  const hostProp: unknown = "host" in panelProps && typeof panelProps.host === "object" && panelProps.host !== null &&
+    "id" in panelProps.host ? panelProps.host.id : undefined;
+  const hostId = typeof hostProp === "string" ? hostProp : "";
+  const workspaceProp: unknown = "workspaceId" in panelProps ? panelProps.workspaceId : undefined;
+  const panelWorkspaceId = typeof workspaceProp === "string" ? workspaceProp : undefined;
+  const hasDocument = hasDomDocument();
 
   useEffect(() => {
-    const doc = (globalThis as any).document;
-    if (childScope || !doc || !paseo?.agents) return;
+    const doc = "document" in globalThis ? Reflect.get(globalThis, "document") : undefined;
+    if (childScope || !paseo?.agents || (!hasDocument && !hostId && !("activeAgentId" in panelProps))) return;
     let cancelled = false;
-    const tick = async () => {
-      const focused = focusedSessionTab(doc);
-      const fallback = await subagentMainTarget(focused, (id) => queryClient.fetchQuery({
-        queryKey: ["session-nav-parent", id],
-        staleTime: 10_000,
-        queryFn: async () => {
-          const handle = paseo.agents.ref(id);
-          await handle.refresh();
-          const snapshot = handle.current();
-          if (!snapshot) throw new Error("agent_not_found");
-          return snapshot.labels["paseo.parent-agent-id"] ?? null;
-        },
-      }));
-      const values = visibleChatValues(doc);
-      const id = focused?.kind === "provider_subagent" ? focused.parentAgentId : fallback.subagent
-        ? fallback.agentId ?? lastMainAgent.current
-        : focused?.kind === "agent" && followVisible ? focused.agentId : await resolveSessionTarget({
+    const parentOf = (id: string) => queryClient.fetchQuery({
+      queryKey: ["session-nav-parent", id],
+      staleTime: 10_000,
+      queryFn: async () => {
+        const handle = paseo.agents.ref(id);
+        await handle.refresh();
+        const snapshot = handle.current();
+        if (!snapshot) throw new Error("agent_not_found");
+        return snapshot.labels["paseo.parent-agent-id"] ?? null;
+      },
+    });
+    const applySelection = async (focused: SessionTab | null, values: string[] | null) => {
+      const fallback = await subagentMainTarget(focused, parentOf);
+      const resolvedTarget = await resolveSessionTarget({
         followVisible, boundAgentId: params.agentId, visibleValues: values,
         candidates: sessionFollowCandidates(candidateAgentIds, scopes.map((s) => s.agent_id).filter((id): id is string => !!id)),
         timelineIds: async (id) => (await queryClient.fetchQuery({
@@ -194,18 +208,91 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
         })).ids,
       });
-      if (cancelled || JSON.stringify(focusedSessionTab(doc)) !== JSON.stringify(focused)) return;
-      setFocusedTab(focused);
       const managed = focused?.kind === "agent" && scopes.some((scope) => scope.agent_id === focused.agentId);
-      setSubagentFallback(fallback.subagent && !managed);
-      setInView(!!id || fallback.subagent);
-      if (id) lastMainAgent.current = id;
-      setFollowedId(id === params.agentId ? null : id);
+      const selection = selectMainOrFallbackAgent({ tab: focused, managed: !!managed, fallback, followVisible, resolvedTarget, lastMainAgentId: lastMainAgent.current });
+      if (cancelled) return;
+      setFocusedTab(focused);
+      setSubagentFallback(selection.subagentFallback);
+      setInView(selection.inView);
+      if (selection.agentId) lastMainAgent.current = selection.agentId;
+      setFollowedId(selection.agentId === params.agentId ? null : selection.agentId);
     };
+    const tick = async () => {
+      const explicitSupported = "activeAgentId" in panelProps;
+      const explicitProp: unknown = explicitSupported ? panelProps.activeAgentId : undefined;
+      const explicitAgentId = typeof explicitProp === "string" && explicitProp.length > 0 ? explicitProp : null;
+      if (!hasDocument) {
+        const hostFocus = hostId ? readHostFocus(hostId) : { supported: false, focusedAgentId: null, hasSignal: false };
+        const hasSignal = explicitSupported || (hostFocus.supported && hostFocus.hasSignal);
+        const targetId = explicitSupported ? explicitAgentId : hostFocus.focusedAgentId;
+        if (followVisible && hasSignal) {
+          if (targetId === null) {
+            if (cancelled) return;
+            setFocusedTab(null);
+            setSubagentFallback(false);
+            setInView(false);
+            setFollowedId(null);
+            return;
+          }
+          let verdict = acceptWorkspaceAgentId({ agentId: targetId, workspaceCandidateIds: candidateAgentIds, panelWorkspaceId });
+          if (verdict === "unknown") {
+            try {
+              const handle = paseo.agents.ref(targetId);
+              await handle.refresh();
+              verdict = acceptWorkspaceAgentId({ agentId: targetId, workspaceCandidateIds: candidateAgentIds, agentWorkspaceId: handle.current()?.workspaceId ?? null, panelWorkspaceId });
+            } catch {
+              verdict = "reject";
+            }
+          }
+          if (verdict !== "accept" || cancelled) return;
+          await applySelection({ kind: "agent", agentId: targetId }, null);
+          return;
+        }
+        if (cancelled) return;
+        if (params.agentId) {
+          await applySelection({ kind: "agent", agentId: params.agentId }, null);
+          return;
+        }
+        setSubagentFallback(false);
+        setInView(false);
+        setFollowedId(null);
+        return;
+      }
+      // Web: DOM tab wins; layout-state and workspace-verified heartbeat focus back up compact/empty chats.
+      const readFocusedTab = (): SessionTab | null => {
+        const dom = focusedSessionTab(doc);
+        if (dom) return dom;
+        const layoutTab = hostId && panelWorkspaceId ? readWebWorkspaceFocusedTab(hostId, panelWorkspaceId) : null;
+        if (layoutTab) return layoutTab;
+        const candidateId = explicitSupported
+          ? explicitAgentId
+          : (hostId ? readHostFocus(hostId).focusedAgentId : null);
+        if (!candidateId) return null;
+        const verdict = acceptWorkspaceAgentId({ agentId: candidateId, workspaceCandidateIds: candidateAgentIds, panelWorkspaceId });
+        return verdict === "accept" || (verdict === "unknown" && !panelWorkspaceId)
+          ? { kind: "agent", agentId: candidateId }
+          : null;
+      };
+      const focusTab = readFocusedTab();
+      const values = visibleChatValues(doc);
+      if (focusTab && (values === null || values.length === 0)) {
+        if (!cancelled && JSON.stringify(readFocusedTab()) === JSON.stringify(focusTab)) {
+          await applySelection(focusTab, null);
+        }
+        return;
+      }
+      if (cancelled || JSON.stringify(readFocusedTab()) !== JSON.stringify(focusTab)) return;
+      await applySelection(focusTab, values);
+    };
+    const unsubscribe = hostId ? subscribeHostFocus(hostId, () => void tick()) : () => {};
     void tick();
-    const timer = setInterval(() => void tick(), 1500);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [paseo, params.agentId, scopes, queryClient, followVisible, candidateAgentIds, childScope]);
+    const timer = hasDocument ? setInterval(() => void tick(), 1500) : undefined;
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      clearInterval(timer);
+    };
+  }, [paseo, params.agentId, scopes, queryClient, followVisible, candidateAgentIds, childScope, hasDocument, hostId, panelWorkspaceId]);
   const parentScopeKey = scopeForAgent(scopes, agentId);
 
   const activeChild = childScope ?? resolveChildScope(focusedTab, parentScopeKey, scopes);
@@ -993,6 +1080,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const handleRowPress = async (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
+    if (!hasDocument) {
+      setPreviewOpen(true);
+      return;
+    }
     if (activeChild) {
       if (!activeChild.scope_key.startsWith("omp:") || !activeChild.subagent_id) return;
       const opened = await openProviderSubagent((globalThis as any).document, agentId, activeChild.subagent_id, {
@@ -1539,7 +1630,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             onPress={() => setExpandedChildren((current) => ({ ...current, [child.scope_key]: !current[child.scope_key] }))} style={{ flex: 1 }}>
             <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{expandedChildren[child.scope_key] ? "▾" : "▸"} subagent: {child.subagent_id}</Text>
           </Pressable>
-          {child.scope_key.startsWith("omp:") ? <Pressable accessibilityRole="button" accessibilityLabel={`Open subagent tab ${child.subagent_id}`}
+          {hasDocument && child.scope_key.startsWith("omp:") ? <Pressable accessibilityRole="button" accessibilityLabel={`Open subagent tab ${child.subagent_id}`}
             onPress={async () => {
               const opened = await openProviderSubagent((globalThis as any).document, agentId, child.subagent_id!, { openParent: () => navigation?.openAgent({ agentId }) });
               if (!opened) {
@@ -1556,7 +1647,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     ));
   };
 
-  const isLoading = resolvedScopeKey ? listQuery.isPending || (needsLinkedTimeline && fallbackTimelineQuery.isPending) : fallbackTimelineQuery.isPending;
+  const isLoading = resolvedScopeKey
+    ? (listQuery.isPending && listQuery.fetchStatus !== "idle") || (needsLinkedTimeline && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle")
+    : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
   const capabilityMessage = capabilityNotice(listQuery.error instanceof Error ? listQuery.error.message : scopesQuery.error instanceof Error ? scopesQuery.error.message : undefined, capabilities);
   const noticeBar = notice || capabilityMessage || displayOnly ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>

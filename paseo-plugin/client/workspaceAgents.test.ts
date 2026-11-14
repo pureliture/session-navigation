@@ -21,3 +21,14 @@ test("empty workspaces stay empty and API errors propagate for the retry UI", as
 test("stalled pagination fails instead of silently omitting agents", async () => {
   await expect(listWorkspaceAgents({ agents: { list: async () => ({ entries: [], pageInfo: { hasMore: true, nextCursor: "same" } }) } } as any, "w")).rejects.toThrow("did not advance");
 });
+
+test("attaches archived flag only when archivedAt is present", async () => {
+  const paseo: any = { agents: { list: async () => ({ entries: [
+    { agent: { id: "active", workspaceId: "w", title: "Active", archivedAt: null } },
+    { agent: { id: "old", workspaceId: "w", title: "Old", archivedAt: "2026-01-01" } },
+  ], pageInfo: { hasMore: false } }) } };
+  expect(await listWorkspaceAgents(paseo, "w")).toEqual([
+    { id: "active", title: "Active" },
+    { id: "old", title: "Old", archived: true },
+  ]);
+});

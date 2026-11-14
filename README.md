@@ -127,7 +127,7 @@ Or install the Git folder directly. For reproducibility, use a reviewed commit o
 paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref main
 ```
 
-Choose **+ → Session navigation** in Explorer to follow the visible chat session. Keep **Follow visible session** enabled or pin an agent with the selector. Empty, unmatched, or non-session screens show **No session in view**. **Cmd/Ctrl+K → Open session navigation** and **/nav** are also available. Paseo restores open panel layouts; a panel closed by the user is not forcibly reopened. If an old page remains after a plugin reload, refresh the entire page.
+Choose **+ → Session navigation** in Explorer to follow the visible chat session across desktop, compact mobile web, and Paseo 0.15.3 mobile clients, or pin an agent with the selector. When no session is focused on native clients (or on untested host versions), the panel presents a bound-session chooser; selecting an outline row on native clients opens **Preview** directly. Empty, unmatched, or non-session web screens show **No session in view**. **Cmd/Ctrl+K → Open session navigation** and **/nav** are also available. Paseo restores open panel layouts; a panel closed by the user is not forcibly reopened. If an old page remains after a plugin reload, refresh the entire page.
 
 ### OMP (oh-my-pi) extension
 
@@ -251,12 +251,15 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 | Hermes via ACP | Expandable inline child outlines under `delegate_task`, with child-scoped Hide/Unhide/Summarize. No native child tab. Selecting a child row highlights it without navigating. |
 | Others, e.g. OpenCode Go; unregistered children | Display-only main outline and **subagent context is not managed**. Selecting a row opens the main agent and scrolls there. |
 
-Child-tab identification/opening relies on **Paseo 0.15.3 UI internals** isolated
-in `client/hostCompat.ts`. Known untested host versions, ambiguous/malformed tabs,
-or missing child registrations fall back safely. When version metadata is absent,
-the guarded DOM shape is required; no public SDK child-target API exists in 0.15.3.
-If opening a child tab fails, the inline outline remains available. Children have
-separate state; navigation tools/guidance/reminders are not exposed to them by default.
+Active-session tracking on mobile/compact layouts and child-tab identification/opening
+rely on guarded **Paseo 0.15.3 runtime/UI internals** isolated in `client/hostCompat.ts`.
+Known untested host versions, ambiguous/malformed tabs, or missing registrations fall
+back safely to the session chooser or parent/inline outlines. Paseo-spawned subagents
+that register their own adapter scope display their own outline rather than their
+parent's. When version metadata is absent on web, the guarded DOM shape is required; no
+public SDK active-tab or child-target API exists in 0.15.3. If opening a child tab
+fails, the inline outline remains available. Children have separate state; navigation
+tools/guidance/reminders are not exposed to them by default.
 See [backend evidence](docs/subagent-backend-verification.md).
 
 - Original host history remains intact; only the request copy changes. **Hide is not a permanent deletion or secret-erasure feature.**

@@ -25,12 +25,16 @@ adapter's own model; Paseo never substitutes a separate model.
 
 ## Explorer and preview
 
-Use Explorer's **+ → Session navigation**. The workspace panel follows the visible
-session using chat/timeline identity matching every 1.5 seconds. Empty or unmatched
-chats and non-session screens show **No session in view**. An optional picker pins an
-agent; **Follow visible session** clears the pin. Paseo remembers open tabs and the
-follow/pin choice. Closing the tab stays closed; there is no forced first-time opening.
-Command Center's **Open session navigation** and **/nav** also open the agent panel.
+Use Explorer's **+ → Session navigation**. On web, the workspace panel follows the
+visible session through tab/layout state and chat/timeline identity matching; empty or
+non-session screens show **No session in view**. On mobile and native clients, it
+follows Paseo 0.15.3 client focus updates within the current workspace and falls back
+to a bound-session chooser when no session is focused or on untested host versions.
+Tapping a row on native clients opens its read-only **Preview** instead of scrolling
+chat DOM. An optional picker pins an agent; **Follow visible session** clears the pin.
+Paseo remembers open tabs and the follow/pin choice. Closing the tab stays closed;
+there is no forced first-time opening. Command Center's **Open session navigation**
+and **/nav** also open the agent panel.
 
 Hide and Unhide retain rows in the outline. The read-only **Preview** drawer shows
 original input/output or message text. Hidden tools show the stored **Sent to model**
@@ -48,12 +52,15 @@ truncation marker. IDs and metadata remain selectable.
 | Hermes via ACP | Expandable inline outlines under `delegate_task` with the same child-scoped controls; no native child tab. Row clicks only highlight. |
 | Other providers (e.g. OpenCode Go) or unregistered children | Display-only main outline with **subagent context is not managed**; row clicks open main and scroll. |
 
-Tab following/opening uses guarded **Paseo 0.15.3 UI internals**, isolated in
-`client/hostCompat.ts`. There is no public SDK child-target API in that version.
-Known untested versions fail closed; if version metadata is unavailable, strict DOM
-guards apply. Ambiguous/malformed identity and missing registration retain the fallback.
-Failed opening keeps the inline expansion available. Child controls use the child's
-capabilities, never the parent's. Child tools/guidance/reminders are suppressed by default.
+Tab following, mobile focus tracking, and native child-tab opening use guarded
+**Paseo 0.15.3 UI/runtime internals**, isolated in `client/hostCompat.ts`. There is no
+public SDK active-tab or child-target API in that version. Known untested versions fail
+closed to manual session selection or inline child outlines; if version metadata is
+unavailable on web, strict DOM guards apply. Paseo-spawned subagents with their own
+registered scope display their own outline, while unregistered children retain the
+parent fallback. Failed tab opening keeps the inline expansion available. Child controls
+use the child's capabilities, never the parent's. Child tools/guidance/reminders are
+suppressed by default.
 
 The server runs SQLite away from its event loop in an embedded Node Worker. It reads
 local session history and writes originals, replacements and hide state to

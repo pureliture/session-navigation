@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 interface ScopeEntry {
@@ -11,8 +12,10 @@ interface ScopeEntry {
 export function bindAgents<T extends ScopeEntry>(
   home: string,
   scopes: T[],
+  paseoHome = home === homedir()
+    ? process.env.PASEO_HOME ?? join(home, ".paseo")
+    : join(home, ".paseo"),
 ): T[] {
-  const paseoHome = process.env.PASEO_HOME ?? join(home, ".paseo");
   let providers: Record<string, any> = {};
   const config = join(paseoHome, "config.json");
   if (existsSync(config)) {

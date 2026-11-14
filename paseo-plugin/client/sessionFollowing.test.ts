@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readSessionTimelineIds, resolveSessionTarget, sessionFollowCandidates } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, resolveWorkspaceSessionState, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import { QueryClient } from "@tanstack/react-query";
 import { defaultWorkspaceState, selectWorkspaceAgent, workspaceTabSchema } from "./workspaceState";
 
@@ -158,4 +158,125 @@ test("incomplete identity history retries immediately, then caches the recovered
     await client.fetchQuery(options);
     expect(calls).toBe(4);
   } finally { client.clear(); }
+});
+
+test("hasDomDocument detects a DOM-like document", () => {
+  expect(hasDomDocument({ querySelectorAll: () => [] })).toBe(true);
+  expect(hasDomDocument({})).toBe(false);
+  expect(hasDomDocument(undefined)).toBe(false);
+  expect(hasDomDocument(null)).toBe(false);
+});
+
+test("boundRootSessions keeps only root scopes with agents and prefers omp over pi aliases", () => {
+  const scopes = [
+    { scope_key: "pi:default:a:default", agent_id: "a", items: 5 },
+    { scope_key: "omp:default:a:default", agent_id: "a", items: 1 },
+    { scope_key: "omp:default:child:default", parent_scope: "omp:default:a:default", agent_id: "child", items: 9 },
+    { scope_key: "omp:default:noagent:default", items: 9 },
+    { scope_key: "omp:default:empty:default", agent_id: "", items: 9 },
+    { scope_key: "hermes:default:b:unknown", agent_id: "b", items: 3 },
+  ];
+  expect(boundRootSessions(scopes)).toEqual([
+    { agentId: "b", scopeKey: "hermes:default:b:unknown", items: 3, adapter: "hermes" },
+    { agentId: "a", scopeKey: "omp:default:a:default", items: 1, adapter: "omp" },
+  ]);
+});
+
+test("boundRootSessions breaks adapter ties by items then scope key", () => {
+  const byItems = [
+    { scope_key: "omp:default:a:one", agent_id: "a", items: 1 },
+    { scope_key: "omp:default:a:two", agent_id: "a", items: 4 },
+  ];
+  expect(boundRootSessions(byItems)).toEqual([{ agentId: "a", scopeKey: "omp:default:a:two", items: 4, adapter: "omp" }]);
+  const byKey = [
+    { scope_key: "omp:default:a:b", agent_id: "a", items: 2 },
+    { scope_key: "omp:default:a:a", agent_id: "a", items: 2 },
+  ];
+  expect(boundRootSessions(byKey)).toEqual([{ agentId: "a", scopeKey: "omp:default:a:a", items: 2, adapter: "omp" }]);
+});
+
+test("boundRootSessions filters and orders by workspaceAgentIds", () => {
+  const scopes = [
+    { scope_key: "omp:default:a:default", agent_id: "a", items: 1 },
+    { scope_key: "omp:default:b:default", agent_id: "b", items: 1 },
+    { scope_key: "omp:default:c:default", agent_id: "c", items: 1 },
+  ];
+  expect(boundRootSessions(scopes, undefined).map((s) => s.agentId)).toEqual(["a", "b", "c"]);
+  expect(boundRootSessions(scopes, [])).toEqual([]);
+  expect(boundRootSessions(scopes, ["b", "a"]).map((s) => s.agentId)).toEqual(["b", "a"]);
+});
+
+test("native follow tracks the focused workspace agent across switches and non-agent tabs", () => {
+  const two = [
+    { agentId: "a", scopeKey: "omp:default:a:default", items: 1, adapter: "omp" },
+    { agentId: "b", scopeKey: "omp:default:b:default", items: 1, adapter: "omp" },
+  ];
+  const base = { pinnedAgentId: null, hasDocument: false, demandedAgentIds: [] as string[], boundSessions: two, workspaceAgentIds: ["a", "b"] as const };
+  expect(resolveWorkspaceSessionState({ ...base, trackedAgentId: null, hasTrackerSignal: false, trackerSupported: true }))
+    .toEqual({ mode: "chooser", effectiveAgentId: null, unavailablePin: false });
+  expect(resolveWorkspaceSessionState({ ...base, trackedAgentId: "a", hasTrackerSignal: true, trackerSupported: true }))
+    .toEqual({ mode: "follow", effectiveAgentId: "a", unavailablePin: false });
+  expect(resolveWorkspaceSessionState({ ...base, trackedAgentId: "b", hasTrackerSignal: true, trackerSupported: true }))
+    .toEqual({ mode: "follow", effectiveAgentId: "b", unavailablePin: false });
+  expect(resolveWorkspaceSessionState({ ...base, trackedAgentId: null, hasTrackerSignal: true, trackerSupported: true }))
+    .toEqual({ mode: "chooser", effectiveAgentId: null, unavailablePin: false });
+});
+
+test("native single bound session auto-selects without a focus signal", () => {
+  const one = [{ agentId: "a", scopeKey: "omp:default:a:default", items: 2, adapter: "omp" }];
+  expect(resolveWorkspaceSessionState({ pinnedAgentId: null, trackedAgentId: null, hasTrackerSignal: false,
+    trackerSupported: false, hasDocument: false, demandedAgentIds: [], boundSessions: one }))
+    .toEqual({ mode: "single-auto", effectiveAgentId: "a", unavailablePin: false });
+  expect(resolveWorkspaceSessionState({ pinnedAgentId: null, trackedAgentId: null, hasTrackerSignal: false,
+    trackerSupported: true, hasDocument: false, demandedAgentIds: [], boundSessions: one, workspaceAgentIds: ["a"] }))
+    .toEqual({ mode: "single-auto", effectiveAgentId: "a", unavailablePin: false });
+});
+
+test("native demanded seed follows a single candidate but stays chooser when ambiguous", () => {
+  const base = { pinnedAgentId: null, trackedAgentId: null, hasTrackerSignal: false, trackerSupported: true,
+    hasDocument: false, boundSessions: [] as { agentId: string; scopeKey: string; items: number; adapter: string }[] };
+  expect(resolveWorkspaceSessionState({ ...base, demandedAgentIds: ["a"] }))
+    .toEqual({ mode: "follow", effectiveAgentId: "a", unavailablePin: false });
+  expect(resolveWorkspaceSessionState({ ...base, demandedAgentIds: ["a", "b"] }))
+    .toEqual({ mode: "chooser", effectiveAgentId: null, unavailablePin: false });
+});
+
+test("unavailable pinned sessions fall back to the chooser with a notice", () => {
+  expect(resolveWorkspaceSessionState({ pinnedAgentId: "missing", trackedAgentId: null, hasTrackerSignal: false,
+    trackerSupported: true, hasDocument: false, demandedAgentIds: [], boundSessions: [], workspaceAgentIds: ["a"] }))
+    .toEqual({ mode: "chooser", effectiveAgentId: null, unavailablePin: true });
+  expect(resolveWorkspaceSessionState({ pinnedAgentId: "a", trackedAgentId: null, hasTrackerSignal: false,
+    trackerSupported: true, hasDocument: false, demandedAgentIds: [], boundSessions: [], workspaceAgentIds: ["a"] }))
+    .toEqual({ mode: "pinned", effectiveAgentId: "a", unavailablePin: false });
+});
+
+test("web always follows the visible session when unpinned", () => {
+  expect(resolveWorkspaceSessionState({ pinnedAgentId: null, trackedAgentId: "a", hasTrackerSignal: false,
+    trackerSupported: true, hasDocument: true, demandedAgentIds: [], boundSessions: [] }))
+    .toEqual({ mode: "follow", effectiveAgentId: "a", unavailablePin: false });
+  expect(resolveWorkspaceSessionState({ pinnedAgentId: null, trackedAgentId: null, hasTrackerSignal: false,
+    trackerSupported: true, hasDocument: true, demandedAgentIds: [], boundSessions: [] }))
+    .toEqual({ mode: "follow", effectiveAgentId: null, unavailablePin: false });
+});
+
+test("acceptWorkspaceAgentId guards against cross-workspace leaks", () => {
+  expect(acceptWorkspaceAgentId({ agentId: null, panelWorkspaceId: "w" })).toBe("reject");
+  expect(acceptWorkspaceAgentId({ agentId: "a", agentWorkspaceId: "w", panelWorkspaceId: "w" })).toBe("accept");
+  expect(acceptWorkspaceAgentId({ agentId: "a", agentWorkspaceId: "other", panelWorkspaceId: "w" })).toBe("reject");
+  expect(acceptWorkspaceAgentId({ agentId: "a", workspaceCandidateIds: ["a"], panelWorkspaceId: "w" })).toBe("accept");
+  expect(acceptWorkspaceAgentId({ agentId: "b", workspaceCandidateIds: ["a"], panelWorkspaceId: "w" })).toBe("reject");
+  expect(acceptWorkspaceAgentId({ agentId: "a", panelWorkspaceId: "w" })).toBe("unknown");
+  expect(acceptWorkspaceAgentId({ agentId: "a" })).toBe("accept");
+});
+
+test("managed Paseo subagents stay on the child while unmanaged children fall back to the parent", () => {
+  expect(selectMainOrFallbackAgent({ tab: { kind: "agent", agentId: "child-omp" }, managed: true,
+    fallback: { agentId: "parent-omp", subagent: true }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
+    .toEqual({ agentId: "child-omp", subagentFallback: false, inView: true });
+  expect(selectMainOrFallbackAgent({ tab: { kind: "agent", agentId: "child-omp" }, managed: false,
+    fallback: { agentId: "parent-omp", subagent: true }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
+    .toEqual({ agentId: "parent-omp", subagentFallback: true, inView: true });
+  expect(selectMainOrFallbackAgent({ tab: { kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" }, managed: false,
+    fallback: { agentId: null, subagent: false }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
+    .toEqual({ agentId: "parent", subagentFallback: false, inView: true });
 });

@@ -54,6 +54,10 @@ Publication and registry/catalog approval are separate steps; see
 - Discover registered subagent scopes and render child-scoped controls in
   Paseo. Unsupported or unregistered children show **subagent context is not
   managed**, rather than applying parent-scope mutations to a child.
+- Track active workspace sessions in Paseo Explorer across mobile/native and
+  compact web layouts using guarded Paseo 0.15.3 focus/layout state, with a
+  bound-session chooser fallback, native row-tap Preview, and own-scope routing
+  for Paseo-spawned OMP subagents (#13).
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

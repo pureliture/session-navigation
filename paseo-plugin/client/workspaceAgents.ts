@@ -2,7 +2,7 @@ import type { usePaseo } from "@getpaseo/plugin/client";
 
 type PaseoApi = ReturnType<typeof usePaseo>;
 
-export type WorkspaceAgent = { id: string; title: string };
+export type WorkspaceAgent = { id: string; title: string; archived?: boolean };
 
 export async function listWorkspaceAgents(paseo: PaseoApi, workspaceId: string, signal?: AbortSignal): Promise<WorkspaceAgent[]> {
   const agents = new Map<string, WorkspaceAgent>();
@@ -16,7 +16,7 @@ export async function listWorkspaceAgents(paseo: PaseoApi, workspaceId: string, 
       signal,
     });
     for (const { agent } of page.entries) {
-      if (agent.workspaceId === workspaceId) agents.set(agent.id, { id: agent.id, title: agent.title || agent.id });
+      if (agent.workspaceId === workspaceId) agents.set(agent.id, { id: agent.id, title: agent.title || agent.id, ...(agent.archivedAt ? { archived: true } : {}) });
     }
     if (!page.pageInfo.hasMore) break;
     cursor = page.pageInfo.nextCursor ?? undefined;
