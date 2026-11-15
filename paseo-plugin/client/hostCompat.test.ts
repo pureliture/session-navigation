@@ -31,6 +31,7 @@ function fixture() {
 
 test("known untested versions disable following/opening; unknown hosts require structural guards", async () => {
   expect(supportedHostVersion("0.15.3")).toBe(true);
+  expect(supportedHostVersion("0.15.4")).toBe(true);
   expect(supportedHostVersion(null)).toBe(true);
   expect(supportedHostVersion("0.16.0")).toBe(false);
   const f = fixture(); f.select(childId);
@@ -93,8 +94,9 @@ test("a document-less opener fails before opening the parent or waiting", async 
   expect(waits).toBe(0);
 });
 
-test("strict host version requires the verified 0.15.3 contract", () => {
+test("strict host version requires verified 0.15.3 or 0.15.4 contracts", () => {
   expect(strictSupportedHostVersion("0.15.3")).toBe(true);
+  expect(strictSupportedHostVersion("0.15.4")).toBe(true);
   for (const version of [null, undefined, "0.16.0", "0.15.2"]) expect(strictSupportedHostVersion(version)).toBe(false);
 });
 

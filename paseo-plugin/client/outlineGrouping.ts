@@ -25,10 +25,21 @@ export function truncateString(str: string, maxLen = 120): string {
   return `${singleLine.slice(0, maxLen - 1)}…`;
 }
 
+const SUMMARY_SOURCES = new Set([
+  "rule_summary",
+  "llm",
+  "llm_summary",
+  "summarize",
+  "summarize_pending",
+]);
+
 export function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boolean {
-  if (localMode) return localMode === "summarize";
-  const src = row.source ?? "";
-  return src === "rule_summary" || src === "llm" || src === "llm_summary" || src === "summarize" || src === "summarize_pending";
+  const src = String(row.source ?? "")
+    .trim()
+    .toLowerCase();
+  if (SUMMARY_SOURCES.has(src)) return true;
+  if (src === "explicit_user_hide") return localMode === "summarize";
+  return localMode === "summarize";
 }
 
 export type OutlineRow =
@@ -44,9 +55,12 @@ export type OutlineRow =
       totalTokens: number | null;
       children: Row[];
       allHidden: boolean;
+      allManageableHidden: boolean;
       allSummarized: boolean;
       mixed: boolean;
       hiddenCount: number;
+      summarizedCount: number;
+      visibleManageableCount: number;
     }
   | { key: string; type: "child"; row: Row; groupId: string };
 
@@ -66,15 +80,22 @@ export function buildGroupedRows(
     const totalTokens = currentGroupTools.every((r) => typeof r.tokens === "number")
       ? currentGroupTools.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
       : null;
-    const hiddenCount = currentGroupTools.filter((r) => r.status === "hidden").length;
+    const hiddenChildren = currentGroupTools.filter((r) => r.status === "hidden");
+    const hiddenCount = hiddenChildren.length;
+    const summarizedCount = hiddenChildren.filter((r) => {
+      const k = r.item_id ?? r.tool_call_id;
+      return isSummarizedRow(r, lastActionByItem[k]);
+    }).length;
+    const visibleManageableCount = currentGroupTools.filter(
+      (r) => r.status !== "hidden" && r.manageable !== false,
+    ).length;
     const allHidden = hiddenCount === currentGroupTools.length && currentGroupTools.length > 0;
-    const mixed = hiddenCount > 0 && !allHidden;
+    const allManageableHidden = hiddenCount > 0 && visibleManageableCount === 0;
+    const mixed =
+      (hiddenCount > 0 && !allHidden) ||
+      (summarizedCount > 0 && summarizedCount < hiddenCount);
     const allSummarized =
-      allHidden &&
-      currentGroupTools.every((r) => {
-        const k = r.item_id ?? r.tool_call_id;
-        return isSummarizedRow(r, lastActionByItem[k]);
-      });
+      allManageableHidden && summarizedCount === hiddenCount;
 
     // Tool name counts for subtitle summary (e.g. "bash × 3, read × 2")
     const nameCounts: Record<string, number> = {};
@@ -100,9 +121,12 @@ export function buildGroupedRows(
       totalTokens,
       children: currentGroupTools,
       allHidden,
+      allManageableHidden,
       allSummarized,
       mixed,
       hiddenCount,
+      summarizedCount,
+      visibleManageableCount,
     });
 
     const isExpanded = !!expandedGroups[groupId];
@@ -149,6 +173,87 @@ export function buildGroupedRows(
 
 export function groupEyeAction(group: { hiddenCount: number }): "hide" | "unhide" {
   return group.hiddenCount > 0 ? "unhide" : "hide";
+}
+
+/**
+ * Picks the slashed restore icon for a group: shows summarize when any hidden child is summarized.
+ */
+export function groupRestoreIconKind(group: {
+  hiddenCount: number;
+  summarizedCount: number;
+}): "hide" | "summarize" {
+  return group.summarizedCount > 0 ? "summarize" : "hide";
+}
+
+/**
+ * Formats the group header badge reflecting plain-hidden and summarized child counts.
+ */
+export function groupBadgeText(group: {
+  children: Row[];
+  allHidden: boolean;
+  hiddenCount: number;
+  summarizedCount: number;
+}): string | null {
+  const { children, allHidden, hiddenCount, summarizedCount } = group;
+  if (hiddenCount <= 0) return null;
+  const plainHiddenCount = Math.max(0, hiddenCount - summarizedCount);
+  if (allHidden) {
+    if (summarizedCount > 0 && plainHiddenCount > 0) {
+      return `${summarizedCount} summarized, ${plainHiddenCount} hidden`;
+    }
+    return null;
+  }
+  if (summarizedCount === 0) {
+    return `${hiddenCount}/${children.length} hidden`;
+  }
+  if (plainHiddenCount === 0) {
+    return `${summarizedCount}/${children.length} summarized`;
+  }
+  return `${summarizedCount} summarized, ${plainHiddenCount} hidden / ${children.length}`;
+}
+
+/**
+ * Formats the group subtitle reflecting summarized, plain-hidden, and unmanageable states.
+ */
+export function groupSubtitleText(group: {
+  subTitle: string;
+  children: Row[];
+  allHidden: boolean;
+  allManageableHidden?: boolean;
+  allSummarized: boolean;
+  hiddenCount: number;
+  summarizedCount: number;
+}): string {
+  const {
+    subTitle,
+    children,
+    allHidden,
+    allManageableHidden,
+    allSummarized,
+    hiddenCount,
+    summarizedCount,
+  } = group;
+  const plainHiddenCount = Math.max(0, hiddenCount - summarizedCount);
+  const effectiveAllManageableHidden = allManageableHidden ?? allHidden;
+  if (allHidden) {
+    if (allSummarized || (summarizedCount > 0 && plainHiddenCount === 0)) {
+      return `[all summarized] tap slashed icon to restore (${subTitle})`;
+    }
+    if (summarizedCount > 0) {
+      return `[${summarizedCount} summarized, ${plainHiddenCount} hidden] tap slashed icon to restore (${subTitle})`;
+    }
+    return `[all hidden] tap slashed icon to restore (${subTitle})`;
+  }
+  if (effectiveAllManageableHidden && hiddenCount > 0) {
+    if (plainHiddenCount === 0) {
+      return `[${summarizedCount}/${children.length} summarized] tap slashed icon to restore (${subTitle})`;
+    }
+    if (summarizedCount > 0) {
+      return `[${summarizedCount} summarized, ${plainHiddenCount} hidden] tap slashed icon to restore (${subTitle})`;
+    }
+    return `[${hiddenCount}/${children.length} hidden] tap slashed icon to restore (${subTitle})`;
+  }
+  return subTitle || "tools";
 }
 
 export function groupMutationItems(

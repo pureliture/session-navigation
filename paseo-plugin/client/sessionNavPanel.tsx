@@ -29,8 +29,11 @@ import {
   fmtBytes,
   fmtTokenCount,
   fmtTokens,
-  groupMutationItems,
+  groupBadgeText,
   groupEyeAction,
+  groupMutationItems,
+  groupRestoreIconKind,
+  groupSubtitleText,
   isSummarizedRow,
   rowMetric,
   truncateString,
@@ -335,10 +338,21 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   };
 
   const hideMutation = useMutation({
+    onMutate: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }): {
+      rowKey: string;
+      prevActionMode: "hide" | "summarize" | undefined;
+      changed: boolean;
+    } => {
+      const rowKey = row.item_id ?? row.tool_call_id;
+      if (displayOnly || !actionAllowed(row, capabilities, mode)) {
+        return { rowKey, prevActionMode: undefined, changed: false };
+      }
+      const prevActionMode = lastActionByItem[rowKey];
+      setLastActionByItem((prev) => ({ ...prev, [rowKey]: mode }));
+      return { rowKey, prevActionMode, changed: true };
+    },
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
       if (displayOnly || !actionAllowed(row, capabilities, mode)) return Promise.resolve({ ok: false, error: "capability_unavailable" });
-      const rowKey = row.item_id ?? row.tool_call_id;
-      setLastActionByItem((prev) => ({ ...prev, [rowKey]: mode }));
       return hideRpc({
         scope_key: scopeKey,
         item_id: row.item_id ?? "",
@@ -346,11 +360,31 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         mode,
       });
     },
-    onSuccess: (r, { row }) => {
+    onSuccess: (r, { row }, context) => {
+      if (!r?.ok && context?.changed) {
+        const { rowKey, prevActionMode } = context;
+        setLastActionByItem((prev) => {
+          const next = { ...prev };
+          if (prevActionMode === undefined) delete next[rowKey];
+          else next[rowKey] = prevActionMode;
+          return next;
+        });
+      }
       if (!onMutationError(r)) {
         setNotice(null);
         if (row.status !== "hidden") notePending([row], -1);
         void invalidate();
+      }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.changed) {
+        const { rowKey, prevActionMode } = context;
+        setLastActionByItem((prev) => {
+          const next = { ...prev };
+          if (prevActionMode === undefined) delete next[rowKey];
+          else next[rowKey] = prevActionMode;
+          return next;
+        });
       }
     },
   });
@@ -377,6 +411,21 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     if (action !== "unhide" && !capabilities?.[action]) { setNotice(capabilityNotice(undefined, capabilities)); return; }
     const items = groupMutationItems(group, action);
     if (items.length === 0) return;
+    const prevActions: Record<string, "hide" | "summarize" | undefined> = {};
+    for (const item of items) {
+      prevActions[item.item_id] = lastActionByItem[item.item_id];
+    }
+    const rollbackItems = (ids: Iterable<string>) => {
+      setLastActionByItem((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          const prevVal = prevActions[id];
+          if (prevVal === undefined) delete next[id];
+          else next[id] = prevVal;
+        }
+        return next;
+      });
+    };
     setPendingGroupId(group.groupId);
     setLastActionByItem((prev) => {
       const next = { ...prev };
@@ -392,6 +441,18 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           ? await unhideBatch({ scope_key: scopeKey, items })
           : await hideBatch({ scope_key: scopeKey, mode: action, items });
       const failures = result.items.filter((item) => !item.ok);
+      if (failures.length > 0 || !result.ok) {
+        const failedIds = new Set<string>();
+        for (const failed of failures) {
+          if (failed.item_id && failed.item_id in prevActions) {
+            failedIds.add(failed.item_id);
+          }
+        }
+        if (!result.ok && failedIds.size === 0) {
+          for (const item of items) failedIds.add(item.item_id);
+        }
+        if (failedIds.size > 0) rollbackItems(failedIds);
+      }
       const applied = new Set(result.items.filter((item) => item.ok).map((item) => item.item_id));
       notePending(rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
         action === "unhide" ? 1 : -1);
@@ -404,6 +465,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         setNotice(null);
       }
     } catch {
+      rollbackItems(items.map((item) => item.item_id));
       onMutationError({ ok: false, error: "db_error" });
     } finally {
       setPendingGroupId(null);
@@ -727,7 +789,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const styles = useMemo(() => {
     const pad = layout.compact ? 6 : 10;
     return {
-      screen: { flex: 1, backgroundColor: theme.colors.surface0, minWidth: 0, overflow: "hidden" as const },
+      screen: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface0, minWidth: 0, overflow: "hidden" as const },
       // 1. Outline Header (Responsive, clean, no manage button)
       header: {
         flexDirection: "row" as const,
@@ -824,6 +886,16 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       // 2. Main Outline Timeline List (Harden flex layout against narrow widths)
       list: {
         flex: 1,
+        minHeight: 0,
+      },
+      listContent: {
+        flexGrow: 1,
+      },
+      emptyContainer: {
+        flex: 1,
+        justifyContent: "center" as const,
+        alignItems: "center" as const,
+        paddingHorizontal: 16,
       },
       rowItem: {
         paddingVertical: layout.compact ? 5 : 6,
@@ -1334,6 +1406,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   const renderGroupRow = (group: OutlineRow & { type: "group" }) => {
     const eyeAction = groupEyeAction(group);
+    const noRemainingManageableVisible = group.allHidden || group.allManageableHidden;
+    const restoreIconKind = groupRestoreIconKind(group);
+    const badgeText = groupBadgeText(group);
+    const subtitleText = groupSubtitleText(group);
     const isExpanded = !!expandedGroups[group.groupId];
     const isPending = pendingGroupId === group.groupId;
     const isSelected =
@@ -1390,10 +1466,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               {group.title}
             </Text>
 
-            {group.mixed ? (
+            {badgeText ? (
               <View style={styles.mixedBadge}>
                 <Text style={styles.mixedBadgeText}>
-                  {group.hiddenCount}/{group.children.length} hidden
+                  {badgeText}
                 </Text>
               </View>
             ) : null}
@@ -1403,7 +1479,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           <View style={styles.rowRightWrap}>
             {!displayOnly && resolvedScopeKey && group.children.some((row) => actionAllowed(row, capabilities, row.status === "hidden" ? "unhide" : "hide") || actionAllowed(row, capabilities, "summarize")) ? (
               <View style={[styles.actionsContainer, isPending ? { opacity: 0.5 } : null]}>
-                {group.allHidden ? (
+                {noRemainingManageableVisible ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`Unhide all in ${group.groupId}`}
@@ -1415,7 +1491,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                     }}
                   >
                     <ActionSvgIcon
-                      kind={group.allSummarized ? "summarize" : "hide"}
+                      kind={restoreIconKind}
                       slashed={true}
                       size={iconSize}
                       color={theme.colors.foregroundMuted}
@@ -1434,7 +1510,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                       }}
                     >
                       <ActionSvgIcon
-                        kind="hide"
+                        kind={eyeAction === "unhide" ? restoreIconKind : "hide"}
                         slashed={eyeAction === "unhide"}
                         size={iconSize}
                         color={theme.colors.foregroundMuted}
@@ -1469,10 +1545,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         </View>
 
         <View style={styles.treeLineContainer}>
-          <Text style={group.allHidden ? styles.summaryHiddenSnippet : styles.summarySnippet} numberOfLines={1}>
-            {group.allHidden
-              ? `[all ${group.allSummarized ? "summarized" : "hidden"}] tap slashed icon to restore (${group.subTitle})`
-              : group.subTitle || "tools"}
+          <Text style={noRemainingManageableVisible ? styles.summaryHiddenSnippet : styles.summarySnippet} numberOfLines={1}>
+            {subtitleText}
           </Text>
         </View>
       </Pressable>
@@ -1769,23 +1843,32 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       {listQuery.isError ? <Text style={styles.errorText}>List failed — retrying.</Text> : null}
 
       {/* 2. Main Timeline Tree List */}
-      <FlatList
-        style={styles.list}
-        data={groupedRows}
-        keyExtractor={(item) => item.key}
-        extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
-        ListEmptyComponent={
-          listQuery.isPending ? (
-            <Text style={styles.emptyText}>Loading outline…</Text>
-          ) : (
-            <Text style={styles.emptyText}>No activity recorded in this session yet.</Text>
-          )
-        }
-        renderItem={({ item }) => {
-          if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
-          return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
-        }}
-      />
+      {groupedRows.length === 0 ? (
+        <View style={[styles.list, styles.emptyContainer]}>
+          <Text style={styles.emptyText}>
+            {isLoading || listQuery.isPending
+              ? "Loading outline…"
+              : "No activity recorded in this session yet."}
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          key={resolvedScopeKey || agentId || "outline-list"}
+          style={styles.list}
+          contentContainerStyle={styles.listContent}
+          nestedScrollEnabled={true}
+          initialNumToRender={30}
+          maxToRenderPerBatch={40}
+          windowSize={12}
+          data={groupedRows}
+          keyExtractor={(item) => item.key}
+          extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
+          renderItem={({ item }) => {
+            if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
+            return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
+          }}
+        />
+      )}
 
       {/* 3. Context Window Gauge Bar */}
       <View style={styles.usageFooter}>

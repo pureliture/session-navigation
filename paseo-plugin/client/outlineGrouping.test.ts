@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { Row } from "../shared/sessionNav";
 import {
+  groupBadgeText,
   groupEyeAction,
   buildGroupedRows,
   fmtBytes,
   fmtTokenCount,
   fmtTokens,
   groupMutationItems,
+  groupRestoreIconKind,
+  groupSubtitleText,
   isSummarizedRow,
   rowMetric,
   truncateString,
@@ -244,4 +247,189 @@ test("user/assistant/tool rows share one metric: measured tokens, else bytes", (
 test("group actions skip display-only tool rows", () => {
   const row = (id: string, manageable?: boolean): Row => ({ item_id: id, tool_call_id: id, kind: "tool", status: "visible", version: 1, tokens_display: "—", manageable });
   expect(groupMutationItems({ children: [row("a"), row("b", false)] }, "hide")).toEqual([{ item_id: "a", expected_version: 1 }]);
+});
+
+describe("mixed summarize and hide group states (Issue #16)", () => {
+  const makeTool = (
+    id: string,
+    overrides: Partial<Row> = {},
+  ): Row => ({
+    item_id: id,
+    tool_call_id: `call_${id}`,
+    kind: "tool",
+    tool_name: "bash",
+    status: "visible",
+    version: 1,
+    tokens_display: "100 tok",
+    tokens: 100,
+    bytes_size: 200,
+    ...overrides,
+  });
+
+  test("Scenario A: 2 llm_summary + 8 explicit_user_hide + 5 unmanageable visible rows", () => {
+    const rows: Row[] = [
+      ...Array.from({ length: 2 }, (_, i) =>
+        makeTool(`s${i}`, { status: "hidden", source: "llm_summary", version: 2 }),
+      ),
+      ...Array.from({ length: 8 }, (_, i) =>
+        makeTool(`h${i}`, { status: "hidden", source: "explicit_user_hide", version: 2 }),
+      ),
+      ...Array.from({ length: 5 }, (_, i) =>
+        makeTool(`u${i}`, { status: "visible", manageable: false, version: 1 }),
+      ),
+    ];
+
+    const grouped = buildGroupedRows(rows, {}, {});
+    expect(grouped.length).toBe(1);
+    const group = grouped[0] as Extract<OutlineRow, { type: "group" }>;
+
+    expect(group.hiddenCount).toBe(10);
+    expect(group.summarizedCount).toBe(2);
+    expect(group.visibleManageableCount).toBe(0);
+    expect(group.allHidden).toBe(false);
+    expect(group.allManageableHidden).toBe(true);
+    expect(group.allSummarized).toBe(false);
+    expect(group.mixed).toBe(true);
+
+    expect(groupRestoreIconKind(group)).toBe("summarize");
+    expect(groupBadgeText(group)).toBe("2 summarized, 8 hidden / 15");
+    expect(groupSubtitleText(group)).toBe(
+      `[2 summarized, 8 hidden] tap slashed icon to restore (${group.subTitle})`,
+    );
+    expect(groupMutationItems(group, "summarize")).toEqual([]);
+    expect(groupMutationItems(group, "unhide")).toHaveLength(10);
+  });
+
+  test("Scenario B: all 10 manageable rows hidden with 2 summarized and 8 plain hidden", () => {
+    const rows: Row[] = [
+      ...Array.from({ length: 2 }, (_, i) =>
+        makeTool(`s${i}`, { status: "hidden", source: "llm_summary", version: 2 }),
+      ),
+      ...Array.from({ length: 8 }, (_, i) =>
+        makeTool(`h${i}`, { status: "hidden", source: "explicit_user_hide", version: 2 }),
+      ),
+    ];
+
+    const grouped = buildGroupedRows(rows, {}, {});
+    const group = grouped[0] as Extract<OutlineRow, { type: "group" }>;
+
+    expect(group.allHidden).toBe(true);
+    expect(group.allManageableHidden).toBe(true);
+    expect(group.allSummarized).toBe(false);
+    expect(group.summarizedCount).toBe(2);
+    expect(group.mixed).toBe(true);
+
+    expect(groupRestoreIconKind(group)).toBe("summarize");
+    expect(groupBadgeText(group)).toBe("2 summarized, 8 hidden");
+    expect(groupSubtitleText(group)).toBe(
+      `[2 summarized, 8 hidden] tap slashed icon to restore (${group.subTitle})`,
+    );
+  });
+
+  test("Scenario C: partial summarized group with remaining visible manageable rows", () => {
+    const rows: Row[] = [
+      makeTool("s0", { status: "hidden", source: "llm_summary", version: 2 }),
+      makeTool("s1", { status: "hidden", source: "rule_summary", version: 2 }),
+      makeTool("v0", { status: "visible", manageable: true }),
+      makeTool("v1", { status: "visible", manageable: true }),
+      makeTool("v2", { status: "visible", manageable: true }),
+    ];
+
+    const grouped = buildGroupedRows(rows, {}, {});
+    const group = grouped[0] as Extract<OutlineRow, { type: "group" }>;
+
+    expect(group.allHidden).toBe(false);
+    expect(group.allManageableHidden).toBe(false);
+    expect(group.summarizedCount).toBe(2);
+    expect(group.visibleManageableCount).toBe(3);
+
+    expect(groupRestoreIconKind(group)).toBe("summarize");
+    expect(groupBadgeText(group)).toBe("2/5 summarized");
+    expect(groupSubtitleText(group)).toBe(group.subTitle);
+  });
+
+  test("Scenario D: plain hidden rows only keep hide restore icon and standard badge/subtitle", () => {
+    const partialRows: Row[] = [
+      makeTool("h0", { status: "hidden", source: "explicit_user_hide", version: 2 }),
+      makeTool("v0", { status: "visible", manageable: true }),
+    ];
+    const partialGroup = buildGroupedRows(partialRows, {}, {})[0] as Extract<OutlineRow, { type: "group" }>;
+    expect(groupRestoreIconKind(partialGroup)).toBe("hide");
+    expect(groupBadgeText(partialGroup)).toBe("1/2 hidden");
+
+    const allPlainHiddenRows: Row[] = [
+      makeTool("h0", { status: "hidden", source: "explicit_user_hide", version: 2 }),
+      makeTool("h1", { status: "hidden", source: "explicit_user_hide", version: 2 }),
+    ];
+    const allPlainGroup = buildGroupedRows(allPlainHiddenRows, {}, {})[0] as Extract<OutlineRow, { type: "group" }>;
+    expect(groupRestoreIconKind(allPlainGroup)).toBe("hide");
+    expect(groupBadgeText(allPlainGroup)).toBeNull();
+    expect(groupSubtitleText(allPlainGroup)).toBe(
+      `[all hidden] tap slashed icon to restore (${allPlainGroup.subTitle})`,
+    );
+  });
+
+  test("Scenario E: all summarized and unmanageable-included summarized groups", () => {
+    const allSumRows: Row[] = [
+      makeTool("s0", { status: "hidden", source: "llm_summary", version: 2 }),
+      makeTool("s1", { status: "hidden", source: "summarize_pending", version: 2 }),
+    ];
+    const allSumGroup = buildGroupedRows(allSumRows, {}, {})[0] as Extract<OutlineRow, { type: "group" }>;
+    expect(allSumGroup.allSummarized).toBe(true);
+    expect(groupRestoreIconKind(allSumGroup)).toBe("summarize");
+    expect(groupBadgeText(allSumGroup)).toBeNull();
+    expect(groupSubtitleText(allSumGroup)).toBe(
+      `[all summarized] tap slashed icon to restore (${allSumGroup.subTitle})`,
+    );
+
+    const mixedUnmanageableSumRows: Row[] = [
+      makeTool("s0", { status: "hidden", source: "llm_summary", version: 2 }),
+      makeTool("s1", { status: "hidden", source: "llm_summary", version: 2 }),
+      makeTool("u0", { status: "visible", manageable: false }),
+    ];
+    const mixedSumGroup = buildGroupedRows(mixedUnmanageableSumRows, {}, {})[0] as Extract<OutlineRow, { type: "group" }>;
+    expect(mixedSumGroup.allHidden).toBe(false);
+    expect(mixedSumGroup.allManageableHidden).toBe(true);
+    expect(mixedSumGroup.allSummarized).toBe(true);
+    expect(groupRestoreIconKind(mixedSumGroup)).toBe("summarize");
+    expect(groupBadgeText(mixedSumGroup)).toBe("2/3 summarized");
+    expect(groupSubtitleText(mixedSumGroup)).toBe(
+      `[2/3 summarized] tap slashed icon to restore (${mixedSumGroup.subTitle})`,
+    );
+  });
+
+  test("server summary source wins over explicit_user_hide fallback rules and preserves large outline counts", () => {
+    expect(
+      isSummarizedRow(
+        makeTool("s0", { status: "hidden", source: "llm_summary" }),
+        "hide",
+      ),
+    ).toBe(true);
+    expect(
+      isSummarizedRow(
+        makeTool("h0", { status: "hidden", source: "explicit_user_hide" }),
+        "summarize",
+      ),
+    ).toBe(true);
+
+    // Build a long session (> 200 items) to verify grouping produces all rows without truncation.
+    const longRows: Row[] = [];
+    for (let i = 0; i < 120; i++) {
+      longRows.push(
+        {
+          item_id: `u${i}`,
+          tool_call_id: "",
+          kind: "user",
+          tool_name: "user",
+          status: "visible",
+          version: 1,
+          tokens_display: "10 tok",
+          bytes_size: 50,
+        },
+        makeTool(`t${i}`),
+      );
+    }
+    const grouped = buildGroupedRows(longRows, {}, {});
+    expect(grouped.length).toBe(240);
+  });
 });
