@@ -220,50 +220,31 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         deadline,
         () => generation === requestGeneration && sessionId(ctx) === session,
       );
-      if (!child && response.ok && collected.records.length) {
-        const patchedIds = new Set(
-          Array.isArray(response.patches)
-            ? response.patches
-                .map((patch) => patch?.call_id)
-                .filter((id): id is string => typeof id === "string")
-            : [],
+      if (!child && response.ok) {
+        const rawItems = Array.isArray(response.reminder_items)
+          ? (response.reminder_items as ReminderItem[])
+          : [];
+        reminderItems = rawItems
+          .filter(
+            (item) =>
+              typeof item?.tool_call_id === "string" && typeof item.bytes_size === "number",
+          )
+          .map((item) => ({
+            ...item,
+            turn: event.messages
+              .slice(0, (collected.positions.get(item.tool_call_id) ?? -1) + 1)
+              .filter((message) => message.role === "user").length,
+          }));
+        eligibleCount = Number(response.eligible_count ?? reminderItems.length);
+        eligibleBytes = Number(
+          response.eligible_bytes ??
+            reminderItems.reduce((sum, item) => sum + item.bytes_size, 0),
         );
-        const unpatchedRecords = collected.records.filter(
-          (record) => !patchedIds.has(record.call_id) && record.content.length >= 800,
-        );
-        const unpatchedBytes = unpatchedRecords.reduce(
-          (sum, record) => sum + Buffer.byteLength(record.content, "utf8"),
-          0,
-        );
-        const unpatchedIds = unpatchedRecords.map((record) => record.call_id);
-        if (reminder.due(turn, tokens, window, unpatchedBytes, unpatchedIds)) {
-          const listed = await rpcOnce(
-            "list_candidates",
-            { session_id: session, snapshot_id: next.token, limit: 3 },
-            2000,
-          );
-          if (listed.ok && Array.isArray(listed.items)) {
-            reminderItems = (listed.items as ReminderItem[])
-              .filter(
-                (item) =>
-                  typeof item?.tool_call_id === "string" && typeof item.bytes_size === "number",
-              )
-              .map((item) => ({
-                ...item,
-                turn: event.messages
-                  .slice(0, (collected.positions.get(item.tool_call_id) ?? -1) + 1)
-                  .filter((message) => message.role === "user").length,
-              }));
-            eligibleCount = Number(listed.total ?? reminderItems.length);
-            eligibleBytes = Number(
-              listed.total_bytes ??
-                reminderItems.reduce((sum, item) => sum + item.bytes_size, 0),
-            );
-            candidateIds = Array.isArray(listed.candidate_ids)
-              ? (listed.candidate_ids as unknown[]).filter((id): id is string => typeof id === "string")
-              : reminderItems.map((item) => item.tool_call_id);
-          }
-        }
+        candidateIds = Array.isArray(response.candidate_ids)
+          ? (response.candidate_ids as unknown[]).filter(
+              (id): id is string => typeof id === "string",
+            )
+          : reminderItems.map((item) => item.tool_call_id);
       }
       return response;
     });
@@ -328,6 +309,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       return;
     }
     let messages: any[] | null = null;
+    let savedChars = 0;
     for (const patch of response.patches) {
       if (
         !patch ||
@@ -351,16 +333,23 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         continue;
       messages ??= event.messages.slice();
       messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
+      savedChars += Math.max(0, block.text.length - patch.text.length);
     }
     const hidden = new Set<string>(
       Array.isArray(response.hidden_messages)
         ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string")
         : [],
     );
-    messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
-    const saved = messages
-      ? Math.ceil((JSON.stringify(event.messages).length - JSON.stringify(messages).length) / 4)
-      : 0;
+    const beforeHidden = messages ?? event.messages;
+    const afterHidden = dropHiddenMessages(beforeHidden, hidden);
+    if (afterHidden) {
+      savedChars += Math.max(
+        0,
+        JSON.stringify(beforeHidden).length - JSON.stringify(afterHidden).length,
+      );
+      messages = afterHidden;
+    }
+    const saved = Math.ceil(savedChars / 4);
     note = child
       ? null
       : reminder.note(
@@ -875,7 +864,10 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     description: "Restore an original by item_id without re-execution.",
     parameters: z.object({ item_id: z.string() }),
     async execute(_id, params, signal, _update, ctx) {
-      return result(await tool("restore", params, ctx, signal));
+      const reply = await tool("restore", params, ctx, signal);
+      const sid = sessionId(ctx);
+      if (reply.ok && sid) reminders.get(sid)?.suppressUnhide();
+      return result(reply);
     },
   });
   registerOverlay(pi, {

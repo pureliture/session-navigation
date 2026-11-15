@@ -14,68 +14,78 @@ test("model-facing guidance and notes stay non-Hangul", () => {
       tool_call_id: "chatcmpl-tool-0000000000000001",
       tool_name: "read",
       hint: "audit-01.jsonl",
-      bytes_size: 4000,
+      bytes_size: 40_000,
       turn: 1,
     },
   ];
-  const note = new BoundaryReminder().note("1", 10, 100, 1, items)!;
+  const note = new BoundaryReminder().note("1", 10, 1000, 1, items)!;
   for (const text of [CLEANUP_GUIDANCE, note]) {
     expect(text).not.toMatch(/[\uac00-\ud7a3]/);
   }
 });
 
-test("reminder notes ignore context-occupancy %, stay silent on chat-only turns, and fire on new candidates", () => {
+test("state machine silences cold-start/mid-turn small reads, prevents boundary oscillation, and enforces 75% safety net + unhide suppression", () => {
   const reminder = new BoundaryReminder();
-  const items = Array.from({ length: 20 }, (_, i) => ({
+  // Cold start on Turn 1 Request 1 (empty), followed by a 4 KiB read mid-Turn 1 -> stays silent!
+  expect(reminder.note("1", 1_000, 128_000, 0, [])).toBeNull();
+  const tiny = [{ tool_call_id: "t0", tool_name: "read", hint: "small.ts", bytes_size: 4096, turn: 1 }];
+  expect(reminder.note("1", 2_000, 128_000, 1, tiny, 4096)).toBeNull();
+  // Turn 2 Request 1 with only 4 KiB (<32 KiB worthwhile floor) stays silent AND eagerly advances turn,
+  // so another 4 KiB read inside Turn 2 does NOT leak via stale turn!
+  expect(reminder.note("2", 2_500, 128_000, 1, tiny, 4096)).toBeNull();
+  const tiny2 = [{ tool_call_id: "t1", tool_name: "read", hint: "small2.ts", bytes_size: 4096, turn: 2 }, ...tiny];
+  expect(reminder.note("2", 3_500, 128_000, 2, tiny2, 8192)).toBeNull();
+
+  // Accumulating 50 KiB (<100 KiB) during Turn 2 stays silent mid-turn, then fires ONCE on Turn 3 Request 1 (>=32 KiB).
+  const phase = Array.from({ length: 14 }, (_, i) => ({
     tool_call_id: `chatcmpl-tool-${String(i).padStart(16, "0")}`,
     tool_name: "read",
     hint: "phase.txt",
     bytes_size: 4000,
-    turn: 1,
+    turn: 2,
   }));
-  expect(reminder.note("", 10, 100, 20, items)).toBeNull();
-  expect(reminder.note("1", 10, 100, 0, [])).toBeNull();
-  const note = reminder.note("1", 10, 100, 20, items)!;
+  expect(reminder.note("2", 18_000, 128_000, 14, phase, 56_000)).toBeNull();
+  const note = reminder.note("3", 19_000, 128_000, 14, phase, 56_000)!;
   expect(Buffer.byteLength(note)).toBeLessThanOrEqual(1000);
-  expect(note).toContain("eligible=20");
-  expect(note).toContain("+17 via list_context_items(view=candidates)");
+  expect(note).toContain("eligible=14 (54 KiB)");
+  expect(note).toContain("+11 via list_context_items(view=candidates)");
   expect(note.split("\n")).toHaveLength(4);
-  expect(JSON.parse(note.split("\n")[1])[0]).toBe(items[0].tool_call_id);
-  // Context occupancy % (50/75/90%) must NOT re-fire when no new bytes/items arrived.
-  for (const tokens of [49, 50, 75, 90, 99]) {
-    expect(reminder.note("1", tokens, 100, 20, items)).toBeNull();
-  }
-  // New chat-only turn with identical candidate IDs stays silent; adding a new candidate ID fires once.
-  expect(reminder.note("2", 10, 100, 20, items)).toBeNull();
-  const nextItems = [{ tool_call_id: "chatcmpl-tool-new", tool_name: "bash", hint: "ls", bytes_size: 4000, turn: 2 }, ...items];
-  expect(reminder.note("2", 10, undefined, 21, nextItems)).toContain("eligible=21");
+
+  // Keeping that 56 KiB and running ONE 2 KiB read in Turn 3 does NOT nag on Turn 4 (unfiredCredit=2 KiB < 32 KiB).
+  const plusSmall = [{ tool_call_id: "tiny-keep", tool_name: "read", hint: "x.ts", bytes_size: 2048, turn: 3 }, ...phase];
+  expect(reminder.note("3", 20_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  expect(reminder.note("4", 21_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+
+  // 50% and 70% occupancy stay silent; >=75% safety net fires ONCE and does not repeat at 80%/88% until re-armed (<70%).
+  expect(reminder.note("5", 64_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  expect(reminder.note("6", 90_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  expect(reminder.note("7", 96_000, 128_000, 15, plusSmall, 58_048)).toContain("eligible=15");
+  expect(reminder.note("8", 104_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  expect(reminder.note("9", 112_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  // Dropping below 70% re-arms the 75% safety net.
+  expect(reminder.note("10", 80_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  expect(reminder.note("11", 98_000, 128_000, 15, plusSmall, 58_048)).toContain("eligible=15");
+
+  // Boundary oscillation check: 95K -> 105K fire -> hide 10K to 95K -> +6K to 101K MUST stay silent!
+  const osc = new BoundaryReminder();
+  expect(osc.note("1", 1000, 1_048_576, 0, [])).toBeNull();
+  const baseItem = [{ tool_call_id: "o1", tool_name: "bash", hint: "logs", bytes_size: 95 * 1024, turn: 1 }];
+  expect(osc.note("1", 25_000, 1_048_576, 1, baseItem, 95 * 1024)).toBeNull();
+  expect(osc.note("1", 28_000, 1_048_576, 2, baseItem, 105 * 1024)).toContain("eligible=2");
+  expect(osc.note("1", 25_000, 1_048_576, 1, baseItem, 95 * 1024)).toBeNull();
+  expect(osc.note("1", 27_000, 1_048_576, 2, baseItem, 101 * 1024)).toBeNull();
+
+  // suppressUnhide absorbs restored byte spikes without firing.
+  osc.suppressUnhide();
+  expect(osc.note("1", 800_000, 1_048_576, 3, baseItem, 260 * 1024)).toBeNull();
+
+  // Oversized ID is safely excluded from bounded 1000-byte note.
   expect(
-    reminder.note("3", 10, 100, 1, [{ ...items[0], tool_call_id: "a".repeat(2000) }]),
+    new BoundaryReminder().note("1", 10, 1000, 1, [{ ...phase[0], bytes_size: 40_000, tool_call_id: "a".repeat(2000) }]),
   ).not.toContain("a".repeat(100));
 });
 
-test("intra-turn cumulative eligible-byte milestones re-fire on large 1M-window turns and reset after cleanup", () => {
-  const reminder = new BoundaryReminder();
-  const small = [{ tool_call_id: "c0", tool_name: "read", hint: "a.ts", bytes_size: 4096, turn: 1 }];
-  expect(reminder.note("1", 50_000, 1_048_576, 1, small, 4096)).toContain("eligible=1");
-  expect(reminder.note("1", 60_000, 1_048_576, 1, small, 4096)).toBeNull();
-  const large = [
-    { tool_call_id: "c3", tool_name: "grep", hint: "pattern", bytes_size: 120_000, turn: 1 },
-    { tool_call_id: "c2", tool_name: "bash", hint: "kubectl get pods", bytes_size: 110_000, turn: 1 },
-    { tool_call_id: "c1", tool_name: "read", hint: "spec.md", bytes_size: 90_000, turn: 1 },
-  ];
-  const fired = reminder.note("1", 140_000, 1_048_576, 8, large, 320_000)!;
-  expect(fired).toContain("eligible=8 (312 KiB)");
-  expect(Buffer.byteLength(fired, "utf8")).toBeLessThanOrEqual(1000);
-  expect(reminder.note("1", 150_000, 1_048_576, 8, large, 330_000)).toBeNull();
-  // Cleanup lowers eligibleBytes back under 100 KiB without nagging, then re-arms for the next >=100 KiB wave.
-  expect(reminder.note("1", 60_000, 1_048_576, 1, small, 4096)).toBeNull();
-  expect(reminder.note("1", 100_000, 1_048_576, 2, large.slice(0, 1), 120_000)).toContain(
-    "eligible=2 (117 KiB)",
-  );
-});
-
-test("OMP tail note uses engine eligibility, never persists, and unlisted IDs support keep_lines", async () => {
+test("OMP context pipeline re-arms after full cleanup (total=0), suppresses unhide spikes, and supports unlisted keep_lines", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sn-reminder-"));
   process.env.SESSION_NAVIGATION_STATE_PATH = join(dir, "state.sqlite3");
   const events: Record<string, Function> = {},
@@ -102,44 +112,45 @@ test("OMP tail note uses engine eligibility, never persists, and unlisted IDs su
     sessionManager: { getSessionId: () => "reminders" },
     getContextUsage: () => ({ tokens, contextWindow: 128000 }),
   };
-  const body = Array.from({ length: 150 }, (_, i) =>
-    i === 50 ? "Agent selected middle sentence." : `fixture row ${i}: detail`,
+  const body = Array.from({ length: 320 }, (_, i) =>
+    i === 50 ? "Agent selected middle sentence." : `fixture row ${i}: detail payload padding`,
   ).join("\n");
   const messages: any[] = [
     { role: "user", content: [{ type: "text", text: "Inspect files" }], timestamp: 1 },
   ];
-  for (let i = 0; i < 5; i++)
-    messages.push(
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: `r${i}`, name: "read", arguments: { path: `phase-${i}.txt` } },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: `r${i}`,
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: body }],
-      },
-    );
-  const original = structuredClone(messages);
   try {
+    // Turn 1 Request 1 (empty) + single ~10 KiB read stays silent inside Turn 1 (no cold-start noise).
+    expect(await events.context({ messages }, ctx)).toBeUndefined();
+    messages.push(
+      { role: "assistant", content: [{ type: "toolCall", id: "r0", name: "read", arguments: { path: "phase-0.txt" } }] },
+      { role: "toolResult", toolCallId: "r0", toolName: "read", isError: false, content: [{ type: "text", text: body }] },
+    );
+    expect(await events.context({ messages }, ctx)).toBeUndefined();
+
+    // Push r1..r10 so Turn 1 crosses 100 KiB intra-turn -> fires!
+    for (let i = 1; i <= 10; i++) {
+      messages.push(
+        { role: "assistant", content: [{ type: "toolCall", id: `r${i}`, name: "read", arguments: { path: `phase-${i}.txt` } }] },
+        { role: "toolResult", toolCallId: `r${i}`, toolName: "read", isError: false, content: [{ type: "text", text: body }] },
+      );
+    }
+    const original = structuredClone(messages);
     let out = await events.context({ messages }, ctx);
     expect(messages).toEqual(original);
     expect(out.messages.slice(0, -1)).toEqual(original);
     const note = out.messages.at(-1).content[0].text;
-    expect(note).toContain("eligible=5");
+    expect(note).toContain("eligible=11");
     expect(JSON.parse(note.split("\n")[1])).toEqual([
-      "r4",
+      "r10",
       "read",
-      "phase-4.txt",
+      "phase-10.txt",
       Buffer.byteLength(body),
       1,
     ]);
     expect(note).not.toContain('"r0"');
     expect(await events.context({ messages }, ctx)).toBeUndefined();
+
+    // Hide r0 with keep_lines, r1..r2 with normalized/ignored diagnostics, and r3..r10 to empty ALL candidates (total=0)!
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
     let result = (
       await tools.manage_context.execute(
@@ -151,15 +162,8 @@ test("OMP tail note uses engine eligibility, never persists, and unlisted IDs su
       )
     ).details;
     expect(result.applied).toBe(1);
-    out = await events.context({ messages }, ctx);
-    expect(out.messages[2].content[0].text).toContain("selected middle sentence");
-    expect(out.messages).toHaveLength(messages.length);
-    expect(messages).toEqual(original);
-    // Raising context occupancy % alone must NOT re-fire a reminder when no new outputs arrived.
-    tokens = 100000;
-    out = await events.context({ messages }, ctx);
-    expect(out.messages).toHaveLength(messages.length);
-    await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
+    const r0ItemId = result.items[0].item_id;
+
     result = (
       await tools.manage_context.execute(
         "hide",
@@ -189,16 +193,37 @@ test("OMP tail note uses engine eligibility, never persists, and unlisted IDs su
       )
     ).details;
     expect(result.error).toBe("invalid_keep_lines_action");
-    // Chat-only user turn with no new eligible output stays silent; adding a new eligible output fires.
-    messages.push({ role: "user", content: [{ type: "text", text: "Next unit" }], timestamp: 2 });
+
+    // Clean ALL remaining items (r3..r10 -> eligible_count = 0), verify real context hook resets watermark to 0,
+    // and then another >=100 KiB wave in the SAME turn fires again!
+    const restIds = Array.from({ length: 8 }, (_, i) => `r${i + 3}`);
+    const restRes = (
+      await tools.manage_context.execute("hide", { tool_call_ids: restIds, action: "hide" }, undefined, undefined, ctx)
+    ).details;
+    expect(restRes.applied).toBe(8);
+    out = await events.context({ messages }, ctx);
+    expect(out.messages[2].content[0].text).toContain("selected middle sentence");
+    expect(out.messages).toHaveLength(messages.length);
+
+    // Unhiding r0 must NOT trigger a reminder spike even at high occupancy!
+    tokens = 105000;
+    const unhid = (
+      await tools.unhide_context.execute("unhide", { item_id: r0ItemId }, undefined, undefined, ctx)
+    ).details;
+    expect(unhid.ok).toBe(true);
     out = await events.context({ messages }, ctx);
     expect(out.messages).toHaveLength(messages.length);
-    messages.push(
-      { role: "assistant", content: [{ type: "toolCall", id: "r5", name: "read", arguments: { path: "phase-5.txt" } }] },
-      { role: "toolResult", toolCallId: "r5", toolName: "read", content: [{ type: "text", text: body }], isError: false },
-    );
+    tokens = 20000;
+
+    // Second >=100 KiB wave in the SAME Turn 1 re-fires cleanly through the real prepare+context pipeline!
+    for (let i = 11; i <= 21; i++) {
+      messages.push(
+        { role: "assistant", content: [{ type: "toolCall", id: `r${i}`, name: "read", arguments: { path: `phase-${i}.txt` } }] },
+        { role: "toolResult", toolCallId: `r${i}`, toolName: "read", isError: false, content: [{ type: "text", text: body }] },
+      );
+    }
     out = await events.context({ messages }, ctx);
-    expect(out.messages.at(-1).content[0].text).toContain("eligible=3");
+    expect(out.messages.at(-1).content[0].text).toContain("eligible=12");
   } finally {
     await events.session_shutdown?.();
     rmSync(dir, { recursive: true, force: true });

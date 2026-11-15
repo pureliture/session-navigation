@@ -118,7 +118,7 @@ def test_all_model_facing_text_is_english():
     from hermes_navigation_adapter.schemas import SUPERVISION_SECTION_TEXT
 
     items = [{"tool_call_id": "chatcmpl-tool-0000000000000001", "tool_name": "read",
-              "hint": "audit-01.jsonl", "bytes_size": 4000, "turn": 1}]
+              "hint": "audit-01.jsonl", "bytes_size": 40_000, "turn": 1}]
     surfaces = [
         render_compaction("item_1", ["owner=Orchid"]),
         render_compaction("item_1", ["owner=Orchid"], summary_text={"summary": "text"},
@@ -132,42 +132,64 @@ def test_all_model_facing_text_is_english():
         assert not any("\uac00" <= char <= "\ud7a3" for char in surface), surface
 
 
-def test_reminder_boundaries_ignore_occupancy_and_require_new_items_or_byte_growth():
+def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_enforces_75_backstop():
     reminders = BoundaryReminders()
-    items = [{"tool_call_id": f"chatcmpl-tool-{i:016x}", "tool_name": "read", "hint": "phase.txt", "bytes_size": 4000, "turn": 1} for i in range(20)]
-    assert reminders.note("s", "1", 100, 1000, []) is None
-    assert reminders.note("s", "", 100, 1000, items) is None
-    note = reminders.note("s", "1", 100, 1000, items)
-    assert "eligible=20" in note and "+17 via list_context_items(view=candidates)" in note
+    assert reminders.note("s", "", 100, 1000, [{"tool_call_id": "x", "bytes_size": 40_000}]) is None
+    # Turn 1 Request 1 (empty) + single 4 KiB read mid-Turn 1 stays silent (no cold-start noise).
+    assert reminders.note("s", "1", 1000, 128_000, []) is None
+    tiny = [{"tool_call_id": "t0", "tool_name": "read", "hint": "a.py", "bytes_size": 4096, "turn": 1}]
+    assert reminders.note("s", "1", 2000, 128_000, tiny) is None
+    # Turn 2 Request 1 with <32 KiB stays silent AND advances turn so a mid-Turn 2 small read stays silent.
+    assert reminders.note("s", "2", 2500, 128_000, tiny) is None
+    tiny2 = [{"tool_call_id": "t1", "tool_name": "read", "hint": "b.py", "bytes_size": 4096, "turn": 2}, *tiny]
+    assert reminders.note("s", "2", 3500, 128_000, tiny2) is None
+
+    # Accumulating 56 KiB (<100 KiB) in Turn 2 stays silent mid-turn, then fires ONCE on Turn 3 Request 1.
+    items = [
+        {"tool_call_id": f"chatcmpl-tool-{i:016x}", "tool_name": "read", "hint": "phase.txt", "bytes_size": 4000, "turn": 2}
+        for i in range(14)
+    ]
+    assert reminders.note("s", "2", 18_000, 128_000, items) is None
+    note = reminders.note("s", "3", 19_000, 128_000, items)
+    assert note is not None and "eligible=14 (54 KiB)" in note and "+11 via list_context_items(view=candidates)" in note
     assert len(note.encode()) <= NOTE_BYTES
     assert len(note.splitlines()) == 4
     assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
-    for tokens in (499, 500, 750, 900):
-        assert reminders.note("s", "1", tokens, 1000, items) is None
-    # Chat-only turn 2 with identical eligible IDs stays silent; adding a new eligible ID fires.
-    assert reminders.note("s", "2", 100, 1000, items) is None
-    with_new = [{"tool_call_id": "chatcmpl-tool-new", "tool_name": "read", "hint": "next.txt", "bytes_size": 4000, "turn": 2}, *items]
-    assert reminders.note("s", "2", 100, 1000, with_new) is not None
-    assert reminders.note("other", "1", 100, None, items) is not None
-    huge = [{**items[0], "tool_call_id": "a" * 2000}]
-    assert "a" * 100 not in reminders.note("s", "3", 100, None, huge)
-    # Intra-turn cumulative eligible-byte milestones fire on a 1M window (<50%) and reset after cleanup.
-    big_turn = BoundaryReminders()
-    small = [{"tool_call_id": "c0", "tool_name": "read", "hint": "a.txt", "bytes_size": 4096, "turn": 1}]
-    assert big_turn.note("big", "1", 50_000, 1_048_576, small) is not None
-    assert big_turn.note("big", "1", 60_000, 1_048_576, small) is None
-    over_300k = [
-        {"tool_call_id": f"c{i}", "tool_name": "bash", "hint": "kubectl get all", "bytes_size": 80_000, "turn": 1}
-        for i in range(1, 5)
-    ]
-    fired_300k = big_turn.note("big", "1", 120_000, 1_048_576, over_300k)
-    assert fired_300k is not None and "(312 KiB)" in fired_300k
-    assert big_turn.note("big", "1", 125_000, 1_048_576, over_300k) is None
-    # After cleanup shrinks eligible bytes back below 100 KiB, it stays quiet until another >=100 KiB accumulates.
-    assert big_turn.note("big", "1", 40_000, 1_048_576, small) is None
-    second_wave = [{"tool_call_id": "w1", "tool_name": "read", "hint": "b.txt", "bytes_size": 120_000, "turn": 1}]
-    assert big_turn.note("big", "1", 80_000, 1_048_576, second_wave) is not None
 
+    # Keeping 56 KiB and adding one 2 KiB read in Turn 3 stays silent on Turn 4 (unfired_credit < 32 KiB).
+    plus_small = [{"tool_call_id": "tiny-keep", "tool_name": "read", "hint": "c.py", "bytes_size": 2048, "turn": 3}, *items]
+    assert reminders.note("s", "3", 20_000, 128_000, plus_small) is None
+    assert reminders.note("s", "4", 21_000, 128_000, plus_small) is None
+
+    # Single >=75% backstop fires once, stays silent at 80%/88%, and re-arms below 70%.
+    assert reminders.note("s", "5", 64_000, 128_000, plus_small) is None
+    assert reminders.note("s", "6", 96_000, 128_000, plus_small) is not None
+    assert reminders.note("s", "7", 104_000, 128_000, plus_small) is None
+    assert reminders.note("s", "8", 80_000, 128_000, plus_small) is None
+    assert reminders.note("s", "9", 98_000, 128_000, plus_small) is not None
+
+    # Boundary oscillation (95K -> 105K fire -> hide 10K to 95K -> +6K to 101K) stays silent,
+    # AND full cleanup (candidates=[]) resets watermark so a new >=100 KiB wave fires!
+    osc = BoundaryReminders()
+    assert osc.note("big", "1", 1000, 1_048_576, []) is None
+    c95 = [{"tool_call_id": "o1", "tool_name": "bash", "hint": "logs", "bytes_size": 95 * 1024, "turn": 1}]
+    c105 = [{"tool_call_id": "o2", "tool_name": "bash", "hint": "logs", "bytes_size": 10 * 1024, "turn": 1}, *c95]
+    c101 = [{"tool_call_id": "o3", "tool_name": "bash", "hint": "logs", "bytes_size": 6 * 1024, "turn": 1}, *c95]
+    assert osc.note("big", "1", 25_000, 1_048_576, c95) is None
+    assert osc.note("big", "1", 28_000, 1_048_576, c105) is not None
+    assert osc.note("big", "1", 25_000, 1_048_576, c95) is None
+    assert osc.note("big", "1", 27_000, 1_048_576, c101) is None
+    assert osc.note("big", "1", 5_000, 1_048_576, []) is None
+    second_wave = [{"tool_call_id": "w1", "tool_name": "read", "hint": "b.txt", "bytes_size": 120_000, "turn": 1}]
+    assert osc.note("big", "1", 35_000, 1_048_576, second_wave) is not None
+
+    # suppress_unhide absorbs restored byte growth without firing.
+    osc.suppress_unhide("big")
+    restored = [{"tool_call_id": "u1", "tool_name": "read", "hint": "r.txt", "bytes_size": 180_000, "turn": 1}, *second_wave]
+    assert osc.note("big", "1", 850_000, 1_048_576, restored) is None
+
+    huge = [{"tool_call_id": "a" * 2000, "tool_name": "read", "hint": "h.txt", "bytes_size": 40_000, "turn": 1}]
+    assert "a" * 100 not in BoundaryReminders().note("huge", "1", 100, None, huge)
 
 def cleanup_session(records):
     plugin = hermes_adapter().plugin
@@ -233,7 +255,7 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     middleware = adapter.plugin.make_middleware(state)
     key = "messages" if mode == "chat_completions" else "input"
     messages = [{"role": "user", "content": "Inspect these files"}]
-    for i in range(5):
+    for i in range(7):
         if mode == "chat_completions":
             messages.extend([{"role": "assistant", "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"phase.txt"}'}}]},
                              {"role": "tool", "tool_call_id": f"c{i}", "content": body()}])
@@ -248,8 +270,8 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     note = out[key][-1]["content"]
     if isinstance(note, list):
         note = note[0]["text"]
-    assert "eligible=5" in note
-    assert "+2 via list_context_items(view=candidates)" in note
+    assert "eligible=7" in note
+    assert "+4 via list_context_items(view=candidates)" in note
     assert json.loads(note.splitlines()[1])[-1] == 1
     assert len(note.encode()) <= NOTE_BYTES
     assert middleware(request=request, session_id="s", api_mode=mode, context_length=128000)["request"] == original

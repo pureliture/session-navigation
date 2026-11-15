@@ -10,53 +10,148 @@ export type ReminderItem = {
 const REMINDER_BYTES = 1000;
 const REMINDER_ITEMS = 3;
 export const REMINDER_ELIGIBLE_STEP_BYTES = 100 * 1024;
+export const REMINDER_WORTHWHILE_BYTES = 32 * 1024;
+export const REMINDER_HIGH_OCCUPANCY = 0.75;
+export const REMINDER_OCCUPANCY_REARM = 0.7;
+
+type ReminderState = {
+  turn: string;
+  watermark: number;
+  intraCredit: number;
+  unfiredCredit: number;
+  ids: Set<string>;
+  highOccupancyFired: boolean;
+  suppressNextGrowth: boolean;
+};
+
 export class BoundaryReminder {
-  private seen: { turn: string; byteStep: number; ids: Set<string> } | undefined;
-  private byteStep(eligibleBytes = 0) {
-    return eligibleBytes > 0 ? Math.floor(eligibleBytes / REMINDER_ELIGIBLE_STEP_BYTES) : 0;
-  }
-  due(
-    turn: string,
-    _tokens?: number,
-    _window?: number,
-    eligibleBytes = 0,
-    candidateIds: readonly string[] = [],
-  ): boolean {
-    if (!turn) return false;
-    if (!this.seen) return candidateIds.length > 0 || eligibleBytes > 0;
-    if (this.seen.turn !== turn) {
-      return candidateIds.length > 0
-        ? candidateIds.some((id) => !this.seen!.ids.has(id))
-        : eligibleBytes > 0;
+  private state: ReminderState | undefined;
+
+  suppressUnhide(): void {
+    if (this.state) this.state.suppressNextGrowth = true;
+    else {
+      this.state = {
+        turn: "",
+        watermark: 0,
+        intraCredit: 0,
+        unfiredCredit: 0,
+        ids: new Set(),
+        highOccupancyFired: false,
+        suppressNextGrowth: true,
+      };
     }
-    return this.byteStep(eligibleBytes) > this.seen.byteStep;
   }
+
   note(
     turn: string,
-    _tokens: number,
-    _window: number | undefined,
+    tokens: number,
+    window: number | undefined,
     total: number,
     items: ReminderItem[],
     eligibleBytes?: number,
     candidateIds?: readonly string[],
   ): string | null {
-    if (!turn || !total) return null;
+    if (!turn) return null;
     const bytesTotal =
-      typeof eligibleBytes === "number" && Number.isFinite(eligibleBytes) && eligibleBytes >= 0
-        ? eligibleBytes
-        : items.reduce(
-            (sum, item) =>
-              sum + (typeof item?.bytes_size === "number" && item.bytes_size > 0 ? item.bytes_size : 0),
-            0,
-          );
-    const allIds = candidateIds?.length
-      ? candidateIds
-      : items.map((item) => item.tool_call_id).filter((id): id is string => typeof id === "string" && !!id);
-    const step = this.byteStep(bytesTotal);
-    if (this.seen && this.seen.turn === turn && step < this.seen.byteStep) {
-      this.seen.byteStep = step;
+      total <= 0
+        ? 0
+        : typeof eligibleBytes === "number" && Number.isFinite(eligibleBytes) && eligibleBytes >= 0
+          ? eligibleBytes
+          : items.reduce(
+              (sum, item) =>
+                sum +
+                (typeof item?.bytes_size === "number" && item.bytes_size > 0 ? item.bytes_size : 0),
+              0,
+            );
+    const allIds =
+      total <= 0
+        ? []
+        : candidateIds?.length
+          ? candidateIds
+          : items
+              .map((item) => item.tool_call_id)
+              .filter((id): id is string => typeof id === "string" && !!id);
+    const occupancy =
+      typeof tokens === "number" &&
+      Number.isFinite(tokens) &&
+      tokens >= 0 &&
+      typeof window === "number" &&
+      Number.isFinite(window) &&
+      window > 0
+        ? tokens / window
+        : null;
+
+    const state =
+      this.state ??
+      (this.state = {
+        turn: "",
+        watermark: 0,
+        intraCredit: 0,
+        unfiredCredit: 0,
+        ids: new Set(),
+        highOccupancyFired: false,
+        suppressNextGrowth: false,
+      });
+
+    const isNewTurn = state.turn !== turn;
+    const delta = bytesTotal - state.watermark;
+    const wasSuppressed = state.suppressNextGrowth;
+    state.suppressNextGrowth = false;
+    state.turn = turn;
+    state.watermark = bytesTotal;
+
+    if (wasSuppressed) {
+      if (isNewTurn) state.intraCredit = 0;
+      if (bytesTotal < state.unfiredCredit) state.unfiredCredit = bytesTotal;
+      for (const id of allIds) state.ids.add(id);
+      while (state.ids.size > 2048) {
+        const oldest = state.ids.values().next().value;
+        if (oldest === undefined) break;
+        state.ids.delete(oldest);
+      }
+      return null;
     }
-    if (!this.due(turn, undefined, undefined, bytesTotal, allIds)) return null;
+
+    const gain = delta > 0 ? delta : 0;
+    state.intraCredit = isNewTurn ? gain : state.intraCredit + gain;
+    state.unfiredCredit = Math.min(bytesTotal, state.unfiredCredit + gain);
+    if (
+      bytesTotal < REMINDER_WORTHWHILE_BYTES ||
+      (occupancy !== null && occupancy < REMINDER_OCCUPANCY_REARM)
+    ) {
+      state.highOccupancyFired = false;
+    }
+
+    if (total <= 0 || bytesTotal <= 0) return null;
+
+    const hasNewCandidate = allIds.some((id) => !state.ids.has(id));
+    const intraFired = !isNewTurn && state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES;
+    const turnBoundaryFired =
+      isNewTurn &&
+      ((hasNewCandidate &&
+        state.unfiredCredit >= REMINDER_WORTHWHILE_BYTES &&
+        bytesTotal >= REMINDER_WORTHWHILE_BYTES) ||
+        state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES);
+    const occupancyFired =
+      occupancy !== null &&
+      occupancy >= REMINDER_HIGH_OCCUPANCY &&
+      bytesTotal >= REMINDER_WORTHWHILE_BYTES &&
+      !state.highOccupancyFired;
+
+    if (!intraFired && !turnBoundaryFired && !occupancyFired) return null;
+
+    state.intraCredit = 0;
+    state.unfiredCredit = 0;
+    if (occupancy !== null && occupancy >= REMINDER_HIGH_OCCUPANCY) {
+      state.highOccupancyFired = true;
+    }
+    for (const id of allIds) state.ids.add(id);
+    while (state.ids.size > 2048) {
+      const oldest = state.ids.values().next().value;
+      if (oldest === undefined) break;
+      state.ids.delete(oldest);
+    }
+
     const sizeHint = bytesTotal >= 1024 ? ` (${Math.floor(bytesTotal / 1024)} KiB)` : "";
     const moreHint =
       total > REMINDER_ITEMS
@@ -76,13 +171,6 @@ export class BoundaryReminder {
         rows.push(row);
       if (rows.length === REMINDER_ITEMS) break;
     }
-    const mergedIds = new Set([...(this.seen?.ids ?? []), ...allIds]);
-    while (mergedIds.size > 2048) {
-      const oldest = mergedIds.values().next().value;
-      if (oldest === undefined) break;
-      mergedIds.delete(oldest);
-    }
-    this.seen = { turn, byteStep: step, ids: mergedIds };
     return [header, ...rows].join("\n");
   }
 }

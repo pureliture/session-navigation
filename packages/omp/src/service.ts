@@ -319,11 +319,22 @@ export class OmpService {
           content: record.content,
         });
     }
+    const candidates = this.store.registration(scope)?.parent_scope
+      ? { total: 0, total_bytes: 0, candidate_ids: [] as string[], items: [] }
+      : this.candidateSnapshot(scope, previous.values(), 3);
     return {
       ok: true,
       patches,
       hidden_messages: this.store.hiddenMessages(scope),
       pending_summaries: pending,
+      ...(candidates.total
+        ? {
+            eligible_count: candidates.total,
+            eligible_bytes: candidates.total_bytes,
+            candidate_ids: candidates.candidate_ids,
+            reminder_items: candidates.items,
+          }
+        : {}),
       ...(evicted.length ? { evicted_snapshots: evicted } : {}),
     };
   }
@@ -402,19 +413,38 @@ export class OmpService {
       (!Array.isArray(wanted) || !wanted.every((id) => typeof id === "string"))
     )
       return { ok: false, error: "invalid_tool_call_ids" };
-    const filtered = [...snapshot.records.values()]
+    const snapshotOut = this.candidateSnapshot(
+      scope,
+      snapshot.records.values(),
+      Number(limit),
+      Array.isArray(wanted) ? wanted : undefined,
+      params.include_hidden === true,
+    );
+    return {
+      ok: true,
+      ...snapshotOut,
+    };
+  }
+
+  private candidateSnapshot(
+    scope: string,
+    records: Iterable<RecordInput>,
+    limit: number,
+    wanted?: readonly string[],
+    includeHidden = false,
+  ) {
+    const filtered = [...records]
       .reverse()
       .filter(
         (record) =>
-          (!Array.isArray(wanted) || wanted.includes(record.call_id)) &&
-          !this.cleanupError(scope, record, params.include_hidden === true),
+          (!wanted || wanted.includes(record.call_id)) &&
+          !this.cleanupError(scope, record, includeHidden),
       );
     return {
-      ok: true,
       total: filtered.length,
       total_bytes: filtered.reduce((sum, record) => sum + bytes(record.content), 0),
       candidate_ids: filtered.map((record) => record.call_id),
-      items: filtered.slice(0, Number(limit)).map((record) => {
+      items: filtered.slice(0, limit).map((record) => {
         const args = record.invocation.arguments as { [key: string]: Json };
         return {
           tool_call_id: record.call_id,

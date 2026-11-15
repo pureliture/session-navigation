@@ -342,6 +342,7 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
                 return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
             return _dump({"ok": False, "error": err})
         state.presentations.mark_visible(scope.scope_key(), result.item.item_id)
+        state.reminders.suppress_unhide(scope.scope_key())
         return _dump({
             "ok": True,
             "item_id": result.item.item_id,
