@@ -7,8 +7,8 @@ export type ReminderItem = {
   bytes_size: number;
   turn?: number;
 };
-const REMINDER_BYTES = 1000;
-const REMINDER_ITEMS = 3;
+const REMINDER_BYTES = 16 * 1024;
+const REMINDER_MAX_ID_CHARS = 128;
 export const REMINDER_ELIGIBLE_STEP_BYTES = 100 * 1024;
 export const REMINDER_WORTHWHILE_BYTES = 32 * 1024;
 type ReminderState = {
@@ -121,13 +121,17 @@ export class BoundaryReminder {
     }
 
     const sizeHint = bytesTotal >= 1024 ? ` (${Math.floor(bytesTotal / 1024)} KiB)` : "";
-    const moreHint =
-      total > REMINDER_ITEMS
-        ? ` (+${total - REMINDER_ITEMS} via list_context_items(view=candidates))`
-        : "";
-    const header = `[context-navigation] eligible=${total}${sizeHint}${moreHint}. Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; when a research/command phase finishes, sweep ALL unneeded IDs in one manage_context batch (do not trickle 3/turn; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values (never say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
+    const baseHeader = `[context-navigation] eligible=${total}${sizeHint}. Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch (skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values (never say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
+    const budget = REMINDER_BYTES - Buffer.byteLength(baseHeader, "utf8") - 80;
     const rows: string[] = [];
+    let usedBytes = 0;
     for (const item of items) {
+      if (
+        typeof item.tool_call_id !== "string" ||
+        !item.tool_call_id ||
+        item.tool_call_id.length > REMINDER_MAX_ID_CHARS
+      )
+        continue;
       const row = JSON.stringify([
         item.tool_call_id,
         (item.tool_name ?? "").slice(0, 24),
@@ -135,10 +139,15 @@ export class BoundaryReminder {
         item.bytes_size,
         item.turn ?? 0,
       ]);
-      if (Buffer.byteLength([header, ...rows, row].join("\n"), "utf8") <= REMINDER_BYTES)
-        rows.push(row);
-      if (rows.length === REMINDER_ITEMS) break;
+      const rowBytes = Buffer.byteLength(row, "utf8") + 1;
+      if (usedBytes + rowBytes > budget) break;
+      rows.push(row);
+      usedBytes += rowBytes;
     }
+    const omitted = Math.max(0, total - rows.length);
+    const moreHint =
+      omitted > 0 ? ` (+${omitted} via list_context_items(view=candidates))` : "";
+    const header = `[context-navigation] eligible=${total}${sizeHint}${moreHint}. Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch (skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values (never say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
     return [header, ...rows].join("\n");
   }
 }
@@ -170,7 +179,7 @@ export const MAX_CHUNK_RECORDS = 64;
 export const MAX_SUMMARY_CONCURRENCY = 4;
 export const SUMMARY_TIMEOUT_MS = 25_000;
 export const CLEANUP_GUIDANCE =
-  "Clean up context strictly by actual need, never by context occupancy % or mechanically after single routine tool calls: keep outputs you still reference, skip cleanup on brief checks or when the user asks to defer or restore items, and call manage_context once when an investigation or command phase finishes to sweep all unneeded tool_call_ids in a single batch (if more than the 3 previewed IDs are unneeded, call list_context_items(view=candidates) and batch them together rather than hiding a few per turn). Emit one complete final answer with all requested facts/values only after cleanup; never write the answer twice, never re-hide an item in the same turn as unhide_context, and never say 'reported above' or 'see above'. Choose hide (rules), summarize (session LLM), or auto (summary with rule fallback); avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
+  "Clean up context strictly by actual need, never by context occupancy % or mechanically after single routine tool calls: keep outputs you still reference, skip cleanup on brief checks or when the user asks to defer or restore items, and call manage_context once when an investigation or command phase finishes to sweep all unneeded tool_call_ids in a single batch (pass the unneeded IDs directly from [context-navigation] without an extra list_context_items call; use list_context_items(view=candidates) only if no note is shown). Emit one complete final answer with all requested facts/values only after cleanup; never write the answer twice, never re-hide an item in the same turn as unhide_context, and never say 'reported above' or 'see above'. Choose hide (rules), summarize (session LLM), or auto (summary with rule fallback); avoid re-verifying unchanged files. Originals remain restorable.";
 export const hash = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 

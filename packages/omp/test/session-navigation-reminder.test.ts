@@ -46,10 +46,10 @@ test("state machine silences cold-start/mid-turn small reads, prevents boundary 
   }));
   expect(reminder.note("2", 18_000, 128_000, 14, phase, 56_000)).toBeNull();
   const note = reminder.note("3", 19_000, 128_000, 14, phase, 56_000)!;
-  expect(Buffer.byteLength(note)).toBeLessThanOrEqual(1000);
+  expect(Buffer.byteLength(note)).toBeLessThanOrEqual(16 * 1024);
   expect(note).toContain("eligible=14 (54 KiB)");
-  expect(note).toContain("+11 via list_context_items(view=candidates)");
-  expect(note.split("\n")).toHaveLength(4);
+  expect(note).not.toContain("via list_context_items");
+  expect(note.split("\n")).toHaveLength(15);
 
   // Keeping that 56 KiB and running ONE 2 KiB read in Turn 3 does NOT nag on Turn 4 (unfiredCredit=2 KiB < 32 KiB).
   const plusSmall = [{ tool_call_id: "tiny-keep", tool_name: "read", hint: "x.ts", bytes_size: 2048, turn: 3 }, ...phase];
@@ -141,7 +141,8 @@ test("OMP context pipeline re-arms after full cleanup (total=0), suppresses unhi
       Buffer.byteLength(body),
       1,
     ]);
-    expect(note).not.toContain('"r0"');
+    expect(note).toContain('"r0"');
+    expect(note.split("\n")).toHaveLength(12);
     expect(await events.context({ messages }, ctx)).toBeUndefined();
 
     // Hide r0 with keep_lines, r1..r2 with normalized/ignored diagnostics, and r3..r10 to empty ALL candidates (total=0)!

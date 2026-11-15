@@ -5,8 +5,8 @@ import json
 from collections import OrderedDict
 from typing import Any
 
-DISPLAY_LIMIT = 3
-NOTE_BYTES = 1000
+NOTE_BYTES = 16 * 1024
+MAX_ID_CHARS = 128
 ELIGIBLE_BYTE_STEP = 100 * 1024
 WORTHWHILE_BYTES = 32 * 1024
 class _SessionReminderState:
@@ -123,23 +123,23 @@ class BoundaryReminders:
         state.ids = list(dict.fromkeys([*state.ids, *cand_ids]))[-2048:]
 
         size_hint = f" ({total_bytes // 1024} KiB)" if total_bytes >= 1024 else ""
-        more_hint = (
-            f" (+{total - DISPLAY_LIMIT} via list_context_items(view=candidates))"
-            if total > DISPLAY_LIMIT
-            else ""
-        )
-        header = (
-            f"[context-navigation] eligible={total}{size_hint}{more_hint}. "
+        base_header = (
+            f"[context-navigation] eligible={total}{size_hint}. "
             "Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; "
-            "when a research/command phase finishes, sweep ALL unneeded IDs in one manage_context batch "
-            "(do not trickle 3/turn; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values "
+            "when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch "
+            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values "
             "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
         )
+        budget = NOTE_BYTES - len(base_header.encode()) - 80
         rows = []
+        used_bytes = 0
         for item in candidates:
+            cid = item.get("tool_call_id")
+            if not isinstance(cid, str) or not cid or len(cid) > MAX_ID_CHARS:
+                continue
             row = json.dumps(
                 [
-                    item["tool_call_id"],
+                    cid,
                     str(item.get("tool_name", ""))[:24],
                     str(item.get("hint", ""))[:48],
                     item["bytes_size"],
@@ -148,8 +148,22 @@ class BoundaryReminders:
                 ensure_ascii=True,
                 separators=(",", ":"),
             )
-            if len((header + "\n" + "\n".join([*rows, row])).encode()) <= NOTE_BYTES:
-                rows.append(row)
-            if len(rows) == DISPLAY_LIMIT:
+            row_bytes = len(row.encode()) + 1
+            if used_bytes + row_bytes > budget:
                 break
+            rows.append(row)
+            used_bytes += row_bytes
+        omitted = max(0, total - len(rows))
+        more_hint = (
+            f" (+{omitted} via list_context_items(view=candidates))"
+            if omitted > 0
+            else ""
+        )
+        header = (
+            f"[context-navigation] eligible={total}{size_hint}{more_hint}. "
+            "Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; "
+            "when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch "
+            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values "
+            "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
+        )
         return header + ("\n" + "\n".join(rows) if rows else "")

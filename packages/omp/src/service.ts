@@ -321,7 +321,7 @@ export class OmpService {
     }
     const candidates = this.store.registration(scope)?.parent_scope
       ? { total: 0, total_bytes: 0, candidate_ids: [] as string[], items: [] }
-      : this.candidateSnapshot(scope, previous.values(), 3);
+      : this.candidateSnapshot(scope, previous.values(), previous.size);
     return {
       ok: true,
       patches,

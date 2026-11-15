@@ -151,9 +151,9 @@ def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_ig
     ]
     assert reminders.note("s", "2", 18_000, 128_000, items) is None
     note = reminders.note("s", "3", 19_000, 128_000, items)
-    assert note is not None and "eligible=14 (54 KiB)" in note and "+11 via list_context_items(view=candidates)" in note
+    assert note is not None and "eligible=14 (54 KiB)" in note and "via list_context_items" not in note
     assert len(note.encode()) <= NOTE_BYTES
-    assert len(note.splitlines()) == 4
+    assert len(note.splitlines()) == 15
     assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
 
     # Keeping 56 KiB and adding one 2 KiB read in Turn 3 stays silent on Turn 4 (unfired_credit < 32 KiB).
@@ -267,7 +267,9 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     if isinstance(note, list):
         note = note[0]["text"]
     assert "eligible=7" in note
-    assert "+4 via list_context_items(view=candidates)" in note
+    assert "via list_context_items" not in note
+    assert '"c0"' in note and '"c6"' in note
+    assert len(note.splitlines()) == 8
     assert json.loads(note.splitlines()[1])[-1] == 1
     assert len(note.encode()) <= NOTE_BYTES
     assert middleware(request=request, session_id="s", api_mode=mode, context_length=128000)["request"] == original
