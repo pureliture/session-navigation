@@ -11,16 +11,12 @@ const REMINDER_BYTES = 1000;
 const REMINDER_ITEMS = 3;
 export const REMINDER_ELIGIBLE_STEP_BYTES = 100 * 1024;
 export const REMINDER_WORTHWHILE_BYTES = 32 * 1024;
-export const REMINDER_HIGH_OCCUPANCY = 0.75;
-export const REMINDER_OCCUPANCY_REARM = 0.7;
-
 type ReminderState = {
   turn: string;
   watermark: number;
   intraCredit: number;
   unfiredCredit: number;
   ids: Set<string>;
-  highOccupancyFired: boolean;
   suppressNextGrowth: boolean;
 };
 
@@ -36,7 +32,6 @@ export class BoundaryReminder {
         intraCredit: 0,
         unfiredCredit: 0,
         ids: new Set(),
-        highOccupancyFired: false,
         suppressNextGrowth: true,
       };
     }
@@ -44,8 +39,8 @@ export class BoundaryReminder {
 
   note(
     turn: string,
-    tokens: number,
-    window: number | undefined,
+    _tokens: number,
+    _window: number | undefined,
     total: number,
     items: ReminderItem[],
     eligibleBytes?: number,
@@ -71,16 +66,6 @@ export class BoundaryReminder {
           : items
               .map((item) => item.tool_call_id)
               .filter((id): id is string => typeof id === "string" && !!id);
-    const occupancy =
-      typeof tokens === "number" &&
-      Number.isFinite(tokens) &&
-      tokens >= 0 &&
-      typeof window === "number" &&
-      Number.isFinite(window) &&
-      window > 0
-        ? tokens / window
-        : null;
-
     const state =
       this.state ??
       (this.state = {
@@ -89,7 +74,6 @@ export class BoundaryReminder {
         intraCredit: 0,
         unfiredCredit: 0,
         ids: new Set(),
-        highOccupancyFired: false,
         suppressNextGrowth: false,
       });
 
@@ -115,12 +99,6 @@ export class BoundaryReminder {
     const gain = delta > 0 ? delta : 0;
     state.intraCredit = isNewTurn ? gain : state.intraCredit + gain;
     state.unfiredCredit = Math.min(bytesTotal, state.unfiredCredit + gain);
-    if (
-      bytesTotal < REMINDER_WORTHWHILE_BYTES ||
-      (occupancy !== null && occupancy < REMINDER_OCCUPANCY_REARM)
-    ) {
-      state.highOccupancyFired = false;
-    }
 
     if (total <= 0 || bytesTotal <= 0) return null;
 
@@ -132,20 +110,10 @@ export class BoundaryReminder {
         state.unfiredCredit >= REMINDER_WORTHWHILE_BYTES &&
         bytesTotal >= REMINDER_WORTHWHILE_BYTES) ||
         state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES);
-    const occupancyFired =
-      occupancy !== null &&
-      occupancy >= REMINDER_HIGH_OCCUPANCY &&
-      bytesTotal >= REMINDER_WORTHWHILE_BYTES &&
-      !state.highOccupancyFired;
-
-    if (!intraFired && !turnBoundaryFired && !occupancyFired) return null;
+    if (!intraFired && !turnBoundaryFired) return null;
 
     state.intraCredit = 0;
     state.unfiredCredit = 0;
-    if (occupancy !== null && occupancy >= REMINDER_HIGH_OCCUPANCY) {
-      state.highOccupancyFired = true;
-    }
-    for (const id of allIds) state.ids.add(id);
     while (state.ids.size > 2048) {
       const oldest = state.ids.values().next().value;
       if (oldest === undefined) break;

@@ -132,7 +132,7 @@ def test_all_model_facing_text_is_english():
         assert not any("\uac00" <= char <= "\ud7a3" for char in surface), surface
 
 
-def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_enforces_75_backstop():
+def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_ignores_occupancy():
     reminders = BoundaryReminders()
     assert reminders.note("s", "", 100, 1000, [{"tool_call_id": "x", "bytes_size": 40_000}]) is None
     # Turn 1 Request 1 (empty) + single 4 KiB read mid-Turn 1 stays silent (no cold-start noise).
@@ -161,13 +161,9 @@ def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_en
     assert reminders.note("s", "3", 20_000, 128_000, plus_small) is None
     assert reminders.note("s", "4", 21_000, 128_000, plus_small) is None
 
-    # Single >=75% backstop fires once, stays silent at 80%/88%, and re-arms below 70%.
-    assert reminders.note("s", "5", 64_000, 128_000, plus_small) is None
-    assert reminders.note("s", "6", 96_000, 128_000, plus_small) is not None
-    assert reminders.note("s", "7", 104_000, 128_000, plus_small) is None
-    assert reminders.note("s", "8", 80_000, 128_000, plus_small) is None
-    assert reminders.note("s", "9", 98_000, 128_000, plus_small) is not None
-
+    # Context occupancy % (50%, 75%, 85%, 95%) never triggers a reminder; global window compaction belongs to the host.
+    for turn_id, tok in (("5", 64_000), ("6", 96_000), ("7", 110_000), ("8", 122_000)):
+        assert reminders.note("s", turn_id, tok, 128_000, plus_small) is None
     # Boundary oscillation (95K -> 105K fire -> hide 10K to 95K -> +6K to 101K) stays silent,
     # AND full cleanup (candidates=[]) resets watermark so a new >=100 KiB wave fires!
     osc = BoundaryReminders()

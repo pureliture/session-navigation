@@ -188,17 +188,6 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     const deadline = Date.now() + SUMMARY_TIMEOUT_MS;
     const users = event.messages.filter((message) => message?.role === "user");
     const turn = users.length ? `${users.length}:${hash(messageText(users.at(-1)))}` : "";
-    let usage: { tokens: number; contextWindow?: number } | undefined;
-    try {
-      usage = ctx.getContextUsage?.();
-    } catch {
-      /* use request estimate */
-    }
-    const tokens =
-      usage && Number.isFinite(usage.tokens) && usage.tokens >= 0
-        ? usage.tokens
-        : Math.ceil(JSON.stringify(event.messages).length / 4);
-    const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? undefined;
     let reminder = reminders.get(session);
     if (!reminder) {
       reminder = new BoundaryReminder();
@@ -309,7 +298,6 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       return;
     }
     let messages: any[] | null = null;
-    let savedChars = 0;
     for (const patch of response.patches) {
       if (
         !patch ||
@@ -333,34 +321,17 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         continue;
       messages ??= event.messages.slice();
       messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
-      savedChars += Math.max(0, block.text.length - patch.text.length);
     }
     const hidden = new Set<string>(
       Array.isArray(response.hidden_messages)
         ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string")
         : [],
     );
-    const beforeHidden = messages ?? event.messages;
-    const afterHidden = dropHiddenMessages(beforeHidden, hidden);
-    if (afterHidden) {
-      savedChars += Math.max(
-        0,
-        JSON.stringify(beforeHidden).length - JSON.stringify(afterHidden).length,
-      );
-      messages = afterHidden;
-    }
-    const saved = Math.ceil(savedChars / 4);
+    const afterHidden = dropHiddenMessages(messages ?? event.messages, hidden);
+    if (afterHidden) messages = afterHidden;
     note = child
       ? null
-      : reminder.note(
-          turn,
-          Math.max(0, tokens - saved),
-          window,
-          eligibleCount,
-          reminderItems,
-          eligibleBytes,
-          candidateIds,
-        );
+      : reminder.note(turn, 0, undefined, eligibleCount, reminderItems, eligibleBytes, candidateIds);
     if (note)
       messages = [
         ...(messages ?? event.messages),

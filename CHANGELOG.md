@@ -51,9 +51,9 @@ Publication and registry/catalog approval are separate steps; see
 - Tighten `protected_error` and `sensitive_invocation` matchers to same-line
   domain+state co-occurrence and credential-bearing keys/tokens so ordinary
   code, Korean prose, and CLI flags remain eligible, replace per-turn/50-75-90%
-  reminder nagging with a hysteresis-safe +100 KiB intra-turn gross-growth counter,
-  an eager >=32 KiB new-turn boundary gate, a single >=75% safety-net backstop
-  (with Unhide growth suppression), pin OMP context tools as top-level `essential`
+  reminder nagging with a hysteresis-safe +100 KiB intra-turn gross-growth counter
+  and an eager >=32 KiB new-turn boundary gate (decoupled from context-occupancy %
+  and suppressing Unhide growth), pin OMP context tools as top-level `essential`
   tools, broaden OMP/Paseo read-only query tool collection (`grep`, `glob`,
   `web_search`, agent/model inspection), and instruct consolidated `manage_context`
   batch cleanup with bounded head/keep/tail fallback on dense pipe/path outputs.

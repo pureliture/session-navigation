@@ -9,10 +9,6 @@ DISPLAY_LIMIT = 3
 NOTE_BYTES = 1000
 ELIGIBLE_BYTE_STEP = 100 * 1024
 WORTHWHILE_BYTES = 32 * 1024
-HIGH_OCCUPANCY_RATIO = 0.75
-OCCUPANCY_REARM_RATIO = 0.70
-
-
 class _SessionReminderState:
     __slots__ = (
         "turn",
@@ -20,7 +16,6 @@ class _SessionReminderState:
         "intra_credit",
         "unfired_credit",
         "ids",
-        "high_occupancy_fired",
         "suppress_next_growth",
     )
 
@@ -30,9 +25,7 @@ class _SessionReminderState:
         self.intra_credit: int = 0
         self.unfired_credit: int = 0
         self.ids: list[str] = []
-        self.high_occupancy_fired: bool = False
         self.suppress_next_growth: bool = suppress_next_growth
-
 
 class BoundaryReminders:
     def __init__(self) -> None:
@@ -58,8 +51,8 @@ class BoundaryReminders:
         self,
         session: str,
         turn: str,
-        tokens: int,
-        window: int | None,
+        _tokens: int,
+        _window: int | None,
         candidates: list[dict[str, Any]],
         eligible_bytes: int | None = None,
     ) -> str | None:
@@ -88,15 +81,6 @@ class BoundaryReminders:
                 if isinstance(item.get("tool_call_id"), str) and item["tool_call_id"]
             ]
         )
-        occupancy = (
-            tokens / window
-            if type(tokens) is int
-            and tokens >= 0
-            and type(window) is int
-            and window > 0
-            else None
-        )
-
         state = self._state(session)
         is_new_turn = state.turn != turn
         delta = total_bytes - state.watermark
@@ -117,11 +101,6 @@ class BoundaryReminders:
         gain = delta if delta > 0 else 0
         state.intra_credit = gain if is_new_turn else state.intra_credit + gain
         state.unfired_credit = min(total_bytes, state.unfired_credit + gain)
-        if total_bytes < WORTHWHILE_BYTES or (
-            occupancy is not None and occupancy < OCCUPANCY_REARM_RATIO
-        ):
-            state.high_occupancy_fired = False
-
         if total <= 0 or total_bytes <= 0:
             return None
 
@@ -136,19 +115,11 @@ class BoundaryReminders:
             )
             or state.intra_credit >= ELIGIBLE_BYTE_STEP
         )
-        occupancy_fired = (
-            occupancy is not None
-            and occupancy >= HIGH_OCCUPANCY_RATIO
-            and total_bytes >= WORTHWHILE_BYTES
-            and not state.high_occupancy_fired
-        )
-        if not intra_fired and not turn_boundary_fired and not occupancy_fired:
+        if not intra_fired and not turn_boundary_fired:
             return None
 
         state.intra_credit = 0
         state.unfired_credit = 0
-        if occupancy is not None and occupancy >= HIGH_OCCUPANCY_RATIO:
-            state.high_occupancy_fired = True
         state.ids = list(dict.fromkeys([*state.ids, *cand_ids]))[-2048:]
 
         size_hint = f" ({total_bytes // 1024} KiB)" if total_bytes >= 1024 else ""

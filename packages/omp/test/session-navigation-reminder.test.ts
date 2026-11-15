@@ -24,7 +24,7 @@ test("model-facing guidance and notes stay non-Hangul", () => {
   }
 });
 
-test("state machine silences cold-start/mid-turn small reads, prevents boundary oscillation, and enforces 75% safety net + unhide suppression", () => {
+test("state machine silences cold-start/mid-turn small reads, prevents boundary oscillation, ignores occupancy %, and suppresses unhide growth", () => {
   const reminder = new BoundaryReminder();
   // Cold start on Turn 1 Request 1 (empty), followed by a 4 KiB read mid-Turn 1 -> stays silent!
   expect(reminder.note("1", 1_000, 128_000, 0, [])).toBeNull();
@@ -56,16 +56,10 @@ test("state machine silences cold-start/mid-turn small reads, prevents boundary 
   expect(reminder.note("3", 20_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
   expect(reminder.note("4", 21_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
 
-  // 50% and 70% occupancy stay silent; >=75% safety net fires ONCE and does not repeat at 80%/88% until re-armed (<70%).
-  expect(reminder.note("5", 64_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
-  expect(reminder.note("6", 90_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
-  expect(reminder.note("7", 96_000, 128_000, 15, plusSmall, 58_048)).toContain("eligible=15");
-  expect(reminder.note("8", 104_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
-  expect(reminder.note("9", 112_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
-  // Dropping below 70% re-arms the 75% safety net.
-  expect(reminder.note("10", 80_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
-  expect(reminder.note("11", 98_000, 128_000, 15, plusSmall, 58_048)).toContain("eligible=15");
-
+  // Context occupancy % (50%, 75%, 85%, 95%) never triggers a reminder; global window compaction belongs to the host.
+  for (const [turnId, tok] of [["5", 64_000], ["6", 96_000], ["7", 110_000], ["8", 122_000]] as const) {
+    expect(reminder.note(turnId, tok, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  }
   // Boundary oscillation check: 95K -> 105K fire -> hide 10K to 95K -> +6K to 101K MUST stay silent!
   const osc = new BoundaryReminder();
   expect(osc.note("1", 1000, 1_048_576, 0, [])).toBeNull();
