@@ -155,7 +155,8 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
       </Pressable>
       {showChooser ? (
         <ScrollView
-          style={resolution.mode === "chooser" ? { flex: 1 } : { maxHeight: 220 }}
+          nestedScrollEnabled={true}
+          style={resolution.mode === "chooser" ? { flex: 1, minHeight: 0 } : { maxHeight: 220 }}
           contentContainerStyle={{ padding: 10, gap: 8 }}
         >
           {resolution.unavailablePin ? (

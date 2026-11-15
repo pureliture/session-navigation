@@ -9,12 +9,14 @@ export type HostFocusSnapshot = {
   hasSignal: boolean;
 };
 
+const SUPPORTED_HOST_VERSIONS = new Set(["0.15.3", "0.15.4"]);
+
 export function supportedHostVersion(version?: string | null): boolean {
-  return version == null || version === "0.15.3";
+  return version == null || SUPPORTED_HOST_VERSIONS.has(version);
 }
 
 export function strictSupportedHostVersion(version?: string | null): boolean {
-  return version === "0.15.3";
+  return typeof version === "string" && SUPPORTED_HOST_VERSIONS.has(version);
 }
 
 function lengthPrefixed(value: string): [string, string] | null {
