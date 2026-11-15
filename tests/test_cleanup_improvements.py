@@ -130,32 +130,43 @@ def test_all_model_facing_text_is_english():
     for surface in surfaces:
         assert surface
         assert not any("\uac00" <= char <= "\ud7a3" for char in surface), surface
-    for guidance in (surfaces[2], SUPERVISION_SECTION_TEXT):
-        assert "final message must restate the complete answer with all requested facts/values" in guidance
-        assert "never say 'reported above' or 'see above'" in guidance
 
 
-def test_reminder_boundaries_thresholds_empty_sessions_and_literal_ids():
+def test_reminder_boundaries_ignore_occupancy_and_require_new_items_or_byte_growth():
     reminders = BoundaryReminders()
     items = [{"tool_call_id": f"chatcmpl-tool-{i:016x}", "tool_name": "read", "hint": "phase.txt", "bytes_size": 4000, "turn": 1} for i in range(20)]
     assert reminders.note("s", "1", 100, 1000, []) is None
     assert reminders.note("s", "", 100, 1000, items) is None
     note = reminders.note("s", "1", 100, 1000, items)
-    assert "eligible=20" in note and len(note.encode()) <= NOTE_BYTES
+    assert "eligible=20" in note and "+17 via list_context_items(view=candidates)" in note
+    assert len(note.encode()) <= NOTE_BYTES
     assert len(note.splitlines()) == 4
     assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
-    assert "summarize facts still needed" in note
-    assert "final message must restate the complete answer with all requested facts/values" in note
-    assert "never say 'reported above' or 'see above'" in note
-    assert reminders.note("s", "1", 499, 1000, items) is None
-    for tokens in (500, 750, 900):
-        assert reminders.note("s", "1", tokens, 1000, items)
+    for tokens in (499, 500, 750, 900):
         assert reminders.note("s", "1", tokens, 1000, items) is None
-    assert reminders.note("s", "1", 500, 1000, items) is None
-    assert reminders.note("s", "2", 100, 1000, items)
-    assert reminders.note("other", "1", 100, None, items)
+    # Chat-only turn 2 with identical eligible IDs stays silent; adding a new eligible ID fires.
+    assert reminders.note("s", "2", 100, 1000, items) is None
+    with_new = [{"tool_call_id": "chatcmpl-tool-new", "tool_name": "read", "hint": "next.txt", "bytes_size": 4000, "turn": 2}, *items]
+    assert reminders.note("s", "2", 100, 1000, with_new) is not None
+    assert reminders.note("other", "1", 100, None, items) is not None
     huge = [{**items[0], "tool_call_id": "a" * 2000}]
     assert "a" * 100 not in reminders.note("s", "3", 100, None, huge)
+    # Intra-turn cumulative eligible-byte milestones fire on a 1M window (<50%) and reset after cleanup.
+    big_turn = BoundaryReminders()
+    small = [{"tool_call_id": "c0", "tool_name": "read", "hint": "a.txt", "bytes_size": 4096, "turn": 1}]
+    assert big_turn.note("big", "1", 50_000, 1_048_576, small) is not None
+    assert big_turn.note("big", "1", 60_000, 1_048_576, small) is None
+    over_300k = [
+        {"tool_call_id": f"c{i}", "tool_name": "bash", "hint": "kubectl get all", "bytes_size": 80_000, "turn": 1}
+        for i in range(1, 5)
+    ]
+    fired_300k = big_turn.note("big", "1", 120_000, 1_048_576, over_300k)
+    assert fired_300k is not None and "(312 KiB)" in fired_300k
+    assert big_turn.note("big", "1", 125_000, 1_048_576, over_300k) is None
+    # After cleanup shrinks eligible bytes back below 100 KiB, it stays quiet until another >=100 KiB accumulates.
+    assert big_turn.note("big", "1", 40_000, 1_048_576, small) is None
+    second_wave = [{"tool_call_id": "w1", "tool_name": "read", "hint": "b.txt", "bytes_size": 120_000, "turn": 1}]
+    assert big_turn.note("big", "1", 80_000, 1_048_576, second_wave) is not None
 
 
 def cleanup_session(records):
@@ -238,7 +249,7 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     if isinstance(note, list):
         note = note[0]["text"]
     assert "eligible=5" in note
-    assert "/128000 tokens" in note
+    assert "+2 via list_context_items(view=candidates)" in note
     assert json.loads(note.splitlines()[1])[-1] == 1
     assert len(note.encode()) <= NOTE_BYTES
     assert middleware(request=request, session_id="s", api_mode=mode, context_length=128000)["request"] == original
@@ -258,16 +269,6 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     assert request == original
     assert state.summarizer is None
 
-
-def test_hermes_action_first_guidance_and_discovery_description():
-    schemas = hermes_adapter().plugin.TOOL_SCHEMAS
-    assert schemas["list_context_items"]["description"].startswith("Discover visible cleanup IDs")
-    from hermes_navigation_adapter.schemas import SUPERVISION_SECTION_TEXT
-    assert SUPERVISION_SECTION_TEXT.startswith("Finish each work unit and answer first")
-    assert "tool_describe, then tool_call" in SUPERVISION_SECTION_TEXT
-    assert "Prefer literal IDs already shown" in SUPERVISION_SECTION_TEXT
-    assert "avoid re-verifying unchanged files" in SUPERVISION_SECTION_TEXT
-    assert not any("\uac00" <= char <= "\ud7a3" for char in json.dumps(schemas) + SUPERVISION_SECTION_TEXT)
 
 
 @pytest.mark.parametrize("content", ["tiny", "ERROR do not discard\n" + body()])

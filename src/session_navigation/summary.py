@@ -13,7 +13,9 @@ from typing import Any
 
 from session_navigation.policy import (
     _EXIT_CLAIM,
+    _HIGH_SIGNAL_PATTERN,
     _decode_envelope,
+    required_evidence_indexes,
     selectable_text,
     strip_consecutive_numbering,
     verified_facts,
@@ -347,3 +349,309 @@ def verify_exit_claims(source: str, summary_text: str) -> bool:
     if not matches:
         return True
     return all(code is not None and int(m[1]) == code for m in matches)
+
+
+SEQUENCE_CHUNK_BYTES = 32768
+SEQUENCE_STEP_MAX_BYTES = 24576
+_ELISION_MARKER = "[... middle content elided for summary budget ...]"
+
+
+def _slice_utf8_prefix(text: str, max_bytes: int) -> str:
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if len(text[:mid].encode("utf-8")) <= max_bytes:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
+
+
+def _slice_utf8_suffix(text: str, max_bytes: int) -> str:
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high) // 2
+        if len(text[mid:].encode("utf-8")) <= max_bytes:
+            high = mid
+        else:
+            low = mid + 1
+    return text[low:]
+
+
+def bounded_summary_source(original: str, max_bytes: int = SEQUENCE_STEP_MAX_BYTES) -> str:
+    """Build a bounded high-signal representation within max_bytes without raising input_too_large."""
+    budget = max(512, max_bytes)
+    decoded = selectable_text(original)
+    if len(decoded.encode("utf-8")) <= budget:
+        return decoded
+    lines = decoded.splitlines()
+    marker_bytes = len(_ELISION_MARKER.encode("utf-8")) + 2
+    if len(lines) <= 2:
+        half = max(64, (budget - marker_bytes) // 2)
+        return f"{_slice_utf8_prefix(decoded, half)}\n{_ELISION_MARKER}\n{_slice_utf8_suffix(decoded, half)}"
+    head_budget = int((budget - marker_bytes * 2) * 0.4)
+    tail_budget = int((budget - marker_bytes * 2) * 0.4)
+    head: list[str] = []
+    head_used = 0
+    head_end = 0
+    while head_end < len(lines):
+        cand = _slice_utf8_prefix(lines[head_end], max(128, head_budget // 2))
+        cost = len(cand.encode("utf-8")) + 1
+        if head_used + cost > head_budget:
+            break
+        head.append(cand)
+        head_used += cost
+        head_end += 1
+    tail: list[str] = []
+    tail_used = 0
+    tail_start = len(lines) - 1
+    while tail_start >= head_end:
+        cand = _slice_utf8_suffix(lines[tail_start], max(128, tail_budget // 2))
+        cost = len(cand.encode("utf-8")) + 1
+        if tail_used + cost > tail_budget:
+            break
+        tail.insert(0, cand)
+        tail_used += cost
+        tail_start -= 1
+    middle_lines = lines[head_end:tail_start + 1]
+    signal_set = set(required_evidence_indexes(middle_lines))
+    middle: list[str] = []
+    middle_used = 0
+    middle_budget = max(0, budget - head_used - tail_used - marker_bytes * 2)
+    for idx, line in enumerate(middle_lines):
+        if idx not in signal_set and not _HIGH_SIGNAL_PATTERN.search(line):
+            continue
+        cand = _slice_utf8_prefix(line, 320)
+        cost = len(cand.encode("utf-8")) + 1
+        if middle_used + cost > middle_budget:
+            break
+        middle.append(cand)
+        middle_used += cost
+    sections = [
+        *(["\n".join(head)] if head else []),
+        _ELISION_MARKER,
+        *(["\n".join(middle), _ELISION_MARKER] if middle else []),
+        *(["\n".join(tail)] if tail else []),
+    ]
+    return _slice_utf8_prefix("\n".join(sections), budget)
+
+
+def chunk_sequence_steps(
+    steps: list[dict[str, Any]],
+    chunk_bytes: int = SEQUENCE_CHUNK_BYTES,
+    step_max_bytes: int = SEQUENCE_STEP_MAX_BYTES,
+) -> list[list[dict[str, Any]]]:
+    effective_chunk = max(4096, chunk_bytes)
+    multi_step_cap = min(step_max_bytes, 9216) if len(steps) > 1 else step_max_bytes
+    effective_step = min(multi_step_cap, max(2048, effective_chunk - 1536))
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_bytes = 0
+    for step in steps:
+        bounded = bounded_summary_source(step["content"], effective_step)
+        header = f"--- call_id: {step['call_id']} | tool: {step['tool_name']} | args: {json.dumps(step['invocation'], ensure_ascii=False)} ---\n"
+        entry_bytes = len(header.encode("utf-8")) + len(bounded.encode("utf-8")) + 2
+        if current and current_bytes + entry_bytes > effective_chunk:
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append({**step, "bounded": bounded})
+        current_bytes += entry_bytes
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def sequence_summary_prompt(chunk: list[dict[str, Any]], prior_summary: str | None = None) -> str:
+    prior = (
+        f"Prior steps context (already completed earlier in this sequence):\n{prior_summary.strip()}\n\n"
+        if prior_summary and prior_summary.strip()
+        else ""
+    )
+    parts = []
+    for step in chunk:
+        inv = step.get("invocation")
+        args = inv.get("arguments", {}) if isinstance(inv, dict) else inv
+        parts.append(
+            f"--- call_id: {step['call_id']} | tool: {step['tool_name']} | args: {json.dumps(args, ensure_ascii=False)} ---\n{step['bounded']}"
+        )
+    return (
+        "Summarize this chronological tool-execution sequence as strict JSON only (no markdown code fences):\n"
+        '{"sequence_summary":"<1 concise paragraph connecting what the sequence checked, found, and concluded, preserving exact identifiers, numbers, paths, and exit codes>","steps":{"<call_id>":"<1 concise factual sentence (<=200 chars) stating what this step ran and observed>"}}\n'
+        'Include every listed call_id in "steps". Quote only literal numbers, paths, identifiers, and exit codes present in the steps (and Prior steps context if given); never count rows, derive totals/differences, or invent tokens.\n\n'
+        + prior
+        + "\n\n".join(parts)
+    )
+
+
+def has_summary_injection(text: str) -> bool:
+    return any(p.search(text) for p in _INJECTION_OUTPUT_PATTERNS)
+
+
+def _parse_sequence_payload(raw_response: str, chunk: list[dict[str, Any]]) -> tuple[str, dict[str, str]] | None:
+    trimmed = raw_response.strip() if isinstance(raw_response, str) else ""
+    if not trimmed:
+        return None
+    unfenced = re.sub(r"\s*```$", "", re.sub(r"^```(?:json)?\s*", "", trimmed, flags=re.I)).strip()
+    start = unfenced.find("{")
+    end = unfenced.rfind("}")
+    if 0 <= start < end:
+        try:
+            parsed = json.loads(unfenced[start:end + 1])
+            if isinstance(parsed, dict):
+                seq = parsed.get("sequence_summary")
+                raw_steps = parsed.get("steps")
+                if isinstance(seq, str) and seq.strip() and isinstance(raw_steps, dict):
+                    steps = {
+                        str(k): v.strip()
+                        for k, v in raw_steps.items()
+                        if isinstance(v, str) and v.strip()
+                    }
+                    return seq.strip(), steps
+        except ValueError:
+            pass
+    if len(chunk) == 1 and not unfenced.startswith("{"):
+        return unfenced, {chunk[0]["call_id"]: unfenced}
+    return None
+
+
+def validate_sequence_chunk(
+    chunk: list[dict[str, Any]],
+    raw_response: str,
+    prior_summary: str | None = None,
+) -> tuple[bool, str, dict[str, str], str]:
+    parsed = _parse_sequence_payload(raw_response, chunk)
+    if parsed is None:
+        return (
+            False,
+            "",
+            {},
+            'Invalid response format. Return strict JSON {"sequence_summary":"...","steps":{"<call_id>":"..."}} covering every call_id.',
+        )
+    seq_summary, steps = parsed
+    missing = [
+        step["call_id"]
+        for step in chunk
+        if step["call_id"] not in steps or len(steps[step["call_id"]]) > 200
+    ]
+    if missing or len(seq_summary) > 1200:
+        return (
+            False,
+            "",
+            {},
+            f"Provide concise entries (<=200 chars per step, <=1200 chars for sequence_summary) for every call_id. Missing or oversize call_ids: {json.dumps(missing)}.",
+        )
+
+    def _values_text(val: Any) -> str:
+        if isinstance(val, list):
+            return "\n".join(_values_text(v) for v in val)
+        if isinstance(val, dict):
+            return "\n".join(_values_text(v) for v in val.values())
+        if val is None:
+            return "None"
+        if isinstance(val, bool):
+            return "True" if val else "False"
+        return str(val)
+
+    corpus_parts = [prior_summary or ""]
+    allowed_exits: set[int] = set()
+    for step in chunk:
+        content = step["content"]
+        decoded = _decode_envelope(content)
+        corpus_parts.append(content)
+        if isinstance(decoded, dict):
+            corpus_parts.append(_values_text(decoded))
+        corpus_parts.append(json.dumps(step.get("invocation", {}), ensure_ascii=False))
+        code = verified_facts(content)["exit_code"]
+        if code is not None:
+            allowed_exits.add(code)
+    if prior_summary:
+        for match in _EXIT_CLAIM.finditer(prior_summary):
+            allowed_exits.add(int(match[1]))
+    corpus = "\n".join(corpus_parts)
+    source_paths = _path_claims(corpus)
+    allowed_ids = {m.group(0).strip() for m in _IDENTIFIER_PATTERN.finditer(corpus)}
+    allowed_nums = {normalize_number(m.group(0).strip()) for m in NUMBER.finditer(corpus)}
+    bad_nums: list[str] = []
+    bad_ids: list[str] = []
+    bad_paths: set[str] = set()
+    bad_exit = False
+
+    def check_claim(text: str, step_exit: int | None, enforce_step_exit: bool) -> bool:
+        nonlocal bad_exit
+        if has_summary_injection(text):
+            return False
+        if any(p.search(text) for p in _GENERIC_SUMMARY_PATTERNS) and text.casefold() not in corpus.casefold():
+            return False
+        bad_paths.update(_path_claims(text) - source_paths)
+        for m in _IDENTIFIER_PATTERN.finditer(text):
+            tok = m.group(0).strip()
+            if tok not in allowed_ids and tok not in bad_ids:
+                bad_ids.append(tok)
+        for m in NUMBER.finditer(text):
+            raw = m.group(0).strip()
+            if normalize_number(raw) not in allowed_nums and raw not in bad_nums:
+                bad_nums.append(raw)
+        for m in _EXIT_CLAIM.finditer(text):
+            claimed = int(m[1])
+            if enforce_step_exit and step_exit is not None:
+                if claimed != step_exit:
+                    bad_exit = True
+            elif claimed not in allowed_exits:
+                bad_exit = True
+        return True
+
+    if not check_claim(seq_summary, None, False):
+        return False, "", {}, "Summary contained disallowed instruction or generic filler text. Quote concrete facts from the steps only."
+    for step in chunk:
+        if not check_claim(steps[step["call_id"]], verified_facts(step["content"])["exit_code"], True):
+            return False, "", {}, f"Step summary for {step['call_id']} contained disallowed instruction or generic filler text. State concrete facts only."
+    if bad_nums or bad_ids or bad_paths or bad_exit:
+        feedback = (
+            "The previous sequence summary failed factual validation. Correct it once using only tokens present in the provided steps and prior context. "
+            f"Unsupported numeric tokens: {json.dumps(bad_nums, ensure_ascii=False)}. "
+            f"Unsupported identifiers: {json.dumps(bad_ids, ensure_ascii=False)}. "
+            f"Unsupported paths: {json.dumps(sorted(bad_paths), ensure_ascii=False)}. "
+            + ("Remove or fix unverified exit code claims. " if bad_exit else "")
+            + "Return strict JSON only."
+        )
+        return False, "", {}, feedback
+    return True, seq_summary, steps, ""
+
+
+def compose_hybrid_slot_summaries(
+    ordered_steps: list[dict[str, Any]],
+    step_traces: dict[str, str],
+    final_sequence_summary: str,
+) -> dict[str, str]:
+    summarized = [step for step in ordered_steps if step["call_id"] in step_traces]
+    if not summarized:
+        return {}
+    if len(summarized) == 1:
+        only = summarized[0]
+        return {only["call_id"]: final_sequence_summary.strip() or step_traces[only["call_id"]]}
+    out: dict[str, str] = {}
+    last_idx = len(summarized) - 1
+    for idx, step in enumerate(summarized):
+        inv = step.get("invocation")
+        args = inv.get("arguments", {}) if isinstance(inv, dict) else {}
+        raw_hint = str(
+            args.get("command")
+            or args.get("path")
+            or args.get("pattern")
+            or args.get("query")
+            or ""
+        )
+        hint = re.sub(r"\s+", " ", raw_hint).strip()[:48]
+        prefix = f"[{step['tool_name']}{f': {hint}' if hint else ''}]"
+        trace = f"{prefix} {step_traces[step['call_id']]}"
+        out[step["call_id"]] = (
+            f"{trace}\n[Sequence summary] {final_sequence_summary.strip()}"
+            if idx == last_idx and final_sequence_summary.strip()
+            else trace
+        )
+    return out

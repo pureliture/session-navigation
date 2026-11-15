@@ -2,9 +2,8 @@
 
 Date: 2026-11-10. **B-current only was executed.** Historical A/B-old were never rerun.
 
-**Latest:** [fixed-product live revalidation](#fixed-product-live-revalidation-df47548)
-adds `df47548` as a fourth column. Earlier campaign/RCA sections remain historical;
-the fixed run has its own evidence, ledger and acceptance limitations.
+**Latest:** [autonomous adoption and hybrid sequence-summary revalidation (2026-11-15)](#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-15)
+follows the earlier [fixed-product live revalidation (`df47548`)](#fixed-product-live-revalidation-df47548) and [summary-upgrade revalidation (`fe75673`)](#summary-upgrade-and-factual-retry-revalidation-fe75673). Earlier campaign/RCA sections remain historical.
 
 ## Decision
 
@@ -2239,3 +2238,53 @@ late-fact retention and exact no-rerun restoration pass **3/3** targeted trials.
 This closes the branch-coverage gap; it does not establish stochastic quality
 equivalence or change the earlier frozen campaign metrics. Only this report is
 changed in git. Markdown was not visually rendered.
+
+## Autonomous adoption and hybrid sequence-summary revalidation (2026-11-15)
+
+### Scope
+
+Full 16-cell live revalidation (OMP + Hermes × Atlas/Boreal × 2 repetitions at 25 turns each, plus OMP + Hermes × Hide/Summarize × 2 repetitions at 3 turns each, plus 8 replacement judges) and a paired 12-step `332.9 KiB` sequence-summarization benchmark were executed on `deepseek/deepseek-v4.1-flash-1017` (`Relace`, no fallback, reasoning `{enabled:false, exclude:true}`, 65,536-token window) after landing:
+
+1. Same-line domain+state co-occurrence `protected_error` / credential-only `sensitive_invocation` filters, broadened read-only query tool collection, and bounded head/keep/tail fallback on dense pipe/path targets in explicit `manage_context`.
+2. Top-level `essential` OMP tool registration, 100 KiB intra-turn unmanaged eligible-byte reminder milestones, and pre-final-answer single-pass cleanup guidance with restore-turn re-hide suppression.
+3. Chronological B+A hybrid sequence summarization (`chunkSequenceSteps` + rolling `sequence_summary` carry-over + bounded `>32 KiB` per-step high-signal excerpts + self-contained 1-line step traces + final-slot `[Sequence summary]`).
+
+### Tariff normalization note
+
+Between the frozen 2026-11-09/10 runs and 2026-11-15, OpenRouter's `Relace` endpoint raised uncached input pricing **20×** (`$0.006/M → $0.120/M`), while cached input (`$0.003/M`) and output (`$0.500/M`) rates remained unchanged. Raw `reported_usd` receipts from different dates therefore mix two tariff schedules; the table below reports raw token counts alongside **same-tariff repricing** under both schedules plus the harness's fixed GPT-4.1 `reference_cost`.
+
+### Pooled 8-session autonomous long-session comparison (200 turns per column)
+
+| Metric (OMP + Hermes pooled) | `A` (off) | `B-old` (`37348b8`) | `Pre-fix` (`8902a41`) | `Fixed` (`df47548`) | **2026-11-15 (`v5-hybrid`)** | `v5 / Fixed` |
+|---|---:|---:|---:|---:|---:|---:|
+| Task / final-only / visible-unit / canonical tests | 8/8 | 8/8 | 8/8 | 8/8 | **8/8** | 1.000× |
+| Announced recall / surprise recovery | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | **8/8 · 8/8** | 1.000× |
+| Stored-original mismatches | 0 | 0 | 0 | 0 | **0** *(197 checked)* | PASS |
+| Sessions with ≥2 cleanup boundaries | 0/8 | 6/8 | 4/8 | 5/8 | **8/8 (100%)** | **1.600×** |
+| Successful cleanup boundaries | 0 | 39 | 25 | 33 | **90** *(OMP 35 + Hermes 55)* | **2.727×** |
+| Navigation calls | 0 | 59 | 42 | 46 | **117** *(OMP 52 + Hermes 65)* | **2.543×** |
+| Valid literal IDs (`literal_ids_valid`) | 0 | 101 | 69 | 81 | **191** | **2.358×** |
+| Disposable outputs cleaned (`selected / observed`) | 0/137 (0%) | 68/137 (49.6%) | 52/139 (37.4%) | 67/136 (49.3%) | **154/182 (84.6%)** | **+35.3%p** |
+| Hermes native compactions | 28 | 18 | 23 | 23 | **4** | **0.174× (−82.6%)** |
+| Uncached prompt tokens | 3,206,976 | 3,258,840 | 3,838,805 | 3,712,399 | **3,122,468 (lowest)** | **0.841× (−15.9%)** |
+| Cached prompt tokens | 20,004,352 | 15,760,640 | 15,820,544 | 15,150,592 | **18,294,272** *(85.4% hit)* | 1.207× |
+| Output tokens | 287,668 | 198,169 | 251,896 | 253,815 | **127,434 (lowest)** | **0.502× (−49.8%)** |
+| **Same-tariff USD @ Nov 9 Relace (`$0.006/M` uncached)** | $0.223 | $0.166 | $0.196 | $0.195 | **$0.137 (lowest)** | **0.705× (−29.5%)** |
+| **Same-tariff USD @ Nov 15 Relace (`$0.120/M` uncached)** | $0.589 | $0.537 | $0.634 | $0.618 | **$0.493 (lowest)** | **0.798× (−20.2%)** |
+| Hypothetical GPT-4.1 `reference_cost` | $18.717 | $15.983 | $17.603 | $17.031 | **$16.412** *(Hermes $6.888)* | **0.964× (`A`: −12.3%)** |
+
+### Commanded components (OMP + Hermes, 8 cells)
+
+- **Strict success / no-rerun restore / exact original in final request:** **4/4** on OMP and **4/4** on Hermes (**8/8** total), with **0** third-turn work-tool reruns, **0** final-message backreferences, and **0** stored-original mismatches.
+- **OMP efficiency and fact retention:** **28** requests, **293,701** prompt tokens, **3,060** output tokens (lowest of all evaluated versions; `fe75673` was `33 / 297,955 / 4,320`), **6/6** Hide facts retained, **2/2** pure LLM Summarize trials with **6/6** facts retained (`wrong_source = 0`), judge mean **2.00**.
+- **Hermes:** **4/4** strict success and exact restores, **6/6** Hide facts, **2/2** pure LLM Summarize trials (**3/6** literal checklist facts across the two trials, judge mean **2.75**).
+
+### Paired `332.9 KiB` 12-step sequence Summarize benchmark (same model & tariff)
+
+| Metric (`340,932 B`, 12 steps, 3 steps `>32 KiB`) | Legacy isolated per-item Summarize | **B+A hybrid sequence Summarize** | Delta |
+|---|---:|---:|---:|
+| `input_too_large` (>32 KiB) blocks | 3 / 12 | **0 / 12** | −100% |
+| Summarized & applied slots | 1 / 12 (8.3%) | **12 / 12 (100%)** | +11 slots |
+| Summary LLM calls / wall time | 9 calls / 9.1s | **3 calls** *(3 rolling chunks)* / **6.3s** | −66.7% calls / −30.8% time |
+| Summary prompt tokens / billed USD | 89,831 tok / $0.011406 | **40,193 tok / $0.005675** | **−55.3% tok / −50.2% USD** |
+| Remaining payload after compaction | 319,285 B (311.8 KiB) | **6,050 B (5.9 KiB)** | **98.2% reduction** |

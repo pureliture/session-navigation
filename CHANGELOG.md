@@ -48,6 +48,19 @@ Publication and registry/catalog approval are separate steps; see
 - Validate comma-grouped numbers alongside other literal facts.
 - Keep original host history and stored originals unchanged; apply all
   exclusions/replacements only to outgoing request copies.
+- Tighten `protected_error` and `sensitive_invocation` matchers to same-line
+  domain+state co-occurrence and credential-bearing keys/tokens so ordinary
+  code, Korean prose, and CLI flags remain eligible, add 100 KiB intra-turn
+  eligible-byte reminder milestones, pin OMP context tools as top-level
+  `essential` tools, broaden OMP/Paseo read-only query tool collection (`grep`,
+  `glob`, `web_search`, agent/model inspection), and instruct pre-final-answer
+  single-pass `manage_context` cleanup with bounded head/keep/tail fallback on
+  dense pipe/path outputs.
+- Summarize `manage_context` batches chronologically using a hybrid sequence
+  pipeline: bounded high-signal excerpts remove `input_too_large` refusals on
+  >32 KiB items, rolling `sequence_summary` carry-over links multi-chunk runs,
+  earlier slots store self-contained 1-line step traces, and the final slot
+  appends the consolidated `[Sequence summary]` without coupling per-item Unhide.
 
 ### Scopes and compatibility
 

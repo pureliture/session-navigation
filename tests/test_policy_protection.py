@@ -182,3 +182,53 @@ def test_benign_commands_not_flagged(command: str):
 def test_denylist_ignores_non_shell_tools():
     assert is_destructive_command("read", {"path": "x"}) is False
     assert is_destructive_command("read_file", {"path": "x"}) is False
+
+
+@pytest.mark.parametrize("benign_line", [
+    "export interface AgentState { status: 'idle' | 'running'; window: number; reason?: string }",
+    "Read /workspace/lbrain-delivery-repair/docs/architecture.md because state changed",
+    "배포 파이프라인 상태 점검 및 오류 코드 매핑 문서 (승인 절차 포함, 제한 시간 30초)",
+    "Merge conflict marker helper: lists unresolved merge blocks when requested",
+])
+def test_ordinary_code_and_docs_are_not_rejected_as_protected_error(benign_line: str):
+    original = output_with(benign_line)
+    assert is_protected_error(original) is False
+    assert is_business_state_critical(original) is False
+    assert check_refusal_reason(original) is None
+
+
+def test_benign_cli_assignments_and_exports_are_not_rejected_as_sensitive():
+    from session_navigation.model import ToolResultRecord, compute_invocation_digest, compute_sha256
+    from session_navigation.policy import refusal_reason
+
+    body = output_with("648 passed in 12.3s")
+    for cmd in (
+        "PYTHONPATH=. pytest --timeout=10 -k status",
+        "export PATH=/usr/local/bin:$PATH && kubectl get pods -n default -l app=neurons",
+        "python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com?per_page=10', timeout=5)\"",
+    ):
+        inv = {"tool_name": "bash", "arguments": {"command": cmd}}
+        rec = ToolResultRecord(
+            call_id="c1",
+            content=body,
+            content_sha256=compute_sha256(body),
+            invocation=inv,
+            invocation_digest=compute_invocation_digest(inv),
+            status="ok",
+        )
+        assert refusal_reason(rec) is None
+    for secret_cmd in (
+        "OPENAI_API_KEY=sk-12345 pytest",
+        "curl -H 'Authorization: Bearer tok_xyz' https://api.example.com",
+        "gh auth login --with-token && cli --token abc",
+    ):
+        inv = {"tool_name": "bash", "arguments": {"command": secret_cmd}}
+        rec = ToolResultRecord(
+            call_id="c2",
+            content=body,
+            content_sha256=compute_sha256(body),
+            invocation=inv,
+            invocation_digest=compute_invocation_digest(inv),
+            status="ok",
+        )
+        assert refusal_reason(rec) == "sensitive_invocation"

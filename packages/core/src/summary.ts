@@ -1,5 +1,5 @@
-import { length, type Json } from "./model.ts";
-import { exitClaim, selectableText, splitLines, verifiedFacts } from "./policy.ts";
+import { bytes, length, type Json } from "./model.ts";
+import { evidenceIndexes, exitClaim, selectableText, splitLines, verifiedFacts } from "./policy.ts";
 import { pythonInteger, pythonTrim, pythonize } from "./python-regex.ts";
 import { casefold } from "./casefold.ts";
 import { numberPattern, normalizeNumber } from "./numbers.ts";
@@ -233,4 +233,357 @@ function factualSource(original: string): string {
     return original;
   }
   return original;
+}
+
+export const SEQUENCE_CHUNK_BYTES = 32768;
+export const SEQUENCE_STEP_MAX_BYTES = 24576;
+const ELISION_MARKER = "[... middle content elided for summary budget ...]";
+
+export interface SequenceStepInput {
+  call_id: string;
+  tool_name: string;
+  invocation: Json;
+  content: string;
+}
+
+export interface PreparedSequenceStep extends SequenceStepInput {
+  bounded: string;
+}
+
+export type SequenceChunkValidation =
+  | { ok: true; sequenceSummary: string; steps: Record<string, string> }
+  | { ok: false; feedback: string };
+
+function sliceUtf8Prefix(text: string, maxBytes: number): string {
+  if (bytes(text) <= maxBytes) return text;
+  const chars = [...text];
+  let low = 0;
+  let high = chars.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (bytes(chars.slice(0, mid).join("")) <= maxBytes) low = mid;
+    else high = mid - 1;
+  }
+  return chars.slice(0, low).join("");
+}
+
+function sliceUtf8Suffix(text: string, maxBytes: number): string {
+  if (bytes(text) <= maxBytes) return text;
+  const chars = [...text];
+  let low = 0;
+  let high = chars.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (bytes(chars.slice(mid).join("")) <= maxBytes) high = mid;
+    else low = mid + 1;
+  }
+  return chars.slice(low).join("");
+}
+
+export function boundedSummarySource(
+  original: string,
+  maxBytes = SEQUENCE_STEP_MAX_BYTES,
+): string {
+  const budget = Math.max(512, maxBytes);
+  const decoded = selectableText(original);
+  if (bytes(decoded) <= budget) return decoded;
+  const lines = splitLines(decoded);
+  const markerBytes = bytes(ELISION_MARKER) + 2;
+  if (lines.length <= 2) {
+    const half = Math.max(64, Math.floor((budget - markerBytes) / 2));
+    return `${sliceUtf8Prefix(decoded, half)}\n${ELISION_MARKER}\n${sliceUtf8Suffix(decoded, half)}`;
+  }
+  const headBudget = Math.floor((budget - markerBytes * 2) * 0.4);
+  const tailBudget = Math.floor((budget - markerBytes * 2) * 0.4);
+  const head: string[] = [];
+  let headUsed = 0;
+  let headEnd = 0;
+  while (headEnd < lines.length) {
+    const candidate = sliceUtf8Prefix(lines[headEnd], Math.max(128, Math.floor(headBudget / 2)));
+    const cost = bytes(candidate) + 1;
+    if (headUsed + cost > headBudget) break;
+    head.push(candidate);
+    headUsed += cost;
+    headEnd++;
+  }
+  const tail: string[] = [];
+  let tailUsed = 0;
+  let tailStart = lines.length - 1;
+  while (tailStart >= headEnd) {
+    const candidate = sliceUtf8Suffix(lines[tailStart], Math.max(128, Math.floor(tailBudget / 2)));
+    const cost = bytes(candidate) + 1;
+    if (tailUsed + cost > tailBudget) break;
+    tail.unshift(candidate);
+    tailUsed += cost;
+    tailStart--;
+  }
+  const middleLines = lines.slice(headEnd, tailStart + 1);
+  const signalSet = new Set(evidenceIndexes(middleLines));
+  const highSignalRe = pythonize(
+    /^\s*(?:(?:\d+)\s*(?:[:|]\s*|#\S*:\s*))?[A-Za-z_][\p{L}\p{N}_.-]{0,63}\s*[:=]\s*\S|\b(?:error|fail(?:ed|ure)?|warn(?:ing)?)\b/iu,
+  );
+  const middle: string[] = [];
+  let middleUsed = 0;
+  const middleBudget = Math.max(0, budget - headUsed - tailUsed - markerBytes * 2);
+  for (let i = 0; i < middleLines.length; i++) {
+    if (!signalSet.has(i) && !highSignalRe.test(middleLines[i])) continue;
+    const candidate = sliceUtf8Prefix(middleLines[i], 320);
+    const cost = bytes(candidate) + 1;
+    if (middleUsed + cost > middleBudget) break;
+    middle.push(candidate);
+    middleUsed += cost;
+  }
+  const sections = [
+    ...(head.length ? [head.join("\n")] : []),
+    ELISION_MARKER,
+    ...(middle.length ? [middle.join("\n"), ELISION_MARKER] : []),
+    ...(tail.length ? [tail.join("\n")] : []),
+  ];
+  return sliceUtf8Prefix(sections.join("\n"), budget);
+}
+
+export function chunkSequenceSteps(
+  steps: readonly SequenceStepInput[],
+  chunkBytes = SEQUENCE_CHUNK_BYTES,
+  stepMaxBytes = SEQUENCE_STEP_MAX_BYTES,
+): PreparedSequenceStep[][] {
+  const effectiveChunk = Math.max(4096, chunkBytes);
+  const multiStepCap = steps.length > 1 ? Math.min(stepMaxBytes, 9216) : stepMaxBytes;
+  const effectiveStep = Math.min(multiStepCap, Math.max(2048, effectiveChunk - 1536));
+  const chunks: PreparedSequenceStep[][] = [];
+  let current: PreparedSequenceStep[] = [];
+  let currentBytes = 0;
+  for (const step of steps) {
+    const bounded = boundedSummarySource(step.content, effectiveStep);
+    const headerBytes = bytes(
+      `--- call_id: ${step.call_id} | tool: ${step.tool_name} | args: ${JSON.stringify(step.invocation)} ---\n`,
+    );
+    const entryBytes = headerBytes + bytes(bounded) + 2;
+    if (current.length > 0 && currentBytes + entryBytes > effectiveChunk) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push({ ...step, bounded });
+    currentBytes += entryBytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+export function sequenceSummaryPrompt(
+  chunk: readonly PreparedSequenceStep[],
+  priorSummary?: string,
+): string {
+  const prior =
+    priorSummary && pythonTrim(priorSummary)
+      ? `Prior steps context (already completed earlier in this sequence):\n${pythonTrim(priorSummary)}\n\n`
+      : "";
+  const body = chunk
+    .map((step) => {
+      const inv = step.invocation;
+      const args =
+        inv && typeof inv === "object" && !Array.isArray(inv) && "arguments" in inv
+          ? JSON.stringify(inv.arguments ?? {})
+          : JSON.stringify(inv);
+      return `--- call_id: ${step.call_id} | tool: ${step.tool_name} | args: ${args} ---\n${step.bounded}`;
+    })
+    .join("\n\n");
+  return (
+    "Summarize this chronological tool-execution sequence as strict JSON only (no markdown code fences):\n" +
+    '{"sequence_summary":"<1 concise paragraph connecting what the sequence checked, found, and concluded, preserving exact identifiers, numbers, paths, and exit codes>","steps":{"<call_id>":"<1 concise factual sentence (<=200 chars) stating what this step ran and observed>"}}\n' +
+    'Include every listed call_id in "steps". Quote only literal numbers, paths, identifiers, and exit codes present in the steps (and Prior steps context if given); never count rows, derive totals/differences, or invent tokens.\n\n' +
+    prior +
+    body
+  );
+}
+
+export function hasSummaryInjection(text: string): boolean {
+  return injection.some((pattern) => pythonize(pattern).test(text));
+}
+
+function parseSequencePayload(
+  rawResponse: string,
+  chunk: readonly SequenceStepInput[],
+): { sequenceSummary: string; steps: Record<string, string> } | null {
+  const trimmed = pythonTrim(rawResponse);
+  if (!trimmed) return null;
+  const unfenced = trimmed
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const parsed: unknown = JSON.parse(unfenced.slice(start, end + 1));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>;
+        const seq =
+          typeof record.sequence_summary === "string" ? pythonTrim(record.sequence_summary) : "";
+        const rawSteps = record.steps;
+        if (seq && rawSteps && typeof rawSteps === "object" && !Array.isArray(rawSteps)) {
+          const steps: Record<string, string> = {};
+          for (const [key, val] of Object.entries(rawSteps as Record<string, unknown>)) {
+            if (typeof val === "string" && pythonTrim(val)) steps[key] = pythonTrim(val);
+          }
+          return { sequenceSummary: seq, steps };
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  if (chunk.length === 1 && !unfenced.startsWith("{")) {
+    return { sequenceSummary: unfenced, steps: { [chunk[0].call_id]: unfenced } };
+  }
+  return null;
+}
+
+export function validateSequenceChunk(
+  chunk: readonly SequenceStepInput[],
+  rawResponse: string,
+  priorSummary?: string,
+): SequenceChunkValidation {
+  const parsed = parseSequencePayload(rawResponse, chunk);
+  if (!parsed) {
+    return {
+      ok: false,
+      feedback:
+        'Invalid response format. Return strict JSON {"sequence_summary":"...","steps":{"<call_id>":"..."}} covering every call_id.',
+    };
+  }
+  const missingIds = chunk
+    .map((step) => step.call_id)
+    .filter((id) => !parsed.steps[id] || length(parsed.steps[id]) > 200);
+  if (missingIds.length > 0 || length(parsed.sequenceSummary) > 1200) {
+    return {
+      ok: false,
+      feedback: `Provide concise entries (<=200 chars per step, <=1200 chars for sequence_summary) for every call_id. Missing or oversize call_ids: ${JSON.stringify(missingIds)}.`,
+    };
+  }
+  const corpus = [
+    priorSummary ?? "",
+    ...chunk.map((step) => `${factualSource(step.content)}\n${JSON.stringify(step.invocation)}`),
+  ].join("\n");
+  const sourcePaths = pathClaims(corpus);
+  const idRe = pythonize(identifier);
+  const numRe = pythonize(number);
+  const allowedIds = new Set([...corpus.matchAll(idRe)].map((m) => pythonTrim(m[0])));
+  const allowedNums = new Set([...corpus.matchAll(numRe)].map((m) => normalizeNumber(pythonTrim(m[0]))));
+  const allowedExits = new Set<number>();
+  for (const step of chunk) {
+    const code = verifiedFacts(step.content).exit_code;
+    if (code !== null) allowedExits.add(code);
+  }
+  if (priorSummary) {
+    for (const match of priorSummary.matchAll(exitClaim)) allowedExits.add(pythonInteger(match[1]));
+  }
+  const badNumbers = new Set<string>();
+  const badIds = new Set<string>();
+  const badPaths = new Set<string>();
+  let badExit = false;
+  const checkClaim = (text: string, stepExit: number | null | undefined) => {
+    if (
+      hasSummaryInjection(text) ||
+      (generic.some((p) => pythonize(p).test(text)) && !casefold(corpus).includes(casefold(text)))
+    ) {
+      return false;
+    }
+    for (const p of pathClaims(text)) if (!sourcePaths.has(p)) badPaths.add(p);
+    for (const m of text.matchAll(idRe)) {
+      const tok = pythonTrim(m[0]);
+      if (!allowedIds.has(tok)) badIds.add(tok);
+    }
+    for (const m of text.matchAll(numRe)) {
+      const raw = pythonTrim(m[0]);
+      if (!allowedNums.has(normalizeNumber(raw))) badNumbers.add(raw);
+    }
+    for (const m of text.matchAll(exitClaim)) {
+      const claimed = pythonInteger(m[1]);
+      if (stepExit !== undefined && stepExit !== null) {
+        if (claimed !== stepExit) badExit = true;
+      } else if (!allowedExits.has(claimed)) {
+        badExit = true;
+      }
+    }
+    return true;
+  };
+  if (!checkClaim(parsed.sequenceSummary, undefined)) {
+    return {
+      ok: false,
+      feedback:
+        "Summary contained disallowed instruction or generic filler text. Quote concrete facts from the steps only.",
+    };
+  }
+  for (const step of chunk) {
+    if (!checkClaim(parsed.steps[step.call_id], verifiedFacts(step.content).exit_code)) {
+      return {
+        ok: false,
+        feedback: `Step summary for ${step.call_id} contained disallowed instruction or generic filler text. State concrete facts only.`,
+      };
+    }
+  }
+  if (badNumbers.size || badIds.size || badPaths.size || badExit) {
+    return {
+      ok: false,
+      feedback:
+        "The previous sequence summary failed factual validation. Correct it once using only tokens present in the provided steps and prior context. " +
+        `Unsupported numeric tokens: ${JSON.stringify([...badNumbers])}. ` +
+        `Unsupported identifiers: ${JSON.stringify([...badIds])}. ` +
+        `Unsupported paths: ${JSON.stringify([...badPaths])}. ` +
+        (badExit ? "Remove or fix unverified exit code claims. " : "") +
+        "Return strict JSON only.",
+    };
+  }
+  return { ok: true, sequenceSummary: parsed.sequenceSummary, steps: parsed.steps };
+}
+
+export function composeHybridSlotSummaries(
+  orderedSteps: readonly SequenceStepInput[],
+  stepTraces: Readonly<Record<string, string>>,
+  finalSequenceSummary: string,
+): Record<string, string> {
+  const summarized = orderedSteps.filter((step) => !!stepTraces[step.call_id]);
+  if (summarized.length === 0) return {};
+  if (summarized.length === 1) {
+    const only = summarized[0];
+    return { [only.call_id]: pythonTrim(finalSequenceSummary) || stepTraces[only.call_id] };
+  }
+  const out: Record<string, string> = {};
+  const lastIndex = summarized.length - 1;
+  for (let i = 0; i < summarized.length; i++) {
+    const step = summarized[i];
+    const inv = step.invocation;
+    // Json object union includes PythonFloat; narrow plain argument dictionaries into a string-keyed map.
+    const argsObj: Record<string, unknown> =
+      inv &&
+      typeof inv === "object" &&
+      !Array.isArray(inv) &&
+      "arguments" in inv &&
+      inv.arguments &&
+      typeof inv.arguments === "object" &&
+      !Array.isArray(inv.arguments)
+        ? (inv.arguments as unknown as Record<string, unknown>)
+        : {};
+    const rawHint = String(
+      argsObj.command ||
+        argsObj.path ||
+        argsObj.pattern ||
+        argsObj.query ||
+        argsObj.agentId ||
+        argsObj.provider ||
+        "",
+    )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 48);
+    const prefix = `[${step.tool_name}${rawHint ? `: ${rawHint}` : ""}]`;
+    const trace = `${prefix} ${stepTraces[step.call_id]}`;
+    out[step.call_id] =
+      i === lastIndex && pythonTrim(finalSequenceSummary)
+        ? `${trace}\n[Sequence summary] ${pythonTrim(finalSequenceSummary)}`
+        : trace;
+  }
+  return out;
 }

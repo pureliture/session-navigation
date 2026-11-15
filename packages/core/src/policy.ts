@@ -53,23 +53,23 @@ export function stripNumbering(text: string): string {
 const errors = [
   /Traceback \(most recent call last\)/,
   /^\s*(?:ERROR|FAILED|FAIL)\b/im,
-  /오류|실패|미해결/,
+  /^\s*(?:오류|실패|미해결)\s*[:：]|(?:오류|에러)가\s*발생|실패했|실패하였|아직\s*해결되지\s*않|미해결\s*상태/m,
   /\b(?:duplicate\s+(?:invoice|charge)|double[ -]charg(?:ed|e))\b/i,
   /중복\s*청구/,
   /\bexit[_ ]code["']?\s*[:=]\s*["']?-[1-9]\d*\b/i,
   /\bexit[_ ]code["']?\s*[:=]\s*["']?[1-9]\d*\b/i,
   /\bcommand failed\b/i,
   /\bnon-zero exit\b/i,
-  /\bunresolved\b|\bnot resolved\b/i,
+  /^\s*(?:status\s*[:=]?\s*)?(?:unresolved|not resolved)\b|\b(?:error|failure|incident|issue|dispute)\b[^\r\n]{0,40}\b(?:unresolved|not resolved)\b/im,
 ].map(pythonize);
 const business = [
-  /\b(?:deliver(?:y|ed|ies)?|ship(?:ping|ment|ped)?|carrier|dispatch|pickup|payment|pay(?:ment)?|billing|bill|charg(?:e|ed|ing)|invoice|refund|checkout|transaction|authorization|dispute|maintenance|outage|downtime|service window)\b/i,
-  /배송|배달|택배|출고|배차|운송|결제|청구|승인|환불|입금|정산|점검|장애|중단/,
-  /\b(?:delayed?|late|pending|unverified|unconfirmed|unknown|unavailable|unsuccessful|rejected?|denied|awaiting|resolved?|completed?|failed|reason|cause|due to|because|status|state|unresolved|not resolved|scheduled|window|maintenance|retry|blocked|cancelled?|not (?:yet )?(?:confirmed|resolved|completed))\b/i,
-  /지연|사유|원인|상태|미확인|확인되지|확인 전|불명확|대기|거절|반려|해결|완료|예정|시간|재시도|취소|불가|제한/,
+  /^(?=[^\r\n]*(?:^|[ \t"'(,:;])(?:deliver(?:y|ed|ies)|ship(?:ping|ment|ped)|carrier|pickup|payment|billing|invoice|refund|checkout|dispute|outage|downtime|(?:maintenance|service)\s+window)\b)[^\r\n]*\b(?:delayed?|late|pending|unverified|unconfirmed|unavailable|unsuccessful|rejected?|denied|awaiting|dispute|resolved?|cancelled?|not\s+(?:yet\s+)?(?:confirmed|resolved|completed))\b/im,
+  /^(?=[^\r\n]*(?:배송|배달|택배|출고|배차|운송|결제|청구|환불|입금|정산|서비스\s*점검|점검\s*(?:시간|완료|중|예정|상태)))[^\r\n]*(?:지연|미확인|확인되지|확인\s*전|불명확|거절|반려|제한됩|제한됨|해결됨|해결됐|보류|취소)/m,
+  /\bstatus\s+(?:is\s+)?unsuccessful\b/im,
+  /요청이?\s*(?:거절|반려)[^\r\n]*(?:재시도|대기)/,
 ];
 const sensitive =
-  /authorization|bearer\s|password|passwd|credential|secret|api[_-]?key|access[_-]?token|--token\b|\b[A-Za-z_][A-Za-z_0-9]*=|\benv\s|\bexport\s|:\/\/[^\s/]+:[^\s/]+@/i;
+  /authorization["']?\s*[:=]|bearer\s+\S|password|passwd|credential|secret|private[_-]?key|api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|--token\b|\b[A-Za-z0-9_]*(?:token|secret|password|passwd|api_key|private_key|access_key|secret_key|credential)[A-Za-z0-9_]*\s*=|:\/\/[^\s/:]+:[^\s/@]+@/i;
 const strong =
   /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|\b(?:[Ii][Dd]|[Uu][Uu][Ii][Dd]|[Ss][Hh][Aa]256)\s*[:=]|\||\b(?:passed|skipped|warnings?|constraints?|must|receipt|created|updated|deleted|committed|command\s+result|exit[_ ]?code|return[_ ]?code)\b|(?:제약|금지|필수|성공|통과|생성|수정|삭제|건수|행 범위|생략|명령 결과)/i;
 const pathEvidence =
@@ -117,7 +117,13 @@ export function refusalReason(record: RecordInput, config: Config = defaults): s
   if (length(record.content) < config.min_chars) {
     return "not_long";
   }
-  if ([...errors, ...business.map(pythonize)].some((pattern) => pattern.test(record.content))) {
+  const decoded = selectableText(record.content);
+  const targets = decoded !== record.content ? [record.content, decoded] : [record.content];
+  if (
+    [...errors, ...business.map(pythonize)].some((pattern) =>
+      targets.some((target) => pattern.test(target)),
+    )
+  ) {
     return "protected_error";
   }
 }

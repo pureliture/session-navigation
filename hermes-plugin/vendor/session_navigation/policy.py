@@ -67,32 +67,39 @@ _NUMBERED_LINE = re.compile(r"(\d+)\|(.*)")
 _ERROR_PATTERNS = (
     re.compile(r"Traceback \(most recent call last\)"),
     re.compile(r"(?im)^\s*(?:ERROR|FAILED|FAIL)\b"),
-    re.compile(r"오류|실패|미해결"),
+    re.compile(r"(?m)^\s*(?:오류|실패|미해결)\s*[:：]|(?:오류|에러)가\s*발생|실패했|실패하였|아직\s*해결되지\s*않|미해결\s*상태"),
     re.compile(r"(?i)\b(?:duplicate\s+(?:invoice|charge)|double[ -]charg(?:ed|e))\b"),
     re.compile(r"중복\s*청구"),
     re.compile(r'''(?i)\bexit[_ ]code["']?\s*[:=]\s*["']?-[1-9]\d*\b'''),
     re.compile(r'''(?i)\bexit[_ ]code["']?\s*[:=]\s*["']?[1-9]\d*\b'''),
     re.compile(r"(?i)\bcommand failed\b"),
     re.compile(r"(?i)\bnon-zero exit\b"),
-    re.compile(r"(?i)\bunresolved\b|\bnot resolved\b"),
+    re.compile(r"(?im)^\s*(?:status\s*[:=]?\s*)?(?:unresolved|not resolved)\b|\b(?:error|failure|incident|issue|dispute)\b[^\r\n]{0,40}\b(?:unresolved|not resolved)\b"),
+)
+
+_EN_BUSINESS_DOMAIN = (
+    r"(?:^|[ \t\"'(,:;])(?:deliver(?:y|ed|ies)|ship(?:ping|ment|ped)|carrier|pickup|"
+    r"payment|billing|invoice|refund|checkout|dispute|outage|downtime|"
+    r"(?:maintenance|service)\s+window)\b"
+)
+_EN_BUSINESS_STATE = (
+    r"\b(?:delayed?|late|pending|unverified|unconfirmed|unavailable|unsuccessful|"
+    r"rejected?|denied|awaiting|dispute|resolved?|cancelled?|"
+    r"not\s+(?:yet\s+)?(?:confirmed|resolved|completed))\b"
+)
+_KO_BUSINESS_DOMAIN = (
+    r"(?:배송|배달|택배|출고|배차|운송|결제|청구|환불|입금|정산|"
+    r"서비스\s*점검|점검\s*(?:시간|완료|중|예정|상태))"
+)
+_KO_BUSINESS_STATE = (
+    r"(?:지연|미확인|확인되지|확인\s*전|불명확|거절|반려|제한됩|제한됨|해결됨|해결됐|보류|취소)"
 )
 
 _BUSINESS_STATE_PATTERNS = (
-    re.compile(
-        r"(?i)\b(?:deliver(?:y|ed|ies)?|ship(?:ping|ment|ped)?|carrier|dispatch|pickup|"
-        r"payment|pay(?:ment)?|billing|bill|charg(?:e|ed|ing)|invoice|refund|"
-        r"checkout|transaction|authorization|dispute|maintenance|outage|"
-        r"downtime|service window)\b"
-    ),
-    re.compile(r"배송|배달|택배|출고|배차|운송|결제|청구|승인|환불|입금|정산|점검|장애|중단"),
-    re.compile(
-        r"(?i)\b(?:delayed?|late|pending|unverified|unconfirmed|unknown|"
-        r"unavailable|unsuccessful|rejected?|denied|awaiting|resolved?|"
-        r"completed?|failed|reason|cause|due to|because|status|state|"
-        r"unresolved|not resolved|scheduled|window|maintenance|retry|blocked|cancelled?|"
-        r"not (?:yet )?(?:confirmed|resolved|completed))\b"
-    ),
-    re.compile(r"지연|사유|원인|상태|미확인|확인되지|확인 전|불명확|대기|거절|반려|해결|완료|예정|시간|재시도|취소|불가|제한"),
+    re.compile(rf"(?im)^(?=[^\r\n]*{_EN_BUSINESS_DOMAIN})[^\r\n]*{_EN_BUSINESS_STATE}"),
+    re.compile(rf"(?m)^(?=[^\r\n]*{_KO_BUSINESS_DOMAIN})[^\r\n]*{_KO_BUSINESS_STATE}"),
+    re.compile(r"(?im)\bstatus\s+(?:is\s+)?unsuccessful\b"),
+    re.compile(r"요청이?\s*(?:거절|반려)[^\r\n]*(?:재시도|대기)"),
 )
 
 _STRONG_EVIDENCE_PATTERN = re.compile(
@@ -110,7 +117,10 @@ _PATH_EVIDENCE_PATTERN = re.compile(
 )
 
 _SENSITIVE_PATTERN = re.compile(
-    r"(?i)authorization|bearer\s|password|passwd|credential|secret|api[_-]?key|access[_-]?token|--token\b|\b[A-Za-z_][A-Za-z_0-9]*=|\benv\s|\bexport\s|://[^\s/]+:[^\s/]+@"
+    r'''(?i)authorization["']?\s*[:=]|bearer\s+\S|password|passwd|credential|secret|'''
+    r"private[_-]?key|api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|"
+    r"--token\b|\b[A-Za-z0-9_]*(?:token|secret|password|passwd|api_key|private_key|access_key|secret_key|credential)[A-Za-z0-9_]*\s*=|"
+    r"://[^\s/:]+:[^\s/@]+@"
 )
 
 _EXIT_CLAIM = re.compile(
@@ -120,14 +130,17 @@ _EXIT_CLAIM = re.compile(
 
 
 def is_protected_error(text: str) -> bool:
-    """Return True if text matches any unresolved error pattern."""
-    return any(pattern.search(text) for pattern in _ERROR_PATTERNS)
+    """Return True if text or its decoded envelope matches any unresolved error pattern."""
+    decoded = selectable_text(text)
+    targets = (text, decoded) if decoded != text else (text,)
+    return any(pattern.search(target) for target in targets for pattern in _ERROR_PATTERNS)
 
 
 def is_business_state_critical(text: str) -> bool:
-    """Return True if text matches critical domain business state patterns."""
-    return any(pattern.search(text) for pattern in _BUSINESS_STATE_PATTERNS)
-
+    """Return True if text or its decoded envelope matches critical business state patterns."""
+    decoded = selectable_text(text)
+    targets = (text, decoded) if decoded != text else (text,)
+    return any(pattern.search(target) for target in targets for pattern in _BUSINESS_STATE_PATTERNS)
 
 def check_refusal_reason(original: str, min_chars: int = 800) -> str | None:
     """Evaluate whether original content must be rejected from compaction."""

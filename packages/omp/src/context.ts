@@ -9,32 +9,60 @@ export type ReminderItem = {
 };
 const REMINDER_BYTES = 1000;
 const REMINDER_ITEMS = 3;
+export const REMINDER_ELIGIBLE_STEP_BYTES = 100 * 1024;
 export class BoundaryReminder {
-  private seen: { turn: string; tier: number } | undefined;
-  private tier(tokens: number, window?: number) {
-    return window && window > 0
-      ? [50, 75, 90].filter((t) => (100 * tokens) / window >= t).length
-      : 0;
+  private seen: { turn: string; byteStep: number; ids: Set<string> } | undefined;
+  private byteStep(eligibleBytes = 0) {
+    return eligibleBytes > 0 ? Math.floor(eligibleBytes / REMINDER_ELIGIBLE_STEP_BYTES) : 0;
   }
-  due(turn: string, tokens: number, window?: number): boolean {
-    return (
-      !!turn &&
-      (!this.seen || this.seen.turn !== turn || this.tier(tokens, window) > this.seen.tier)
-    );
+  due(
+    turn: string,
+    _tokens?: number,
+    _window?: number,
+    eligibleBytes = 0,
+    candidateIds: readonly string[] = [],
+  ): boolean {
+    if (!turn) return false;
+    if (!this.seen) return candidateIds.length > 0 || eligibleBytes > 0;
+    if (this.seen.turn !== turn) {
+      return candidateIds.length > 0
+        ? candidateIds.some((id) => !this.seen!.ids.has(id))
+        : eligibleBytes > 0;
+    }
+    return this.byteStep(eligibleBytes) > this.seen.byteStep;
   }
   note(
     turn: string,
-    tokens: number,
-    window: number | undefined,
+    _tokens: number,
+    _window: number | undefined,
     total: number,
     items: ReminderItem[],
+    eligibleBytes?: number,
+    candidateIds?: readonly string[],
   ): string | null {
-    if (!total || !this.due(turn, tokens, window)) return null;
-    const usage =
-      window && window > 0
-        ? `~${tokens}/${window} tokens (${Math.round((100 * tokens) / window)}%)`
-        : `~${tokens}/? tokens (?%)`;
-    const header = `[context-navigation] ${usage}; eligible=${total}. Finish the work unit and answer first; then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].`;
+    if (!turn || !total) return null;
+    const bytesTotal =
+      typeof eligibleBytes === "number" && Number.isFinite(eligibleBytes) && eligibleBytes >= 0
+        ? eligibleBytes
+        : items.reduce(
+            (sum, item) =>
+              sum + (typeof item?.bytes_size === "number" && item.bytes_size > 0 ? item.bytes_size : 0),
+            0,
+          );
+    const allIds = candidateIds?.length
+      ? candidateIds
+      : items.map((item) => item.tool_call_id).filter((id): id is string => typeof id === "string" && !!id);
+    const step = this.byteStep(bytesTotal);
+    if (this.seen && this.seen.turn === turn && step < this.seen.byteStep) {
+      this.seen.byteStep = step;
+    }
+    if (!this.due(turn, undefined, undefined, bytesTotal, allIds)) return null;
+    const sizeHint = bytesTotal >= 1024 ? ` (${Math.floor(bytesTotal / 1024)} KiB)` : "";
+    const moreHint =
+      total > REMINDER_ITEMS
+        ? ` (+${total - REMINDER_ITEMS} via list_context_items(view=candidates))`
+        : "";
+    const header = `[context-navigation] eligible=${total}${sizeHint}${moreHint}. Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; when a research/command phase finishes, sweep ALL unneeded IDs in one manage_context batch (do not trickle 3/turn; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values (never say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
     const rows: string[] = [];
     for (const item of items) {
       const row = JSON.stringify([
@@ -48,7 +76,13 @@ export class BoundaryReminder {
         rows.push(row);
       if (rows.length === REMINDER_ITEMS) break;
     }
-    this.seen = { turn, tier: this.tier(tokens, window) };
+    const mergedIds = new Set([...(this.seen?.ids ?? []), ...allIds]);
+    while (mergedIds.size > 2048) {
+      const oldest = mergedIds.values().next().value;
+      if (oldest === undefined) break;
+      mergedIds.delete(oldest);
+    }
+    this.seen = { turn, byteStep: step, ids: mergedIds };
     return [header, ...rows].join("\n");
   }
 }
@@ -80,10 +114,73 @@ export const MAX_CHUNK_RECORDS = 64;
 export const MAX_SUMMARY_CONCURRENCY = 4;
 export const SUMMARY_TIMEOUT_MS = 25_000;
 export const CLEANUP_GUIDANCE =
-  "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
+  "Clean up context strictly by actual need, never by context occupancy % or mechanically after single routine tool calls: keep outputs you still reference, skip cleanup on brief checks or when the user asks to defer or restore items, and call manage_context once when an investigation or command phase finishes to sweep all unneeded tool_call_ids in a single batch (if more than the 3 previewed IDs are unneeded, call list_context_items(view=candidates) and batch them together rather than hiding a few per turn). Emit one complete final answer with all requested facts/values only after cleanup; never write the answer twice, never re-hide an item in the same turn as unhide_context, and never say 'reported above' or 'see above'. Choose hide (rules), summarize (session LLM), or auto (summary with rule fallback); avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
 export const hash = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
+export function ompInvocationArgs(
+  tool: string,
+  raw: Record<string, unknown>,
+): Record<string, string> | null {
+  const str = (key: string) =>
+    typeof raw[key] === "string" && (raw[key] as string).trim() ? (raw[key] as string) : undefined;
+  switch (tool) {
+    case "read": {
+      const path = str("path");
+      return path && !path.trim().startsWith("xd://") ? { path } : null;
+    }
+    case "bash": {
+      const command = str("command");
+      if (!command) return null;
+      const cwd = str("cwd");
+      return cwd ? { command, cwd } : { command };
+    }
+    case "grep": {
+      const pattern = str("pattern");
+      if (!pattern) return null;
+      const path = str("path");
+      return path ? { pattern, path } : { pattern };
+    }
+    case "glob":
+      return { path: str("path") ?? "." };
+    case "web_search": {
+      const query = str("query");
+      return query ? { query } : null;
+    }
+    case "get_agent_activity":
+    case "get_agent_status": {
+      const agentId = str("agentId");
+      return agentId ? { agentId } : null;
+    }
+    case "list_models":
+    case "inspect_provider": {
+      const provider = str("provider");
+      return provider ? { provider } : null;
+    }
+    case "capture_terminal": {
+      const terminalId = str("terminalId");
+      return terminalId ? { terminalId } : null;
+    }
+    case "browser_snapshot":
+    case "browser_logs": {
+      const browserId = str("browserId");
+      return browserId ? { browserId } : null;
+    }
+    case "list_agents":
+    case "list_workspaces":
+    case "list_providers":
+    case "list_profiles": {
+      const out: Record<string, string> = {};
+      const cwd = str("cwd");
+      const serverId = str("serverId");
+      if (cwd) out.cwd = cwd;
+      if (serverId) out.serverId = serverId;
+      return out;
+    }
+    default:
+      return null;
+  }
+}
 export function messageText(message: any): string {
   if (typeof message?.content === "string") return message.content;
   if (!Array.isArray(message?.content)) return "";

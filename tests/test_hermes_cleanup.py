@@ -60,3 +60,63 @@ def test_cleanup_discovery_explicit_ids_model_count_and_repeated_turns(monkeypat
     assert tool("manage_context", {"tool_call_ids": ["next-turn"], "action": "hide"})["applied"] == 1
     assert len(calls) == 80
     assert tool("list_context_items", {"view": "candidates"})["items"] == []
+
+
+def test_hermes_hybrid_sequence_summarizer_handles_oversize_and_rolling_chunks():
+    from types import SimpleNamespace
+
+    seen_prompts: list[str] = []
+
+    class FakeLlm:
+        def complete(self, *, messages, **_kwargs):
+            prompt = messages[-1]["content"]
+            seen_prompts.append(prompt)
+            blocks = prompt.split("--- call_id: ")[1:]
+            steps = {}
+            ids = []
+            for block in blocks:
+                cid = block.split(" | ")[0].strip()
+                first_line = block.split("---\n", 1)[1].splitlines()[0].strip()
+                steps[cid] = first_line
+                ids.append(cid)
+            payload = json.dumps({
+                "sequence_summary": f"Connected findings across {', '.join(ids)}.",
+                "steps": steps,
+            })
+            return SimpleNamespace(text=payload, usage=SimpleNamespace(input_tokens=20, output_tokens=10, total_tokens=30, cost_usd=0.001), audit={"id": f"resp-{len(seen_prompts)}"})
+
+    ctx = FakeCtx(config={"enabled": True})
+    ctx.llm = FakeLlm()
+    state = adapter.plugin.register(ctx)
+    session = "seq-hermes"
+    messages = []
+    for idx in range(10):
+        row_count = 1500 if idx == 2 else 120
+        body = "\n".join(f"Step {idx} row {r:04d}: metric_value={idx * 100 + r}" for r in range(row_count))
+        messages.extend([
+            {"role": "assistant", "content": None, "tool_calls": [{"id": f"s{idx}", "type": "function", "function": {
+                "name": "terminal", "arguments": json.dumps({"command": f"check_stage_{idx}"})}}]},
+            {"role": "tool", "tool_call_id": f"s{idx}", "content": body},
+        ])
+    assert len(messages[5]["content"].encode("utf-8")) > 40_000
+    middleware = ctx.middlewares["llm_request"][0]
+    middleware(request={"messages": messages}, session_id=session, api_mode="chat_completions")
+    res = json.loads(ctx.tools["manage_context"]["handler"](
+        {"tool_call_ids": [f"s{i}" for i in range(9, -1, -1)], "action": "summarize"},
+        session_id=session,
+    ))
+    assert res["ok"] is True and res["applied"] == 10 and res["failed"] == 0
+    assert 1 < len(seen_prompts) < 10
+    assert any("Prior steps context" in p for p in seen_prompts[1:])
+    patched = middleware(request={"messages": messages}, session_id=session, api_mode="chat_completions")["request"]["messages"]
+    tool_bodies = [m["content"] for m in patched if m["role"] == "tool"]
+    assert "[terminal: check_stage_0]" in tool_bodies[0]
+    assert "[Sequence summary]" not in tool_bodies[0]
+    assert "[Sequence summary]" in tool_bodies[9]
+    anchor_item_id = next(item["item_id"] for item in res["items"] if item["tool_call_id"] == "s9")
+    unhidden = json.loads(ctx.tools["unhide_context"]["handler"]({"item_id": anchor_item_id}, session_id=session))
+    assert unhidden["ok"] is True
+    after_unhide = middleware(request={"messages": messages}, session_id=session, api_mode="chat_completions")["request"]["messages"]
+    tool_bodies_after = [m["content"] for m in after_unhide if m["role"] == "tool"]
+    assert tool_bodies_after[9] == messages[19]["content"]
+    assert "[terminal: check_stage_0]" in tool_bodies_after[0]

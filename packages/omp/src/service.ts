@@ -4,21 +4,29 @@ import {
   EngineError,
   Store,
   bytes,
+  hasSummaryInjection,
   invocationDigest,
   itemId,
   safeNumber,
   length,
+  normalizeKeepLines,
   pairUnitId,
   refusalReason,
+  renderCompaction,
   requiredEvidence,
+  selectableText,
   sha256,
+  splitLines,
   validateSummary,
+  verifiedFacts,
   isDestructive,
+  type Item,
   type Json,
   type RecordInput,
   type Result,
   type Row,
 } from "../../core/src/index.ts";
+import { ompInvocationArgs } from "./context.ts";
 
 export const MAX_SCOPES = 32;
 export const MAX_CHUNK_RECORDS = 64;
@@ -211,16 +219,16 @@ export class OmpService {
       previous.has(call_id) ||
       selected.has(call_id) ||
       typeof content !== "string" ||
-      !["read", "bash"].includes(String(tool_name)) ||
+      typeof tool_name !== "string" ||
       (raw.status ?? "ok") !== "ok" ||
       !Number.isSafeInteger(position)
     )
       return;
-    const argument = tool_name === "read" ? raw.arguments.path : raw.arguments.command;
-    if (typeof argument !== "string" || !argument.trim()) return;
+    const args = ompInvocationArgs(tool_name, raw.arguments);
+    if (!args) return;
     const invocation = {
-      tool_name: tool_name as string,
-      arguments: raw.arguments as { [key: string]: Json },
+      tool_name,
+      arguments: args as { [key: string]: Json },
     };
     return {
       call_id,
@@ -404,12 +412,24 @@ export class OmpService {
     return {
       ok: true,
       total: filtered.length,
+      total_bytes: filtered.reduce((sum, record) => sum + bytes(record.content), 0),
+      candidate_ids: filtered.map((record) => record.call_id),
       items: filtered.slice(0, Number(limit)).map((record) => {
         const args = record.invocation.arguments as { [key: string]: Json };
         return {
           tool_call_id: record.call_id,
           tool_name: record.invocation.tool_name,
-          hint: String(args.command || args.path || "").slice(0, 160),
+          hint: String(
+            args.command ||
+              args.path ||
+              args.pattern ||
+              args.query ||
+              args.agentId ||
+              args.provider ||
+              args.terminalId ||
+              args.browserId ||
+              "",
+          ).slice(0, 160),
           bytes_size: bytes(record.content),
           tokens_display: "—",
         };
@@ -446,6 +466,213 @@ export class OmpService {
     );
     if (!validated) return { ok: false, error: "verification_failed" };
     return this.engine.summarize(scope, record, async () => validated);
+  }
+
+  private applySequenceSummary(
+    scope: string,
+    record: RecordInput,
+    summaryText: unknown,
+    expectedVersion?: unknown,
+    failureReason?: unknown,
+  ): Result {
+    const id = identity(scope, record);
+    const existing = this.store.get(scope, id);
+    if (expectedVersion !== undefined && expectedVersion !== (existing?.version ?? 0))
+      return { ok: false, error: "version_conflict" };
+    if (existing && ["llm", "llm_summary"].includes(existing.compaction_source)) {
+      if (existing.visibility === "hidden") {
+        return {
+          ok: true,
+          item: existing,
+          plan: {
+            item_id: id,
+            tool_call_id: record.call_id,
+            visibility_version: existing.version,
+            expected_content_sha256: record.content_sha256,
+            replacement_text: existing.compacted,
+          },
+        };
+      }
+      const restoredHidden: Item = { ...existing, visibility: "hidden", version: existing.version + 1 };
+      const saved = this.store.put(scope, restoredHidden, existing.version, false);
+      return saved.ok && saved.item
+        ? {
+            ok: true,
+            item: saved.item,
+            plan: {
+              item_id: id,
+              tool_call_id: record.call_id,
+              visibility_version: saved.item.version,
+              expected_content_sha256: record.content_sha256,
+              replacement_text: saved.item.compacted,
+            },
+          }
+        : saved;
+    }
+    if (typeof summaryText !== "string" || !summaryText.trim()) {
+      return {
+        ok: false,
+        error: failureReason === "verification_failed" ? "verification_failed" : "summarizer_unavailable",
+      };
+    }
+    const refused = refusalReason(record, this.engine.config);
+    if (refused) return { ok: false, error: refused };
+    const trimmed = summaryText.trim();
+    if (length(trimmed) > 1800 || hasSummaryInjection(trimmed)) {
+      return { ok: false, error: "verification_failed" };
+    }
+    const facts = verifiedFacts(record.content);
+    const req = requiredEvidence(record.content);
+    const origBytes = bytes(record.content);
+    let excerptLines: string[] = [];
+    let compacted = renderCompaction(id, [], { summary: trimmed }, facts, false);
+    if (req.length > 0 && req.length <= 8 && req.every((line) => length(line) <= 240)) {
+      const withReq = renderCompaction(id, req, { summary: trimmed }, facts, false);
+      if (bytes(withReq) <= origBytes * 0.8) {
+        excerptLines = req;
+        compacted = withReq;
+      }
+    }
+    if (bytes(compacted) >= origBytes && trimmed.includes("\n[Sequence summary] ")) {
+      const stepOnly = trimmed.split("\n[Sequence summary] ")[0];
+      compacted = renderCompaction(id, [], { summary: stepOnly }, facts, false);
+      excerptLines = [];
+    }
+    if (bytes(compacted) >= origBytes) {
+      return { ok: false, error: "verification_failed" };
+    }
+    const nextItem: Item = {
+      item_id: id,
+      tool_call_id: record.call_id,
+      result_position: record.result_position,
+      content_sha256: record.content_sha256,
+      invocation_digest: record.invocation_digest,
+      original: record.content,
+      compacted,
+      excerpt_lines: excerptLines,
+      visibility: "hidden",
+      version: existing ? existing.version + 1 : 1,
+      tool_name: String(record.invocation.tool_name),
+      compaction_source: "llm",
+      invocation_snapshot: record.invocation,
+      context_hint: null,
+      invocation_options_omitted: false,
+      created_at: existing?.created_at ?? 0,
+      updated_at: 0,
+    };
+    const saved = this.store.put(scope, nextItem, existing?.version, !existing);
+    if (!saved.ok || !saved.item) return saved;
+    return {
+      ok: true,
+      item: saved.item,
+      plan: {
+        item_id: id,
+        tool_call_id: record.call_id,
+        visibility_version: saved.item.version,
+        expected_content_sha256: record.content_sha256,
+        replacement_text: compacted,
+      },
+    };
+  }
+
+  private explicitManageFallback(
+    scope: string,
+    record: RecordInput,
+    summaryText: unknown,
+    keepLines: unknown,
+    expectedVersion?: unknown,
+  ): Result {
+    if (keepLines !== undefined && !Array.isArray(keepLines))
+      return { ok: false, error: "invalid_keep_lines" };
+    const id = identity(scope, record);
+    const existing = this.store.get(scope, id);
+    if (expectedVersion !== undefined && expectedVersion !== (existing?.version ?? 0))
+      return { ok: false, error: "version_conflict" };
+    const source = selectableText(record.content);
+    const lines = splitLines(source);
+    const eligible = lines.flatMap((line, index) =>
+      length(line) > 0 && length(line) <= 240 ? [index] : [],
+    );
+    if (!eligible.length) return { ok: false, error: "verification_failed" };
+    const retention = Array.isArray(keepLines)
+      ? normalizeKeepLines(record.content, keepLines as Json[])
+      : { accepted: [], ignored: [], normalized: [] };
+    const selected = [...new Set([...eligible.slice(0, 3), ...eligible.slice(-2)])];
+    lines.forEach((line, index) => {
+      if (
+        length(line) <= 240 &&
+        retention.accepted.some((part) => line.includes(part)) &&
+        !selected.includes(index)
+      ) {
+        selected.push(index);
+      }
+    });
+    selected.sort((left, right) => left - right);
+    const excerptLines = selected.map((index) => lines[index]);
+    const excerptBytes = excerptLines.reduce((sum, line) => sum + bytes(line) + 1, 0);
+    if (excerptBytes > 3072) {
+      return {
+        ok: false,
+        error: retention.accepted.length ? "keep_lines_too_broad" : "verification_failed",
+        keep_lines_ignored: retention.ignored,
+        keep_lines_normalized: retention.normalized,
+      };
+    }
+    const facts = verifiedFacts(record.content);
+    const validated =
+      typeof summaryText === "string" && summaryText.trim()
+        ? validateSummary(record.content, { summary: summaryText }, [], record.invocation)
+        : undefined;
+    const summaryRendered = validated
+      ? renderCompaction(id, excerptLines, validated, facts, false)
+      : undefined;
+    const useSummary =
+      !!summaryRendered && bytes(summaryRendered) <= bytes(record.content) * 0.8;
+    const compacted = useSummary
+      ? summaryRendered!
+      : renderCompaction(id, excerptLines, undefined, facts, false);
+    if (bytes(compacted) >= bytes(record.content)) {
+      return {
+        ok: false,
+        error: "verification_failed",
+        keep_lines_ignored: retention.ignored,
+        keep_lines_normalized: retention.normalized,
+      };
+    }
+    const nextItem: Item = {
+      item_id: id,
+      tool_call_id: record.call_id,
+      result_position: record.result_position,
+      content_sha256: record.content_sha256,
+      invocation_digest: record.invocation_digest,
+      original: record.content,
+      compacted,
+      excerpt_lines: excerptLines,
+      visibility: "hidden",
+      version: existing ? existing.version + 1 : 1,
+      tool_name: String(record.invocation.tool_name),
+      compaction_source: useSummary ? "llm" : "rule",
+      invocation_snapshot: record.invocation,
+      context_hint: null,
+      invocation_options_omitted: false,
+      created_at: existing?.created_at ?? 0,
+      updated_at: 0,
+    };
+    const saved = this.store.put(scope, nextItem, existing?.version, !existing);
+    if (!saved.ok || !saved.item) return saved;
+    return {
+      ok: true,
+      item: saved.item,
+      plan: {
+        item_id: id,
+        tool_call_id: record.call_id,
+        visibility_version: saved.item.version,
+        expected_content_sha256: record.content_sha256,
+        replacement_text: compacted,
+      },
+      keep_lines_ignored: retention.ignored,
+      keep_lines_normalized: retention.normalized,
+    };
   }
 
   private async compact(
@@ -525,8 +752,33 @@ export class OmpService {
       const summarize =
         action === "summarize" || (action === "auto" && typeof text === "string" && !!text.trim());
       const versions = params.expected_versions;
-      const result = await this.apply(scope, record, summarize, text, params.keep_lines,
-        object(versions) ? versions[callId] : undefined);
+      const expectedVersion = object(versions) ? versions[callId] : undefined;
+      let result =
+        summarize && params.sequence_verified === true
+          ? this.applySequenceSummary(
+              scope,
+              record,
+              text,
+              expectedVersion,
+              params.summary_failure,
+            )
+          : await this.apply(
+              scope,
+              record,
+              summarize,
+              text,
+              params.keep_lines,
+              expectedVersion,
+            );
+      if (!result.ok && result.error === "verification_failed" && action !== "summarize") {
+        result = this.explicitManageFallback(
+          scope,
+          record,
+          action === "auto" ? text : undefined,
+          params.keep_lines,
+          expectedVersion,
+        );
+      }
       items.push({
         tool_call_id: callId,
         ok: result.ok,
