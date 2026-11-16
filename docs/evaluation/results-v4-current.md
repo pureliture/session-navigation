@@ -2,7 +2,7 @@
 
 Date: 2026-11-10. **B-current only was executed.** Historical A/B-old were never rerun.
 
-**Latest:** [autonomous adoption and hybrid sequence-summary revalidation (2026-11-15)](#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-15)
+**Latest:** [autonomous adoption and hybrid sequence-summary revalidation (2026-11-16, `8dc53fe`)](#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-16-8dc53fe)
 follows the earlier [fixed-product live revalidation (`df47548`)](#fixed-product-live-revalidation-df47548) and [summary-upgrade revalidation (`fe75673`)](#summary-upgrade-and-factual-retry-revalidation-fe75673). Earlier campaign/RCA sections remain historical.
 
 ## Decision
@@ -2279,6 +2279,7 @@ Between the frozen 2026-11-09/10 runs and 2026-11-15/16, OpenRouter's `Relace` e
 - **Strict success / no-rerun restore / exact original in final request:** **4/4** on OMP and **4/4** on Hermes (**8/8** total), with **0** third-turn work-tool reruns, **0** final-message backreferences, **0** `wrong_source` mismatches, and **0** stored-original mismatches across all **16** cells (**235** originals verified; total campaign spend **$0.464256** including judges, **0** excluded sessions).
 - **OMP:** **4/4** strict success, **6/6** Hide facts retained, **2/2** pure LLM Summarize trials with **6/6** facts retained (`wrong_source = 0`), judge mean **2.50** (`39` requests, `406,378` prompt tokens, `4,626` output tokens).
 - **Hermes:** **4/4** strict success, **6/6** Hide facts retained, **2/2** pure LLM Summarize trials with **6/6** facts retained (`wrong_source = 0`, up from `3/6` in `764e032`), judge mean **3.25** (`53` requests, `642,775` prompt tokens, `5,251` output tokens).
+
 ### Paired `332.9 KiB` 12-step sequence Summarize benchmark (same model & tariff)
 
 | Metric (`340,932 B`, 12 steps, 3 steps `>32 KiB`) | Legacy isolated per-item Summarize | **B+A hybrid sequence Summarize** | Delta |
