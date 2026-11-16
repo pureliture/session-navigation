@@ -797,10 +797,54 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                                            "hint": entry.raw_arguments.get("command") or entry.raw_arguments.get("path") or "",
                                            "bytes_size": len(entry.content.encode()),
                                            "turn": sum(i <= index for i, _text in users)})
+                    mutation_names = ("manage_context", "hide_context", "summarize_context", "unhide_context")
+                    after_tool = False
+                    seq_len: int | None = None
+                    if api_mode == "chat_completions" and isinstance(request_out.get("messages"), list):
+                        seq = request_out["messages"]
+                        seq_len = len(seq)
+                        mut_ids: set[str] = set()
+                        for m in seq:
+                            if isinstance(m, dict) and isinstance(m.get("tool_calls"), list):
+                                for tc in m["tool_calls"]:
+                                    fn = tc.get("function") if isinstance(tc, dict) else None
+                                    if not isinstance(fn, dict):
+                                        continue
+                                    fname = str(fn.get("name") or "")
+                                    fargs = str(fn.get("arguments") or "")
+                                    if fname in mutation_names or (fname == "tool_call" and any(n in fargs for n in mutation_names)):
+                                        if isinstance(tc.get("id"), str):
+                                            mut_ids.add(tc["id"])
+                        for m in reversed(seq):
+                            if not isinstance(m, dict) or m.get("role") != "tool":
+                                break
+                            if m.get("tool_call_id") in mut_ids:
+                                after_tool = False
+                                break
+                            after_tool = True
+                    elif isinstance(request_out.get("input"), list):
+                        seq = request_out["input"]
+                        seq_len = len(seq)
+                        mut_ids = set()
+                        for item in seq:
+                            if isinstance(item, dict) and item.get("type") == "function_call":
+                                fname = str(item.get("name") or "")
+                                fargs = str(item.get("arguments") or "")
+                                if fname in mutation_names or (fname == "tool_call" and any(n in fargs for n in mutation_names)):
+                                    if isinstance(item.get("call_id"), str):
+                                        mut_ids.add(item["call_id"])
+                        for item in reversed(seq):
+                            if not isinstance(item, dict) or item.get("type") != "function_call_output":
+                                break
+                            if item.get("call_id") in mut_ids:
+                                after_tool = False
+                                break
+                            after_tool = True
                     turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
                     note = state.reminders.note(scope.scope_key(), turn,
                         estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
-                        kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates)
+                        kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates,
+                        after_tool=after_tool, step_key=seq_len)
                     if note:
                         request_out = copy.deepcopy(request_out)
                         if api_mode == "chat_completions":

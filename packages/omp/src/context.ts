@@ -9,6 +9,7 @@ export type ReminderItem = {
 };
 const REMINDER_BYTES = 16 * 1024;
 const REMINDER_MAX_ID_CHARS = 128;
+const REMINDER_MAX_NOTES_PER_WAVE = 4;
 export const REMINDER_ELIGIBLE_STEP_BYTES = 100 * 1024;
 export const REMINDER_WORTHWHILE_BYTES = 32 * 1024;
 type ReminderState = {
@@ -16,7 +17,9 @@ type ReminderState = {
   watermark: number;
   intraCredit: number;
   unfiredCredit: number;
-  ids: Set<string>;
+  firedInTurn: boolean;
+  notesInWave: number;
+  lastFiredStep: number | null;
   suppressNextGrowth: boolean;
 };
 
@@ -31,7 +34,9 @@ export class BoundaryReminder {
         watermark: 0,
         intraCredit: 0,
         unfiredCredit: 0,
-        ids: new Set(),
+        firedInTurn: false,
+        notesInWave: 0,
+        lastFiredStep: null,
         suppressNextGrowth: true,
       };
     }
@@ -44,7 +49,9 @@ export class BoundaryReminder {
     total: number,
     items: ReminderItem[],
     eligibleBytes?: number,
-    candidateIds?: readonly string[],
+    _candidateIds?: readonly string[],
+    afterTool = true,
+    stepKey?: number,
   ): string | null {
     if (!turn) return null;
     const bytesTotal =
@@ -58,14 +65,6 @@ export class BoundaryReminder {
                 (typeof item?.bytes_size === "number" && item.bytes_size > 0 ? item.bytes_size : 0),
               0,
             );
-    const allIds =
-      total <= 0
-        ? []
-        : candidateIds?.length
-          ? candidateIds
-          : items
-              .map((item) => item.tool_call_id)
-              .filter((id): id is string => typeof id === "string" && !!id);
     const state =
       this.state ??
       (this.state = {
@@ -73,7 +72,9 @@ export class BoundaryReminder {
         watermark: 0,
         intraCredit: 0,
         unfiredCredit: 0,
-        ids: new Set(),
+        firedInTurn: false,
+        notesInWave: 0,
+        lastFiredStep: null,
         suppressNextGrowth: false,
       });
 
@@ -85,43 +86,60 @@ export class BoundaryReminder {
     state.watermark = bytesTotal;
 
     if (wasSuppressed) {
-      if (isNewTurn) state.intraCredit = 0;
-      if (bytesTotal < state.unfiredCredit) state.unfiredCredit = bytesTotal;
-      for (const id of allIds) state.ids.add(id);
-      while (state.ids.size > 2048) {
-        const oldest = state.ids.values().next().value;
-        if (oldest === undefined) break;
-        state.ids.delete(oldest);
+      if (isNewTurn) {
+        if (state.firedInTurn) state.unfiredCredit = 0;
+        state.intraCredit = 0;
+        state.firedInTurn = false;
+        state.notesInWave = 0;
+        state.lastFiredStep = null;
       }
+      if (bytesTotal < state.unfiredCredit) state.unfiredCredit = bytesTotal;
       return null;
     }
 
-    const gain = delta > 0 ? delta : 0;
-    state.intraCredit = isNewTurn ? gain : state.intraCredit + gain;
-    state.unfiredCredit = Math.min(bytesTotal, state.unfiredCredit + gain);
-
-    if (total <= 0 || bytesTotal <= 0) return null;
-
-    const hasNewCandidate = allIds.some((id) => !state.ids.has(id));
-    const intraFired = !isNewTurn && state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES;
-    const turnBoundaryFired =
-      isNewTurn &&
-      ((hasNewCandidate &&
-        state.unfiredCredit >= REMINDER_WORTHWHILE_BYTES &&
-        bytesTotal >= REMINDER_WORTHWHILE_BYTES) ||
-        state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES);
-    if (!intraFired && !turnBoundaryFired) return null;
-
-    state.intraCredit = 0;
-    state.unfiredCredit = 0;
-    while (state.ids.size > 2048) {
-      const oldest = state.ids.values().next().value;
-      if (oldest === undefined) break;
-      state.ids.delete(oldest);
+    if (delta < 0) {
+      state.unfiredCredit = 0;
+      state.intraCredit = 0;
+      state.firedInTurn = false;
+      state.notesInWave = 0;
+      state.lastFiredStep = null;
+    } else {
+      const gain = delta > 0 ? delta : 0;
+      if (isNewTurn) {
+        state.unfiredCredit = state.firedInTurn
+          ? Math.min(bytesTotal, gain)
+          : Math.min(bytesTotal, state.unfiredCredit + gain);
+        state.intraCredit = gain;
+        state.firedInTurn = false;
+        state.notesInWave = 0;
+        state.lastFiredStep = null;
+      } else {
+        state.unfiredCredit = Math.min(bytesTotal, state.unfiredCredit + gain);
+        state.intraCredit += gain;
+        if (state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES) {
+          state.intraCredit = 0;
+          state.notesInWave = 0;
+          state.lastFiredStep = null;
+        }
+      }
+    }
+    if (
+      !afterTool ||
+      total <= 0 ||
+      bytesTotal < REMINDER_WORTHWHILE_BYTES ||
+      state.unfiredCredit < REMINDER_WORTHWHILE_BYTES ||
+      state.notesInWave >= REMINDER_MAX_NOTES_PER_WAVE ||
+      (stepKey !== undefined && state.lastFiredStep === stepKey)
+    ) {
+      return null;
     }
 
+    state.firedInTurn = true;
+    state.notesInWave += 1;
+    state.lastFiredStep = stepKey ?? null;
+
     const sizeHint = bytesTotal >= 1024 ? ` (${Math.floor(bytesTotal / 1024)} KiB)` : "";
-    const baseHeader = `[context-navigation] eligible=${total}${sizeHint}. Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch (skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values (never say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
+    const baseHeader = `[context-navigation] eligible=${total}${sizeHint}. Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below (skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values (never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
     const budget = REMINDER_BYTES - Buffer.byteLength(baseHeader, "utf8") - 80;
     const rows: string[] = [];
     let usedBytes = 0;
@@ -147,7 +165,7 @@ export class BoundaryReminder {
     const omitted = Math.max(0, total - rows.length);
     const moreHint =
       omitted > 0 ? ` (+${omitted} via list_context_items(view=candidates))` : "";
-    const header = `[context-navigation] eligible=${total}${sizeHint}${moreHint}. Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch (skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values (never say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
+    const header = `[context-navigation] eligible=${total}${sizeHint}${moreHint}. Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below (skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values (never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
     return [header, ...rows].join("\n");
   }
 }
@@ -179,7 +197,7 @@ export const MAX_CHUNK_RECORDS = 64;
 export const MAX_SUMMARY_CONCURRENCY = 4;
 export const SUMMARY_TIMEOUT_MS = 25_000;
 export const CLEANUP_GUIDANCE =
-  "Clean up context strictly by actual need, never by context occupancy % or mechanically after single routine tool calls: keep outputs you still reference, skip cleanup on brief checks or when the user asks to defer or restore items, and call manage_context once when an investigation or command phase finishes to sweep all unneeded tool_call_ids in a single batch (pass the unneeded IDs directly from [context-navigation] without an extra list_context_items call; use list_context_items(view=candidates) only if no note is shown). Emit one complete final answer with all requested facts/values only after cleanup; never write the answer twice, never re-hide an item in the same turn as unhide_context, and never say 'reported above' or 'see above'. Choose hide (rules), summarize (session LLM), or auto (summary with rule fallback); avoid re-verifying unchanged files. Originals remain restorable.";
+  "When [context-navigation] lists unneeded completed tool outputs (or after a large tool batch), before sending your final answer — unless the user asked to defer cleanup or restore originals — call manage_context once to batch-clean all unneeded tool_call_ids directly from [context-navigation] (call list_context_items(view=candidates) only if no note is shown; keep outputs you still reference), then emit one complete final answer with all requested facts/values; never write the answer twice, never re-hide an item in the same turn you unhide_context it, and never say 'reported above' or 'see above'. Choose hide (rules), summarize (session LLM), or auto (summary with rule fallback); avoid re-verifying unchanged files. Originals remain restorable.";
 export const hash = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 

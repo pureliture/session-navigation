@@ -24,19 +24,23 @@ test("model-facing guidance and notes stay non-Hangul", () => {
   }
 });
 
-test("state machine silences cold-start/mid-turn small reads, prevents boundary oscillation, ignores occupancy %, and suppresses unhide growth", () => {
+test("phase-aligned state machine silences user/chat turns and small reads, fires post-tool >=32 KiB, prevents oscillation, and ignores occupancy %", () => {
   const reminder = new BoundaryReminder();
-  // Cold start on Turn 1 Request 1 (empty), followed by a 4 KiB read mid-Turn 1 -> stays silent!
-  expect(reminder.note("1", 1_000, 128_000, 0, [])).toBeNull();
+  // Request 1 (user prompt, afterTool=false) + small 4 KiB post-tool read stay silent!
+  expect(reminder.note("1", 1_000, 128_000, 0, [], 0, undefined, false)).toBeNull();
   const tiny = [{ tool_call_id: "t0", tool_name: "read", hint: "small.ts", bytes_size: 4096, turn: 1 }];
-  expect(reminder.note("1", 2_000, 128_000, 1, tiny, 4096)).toBeNull();
-  // Turn 2 Request 1 with only 4 KiB (<32 KiB worthwhile floor) stays silent AND eagerly advances turn,
-  // so another 4 KiB read inside Turn 2 does NOT leak via stale turn!
-  expect(reminder.note("2", 2_500, 128_000, 1, tiny, 4096)).toBeNull();
-  const tiny2 = [{ tool_call_id: "t1", tool_name: "read", hint: "small2.ts", bytes_size: 4096, turn: 2 }, ...tiny];
-  expect(reminder.note("2", 3_500, 128_000, 2, tiny2, 8192)).toBeNull();
-
-  // Accumulating 50 KiB (<100 KiB) during Turn 2 stays silent mid-turn, then fires ONCE on Turn 3 Request 1 (>=32 KiB).
+  expect(reminder.note("1", 2_000, 128_000, 1, tiny, 4096, undefined, true)).toBeNull();
+  // Turn 1 adds 20 KiB (<32 KiB) -> silent; Turn 2 Request 1 (afterTool=false) -> silent, carries over 20 KiB;
+  // Turn 2 post-tool adds +36 KiB (total 56 KiB >= 32 KiB, afterTool=true) -> FIRES right after tool execution!
+  const u1 = Array.from({ length: 5 }, (_, i) => ({
+    tool_call_id: `u1-${i}`,
+    tool_name: "read",
+    hint: "audit-01.jsonl",
+    bytes_size: 4000,
+    turn: 1,
+  }));
+  expect(reminder.note("1", 8_000, 128_000, 5, u1, 20_000, undefined, true)).toBeNull();
+  expect(reminder.note("2", 9_000, 128_000, 5, u1, 20_000, undefined, false)).toBeNull();
   const phase = Array.from({ length: 14 }, (_, i) => ({
     tool_call_id: `chatcmpl-tool-${String(i).padStart(16, "0")}`,
     tool_name: "read",
@@ -44,35 +48,34 @@ test("state machine silences cold-start/mid-turn small reads, prevents boundary 
     bytes_size: 4000,
     turn: 2,
   }));
-  expect(reminder.note("2", 18_000, 128_000, 14, phase, 56_000)).toBeNull();
-  const note = reminder.note("3", 19_000, 128_000, 14, phase, 56_000)!;
+  const note = reminder.note("2", 18_000, 128_000, 14, phase, 56_000, undefined, true)!;
   expect(Buffer.byteLength(note)).toBeLessThanOrEqual(16 * 1024);
   expect(note).toContain("eligible=14 (54 KiB)");
   expect(note).not.toContain("via list_context_items");
   expect(note.split("\n")).toHaveLength(15);
+  // If the model runs 1 more helper read in Turn 2 before answering, the note stays present for the final step!
+  expect(reminder.note("2", 19_000, 128_000, 14, phase, 56_000, undefined, true)).toContain("eligible=14");
 
-  // Keeping that 56 KiB and running ONE 2 KiB read in Turn 3 does NOT nag on Turn 4 (unfiredCredit=2 KiB < 32 KiB).
+  // Once Turn 3 starts without cleanup, unfiredCredit clears; chat-only turns and a tiny 2 KiB read stay silent!
+  expect(reminder.note("3", 19_500, 128_000, 14, phase, 56_000, undefined, false)).toBeNull();
   const plusSmall = [{ tool_call_id: "tiny-keep", tool_name: "read", hint: "x.ts", bytes_size: 2048, turn: 3 }, ...phase];
-  expect(reminder.note("3", 20_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
-  expect(reminder.note("4", 21_000, 128_000, 15, plusSmall, 58_048)).toBeNull();
+  expect(reminder.note("3", 20_000, 128_000, 15, plusSmall, 58_048, undefined, true)).toBeNull();
 
   // Context occupancy % (50%, 75%, 85%, 95%) never triggers a reminder; global window compaction belongs to the host.
   for (const [turnId, tok] of [["5", 64_000], ["6", 96_000], ["7", 110_000], ["8", 122_000]] as const) {
-    expect(reminder.note(turnId, tok, 128_000, 15, plusSmall, 58_048)).toBeNull();
+    expect(reminder.note(turnId, tok, 128_000, 15, plusSmall, 58_048, undefined, false)).toBeNull();
+    expect(reminder.note(turnId, tok, 128_000, 15, plusSmall, 58_048, undefined, true)).toBeNull();
   }
-  // Boundary oscillation check: 95K -> 105K fire -> hide 10K to 95K -> +6K to 101K MUST stay silent!
+  // Partial cleanup (105K fire -> hide 10K to 95K -> +6K to 101K) resets unfiredCredit and does NOT oscillate!
   const osc = new BoundaryReminder();
-  expect(osc.note("1", 1000, 1_048_576, 0, [])).toBeNull();
   const baseItem = [{ tool_call_id: "o1", tool_name: "bash", hint: "logs", bytes_size: 95 * 1024, turn: 1 }];
-  expect(osc.note("1", 25_000, 1_048_576, 1, baseItem, 95 * 1024)).toBeNull();
-  expect(osc.note("1", 28_000, 1_048_576, 2, baseItem, 105 * 1024)).toContain("eligible=2");
-  expect(osc.note("1", 25_000, 1_048_576, 1, baseItem, 95 * 1024)).toBeNull();
-  expect(osc.note("1", 27_000, 1_048_576, 2, baseItem, 101 * 1024)).toBeNull();
+  expect(osc.note("1", 28_000, 1_048_576, 2, baseItem, 105 * 1024, undefined, true)).toContain("eligible=2");
+  expect(osc.note("1", 25_000, 1_048_576, 1, baseItem, 95 * 1024, undefined, false)).toBeNull();
+  expect(osc.note("1", 27_000, 1_048_576, 2, baseItem, 101 * 1024, undefined, true)).toBeNull();
 
   // suppressUnhide absorbs restored byte spikes without firing.
   osc.suppressUnhide();
-  expect(osc.note("1", 800_000, 1_048_576, 3, baseItem, 260 * 1024)).toBeNull();
-
+  expect(osc.note("1", 800_000, 1_048_576, 3, baseItem, 260 * 1024, undefined, true)).toBeNull();
   // Oversized ID is safely excluded from bounded 1000-byte note.
   expect(
     new BoundaryReminder().note("1", 10, 1000, 1, [{ ...phase[0], bytes_size: 40_000, tool_call_id: "a".repeat(2000) }]),
@@ -143,7 +146,6 @@ test("OMP context pipeline re-arms after full cleanup (total=0), suppresses unhi
     ]);
     expect(note).toContain('"r0"');
     expect(note.split("\n")).toHaveLength(12);
-    expect(await events.context({ messages }, ctx)).toBeUndefined();
 
     // Hide r0 with keep_lines, r1..r2 with normalized/ignored diagnostics, and r3..r10 to empty ALL candidates (total=0)!
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);

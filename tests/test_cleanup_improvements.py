@@ -135,54 +135,51 @@ def test_all_model_facing_text_is_english():
 def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_ignores_occupancy():
     reminders = BoundaryReminders()
     assert reminders.note("s", "", 100, 1000, [{"tool_call_id": "x", "bytes_size": 40_000}]) is None
-    # Turn 1 Request 1 (empty) + single 4 KiB read mid-Turn 1 stays silent (no cold-start noise).
-    assert reminders.note("s", "1", 1000, 128_000, []) is None
+    # Request 1 (after_tool=False) and <32 KiB reads stay silent; 20 KiB carries over from Turn 1 into Turn 2 post-tool!
+    assert reminders.note("s", "1", 1000, 128_000, [], after_tool=False) is None
     tiny = [{"tool_call_id": "t0", "tool_name": "read", "hint": "a.py", "bytes_size": 4096, "turn": 1}]
-    assert reminders.note("s", "1", 2000, 128_000, tiny) is None
-    # Turn 2 Request 1 with <32 KiB stays silent AND advances turn so a mid-Turn 2 small read stays silent.
-    assert reminders.note("s", "2", 2500, 128_000, tiny) is None
-    tiny2 = [{"tool_call_id": "t1", "tool_name": "read", "hint": "b.py", "bytes_size": 4096, "turn": 2}, *tiny]
-    assert reminders.note("s", "2", 3500, 128_000, tiny2) is None
+    assert reminders.note("s", "1", 2000, 128_000, tiny, after_tool=True) is None
+    u1 = [{"tool_call_id": f"u1-{i}", "tool_name": "read", "hint": "a.txt", "bytes_size": 4000, "turn": 1} for i in range(5)]
+    assert reminders.note("s", "1", 8000, 128_000, u1, after_tool=True) is None
+    assert reminders.note("s", "2", 9000, 128_000, u1, after_tool=False) is None
 
-    # Accumulating 56 KiB (<100 KiB) in Turn 2 stays silent mid-turn, then fires ONCE on Turn 3 Request 1.
     items = [
         {"tool_call_id": f"chatcmpl-tool-{i:016x}", "tool_name": "read", "hint": "phase.txt", "bytes_size": 4000, "turn": 2}
         for i in range(14)
     ]
-    assert reminders.note("s", "2", 18_000, 128_000, items) is None
-    note = reminders.note("s", "3", 19_000, 128_000, items)
+    note = reminders.note("s", "2", 18_000, 128_000, items, after_tool=True)
     assert note is not None and "eligible=14 (54 KiB)" in note and "via list_context_items" not in note
     assert len(note.encode()) <= NOTE_BYTES
     assert len(note.splitlines()) == 15
     assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
+    assert reminders.note("s", "2", 19_000, 128_000, items, after_tool=True) is not None
 
-    # Keeping 56 KiB and adding one 2 KiB read in Turn 3 stays silent on Turn 4 (unfired_credit < 32 KiB).
+    # Once Turn 3 starts without cleanup, unfired_credit clears; chat-only turns and a tiny 2 KiB read stay silent!
+    assert reminders.note("s", "3", 19_500, 128_000, items, after_tool=False) is None
     plus_small = [{"tool_call_id": "tiny-keep", "tool_name": "read", "hint": "c.py", "bytes_size": 2048, "turn": 3}, *items]
-    assert reminders.note("s", "3", 20_000, 128_000, plus_small) is None
-    assert reminders.note("s", "4", 21_000, 128_000, plus_small) is None
+    assert reminders.note("s", "3", 20_000, 128_000, plus_small, after_tool=True) is None
 
     # Context occupancy % (50%, 75%, 85%, 95%) never triggers a reminder; global window compaction belongs to the host.
     for turn_id, tok in (("5", 64_000), ("6", 96_000), ("7", 110_000), ("8", 122_000)):
-        assert reminders.note("s", turn_id, tok, 128_000, plus_small) is None
-    # Boundary oscillation (95K -> 105K fire -> hide 10K to 95K -> +6K to 101K) stays silent,
-    # AND full cleanup (candidates=[]) resets watermark so a new >=100 KiB wave fires!
+        assert reminders.note("s", turn_id, tok, 128_000, plus_small, after_tool=False) is None
+        assert reminders.note("s", turn_id, tok, 128_000, plus_small, after_tool=True) is None
+
+    # Partial cleanup (105K fire -> hide 10K to 95K -> +6K to 101K) stays silent; full cleanup resets for next wave!
     osc = BoundaryReminders()
-    assert osc.note("big", "1", 1000, 1_048_576, []) is None
     c95 = [{"tool_call_id": "o1", "tool_name": "bash", "hint": "logs", "bytes_size": 95 * 1024, "turn": 1}]
     c105 = [{"tool_call_id": "o2", "tool_name": "bash", "hint": "logs", "bytes_size": 10 * 1024, "turn": 1}, *c95]
     c101 = [{"tool_call_id": "o3", "tool_name": "bash", "hint": "logs", "bytes_size": 6 * 1024, "turn": 1}, *c95]
-    assert osc.note("big", "1", 25_000, 1_048_576, c95) is None
-    assert osc.note("big", "1", 28_000, 1_048_576, c105) is not None
-    assert osc.note("big", "1", 25_000, 1_048_576, c95) is None
-    assert osc.note("big", "1", 27_000, 1_048_576, c101) is None
-    assert osc.note("big", "1", 5_000, 1_048_576, []) is None
+    assert osc.note("big", "1", 28_000, 1_048_576, c105, after_tool=True) is not None
+    assert osc.note("big", "1", 25_000, 1_048_576, c95, after_tool=False) is None
+    assert osc.note("big", "1", 27_000, 1_048_576, c101, after_tool=True) is None
+    assert osc.note("big", "1", 5_000, 1_048_576, [], after_tool=False) is None
     second_wave = [{"tool_call_id": "w1", "tool_name": "read", "hint": "b.txt", "bytes_size": 120_000, "turn": 1}]
-    assert osc.note("big", "1", 35_000, 1_048_576, second_wave) is not None
+    assert osc.note("big", "1", 35_000, 1_048_576, second_wave, after_tool=True) is not None
 
     # suppress_unhide absorbs restored byte growth without firing.
     osc.suppress_unhide("big")
     restored = [{"tool_call_id": "u1", "tool_name": "read", "hint": "r.txt", "bytes_size": 180_000, "turn": 1}, *second_wave]
-    assert osc.note("big", "1", 850_000, 1_048_576, restored) is None
+    assert osc.note("big", "1", 850_000, 1_048_576, restored, after_tool=True) is None
 
     huge = [{"tool_call_id": "a" * 2000, "tool_name": "read", "hint": "h.txt", "bytes_size": 40_000, "turn": 1}]
     assert "a" * 100 not in BoundaryReminders().note("huge", "1", 100, None, huge)

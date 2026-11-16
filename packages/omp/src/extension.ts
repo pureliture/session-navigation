@@ -327,11 +327,39 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string")
         : [],
     );
-    const afterHidden = dropHiddenMessages(messages ?? event.messages, hidden);
+    const effective = messages ?? event.messages;
+    const afterHidden = dropHiddenMessages(effective, hidden);
     if (afterHidden) messages = afterHidden;
+    const activeMessages = messages ?? event.messages;
+    let afterTool = false;
+    for (let idx = activeMessages.length - 1; idx >= 0; idx--) {
+      const msg = activeMessages[idx];
+      if (msg?.role !== "toolResult") break;
+      const toolName = String(msg.toolName ?? "");
+      if (
+        toolName === "manage_context" ||
+        toolName === "hide_context" ||
+        toolName === "summarize_context" ||
+        toolName === "unhide_context"
+      ) {
+        afterTool = false;
+        break;
+      }
+      afterTool = true;
+    }
     note = child
       ? null
-      : reminder.note(turn, 0, undefined, eligibleCount, reminderItems, eligibleBytes, candidateIds);
+      : reminder.note(
+          turn,
+          0,
+          undefined,
+          eligibleCount,
+          reminderItems,
+          eligibleBytes,
+          candidateIds,
+          afterTool,
+          activeMessages.length,
+        );
     if (note)
       messages = [
         ...(messages ?? event.messages),

@@ -7,15 +7,20 @@ from typing import Any
 
 NOTE_BYTES = 16 * 1024
 MAX_ID_CHARS = 128
+MAX_NOTES_PER_WAVE = 4
 ELIGIBLE_BYTE_STEP = 100 * 1024
 WORTHWHILE_BYTES = 32 * 1024
+
+
 class _SessionReminderState:
     __slots__ = (
         "turn",
         "watermark",
         "intra_credit",
         "unfired_credit",
-        "ids",
+        "fired_in_turn",
+        "notes_in_wave",
+        "last_fired_step",
         "suppress_next_growth",
     )
 
@@ -24,8 +29,11 @@ class _SessionReminderState:
         self.watermark: int = 0
         self.intra_credit: int = 0
         self.unfired_credit: int = 0
-        self.ids: list[str] = []
+        self.fired_in_turn: bool = False
+        self.notes_in_wave: int = 0
+        self.last_fired_step: int | None = None
         self.suppress_next_growth: bool = suppress_next_growth
+
 
 class BoundaryReminders:
     def __init__(self) -> None:
@@ -55,6 +63,8 @@ class BoundaryReminders:
         _window: int | None,
         candidates: list[dict[str, Any]],
         eligible_bytes: int | None = None,
+        after_tool: bool = True,
+        step_key: int | None = None,
     ) -> str | None:
         if not turn:
             return None
@@ -72,15 +82,6 @@ class BoundaryReminders:
                 )
             )
         )
-        cand_ids = (
-            []
-            if total <= 0
-            else [
-                str(item["tool_call_id"])
-                for item in candidates
-                if isinstance(item.get("tool_call_id"), str) and item["tool_call_id"]
-            ]
-        )
         state = self._state(session)
         is_new_turn = state.turn != turn
         delta = total_bytes - state.watermark
@@ -91,43 +92,60 @@ class BoundaryReminders:
 
         if was_suppressed:
             if is_new_turn:
+                if state.fired_in_turn:
+                    state.unfired_credit = 0
                 state.intra_credit = 0
+                state.fired_in_turn = False
+                state.notes_in_wave = 0
+                state.last_fired_step = None
             if total_bytes < state.unfired_credit:
                 state.unfired_credit = total_bytes
-            if cand_ids:
-                state.ids = list(dict.fromkeys([*state.ids, *cand_ids]))[-2048:]
             return None
 
-        gain = delta if delta > 0 else 0
-        state.intra_credit = gain if is_new_turn else state.intra_credit + gain
-        state.unfired_credit = min(total_bytes, state.unfired_credit + gain)
-        if total <= 0 or total_bytes <= 0:
+        if delta < 0:
+            state.unfired_credit = 0
+            state.intra_credit = 0
+            state.fired_in_turn = False
+            state.notes_in_wave = 0
+            state.last_fired_step = None
+        else:
+            gain = delta if delta > 0 else 0
+            if is_new_turn:
+                state.unfired_credit = (
+                    min(total_bytes, gain)
+                    if state.fired_in_turn
+                    else min(total_bytes, state.unfired_credit + gain)
+                )
+                state.intra_credit = gain
+                state.fired_in_turn = False
+                state.notes_in_wave = 0
+                state.last_fired_step = None
+            else:
+                state.unfired_credit = min(total_bytes, state.unfired_credit + gain)
+                state.intra_credit += gain
+                if state.intra_credit >= ELIGIBLE_BYTE_STEP:
+                    state.intra_credit = 0
+                    state.notes_in_wave = 0
+                    state.last_fired_step = None
+        if (
+            not after_tool
+            or total <= 0
+            or total_bytes < WORTHWHILE_BYTES
+            or state.unfired_credit < WORTHWHILE_BYTES
+            or state.notes_in_wave >= MAX_NOTES_PER_WAVE
+            or (step_key is not None and state.last_fired_step == step_key)
+        ):
             return None
 
-        prev_set = set(state.ids)
-        has_new_candidate = any(cid not in prev_set for cid in cand_ids)
-        intra_fired = (not is_new_turn) and state.intra_credit >= ELIGIBLE_BYTE_STEP
-        turn_boundary_fired = is_new_turn and (
-            (
-                has_new_candidate
-                and state.unfired_credit >= WORTHWHILE_BYTES
-                and total_bytes >= WORTHWHILE_BYTES
-            )
-            or state.intra_credit >= ELIGIBLE_BYTE_STEP
-        )
-        if not intra_fired and not turn_boundary_fired:
-            return None
-
-        state.intra_credit = 0
-        state.unfired_credit = 0
-        state.ids = list(dict.fromkeys([*state.ids, *cand_ids]))[-2048:]
-
+        state.fired_in_turn = True
+        state.notes_in_wave += 1
+        state.last_fired_step = step_key
         size_hint = f" ({total_bytes // 1024} KiB)" if total_bytes >= 1024 else ""
         base_header = (
             f"[context-navigation] eligible={total}{size_hint}. "
-            "Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; "
-            "when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch "
-            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values "
+            "Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, "
+            "call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below "
+            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values "
             "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
         )
         budget = NOTE_BYTES - len(base_header.encode()) - 80
@@ -161,9 +179,9 @@ class BoundaryReminders:
         )
         header = (
             f"[context-navigation] eligible={total}{size_hint}{more_hint}. "
-            "Clean strictly by need (never after routine single calls or when asked to wait/restore): keep outputs still needed; "
-            "when a research/command phase finishes, pass ALL unneeded IDs directly from Rows below to one manage_context batch "
-            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=LLM, auto=LLM/rules), then send one complete final answer with all facts/values "
+            "Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, "
+            "call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below "
+            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values "
             "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
         )
         return header + ("\n" + "\n".join(rows) if rows else "")
