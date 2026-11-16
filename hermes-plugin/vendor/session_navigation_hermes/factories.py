@@ -569,6 +569,8 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         if action not in ("auto", "hide", "summarize"):
             return _dump({"ok": False, "error": "invalid_action"})
         keep_lines = params.get("keep_lines")
+        if keep_lines == []:
+            keep_lines = None
         if keep_lines is not None and action != "hide":
             return _dump({"ok": False, "error": "invalid_keep_lines_action"})
         if action == "summarize" and state.summarizer is None:

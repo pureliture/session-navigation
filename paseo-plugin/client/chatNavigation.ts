@@ -43,11 +43,22 @@ function findIdentity(root: any, row: Row): any {
   return null;
 }
 
-function findText(root: any, snippet?: string, selector = ROW): any {
+function findText(root: any, snippet?: string, selector = ROW, preferLast = false): any {
   const needle = normalized(snippet ?? "").slice(0, 36);
   if (needle.length < 4) return null;
-  return (Array.from(root.querySelectorAll(selector)) as any[]).find((node) =>
-    normalized(node.textContent ?? "").includes(needle)) ?? null;
+  const matches = (Array.from(root.querySelectorAll(selector)) as any[]).filter((node) =>
+    normalized(node.textContent ?? "").includes(needle));
+  if (matches.length === 0) return null;
+  return preferLast ? matches[matches.length - 1] : matches[0];
+}
+
+function rowPositionIndex(rows: Row[], target: Row): number {
+  return rows.findIndex(
+    (candidate) =>
+      candidate === target ||
+      (!!target.item_id && candidate.item_id === target.item_id) ||
+      (!!target.tool_call_id && candidate.tool_call_id === target.tool_call_id),
+  );
 }
 
 function toolHint(row: Pick<Row, "tool_input">): string | undefined {
@@ -82,14 +93,71 @@ export function historyContainsRow(history: TimelineHistory, row: Row): boolean 
   });
 }
 
-function highlightAndScroll(node: any): boolean {
+const HIGHLIGHT_BG = "rgba(59, 130, 246, 0.22)";
+type HighlightTimer = Parameters<typeof clearTimeout>[0];
+const highlightStates = new WeakMap<
+  any,
+  { bg: string; transition: string; timer: HighlightTimer }
+>();
+let activeHighlightedNode: any = null;
+
+function clearHighlightNode(node: any): void {
+  const state = node ? highlightStates.get(node) : undefined;
+  if (!state) return;
+  clearTimeout(state.timer);
+  highlightStates.delete(node);
+  if (activeHighlightedNode === node) activeHighlightedNode = null;
+  if (node.style && node.style.backgroundColor === HIGHLIGHT_BG) {
+    node.style.backgroundColor = state.bg;
+    node.style.transition = state.transition;
+  }
+}
+
+export function clearChatHighlight(): void {
+  if (activeHighlightedNode) clearHighlightNode(activeHighlightedNode);
+}
+
+function highlightAndScroll(
+  node: any,
+  opts?: { tail?: boolean; root?: any; doc?: any },
+): boolean {
   if (!node) return false;
-  node.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  if (activeHighlightedNode && activeHighlightedNode !== node) {
+    clearHighlightNode(activeHighlightedNode);
+  }
+  const isTail = Boolean(opts?.tail);
+  node.scrollIntoView?.({ behavior: isTail ? "instant" : "smooth", block: isTail ? "end" : "center" });
+  if (isTail && opts?.root) {
+    const scrollable = chatScroller(opts.root);
+    const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
+    if (extent > 0) {
+      const style = opts.doc?.defaultView?.getComputedStyle?.(scrollable);
+      const negative = style?.flexDirection === "column-reverse" || scrollable.scrollTop < 0;
+      const inverted =
+        !negative &&
+        (style?.transform === "scaleY(-1)" ||
+          /^matrix\([^,]+,[^,]+,[^,]+,\s*-1,/.test(style?.transform ?? ""));
+      const bottomTop = negative ? 0 : inverted ? 0 : extent;
+      if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top: bottomTop, behavior: "instant" });
+      else scrollable.scrollTop = bottomTop;
+      if (opts.doc) {
+        emitScroll(scrollable, opts.doc, "wheel", 1);
+        emitScroll(scrollable, opts.doc, "scroll", 1);
+      }
+    }
+  }
   if (node.style) {
-    const original = node.style.backgroundColor;
+    const existing = highlightStates.get(node);
+    if (existing) clearTimeout(existing.timer);
+    const bg = existing ? existing.bg : (node.style.backgroundColor === HIGHLIGHT_BG ? "" : (node.style.backgroundColor ?? ""));
+    const transition = existing ? existing.transition : (node.style.transition ?? "");
     node.style.transition = "background-color 0.3s ease";
-    node.style.backgroundColor = "rgba(59, 130, 246, 0.22)";
-    setTimeout(() => { node.style.backgroundColor = original || ""; }, 1200);
+    node.style.backgroundColor = HIGHLIGHT_BG;
+    activeHighlightedNode = node;
+    const timer = setTimeout(() => {
+      clearHighlightNode(node);
+    }, 1200);
+    highlightStates.set(node, { bg, transition, timer });
   }
   return true;
 }
@@ -185,20 +253,17 @@ function chatScroller(root: any): any {
     node.scrollHeight > node.clientHeight) ?? root;
 }
 
-function emitScroll(scrollable: any, doc: any, type: "scroll" | "wheel"): void {
-  const Constructor = doc.defaultView?.[type === "wheel" ? "WheelEvent" : "Event"];
-  if (Constructor) scrollable.dispatchEvent?.(new Constructor(type, { bubbles: true, deltaY: -1 }));
+function emitScroll(scrollable: any, doc: any, type: "scroll" | "wheel", deltaY = -1): void {
+  const Constructor = doc?.defaultView?.[type === "wheel" ? "WheelEvent" : "Event"];
+  if (Constructor) scrollable.dispatchEvent?.(new Constructor(type, { bubbles: true, deltaY }));
 }
 
 type SearchBounds = { low?: number; high?: number; extent?: number };
+type SeekOutcome = "moved" | "needOlder" | "atNewerEdge" | "unknown";
 
-function seekMountedWindow(root: any, doc: any, rows: Row[], target: Row, bounds: SearchBounds): boolean {
-  const targetIndex = rows.findIndex((candidate) => candidate === target ||
-    (!!target.item_id && candidate.item_id === target.item_id) ||
-    (!!target.tool_call_id && candidate.tool_call_id === target.tool_call_id));
-  if (targetIndex < 0) return false;
+function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual: any[] } {
   const virtual = Array.from(root.querySelectorAll("[data-history-row-id][data-index]")) as any[];
-  let nodes = virtual.length ? virtual : Array.from(root.querySelectorAll(ROW)) as any[];
+  let nodes = virtual.length ? virtual : (Array.from(root.querySelectorAll(ROW)) as any[]);
   const viewport = root.getBoundingClientRect?.();
   if (viewport) {
     const nearby = nodes.filter((node) => {
@@ -207,55 +272,103 @@ function seekMountedWindow(root: any, doc: any, rows: Row[], target: Row, bounds
     });
     if (nearby.length) nodes = nearby;
   }
-  const mounted = nodes.flatMap((node) => {
+  const indices = nodes.flatMap((node) => {
     const values = IDENTITY_ATTRIBUTES.map((attr) => node.getAttribute(attr)).filter(Boolean) as string[];
-    let index = rows.findIndex((candidate) => values.some((value) =>
-      [candidate.item_id, candidate.tool_call_id].some((id) => id && identityMatches(value, id))));
-    if (index < 0) {
-      const text = normalized(node.textContent ?? "");
-      let longest = 0;
-      rows.forEach((candidate, candidateIndex) => {
-        const needle = normalized(candidate.summary_line ?? "").slice(0, 36);
-        if (needle.length >= 4 && needle.length > longest && text.includes(needle)) {
-          index = candidateIndex;
-          longest = needle.length;
-        }
-      });
+    const idIndex = rows.findIndex((candidate) =>
+      values.some((value) =>
+        [candidate.item_id, candidate.tool_call_id].some((id) => id && identityMatches(value, id)),
+      ),
+    );
+    if (idIndex >= 0) return [idIndex];
+    const rawIdx = node.getAttribute?.("data-index");
+    if (rawIdx != null && /^\d+$/u.test(rawIdx)) {
+      const parsed = Number(rawIdx);
+      if (parsed >= 0 && parsed < rows.length) return [parsed];
     }
-    return index < 0 ? [] : [index];
+    const text = normalized(node.textContent ?? "");
+    let longest = 0;
+    let matched: number[] = [];
+    rows.forEach((candidate, candidateIndex) => {
+      const needle = normalized(candidate.summary_line ?? "").slice(0, 36);
+      if (needle.length >= 4 && text.includes(needle)) {
+        if (needle.length > longest) {
+          longest = needle.length;
+          matched = [candidateIndex];
+        } else if (needle.length === longest) {
+          matched.push(candidateIndex);
+        }
+      }
+    });
+    return matched;
   });
-  if (!mounted.length) return false;
-  const first = Math.min(...mounted), last = Math.max(...mounted);
-  const older = targetIndex < (first + last) / 2;
+  return { indices, virtual };
+}
+
+function seekMountedWindow(
+  root: any,
+  doc: any,
+  rows: Row[],
+  target: Row,
+  bounds: SearchBounds,
+): SeekOutcome {
+  const targetIndex = rowPositionIndex(rows, target);
+  if (targetIndex < 0) return "needOlder";
+  const { indices: mounted, virtual } = mountedRowIndices(root, rows);
+  const older = mounted.length > 0 ? targetIndex < (Math.min(...mounted) + Math.max(...mounted)) / 2 : targetIndex < rows.length / 2;
   const scrollable = chatScroller(root);
-  const extent = Math.max(0, scrollable.scrollHeight - scrollable.clientHeight);
-  if (!(extent > 0)) return false;
-  const style = doc.defaultView?.getComputedStyle?.(scrollable);
+  const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
+  if (!(extent > 0)) return older ? "needOlder" : "unknown";
+  const style = doc?.defaultView?.getComputedStyle?.(scrollable);
   const negative = style?.flexDirection === "column-reverse" || scrollable.scrollTop < 0;
-  const inverted = !negative && (style?.transform === "scaleY(-1)" ||
-    /^matrix\([^,]+,[^,]+,[^,]+,\s*-1,/.test(style?.transform ?? ""));
-  const position = negative ? scrollable.scrollTop + extent :
-    inverted ? extent - scrollable.scrollTop : scrollable.scrollTop;
-  if (bounds.extent !== extent) { bounds.low = undefined; bounds.high = undefined; bounds.extent = extent; }
-  if (older && position <= 1) {
-    // A virtual index above zero means the old edge hasn't mounted yet, not that another page is needed.
-    return virtual.length > 0 && !virtual.some((node) => node.getAttribute("data-index") === "0");
+  const inverted =
+    !negative &&
+    (style?.transform === "scaleY(-1)" ||
+      /^matrix\([^,]+,[^,]+,[^,]+,\s*-1,/.test(style?.transform ?? ""));
+  const position = negative
+    ? scrollable.scrollTop + extent
+    : inverted
+      ? extent - scrollable.scrollTop
+      : scrollable.scrollTop;
+  if (bounds.extent !== extent) {
+    bounds.low = undefined;
+    bounds.high = undefined;
+    bounds.extent = extent;
   }
-  if (!older && position >= extent - 1) return true;
+  if (older && position <= 1) {
+    if (virtual.length > 0 && !virtual.some((node) => node.getAttribute("data-index") === "0")) {
+      return "moved";
+    }
+    return "needOlder";
+  }
+  if (!older && position >= extent - 1) return "atNewerEdge";
+  if (!mounted.length) {
+    const next = older ? Math.max(0, position - scrollable.clientHeight * 2) : extent;
+    const top = negative ? next - extent : inverted ? extent - next : next;
+    emitScroll(scrollable, doc, "wheel", older ? -1 : 1);
+    if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top, behavior: "instant" });
+    else scrollable.scrollTop = top;
+    emitScroll(scrollable, doc, "scroll", older ? -1 : 1);
+    return "moved";
+  }
+  const first = Math.min(...mounted);
+  const last = Math.max(...mounted);
   if (older) bounds.high = position;
   else bounds.low = position;
   const gap = older ? first - targetIndex : targetIndex - last;
-  const step = scrollable.clientHeight * Math.max(0.8, Math.min(8, gap / Math.max(1, last - first + 1)));
-  const next = bounds.low !== undefined && bounds.high !== undefined
-    ? (bounds.low + bounds.high) / 2
-    : Math.max(0, Math.min(extent, position + (older ? -step : step)));
+  const step =
+    scrollable.clientHeight * Math.max(0.8, Math.min(8, gap / Math.max(1, last - first + 1)));
+  const next =
+    !older && targetIndex >= rows.length - 2
+      ? extent
+      : bounds.low !== undefined && bounds.high !== undefined
+        ? (bounds.low + bounds.high) / 2
+        : Math.max(0, Math.min(extent, position + (older ? -step : step)));
   const top = negative ? next - extent : inverted ? extent - next : next;
-  // Reading intent prevents Paseo's follow-output anchor from snapping back to the live head.
-  emitScroll(scrollable, doc, "wheel");
+  emitScroll(scrollable, doc, "wheel", older ? -1 : 1);
   if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top, behavior: "instant" });
   else scrollable.scrollTop = top;
-  emitScroll(scrollable, doc, "scroll");
-  return true;
+  emitScroll(scrollable, doc, "scroll", older ? -1 : 1);
+  return "moved";
 }
 
 function loadOlder(root: any, doc: any): void {
@@ -333,8 +446,16 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
   }
   const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row, options.visibleOnly);
   if (!root) return false;
-  if (findIdentity(root, row) || findText(root, row.summary_line)) {
+  const targetIdx = rowPositionIndex(rows, row);
+  if (findIdentity(root, row)) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
+  } else if (findText(root, row.summary_line, ROW, targetIdx >= 0 && targetIdx >= rows.length / 2)) {
+    const { indices: mounted } = mountedRowIndices(root, rows);
+    const windowCoversTarget =
+      mounted.length === 0 ||
+      targetIdx < 0 ||
+      (targetIdx >= Math.min(...mounted) - 2 && targetIdx <= Math.max(...mounted) + 2);
+    if (windowCoversTarget && (await navigateLoaded(row, rows, root, version, options))) return true;
   }
   const history = options.getHistory
     ? await withTimeout(options.getHistory(), options.historyTimeoutMs ?? 3000) : undefined;
@@ -357,9 +478,10 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
     if (history?.complete && now() - lastProgress >= 4000 &&
       !root.querySelector('[data-testid="load-older-history-spinner"]')) break;
     if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 100) {
-      if (seekMountedWindow(root, doc, rows, row, bounds)) {
+      const outcome = seekMountedWindow(root, doc, rows, row, bounds);
+      if (outcome === "moved" || outcome === "atNewerEdge") {
         lastAttempt = now();
-      } else if (now() - lastAttempt >= 250) {
+      } else if (outcome === "needOlder" && now() - lastAttempt >= 250) {
         loadOlder(root, doc);
         lastAttempt = now();
       }
@@ -370,18 +492,40 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
 }
 
 async function navigateLoaded(row: Row, rows: Row[], root: any, version: number, options: NavigationOptions): Promise<boolean> {
+  const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
+  const targetIdx = rowPositionIndex(rows, row);
+  const preferLast = targetIdx >= 0 && targetIdx >= rows.length / 2;
+  const isTail = rows.length > 1 && targetIdx >= rows.length - 2;
+  const hlOpts = { tail: isTail, root, doc };
   const direct = findIdentity(root, row);
-  if (row.kind !== "tool") return highlightAndScroll(direct ?? findText(root, row.summary_line));
+  if (row.kind !== "tool") {
+    if (direct) return highlightAndScroll(direct, hlOpts);
+    const { indices: mounted } = mountedRowIndices(root, rows);
+    const scrollable = chatScroller(root);
+    const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
+    const atNewerEdge = extent <= 0 || scrollable.scrollTop >= extent - 2;
+    const atOlderEdge = scrollable.scrollTop <= 2;
+    if (
+      mounted.length > 0 &&
+      targetIdx >= 0 &&
+      ((targetIdx < Math.min(...mounted) - 3 && !atOlderEdge) ||
+        (targetIdx > Math.max(...mounted) + 3 && !atNewerEdge))
+    ) {
+      return false;
+    }
+    return highlightAndScroll(findText(root, row.summary_line, ROW, preferLast), hlOpts);
+  }
 
-  const index = rows.findIndex((candidate) => candidate === row ||
-    (!!row.tool_call_id && candidate.tool_call_id === row.tool_call_id));
+  const index = targetIdx;
   let start = index;
   while (start > 0 && rows[start - 1].kind === "tool") start--;
   let end = index + 1;
   while (end < rows.length && rows[end].kind === "tool") end++;
+  const isTailGroup = rows.length > 1 && end >= rows.length;
+  const groupHlOpts = { tail: isTail || isTailGroup, root, doc };
   const members = index < 0 ? [row] : rows.slice(start, end);
   let group = direct?.closest(GROUP) ?? direct?.querySelector(GROUP);
-  if (!group && direct?.querySelector(BADGE)) return highlightAndScroll(direct.querySelector(BADGE));
+  if (!group && direct?.querySelector(BADGE)) return highlightAndScroll(direct.querySelector(BADGE), groupHlOpts);
   if (!group) {
     for (const member of members) {
       const host = findIdentity(root, member);
@@ -391,9 +535,14 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   }
   if (!group && start > 0) {
     const previous = rows[start - 1];
-    const anchor = findIdentity(root, previous) ?? findText(root, previous.summary_line);
-    if (anchor) group = (Array.from(root.querySelectorAll(GROUP)) as any[]).find((candidate) =>
-      (anchor.compareDocumentPosition(candidate) & FOLLOWING) !== 0);
+    const anchor = findIdentity(root, previous) ?? findText(root, previous.summary_line, ROW, start >= rows.length / 2);
+    const nextMsg = end < rows.length ? rows[end] : undefined;
+    const nextAnchor = nextMsg && anchor ? anchorOf(root, nextMsg, anchor) : null;
+    if (anchor) {
+      group = (Array.from(root.querySelectorAll(GROUP)) as any[]).find(
+        (candidate) => after(candidate, anchor) && before(candidate, nextAnchor),
+      );
+    }
   }
   if (!group && !direct && !options.turnExpanded) {
     const turn = findTurn(root, rows, start, end);
@@ -422,12 +571,12 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
       return highlightAndScroll(summary);
     }
   }
-  if (!group) return highlightAndScroll(direct ?? findText(root, row.summary_line));
+  if (!group) return highlightAndScroll(direct ?? findText(root, row.summary_line, ROW, preferLast), groupHlOpts);
 
   const toggle = group.querySelector('[role="button"][aria-expanded]');
   const collapsed = toggle?.getAttribute("aria-expanded") === "false";
   if (collapsed) {
-    try { toggle.click(); } catch { return highlightAndScroll(group); }
+    try { toggle.click(); } catch { return highlightAndScroll(group, groupHlOpts); }
   }
   const afterExpand = options.afterExpand ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
   for (let attempt = 0; attempt < (collapsed ? 4 : 1); attempt++) {
@@ -435,12 +584,12 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     if (version !== navigationVersion) return false;
     const target = findIdentity(root, row);
     const targetBadge = target?.matches?.(BADGE) ? target : target?.querySelector(BADGE);
-    if (targetBadge && !target.querySelector(GROUP)) return highlightAndScroll(targetBadge);
+    if (targetBadge && !target.querySelector(GROUP)) return highlightAndScroll(targetBadge, groupHlOpts);
     // Paseo 0.15.3 only puts row IDs on the group's host, not its child badges.
     const badges = Array.from(group.querySelectorAll(BADGE)) as any[];
-    const hint = findText(group, toolHint(row), BADGE) ?? findText(group, row.summary_line, BADGE);
-    if (hint) return highlightAndScroll(hint);
-    if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)]);
+    const hint = findText(group, toolHint(row), BADGE, preferLast) ?? findText(group, row.summary_line, BADGE, preferLast);
+    if (hint) return highlightAndScroll(hint, groupHlOpts);
+    if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)], groupHlOpts);
   }
-  return highlightAndScroll(group);
+  return highlightAndScroll(group, groupHlOpts);
 }

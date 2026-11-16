@@ -451,4 +451,50 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     expect(messageSummarySnippet("\n  \n\t\n")).toBe("");
     expect(utf8ByteLength("아니 모든 방안을")).toBeGreaterThan("아니 모든 방안을".length);
   });
+
+  test("effectiveRowBytes, rowMetric, and buildGroupedRows reflect compacted_bytes_size after Hide/Summarize instead of staying at original size", () => {
+    const { effectiveRowBytes, rowMetric, buildGroupedRows } = require("./outlineGrouping");
+    const visibleTool = {
+      item_id: "item_1",
+      tool_call_id: "c1",
+      kind: "tool",
+      tool_name: "read",
+      status: "visible",
+      version: 1,
+      tokens: 5000,
+      tokens_display: "5.0K tok",
+      bytes_size: 20480,
+    };
+    const hiddenTool = {
+      ...visibleTool,
+      item_id: "item_2",
+      tool_call_id: "c2",
+      status: "hidden",
+      compacted_bytes_size: 512,
+    };
+    const hiddenMsg = {
+      item_id: "msg:user:1:abc",
+      tool_call_id: "",
+      kind: "user",
+      tool_name: "user",
+      status: "hidden",
+      version: 2,
+      tokens_display: "—",
+      bytes_size: 4096,
+      compacted_bytes_size: 0,
+    };
+    expect(effectiveRowBytes(visibleTool)).toBe(20480);
+    expect(effectiveRowBytes(hiddenTool)).toBe(512);
+    expect(effectiveRowBytes(hiddenMsg)).toBe(0);
+    expect(rowMetric(visibleTool)).toBe("5.0K tok");
+    expect(rowMetric(hiddenTool)).toBe("512 B");
+    expect(rowMetric(hiddenMsg)).toBe("0 B");
+
+    const grouped = buildGroupedRows([visibleTool, hiddenTool], {}, {});
+    const group = grouped[0];
+    expect(group.type).toBe("group");
+    // Group total shrinks from 40 KiB to 20.5 KiB (20480 + 512) and clears stale pre-hide token sum!
+    expect(group.totalBytes).toBe(20480 + 512);
+    expect(group.totalTokens).toBeNull();
+  });
 });

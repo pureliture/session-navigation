@@ -233,7 +233,7 @@ export class PaseoService {
       };
       if (
         sha256(record.content) !== record.content_sha256 ||
-        (!target.invocation_options_omitted &&
+        (!target.options_omitted &&
           invocationDigest(invocation) !== record.invocation_digest) ||
         itemId(
           scope,
@@ -289,6 +289,7 @@ export class PaseoService {
         : {}),
       ...(item.visibility === "hidden"
         ? {
+            compacted_bytes_size: bytes(item.compacted),
             replacement_text: preview(item.compacted),
             summary_pending: item.compaction_source === "summarize_pending",
           }
@@ -335,6 +336,7 @@ export class PaseoService {
           visibility: hidden ? "hidden" : "visible",
           version,
           tokens_display: "—",
+          ...(hidden ? { compacted_bytes_size: 0 } : {}),
           ...row,
         };
       }
@@ -528,14 +530,22 @@ export class PaseoService {
           ...(tail.length ? ["..."] : []),
           ...tail,
         ].join("\n");
+        const fallbackId = itemId(
+          scope,
+          record.call_id,
+          record.content_sha256,
+          record.invocation_digest,
+          record.result_position,
+        );
+        const matchedTarget = this.store
+          .targets(scope)
+          .find(
+            (t) =>
+              String(t.tool_call_id) === record.call_id &&
+              String(t.item_id) === fallbackId,
+          );
         const fallback: Item = {
-          item_id: itemId(
-            scope,
-            record.call_id,
-            record.content_sha256,
-            record.invocation_digest,
-            record.result_position,
-          ),
+          item_id: fallbackId,
           tool_call_id: record.call_id,
           result_position: record.result_position,
           content_sha256: record.content_sha256,
@@ -551,7 +561,7 @@ export class PaseoService {
           compaction_source: source,
           invocation_snapshot: record.invocation,
           context_hint: null,
-          invocation_options_omitted: false,
+          invocation_options_omitted: Boolean(matchedTarget?.options_omitted),
           created_at: 0,
           updated_at: 0,
         };

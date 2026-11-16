@@ -761,6 +761,42 @@ test("agent binding resolves Hermes custom profile providers via Paseo 0.15 agen
   expect(bindAgents(home, scopes)[0].agent_id).toBe("atlas-agent-1");
 });
 
+test("Hermes adapter_targets with options_omitted=1 remain manageable in list and preserve invocation_options_omitted + compacted_bytes_size on Hide", async () => {
+  const { store, service, register } = fixture([], false);
+  const hermesScope = "hermes:atlas:local-opts:unknown";
+  register(hermesScope);
+  const content = Array.from({ length: 40 }, (_, i) => `row ${i}: pod status running on k3s node`).join("\n");
+  const contentSha = sha256(content);
+  const filteredInv = { tool_name: "terminal", arguments: { command: "kubectl get pods -A" } };
+  const omitted = { timeout: 30 };
+  const fullDigest = invocationDigest(filteredInv, omitted);
+  const id = itemId(hermesScope, "call_timeout_1", contentSha, fullDigest, 0);
+  store.publishTargets(hermesScope, [
+    {
+      record: {
+        call_id: "call_timeout_1",
+        content,
+        content_sha256: contentSha,
+        invocation: filteredInv,
+        invocation_digest: fullDigest,
+        result_position: 0,
+        status: "ok",
+      },
+      omitted,
+    },
+  ]);
+
+  const listed = await service.handle("list", { scope_key: hermesScope });
+  expect(listed.ok).toBe(true);
+  expect(listed.items).toHaveLength(1);
+  expect(listed.items[0]).toMatchObject({ item_id: id, tool_call_id: "call_timeout_1", manageable: true });
+
+  const hidden = await service.handle("hide", { scope_key: hermesScope, item_id: id, mode: "hide" });
+  expect(hidden.ok).toBe(true);
+  expect(hidden.item.compacted_bytes_size).toBeLessThan(hidden.item.bytes_size);
+  expect(store.get(hermesScope, id)?.invocation_options_omitted).toBe(true);
+});
+
 test("PASEO_HOME redirects only the real home, never an isolated fixture home", () => {
   const { home } = fixture();
   const agents = join(home, ".paseo/agents/workspace");

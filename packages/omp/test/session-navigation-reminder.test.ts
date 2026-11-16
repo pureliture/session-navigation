@@ -180,24 +180,35 @@ test("OMP context pipeline re-arms after full cleanup (total=0), suppresses unhi
       expect(item.keep_lines_ignored[0].reason).toContain("not found verbatim");
       expect(item.keep_lines_normalized[0].accepted).toBe("selected middle sentence");
     }
+    // Empty keep_lines: [] (OpenAI/GPT strict tool schema) is treated as omitted and succeeds with action="auto"!
     result = (
       await tools.manage_context.execute(
-        "hide",
-        { tool_call_ids: ["r1"], keep_lines: [] },
+        "hide-empty-kl",
+        { tool_call_ids: ["r3"], action: "auto", keep_lines: [] },
+        undefined,
+        undefined,
+        ctx,
+      )
+    ).details;
+    expect(result.applied).toBe(1);
+    // Non-empty keep_lines with action !== "hide" still returns invalid_keep_lines_action!
+    result = (
+      await tools.manage_context.execute(
+        "hide-bad-kl",
+        { tool_call_ids: ["r1"], action: "auto", keep_lines: ["selected middle sentence"] },
         undefined,
         undefined,
         ctx,
       )
     ).details;
     expect(result.error).toBe("invalid_keep_lines_action");
-
     // Clean ALL remaining items (r3..r10 -> eligible_count = 0), verify real context hook resets watermark to 0,
     // and then another >=100 KiB wave in the SAME turn fires again!
-    const restIds = Array.from({ length: 8 }, (_, i) => `r${i + 3}`);
+    const restIds = Array.from({ length: 7 }, (_, i) => `r${i + 4}`);
     const restRes = (
       await tools.manage_context.execute("hide", { tool_call_ids: restIds, action: "hide" }, undefined, undefined, ctx)
     ).details;
-    expect(restRes.applied).toBe(8);
+    expect(restRes.applied).toBe(7);
     out = await events.context({ messages }, ctx);
     expect(out.messages[2].content[0].text).toContain("selected middle sentence");
     expect(out.messages).toHaveLength(messages.length);

@@ -219,7 +219,8 @@ def test_engine_hide_keep_lines_and_unlisted_targets():
         assert item["keep_lines_ignored"][0]["entry"] == "invented"
         assert "not found verbatim" in item["keep_lines_ignored"][0]["reason"]
         assert item["keep_lines_normalized"][0]["accepted"] == "rare middle sentence"
-    assert json.loads(manage({"tool_call_ids": ["r1"], "action": "auto", "keep_lines": []}, session_id="s"))["error"] == "invalid_keep_lines_action"
+    assert json.loads(manage({"tool_call_ids": ["r3"], "action": "auto", "keep_lines": []}, session_id="s"))["applied"] == 1
+    assert json.loads(manage({"tool_call_ids": ["r1"], "action": "auto", "keep_lines": ["rare middle sentence"]}, session_id="s"))["error"] == "invalid_keep_lines_action"
     assert request == original
 
 

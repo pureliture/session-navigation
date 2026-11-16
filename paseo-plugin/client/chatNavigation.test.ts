@@ -666,3 +666,81 @@ test("child navigation never selects a hidden parent chat or guesses between vis
   expect(await scrollToMessageInChat(r, [r], { document: doc, visibleOnly: true })).toBe(false);
   expect(child.scrolled).toBe(false);
 });
+
+test("double-clicking the same row within 1200ms never locks highlight background permanently blue, and switching rows clears previous highlight", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const first = new Element({ "data-message-id": "m1" }, "first row");
+  const second = new Element({ "data-message-id": "m2" }, "second row");
+  first.style.backgroundColor = "transparent";
+  root.add(first, second);
+  const doc = new Element().add(root);
+  const r1 = row("m1", "user");
+  const r2 = row("m2", "user");
+  await scrollToMessageInChat(r1, [r1, r2], { document: doc });
+  // Second click while already highlighted blue must NOT capture rgba(59, 130, 246, 0.22) as original!
+  await scrollToMessageInChat(r1, [r1, r2], { document: doc });
+  expect(first.style.backgroundColor).toBe("rgba(59, 130, 246, 0.22)");
+  // Clicking another row immediately restores the first row's original background!
+  await scrollToMessageInChat(r2, [r1, r2], { document: doc });
+  expect(first.style.backgroundColor).toBe("transparent");
+  expect(second.style.backgroundColor).toBe("rgba(59, 130, 246, 0.22)");
+  await new Promise((resolve) => setTimeout(resolve, 1250));
+  expect(second.style.backgroundColor).toBe("");
+});
+
+test("jumping from an old virtualized slice back to the newest row scrolls down with positive wheel delta and never calls loadOlder", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 10_000;
+  root.clientHeight = 800;
+  root.scrollTop = 0;
+  const wheelDeltas: number[] = [];
+  root.onEvent = (ev) => {
+    if (ev.type === "wheel" && typeof ev.deltaY === "number") wheelDeltas.push(ev.deltaY);
+  };
+  const oldNode = new Element({ "data-history-row-id": "r0", "data-index": "0" }, "Repeat status check");
+  const newNode = new Element({ "data-history-row-id": "r9", "data-index": "9" }, "Repeat status check");
+  root.add(oldNode);
+  const doc = {
+    defaultView: {
+      WheelEvent: class {
+        type: string;
+        deltaY?: number;
+        constructor(type: string, init?: { deltaY?: number }) {
+          this.type = type;
+          this.deltaY = init?.deltaY;
+        }
+      },
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    },
+    querySelectorAll: (sel: string) => (sel.includes("agent-chat-scroll") ? [root] : root.querySelectorAll(sel)),
+  };
+  const allRows = Array.from({ length: 10 }, (_, idx) => {
+    const r = row(`msg:user:${idx}`, "user");
+    r.summary_line = idx === 0 || idx === 9 ? "Repeat status check" : `Unique turn ${idx}`;
+    return r;
+  });
+  allRows[0].item_id = "r0";
+  // Target is newest row (index 9, OMP-style msg:user:9 not matching DOM id directly, same text prefix as old row 0!).
+  let clock = 0;
+  expect(
+    await scrollToMessageInChat(allRows[9], allRows, {
+      document: doc,
+      now: () => (clock += 200),
+      afterLoad: async () => {
+        if (root.scrollTop >= 9000 && !root.children.includes(newNode)) {
+          root.children = [newNode];
+          newNode.parent = root;
+        }
+      },
+    }),
+  ).toBe(true);
+  expect(oldNode.scrolled).toBe(false);
+  expect(newNode.scrolled).toBe(true);
+  expect(root.scrollTop).toBe(9200);
+  expect(wheelDeltas.every((d) => d > 0)).toBe(true);
+});

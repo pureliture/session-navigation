@@ -14,7 +14,19 @@ export function fmtTokens(n: number): string {
   return `${fmtTokenCount(n)} tok`;
 }
 
+export function effectiveRowBytes(row: Row): number {
+  if (row.status === "hidden") {
+    if (typeof row.compacted_bytes_size === "number") return row.compacted_bytes_size;
+    if (typeof row.replacement_text === "string") return utf8ByteLength(row.replacement_text);
+    if (row.kind === "user" || row.kind === "assistant") return 0;
+  }
+  return row.bytes_size ?? 0;
+}
+
 export function rowMetric(row: Row): string {
+  if (row.status === "hidden") {
+    return fmtBytes(effectiveRowBytes(row));
+  }
   return row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
 }
 
@@ -114,12 +126,13 @@ export function buildGroupedRows(
     if (currentGroupTools.length === 0) return;
     const first = currentGroupTools[0];
     const groupId = `group:${first.item_id ?? first.tool_call_id}`;
-    const totalBytes = currentGroupTools.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0);
-    const totalTokens = currentGroupTools.every((r) => typeof r.tokens === "number")
-      ? currentGroupTools.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
-      : null;
     const hiddenChildren = currentGroupTools.filter((r) => r.status === "hidden");
     const hiddenCount = hiddenChildren.length;
+    const totalBytes = currentGroupTools.reduce((sum, r) => sum + effectiveRowBytes(r), 0);
+    const totalTokens =
+      hiddenCount === 0 && currentGroupTools.every((r) => typeof r.tokens === "number")
+        ? currentGroupTools.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
+        : null;
     const summarizedCount = hiddenChildren.filter((r) => {
       const k = r.item_id ?? r.tool_call_id;
       return isSummarizedRow(r, lastActionByItem[k]);
