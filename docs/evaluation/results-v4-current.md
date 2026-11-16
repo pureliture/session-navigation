@@ -2255,24 +2255,24 @@ Between the frozen 2026-11-09/10 runs and 2026-11-15/16, OpenRouter's `Relace` e
 
 ### Pooled 8-session autonomous long-session comparison (200 turns per column)
 
-| Metric (OMP + Hermes pooled) | `A` (off) | `B-old` (`37348b8`) | `Pre-fix` (`8902a41`) | `Fixed` (`df47548`) | `v5-init` (`764e032`) | **Final (`8dc53fe`)** | `Final / Fixed` |
+| Metric (OMP + Hermes pooled) | `A` (off) | `B-old` (`37348b8`) | `Pre-fix` (`8902a41`) | `Fixed` (`df47548`) | `v5-init` (`764e032`) | **Final (`8dc53fe`)** | **`Final` vs `A` (off)** |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Task / final-only / visible-unit / canonical tests | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | **8/8** | 1.000× |
-| Announced recall / surprise recovery | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | **8/8 · 8/8** | 1.000× |
+| Task / final-only / visible-unit / canonical tests | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | **8/8** | 8/8 parity |
+| Announced recall / surprise recovery | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | 8/8 · 8/8 | **8/8 · 8/8** | 8/8 parity |
 | Stored-original mismatches | 0 | 0 | 0 | 0 | 0 *(197)* | **0** *(235 checked)* | PASS |
-| Sessions with ≥2 cleanup boundaries | 0/8 | 6/8 | 4/8 | 5/8 | 8/8 (100%) | **8/8 (100%)** | **1.600×** |
-| Successful cleanup boundaries | 0 | 39 | 25 | 33 | 90 | **78** *(OMP 38 + Hermes 40)* | **2.364×** |
-| Navigation calls / `list_context_items` calls | 0 / 0 | 59 / — | 42 / — | 46 / — | 117 / — | **91 / 1** *(OMP 0, Hermes 1)* | **−22.2% vs `v5-init`** |
-| Valid literal IDs (`literal_ids_valid`) | 0 | 101 | 69 | 81 | 191 | **230** | **2.840×** |
-| Disposable outputs cleaned (`selected / observed`) | 0/137 (0%) | 68/137 (49.6%) | 52/139 (37.4%) | 67/136 (49.3%) | 154/182 (84.6%) | **182/189 (96.3%)** | **+47.0%p** |
-| Hermes native compactions | 28 | 18 | 23 | 23 | 4 | **4** | **0.174× (−82.6%)** |
-| Total prompt tokens | 23,211,328 | 19,019,480 | 19,659,349 | 18,862,991 | 21,416,740 | **20,266,158** | `A`: **−12.7%** |
-| Uncached prompt tokens | 3,206,976 | 3,258,840 | 3,838,805 | 3,712,399 | 3,122,468 | **2,550,702 (lowest)** | **0.687× (−31.3%)** |
-| Cached prompt tokens (cache hit %) | 20.00M (86.2%) | 15.76M (82.9%) | 15.82M (80.5%) | 15.15M (80.3%) | 18.29M (85.4%) | **17.72M (87.4% highest)** | +7.1%p hit rate |
-| Output tokens | 287,668 | 198,169 | 251,896 | 253,815 | 127,434 | **139,519** *(Hermes 57,216)* | **0.550× (−45.0%)** |
-| **Same-tariff USD @ Nov 9 Relace (`$0.006/M` uncached)** | $0.223 | $0.166 | $0.196 | $0.195 | $0.137 | **$0.138** | **0.709× (−29.1%)** |
-| **Same-tariff USD @ Nov 15 Relace (`$0.120/M` uncached)** | $0.589 | $0.537 | $0.634 | $0.618 | $0.493 | **$0.429 (lowest)** | **0.694× (−30.6%)** |
-| Hypothetical GPT-4.1 `reference_cost` | $18.717 | $15.983 | $17.603 | $17.031 | $16.412 | **$15.075 (lowest)** | **0.885× (`A`: −19.5%)** |
+| Sessions with ≥2 cleanup boundaries | 0/8 | 6/8 | 4/8 | 5/8 | 8/8 (100%) | **8/8 (100%)** | +8/8 sessions |
+| Successful cleanup boundaries | 0 | 39 | 25 | 33 | 90 | **78** *(OMP 38 + Hermes 40)* | +78 boundaries |
+| Navigation calls / `list_context_items` calls | 0 / 0 | 59 / — | 42 / — | 46 / — | 117 / — | **91 / 1** *(OMP 0, Hermes 1)* | 91 calls |
+| Valid literal IDs (`literal_ids_valid`) | 0 | 101 | 69 | 81 | 191 | **230** | 230 IDs |
+| Disposable outputs cleaned (`selected / observed`) | 0/137 (0%) | 68/137 (49.6%) | 52/139 (37.4%) | 67/136 (49.3%) | 154/182 (84.6%) | **182/189 (96.3%)** | **+96.3%p** |
+| Hermes native compactions | 28 | 18 | 23 | 23 | 4 | **4** | **−85.7%** |
+| Total prompt tokens | 23,211,328 | 19,019,480 | 19,659,349 | 18,862,991 | 21,416,740 | **20,266,158** | **−12.7%** |
+| Uncached prompt tokens | 3,206,976 | 3,258,840 | 3,838,805 | 3,712,399 | 3,122,468 | **2,550,702 (lowest)** | **−20.5%** |
+| Cached prompt tokens (cache hit %) | 20.00M (86.2%) | 15.76M (82.9%) | 15.82M (80.5%) | 15.15M (80.3%) | 18.29M (85.4%) | **17.72M (87.4% highest)** | **+1.2%p hit rate** |
+| Output tokens | 287,668 | 198,169 | 251,896 | 253,815 | 127,434 | **139,519** *(Hermes 57,216)* | **−51.5%** |
+| **Same-tariff USD @ Nov 9 Relace (`$0.006/M` uncached)** | $0.223 | $0.166 | $0.196 | $0.195 | $0.137 | **$0.138** | **−38.1%** |
+| **Same-tariff USD @ Nov 15 Relace (`$0.120/M` uncached)** | $0.589 | $0.537 | $0.634 | $0.618 | $0.493 | **$0.429 (lowest)** | **−27.2%** |
+| Hypothetical GPT-4.1 `reference_cost` | $18.717 | $15.983 | $17.603 | $17.031 | $16.412 | **$15.075 (lowest)** | **−19.5%** |
 
 ### Commanded components (OMP + Hermes, 8 cells, `8dc53fe`)
 
