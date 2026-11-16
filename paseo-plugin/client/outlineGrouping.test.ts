@@ -432,4 +432,23 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     const grouped = buildGroupedRows(longRows, {}, {});
     expect(grouped.length).toBe(240);
   });
+
+  test("messageSummarySnippet strips leading blank lines and Reasoning fences so Assistant rows never collapse to ellipsis", () => {
+    const { messageSummarySnippet, utf8ByteLength } = require("./outlineGrouping");
+    expect(
+      messageSummarySnippet("\n\n**Gemini 오케스트레이터 검토가 끝났습니다.**\n\n**권고 (Gemini)**\n| 단계 | 내용 |"),
+    ).toBe("**Gemini 오케스트레이터 검토가 끝났습니다.**\n**권고 (Gemini)**");
+    expect(
+      messageSummarySnippet(
+        "💭 **Reasoning:**\n```\nCreated. Set thinking high.\n```\n\n**Gemini 오케스트레이터 에이전트를 ACP로 새로 띄웠습니다.**\n\n- 에이전트: `626cf856`",
+      ),
+    ).toBe("**Gemini 오케스트레이터 에이전트를 ACP로 새로 띄웠습니다.**\n- 에이전트: `626cf856`");
+    expect(
+      messageSummarySnippet(
+        "💭 **Reasoning:**\n```\nThe Gemini orchestrator finished with a recommendation.\n```",
+      ),
+    ).toBe("💭 **Reasoning:**\nThe Gemini orchestrator finished with a recommendation.");
+    expect(messageSummarySnippet("\n  \n\t\n")).toBe("");
+    expect(utf8ByteLength("아니 모든 방안을")).toBeGreaterThan("아니 모든 방안을".length);
+  });
 });

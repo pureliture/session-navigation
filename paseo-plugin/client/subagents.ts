@@ -33,6 +33,49 @@ export function mergeLinkedParentRows(rows: Row[], timeline: Row[], scopes: read
     tool_name: parentScope.startsWith("hermes:") ? "delegate_task" : row.tool_name }))];
 }
 
+export function mergeHermesTimelineRows(
+  rows: Row[],
+  timeline: Row[],
+  scopes: readonly ChildScope[],
+  parentScope: string,
+): Row[] {
+  if (!parentScope.startsWith("hermes:") || timeline.length === 0) {
+    return mergeLinkedParentRows(rows, timeline, scopes, parentScope);
+  }
+  const managedByCallId = new Map<string, Row>();
+  for (const row of rows) {
+    if (row.tool_call_id) managedByCallId.set(row.tool_call_id, row);
+  }
+  const consumed = new Set<string>();
+  const merged: Row[] = [];
+  for (const tRow of timeline) {
+    if (tRow.kind === "user" || tRow.kind === "assistant") {
+      merged.push({ ...tRow, item_id: null, manageable: false });
+      continue;
+    }
+    const managed = tRow.tool_call_id ? managedByCallId.get(tRow.tool_call_id) : undefined;
+    if (managed) {
+      merged.push(managed);
+      consumed.add(tRow.tool_call_id);
+    } else {
+      const hasChild =
+        Boolean(tRow.tool_call_id) && childrenForCall(scopes, parentScope, tRow.tool_call_id).length > 0;
+      merged.push({
+        ...tRow,
+        item_id: null,
+        manageable: false,
+        tool_name: hasChild ? "delegate_task" : tRow.tool_name,
+      });
+    }
+  }
+  for (const row of rows) {
+    if (!row.tool_call_id || !consumed.has(row.tool_call_id)) {
+      merged.push(row);
+    }
+  }
+  return merged;
+}
+
 export async function subagentMainTarget(tab: SessionTab | null, parentId: (id: string) => Promise<string | null>): Promise<{
   agentId: string | null; subagent: boolean;
 }> {

@@ -9,6 +9,43 @@ interface ScopeEntry {
   agent_id?: string;
 }
 
+function resolveHermesProfile(
+  agent: Record<string, any>,
+  provider: unknown,
+  configured: Record<string, any> | undefined,
+): string | null {
+  const explicit = agent.persistence?.metadata?.profile;
+  if (typeof explicit === "string") return explicit.trim() ? explicit : null;
+  if (explicit !== undefined && explicit !== null) return null;
+  const argv = [
+    ...(Array.isArray(configured?.command) ? configured.command : []),
+    ...(Array.isArray(configured?.args) ? configured.args : []),
+  ].map((part) => String(part));
+  for (let i = 0; i < argv.length; i++) {
+    if ((argv[i] === "-p" || argv[i] === "--profile") && argv[i + 1]) {
+      return argv[i + 1];
+    }
+    if (argv[i].startsWith("--profile=") && argv[i].slice("--profile=".length)) {
+      return argv[i].slice("--profile=".length);
+    }
+  }
+  if (typeof provider === "string") {
+    const providerMatch = provider.match(/^hermes[-_:](.+)$/iu);
+    if (providerMatch?.[1] && providerMatch[1] !== "acp") {
+      return providerMatch[1];
+    }
+  }
+  const cwd =
+    typeof agent.cwd === "string"
+      ? agent.cwd
+      : typeof agent.persistence?.metadata?.cwd === "string"
+        ? agent.persistence.metadata.cwd
+        : "";
+  const cwdMatch = cwd.match(/[\\/]\.hermes[\\/]profiles[\\/]([^\\/]+)/u);
+  if (cwdMatch?.[1]) return cwdMatch[1];
+  return "default";
+}
+
 export function bindAgents<T extends ScopeEntry>(
   home: string,
   scopes: T[],
@@ -20,7 +57,8 @@ export function bindAgents<T extends ScopeEntry>(
   const config = join(paseoHome, "config.json");
   if (existsSync(config)) {
     try {
-      providers = JSON.parse(readFileSync(config, "utf8")).providers ?? {};
+      const parsed = JSON.parse(readFileSync(config, "utf8"));
+      providers = parsed.agents?.providers ?? parsed.providers ?? {};
     } catch {
       providers = {};
     }
@@ -49,14 +87,17 @@ export function bindAgents<T extends ScopeEntry>(
         agent.runtimeInfo?.provider;
       const transport =
         agent.persistence?.metadata?.provider ?? agent.runtimeInfo?.provider;
-      const profile = agent.persistence?.metadata?.profile ?? "default";
-      if (typeof session !== "string" || typeof profile !== "string") continue;
-      const configured = providers[provider];
+      const configured = typeof provider === "string" ? providers[provider] : undefined;
+      const omp = provider === "omp" || transport === "omp";
+      const profile = omp
+        ? agent.persistence?.metadata?.profile ?? "default"
+        : resolveHermesProfile(agent, provider, configured);
+      if (typeof session !== "string" || typeof profile !== "string" || !profile) continue;
       const acp =
         transport === "acp" ||
         provider === "acp" ||
+        (typeof provider === "string" && provider.startsWith("hermes")) ||
         configured?.extends === "acp";
-      const omp = provider === "omp" || transport === "omp";
       if (!omp && !acp) continue;
       const canonical = `${omp ? "omp" : "hermes"}:${profile}:${session}:${omp ? "default" : "unknown"}`;
       let selected = scopes.find((scope) => scope.scope_key === canonical);

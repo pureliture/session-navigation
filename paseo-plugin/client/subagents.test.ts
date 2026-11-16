@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { focusedSessionTab, parseSessionTab } from "./hostCompat";
 import { selectMainOrFallbackAgent } from "./sessionFollowing";
-import { childrenForCall, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget } from "./subagents";
+import { childrenForCall, mergeHermesTimelineRows, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget } from "./subagents";
 import type { Row } from "../shared/sessionNav";
 
 test("linked delegate calls missing from adapter targets are display-only timeline rows, never fabricated targets", () => {
@@ -13,6 +13,34 @@ test("linked delegate calls missing from adapter targets are display-only timeli
   expect(mergeLinkedParentRows([], [], scopes, parent)).toEqual([]);
   expect(mergeLinkedParentRows([], [row], [], parent)).toEqual([]);
   expect(mergeLinkedParentRows([], [{ ...row, tool_call_id: "unrelated" }], scopes, parent)).toEqual([]);
+});
+
+test("mergeHermesTimelineRows preserves chronological User/Assistant rows while upgrading matching tool calls to manageable SQLite items", () => {
+  const scope = "hermes:atlas:local-123:unknown";
+  const managedTool: Row = {
+    item_id: "item_abc",
+    tool_call_id: "call_1",
+    kind: "tool",
+    tool_name: "terminal",
+    status: "visible",
+    version: 1,
+    tokens_display: "—",
+    manageable: true,
+    bytes_size: 4096,
+    summary_line: "kubectl get pods",
+  };
+  const timeline: Row[] = [
+    { item_id: "u1", tool_call_id: "u1", kind: "user", tool_name: "user", status: "visible", version: 1, tokens_display: "—", summary_line: "상태 확인해줘" },
+    { item_id: "call_1", tool_call_id: "call_1", kind: "tool", tool_name: "execute", status: "visible", version: 1, tokens_display: "—", manageable: false },
+    { item_id: "call_2", tool_call_id: "call_2", kind: "tool", tool_name: "agent_message", status: "visible", version: 1, tokens_display: "—", manageable: false },
+    { item_id: "a1", tool_call_id: "a1", kind: "assistant", tool_name: "assistant", status: "visible", version: 1, tokens_display: "—", summary_line: "**정상입니다.**" },
+  ];
+  const merged = mergeHermesTimelineRows([managedTool], timeline, [], scope);
+  expect(merged).toHaveLength(4);
+  expect(merged[0]).toMatchObject({ kind: "user", item_id: null, manageable: false, summary_line: "상태 확인해줘" });
+  expect(merged[1]).toEqual(managedTool);
+  expect(merged[2]).toMatchObject({ kind: "tool", tool_call_id: "call_2", item_id: null, manageable: false });
+  expect(merged[3]).toMatchObject({ kind: "assistant", item_id: null, manageable: false, summary_line: "**정상입니다.**" });
 });
 
 test("scope binding is exact and refuses ambiguous or unsupported provider children", () => {
