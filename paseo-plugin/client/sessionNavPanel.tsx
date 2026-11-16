@@ -22,7 +22,7 @@ import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
-import { childrenForCall, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
+import { childrenForCall, mergeHermesTimelineRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 
 import {
   buildGroupedRows,
@@ -35,8 +35,10 @@ import {
   groupRestoreIconKind,
   groupSubtitleText,
   isSummarizedRow,
+  messageSummarySnippet,
   rowMetric,
   truncateString,
+  utf8ByteLength,
   type OutlineRow,
 } from "./outlineGrouping";
 
@@ -57,11 +59,12 @@ const EYE_SVG =
 const EYE_SLASHED_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>';
 
+// Vertical compression arrows squeezing a summary bar + 4-point AI star (✦)
 const SUMMARIZE_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5v5.2"/><path d="m5.7 5.2 2.8 2.8 2.8-2.8"/><path d="M3 12h11.5"/><path d="M8.5 21.5v-5.2"/><path d="m5.7 18.8 2.8-2.8 2.8 2.8"/><path d="M18.5 2.5 19.6 5.4 22.5 6.5 19.6 7.6 18.5 10.5 17.4 7.6 14.5 6.5 17.4 5.4Z"/></svg>';
 
 const SUMMARIZE_SLASHED_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="m2 2 20 20"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5v5.2"/><path d="m5.7 5.2 2.8 2.8 2.8-2.8"/><path d="M3 12h11.5"/><path d="M8.5 21.5v-5.2"/><path d="m5.7 18.8 2.8-2.8 2.8 2.8"/><path d="M18.5 2.5 19.6 5.4 22.5 6.5 19.6 7.6 18.5 10.5 17.4 7.6 14.5 6.5 17.4 5.4Z"/><path d="m2 2 20 20"/></svg>';
 
 function ActionSvgIcon({
   kind,
@@ -509,6 +512,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     staleTime: 5000,
   };
 
+  const isHermesScope = Boolean(resolvedScopeKey?.startsWith("hermes:"));
   const needsLinkedTimeline = !activeChild && !!resolvedScopeKey && scopes.some((scope) => scope.parent_scope === resolvedScopeKey &&
     scope.tool_call_id && !listQuery.data?.items.some((row) => row.tool_call_id === scope.tool_call_id));
   const fallbackTimelineQuery = useQuery({
@@ -543,8 +547,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               status: "visible",
               version: 1,
               tokens_display: "—",
-              bytes_size: text.length,
-              summary_line: text,
+              bytes_size: utf8ByteLength(text),
+              summary_line: messageSummarySnippet(text),
               message_text: text,
             });
           } else if (itemType === "assistant_message") {
@@ -557,8 +561,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               status: "visible",
               version: 1,
               tokens_display: "—",
-              bytes_size: text.length,
-              summary_line: text,
+              bytes_size: utf8ByteLength(text),
+              summary_line: messageSummarySnippet(text),
               message_text: text,
             });
           } else if (
@@ -727,7 +731,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         return [];
       }
     },
-    enabled: (!resolvedScopeKey || needsLinkedTimeline) && !!agentId && !activeChild,
+    enabled: (!resolvedScopeKey || isHermesScope || needsLinkedTimeline) && !!agentId && !activeChild,
     refetchInterval: 3000,
   });
 
@@ -736,7 +740,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   }, [scopeKey, queryClient]);
 
   const rawRows = resolvedScopeKey
-    ? activeChild ? listQuery.data?.items ?? [] : mergeLinkedParentRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
+    ? activeChild
+      ? listQuery.data?.items ?? []
+      : mergeHermesTimelineRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
     : fallbackTimelineQuery.data ?? [];
   const rows = useMemo(() => {
     if (!query) return rawRows;
@@ -1201,16 +1207,18 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     );
   };
 
-  const renderMessageSnippet = (row: Row, empty: string) =>
-    row.status === "hidden" ? (
+  const renderMessageSnippet = (row: Row, empty: string) => {
+    const normalized = messageSummarySnippet(row.summary_line ?? row.message_text);
+    return row.status === "hidden" ? (
       <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-        {`[hidden] ${(row.summary_line || "").split("\n")[0] || "tap icon to restore"}`}
+        {`[hidden] ${normalized.split("\n")[0] || "tap icon to restore"}`}
       </Text>
     ) : (
       <Text style={styles.summarySnippet} numberOfLines={2}>
-        {row.summary_line || empty}
+        {normalized || empty}
       </Text>
     );
+  };
 
   const renderRow = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;

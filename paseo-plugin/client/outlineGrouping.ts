@@ -25,6 +25,44 @@ export function truncateString(str: string, maxLen = 120): string {
   return `${singleLine.slice(0, maxLen - 1)}…`;
 }
 
+const UTF8_ENCODER = new TextEncoder();
+
+export function utf8ByteLength(text: string): number {
+  return text ? UTF8_ENCODER.encode(text).byteLength : 0;
+}
+
+const LEADING_REASONING_BLOCK = /^\s*💭\s*\*\*Reasoning:\*\*\s*\r?\n```[^\n]*\r?\n([\s\S]*?)\r?\n```(?:\s*\r?\n)*/u;
+
+export function messageSummarySnippet(text: string | undefined | null): string {
+  if (!text) return "";
+  let source = text;
+  const match = source.match(LEADING_REASONING_BLOCK);
+  if (match) {
+    const remainder = source.slice(match[0].length).trim();
+    if (remainder) {
+      source = remainder;
+    } else {
+      const innerLine = (match[1] ?? "")
+        .split(/\r?\n/u)
+        .map((line) => line.trim().replace(/\s+/gu, " "))
+        .find(Boolean);
+      return innerLine ? `💭 **Reasoning:**\n${innerLine}` : "💭 **Reasoning:**";
+    }
+  }
+  return source
+    .split(/\r?\n/u)
+    .map((line) => line.trim().replace(/\s+/gu, " "))
+    .filter(
+      (line) =>
+        Boolean(line) &&
+        line !== "```" &&
+        !line.startsWith("[hidden:") &&
+        !line.startsWith("The remaining result is preserved"),
+    )
+    .slice(0, 2)
+    .join("\n");
+}
+
 const SUMMARY_SOURCES = new Set([
   "rule_summary",
   "llm",

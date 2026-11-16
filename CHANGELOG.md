@@ -73,6 +73,12 @@ Publication and registry/catalog approval are separate steps; see
   compact web layouts using guarded Paseo 0.15.3 focus/layout state, with a
   bound-session chooser fallback, native row-tap Preview, and own-scope routing
   for Paseo-spawned OMP subagents (#13).
+- Bind Hermes custom-profile Paseo providers (`agents.providers`, `hermes-<profile>`,
+  and `/.hermes/profiles/<profile>` cwds) to their registered `hermes:<profile>:...`
+  SQLite scopes while preserving chronological `User`/`Assistant` timeline rows,
+  strip leading blank lines and ACP Reasoning fences from outline message previews,
+  and replace the generic file-sheet Summarize icon with a compression-arrows +
+  4-point-star icon.
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

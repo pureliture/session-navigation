@@ -719,6 +719,48 @@ test("agent binding uses explicit provider, profile and third scope component, p
   ]);
 });
 
+test("agent binding resolves Hermes custom profile providers via Paseo 0.15 agents.providers, provider suffix, and profile cwd", () => {
+  const { home } = fixture();
+  const paseoDir = join(home, ".paseo");
+  const agentsDir = join(paseoDir, "agents/Users-test-.hermes-profiles-atlas");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    join(paseoDir, "config.json"),
+    JSON.stringify({
+      agents: {
+        providers: {
+          "hermes-atlas": {
+            extends: "acp",
+            command: ["hermes", "-p", "atlas", "acp"],
+          },
+        },
+      },
+    }),
+  );
+  writeFileSync(
+    join(agentsDir, "atlas-agent.json"),
+    JSON.stringify({
+      id: "atlas-agent-1",
+      provider: "hermes-atlas",
+      cwd: join(home, ".hermes/profiles/atlas"),
+      runtimeInfo: { provider: "acp", sessionId: "local-atlas-sid" },
+      persistence: {
+        provider: "hermes-atlas",
+        sessionId: "local-atlas-sid",
+        metadata: { provider: "acp", cwd: join(home, ".hermes/profiles/atlas") },
+      },
+    }),
+  );
+  const scopes = [
+    {
+      scope_key: "hermes:atlas:local-atlas-sid:unknown",
+      items: 4,
+      capabilities: { state: "ready", unhide: true },
+    },
+  ];
+  expect(bindAgents(home, scopes)[0].agent_id).toBe("atlas-agent-1");
+});
+
 test("PASEO_HOME redirects only the real home, never an isolated fixture home", () => {
   const { home } = fixture();
   const agents = join(home, ".paseo/agents/workspace");
