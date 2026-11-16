@@ -79,6 +79,12 @@ Publication and registry/catalog approval are separate steps; see
   strip leading blank lines and ACP Reasoning fences from outline message previews,
   and replace the generic file-sheet Summarize icon with a compression-arrows +
   4-point-star icon.
+- Preserve Hermes `options_omitted` targets in Paseo (`service.ts`), display
+  post-compaction `compacted_bytes_size` across hidden/summarized rows, groups,
+  and saved-byte totals, fix Paseo old-to-new virtualized chat navigation and
+  highlight timer races, auto-scroll the Outline to the latest entries when
+  switching sessions, and accept empty `keep_lines: []` on strict-schema
+  `manage_context` calls.
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

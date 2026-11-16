@@ -762,7 +762,12 @@ export class OmpService {
     const action = params.action ?? "auto";
     if (!["auto", "hide", "summarize"].includes(String(action)))
       return { ok: false, error: "invalid_action" };
-    if (params.keep_lines !== undefined && action !== "hide")
+    const rawKeepLines = params.keep_lines;
+    const normalizedKeepLines =
+      rawKeepLines === null || (Array.isArray(rawKeepLines) && rawKeepLines.length === 0)
+        ? undefined
+        : rawKeepLines;
+    if (normalizedKeepLines !== undefined && action !== "hide")
       return { ok: false, error: "invalid_keep_lines_action" };
     const summaries = params.summaries;
     if (
@@ -797,7 +802,7 @@ export class OmpService {
               record,
               summarize,
               text,
-              params.keep_lines,
+              normalizedKeepLines,
               expectedVersion,
             );
       if (!result.ok && result.error === "verification_failed" && action !== "summarize") {
@@ -805,7 +810,7 @@ export class OmpService {
           scope,
           record,
           action === "auto" ? text : undefined,
-          params.keep_lines,
+          normalizedKeepLines,
           expectedVersion,
         );
       }

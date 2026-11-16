@@ -697,7 +697,12 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     const action = params.action ?? "auto";
     if (!["auto", "hide", "summarize"].includes(String(action)))
       return { ok: false, error: "invalid_action" };
-    if (params.keep_lines !== undefined && action !== "hide")
+    const rawKeepLines = params.keep_lines;
+    const normalizedKeepLines =
+      rawKeepLines === null || (Array.isArray(rawKeepLines) && rawKeepLines.length === 0)
+        ? undefined
+        : rawKeepLines;
+    if (normalizedKeepLines !== undefined && action !== "hide")
       return { ok: false, error: "invalid_keep_lines_action" };
     const wanted = [...new Set(ids as string[])];
     const summaries: Record<string, string> = {};
@@ -765,7 +770,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
           summaries: batchSummaries,
           sequence_verified: true,
           ...(summaryFailure ? { summary_failure: summaryFailure } : {}),
-          ...(params.keep_lines !== undefined ? { keep_lines: params.keep_lines } : {}),
+          ...(normalizedKeepLines !== undefined ? { keep_lines: normalizedKeepLines } : {}),
         },
         ctx,
         signal,

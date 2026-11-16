@@ -31,6 +31,7 @@ export const RowSchema = z.object({
   cost_usd: z.number().nullable().optional(),
   source: z.string().optional(),
   bytes_size: z.number().optional(),
+  compacted_bytes_size: z.number().optional(),
   summary_line: z.string().optional(),
   tool_input: z.string().optional(),
   tool_output: z.string().optional(),

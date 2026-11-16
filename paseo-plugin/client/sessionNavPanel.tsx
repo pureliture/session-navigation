@@ -15,17 +15,17 @@ import {
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
-import { scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
-import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
+import { clearChatHighlight, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { childrenForCall, mergeHermesTimelineRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
-
+import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import {
   buildGroupedRows,
+  effectiveRowBytes,
   fmtBytes,
   fmtTokenCount,
   fmtTokens,
@@ -762,12 +762,13 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   const hiddenCount = rows.filter((r) => r.status === "hidden").length;
 
-  const totalBytes = useMemo(() => rows.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0), [rows]);
-  const visibleBytes = useMemo(
-    () => rows.filter((r) => r.status !== "hidden").reduce((sum, r) => sum + (r.bytes_size ?? 0), 0),
+  const savedBytes = useMemo(
+    () =>
+      rows
+        .filter((r) => r.status === "hidden")
+        .reduce((sum, r) => sum + Math.max(0, (r.bytes_size ?? 0) - effectiveRowBytes(r)), 0),
     [rows],
   );
-  const savedBytes = Math.max(0, totalBytes - visibleBytes);
   const hiddenRows = rows.filter((r) => r.status === "hidden");
   const savedTokens =
     hiddenRows.length > 0 && hiddenRows.every((r) => typeof r.tokens === "number")
@@ -791,6 +792,68 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     if (!selectedId) return null;
     return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? null;
   }, [rows, selectedId]);
+
+  const listRef = useRef<any>(null);
+  const initialScrolledKeyRef = useRef<string | null>(null);
+  const userScrolledOutlineRef = useRef(false);
+  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
+
+  const scrollOutlineToLatest = () => {
+    const list = listRef.current;
+    if (!list) return false;
+    try {
+      list.scrollToEnd?.({ animated: false });
+      const scrollable =
+        list.getScrollableNode?.() ??
+        list._listRef?._scrollRef?.getScrollableNode?.();
+      if (scrollable && typeof scrollable.scrollHeight === "number") {
+        scrollable.scrollTop = scrollable.scrollHeight;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    clearChatHighlight();
+    setSelectedId(null);
+    setPreviewOpen(false);
+    setExpandedGroups({});
+    setPendingGroupId(null);
+    userScrolledOutlineRef.current = false;
+    initialScrolledKeyRef.current = null;
+  }, [sessionViewKey]);
+  const isLoading = resolvedScopeKey
+    ? (listQuery.isPending && listQuery.fetchStatus !== "idle") || ((isHermesScope || needsLinkedTimeline) && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle")
+    : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
+
+  useEffect(() => {
+    if (
+      groupedRows.length === 0 ||
+      isLoading ||
+      userScrolledOutlineRef.current ||
+      initialScrolledKeyRef.current === sessionViewKey
+    ) {
+      return;
+    }
+    const raf =
+      typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame
+        : (cb: () => void) => setTimeout(cb, 0);
+    const timer = raf(() => {
+      if (!userScrolledOutlineRef.current && scrollOutlineToLatest()) {
+        initialScrolledKeyRef.current = sessionViewKey;
+      }
+    });
+    return () => {
+      if (typeof cancelAnimationFrame === "function" && typeof timer === "number") {
+        cancelAnimationFrame(timer);
+      } else {
+        clearTimeout(timer);
+      }
+    };
+  }, [groupedRows.length, isLoading, sessionViewKey]);
 
   const styles = useMemo(() => {
     const pad = layout.compact ? 6 : 10;
@@ -1729,9 +1792,6 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     ));
   };
 
-  const isLoading = resolvedScopeKey
-    ? (listQuery.isPending && listQuery.fetchStatus !== "idle") || (needsLinkedTimeline && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle")
-    : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
   const capabilityMessage = capabilityNotice(listQuery.error instanceof Error ? listQuery.error.message : scopesQuery.error instanceof Error ? scopesQuery.error.message : undefined, capabilities);
   const noticeBar = notice || capabilityMessage || displayOnly ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
@@ -1768,7 +1828,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     );
   }
 
-  if (!isLoading && rows.length === 0) {
+  if (!isLoading && rawRows.length === 0) {
     return (
       <View style={styles.screen}>
         {noticeBar}
@@ -1861,7 +1921,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         </View>
       ) : (
         <FlatList
-          key={resolvedScopeKey || agentId || "outline-list"}
+          ref={listRef}
+          key={sessionViewKey || "outline-list"}
           style={styles.list}
           contentContainerStyle={styles.listContent}
           nestedScrollEnabled={true}
@@ -1871,6 +1932,20 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           data={groupedRows}
           keyExtractor={(item) => item.key}
           extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
+          onScrollBeginDrag={() => {
+            userScrolledOutlineRef.current = true;
+          }}
+          onContentSizeChange={() => {
+            if (
+              groupedRows.length > 0 &&
+              !userScrolledOutlineRef.current &&
+              initialScrolledKeyRef.current !== sessionViewKey
+            ) {
+              if (scrollOutlineToLatest()) {
+                initialScrolledKeyRef.current = sessionViewKey;
+              }
+            }
+          }}
           renderItem={({ item }) => {
             if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
             return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
