@@ -5,43 +5,183 @@ import json
 from collections import OrderedDict
 from typing import Any
 
-DISPLAY_LIMIT = 3
-NOTE_BYTES = 1000
+NOTE_BYTES = 16 * 1024
+MAX_ID_CHARS = 128
+MAX_NOTES_PER_WAVE = 4
+ELIGIBLE_BYTE_STEP = 100 * 1024
+WORTHWHILE_BYTES = 32 * 1024
+
+
+class _SessionReminderState:
+    __slots__ = (
+        "turn",
+        "watermark",
+        "intra_credit",
+        "unfired_credit",
+        "fired_in_turn",
+        "notes_in_wave",
+        "last_fired_step",
+        "suppress_next_growth",
+    )
+
+    def __init__(self, suppress_next_growth: bool = False) -> None:
+        self.turn: str = ""
+        self.watermark: int = 0
+        self.intra_credit: int = 0
+        self.unfired_credit: int = 0
+        self.fired_in_turn: bool = False
+        self.notes_in_wave: int = 0
+        self.last_fired_step: int | None = None
+        self.suppress_next_growth: bool = suppress_next_growth
 
 
 class BoundaryReminders:
     def __init__(self) -> None:
-        self._seen: OrderedDict[str, tuple[str, int]] = OrderedDict()
+        self._seen: OrderedDict[str, _SessionReminderState] = OrderedDict()
 
-    def note(self, session: str, turn: str, tokens: int, window: int | None,
-             candidates: list[dict[str, Any]]) -> str | None:
-        if not turn or not candidates:
-            return None
-        tokens = tokens if type(tokens) is int and tokens >= 0 else 0
-        window = window if type(window) is int and window > 0 else None
-        percent = 100 * tokens / window if window and window > 0 else None
-        tier = sum(percent >= threshold for threshold in (50, 75, 90)) if percent is not None else 0
-        previous = self._seen.get(session)
-        if previous is not None and previous[0] == turn and tier <= previous[1]:
-            return None
-        usage = f"~{tokens}/{window} tokens ({percent:.0f}%)" if percent is not None else f"~{tokens}/? tokens (?%)"
-        header = (f"[context-navigation] {usage}; eligible={len(candidates)}. "
-                  "Finish the work unit and answer first; then, if useful, batch cleanup in one call. "
-                  "After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. "
-                  "You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). "
-                  "Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. "
-                  "Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].")
-        rows = []
-        for item in candidates:
-            row = json.dumps([item["tool_call_id"], str(item.get("tool_name", ""))[:24],
-                              str(item.get("hint", ""))[:48], item["bytes_size"], item.get("turn", 0)],
-                             ensure_ascii=True, separators=(",", ":"))
-            if len((header + "\n" + "\n".join([*rows, row])).encode()) <= NOTE_BYTES:
-                rows.append(row)
-            if len(rows) == DISPLAY_LIMIT:
-                break
-        self._seen[session] = (turn, tier)
+    def _state(self, session: str, suppress_if_new: bool = False) -> _SessionReminderState:
+        state = self._seen.get(session)
+        if state is None:
+            state = _SessionReminderState(suppress_next_growth=suppress_if_new)
+            self._seen[session] = state
         self._seen.move_to_end(session)
         while len(self._seen) > 128:
             self._seen.popitem(last=False)
+        return state
+
+    def suppress_unhide(self, session: str) -> None:
+        if not session:
+            return
+        state = self._state(session, suppress_if_new=True)
+        state.suppress_next_growth = True
+
+    def note(
+        self,
+        session: str,
+        turn: str,
+        _tokens: int,
+        _window: int | None,
+        candidates: list[dict[str, Any]],
+        eligible_bytes: int | None = None,
+        after_tool: bool = True,
+        step_key: int | None = None,
+    ) -> str | None:
+        if not turn:
+            return None
+        total = len(candidates)
+        total_bytes = (
+            0
+            if total <= 0
+            else (
+                eligible_bytes
+                if type(eligible_bytes) is int and eligible_bytes >= 0
+                else sum(
+                    item["bytes_size"]
+                    for item in candidates
+                    if type(item.get("bytes_size")) is int and item["bytes_size"] > 0
+                )
+            )
+        )
+        state = self._state(session)
+        is_new_turn = state.turn != turn
+        delta = total_bytes - state.watermark
+        was_suppressed = state.suppress_next_growth
+        state.suppress_next_growth = False
+        state.turn = turn
+        state.watermark = total_bytes
+
+        if was_suppressed:
+            if is_new_turn:
+                if state.fired_in_turn:
+                    state.unfired_credit = 0
+                state.intra_credit = 0
+                state.fired_in_turn = False
+                state.notes_in_wave = 0
+                state.last_fired_step = None
+            if total_bytes < state.unfired_credit:
+                state.unfired_credit = total_bytes
+            return None
+
+        if delta < 0:
+            state.unfired_credit = 0
+            state.intra_credit = 0
+            state.fired_in_turn = False
+            state.notes_in_wave = 0
+            state.last_fired_step = None
+        else:
+            gain = delta if delta > 0 else 0
+            if is_new_turn:
+                state.unfired_credit = (
+                    min(total_bytes, gain)
+                    if state.fired_in_turn
+                    else min(total_bytes, state.unfired_credit + gain)
+                )
+                state.intra_credit = gain
+                state.fired_in_turn = False
+                state.notes_in_wave = 0
+                state.last_fired_step = None
+            else:
+                state.unfired_credit = min(total_bytes, state.unfired_credit + gain)
+                state.intra_credit += gain
+                if state.intra_credit >= ELIGIBLE_BYTE_STEP:
+                    state.intra_credit = 0
+                    state.notes_in_wave = 0
+                    state.last_fired_step = None
+        if (
+            not after_tool
+            or total <= 0
+            or total_bytes < WORTHWHILE_BYTES
+            or state.unfired_credit < WORTHWHILE_BYTES
+            or state.notes_in_wave >= MAX_NOTES_PER_WAVE
+            or (step_key is not None and state.last_fired_step == step_key)
+        ):
+            return None
+
+        state.fired_in_turn = True
+        state.notes_in_wave += 1
+        state.last_fired_step = step_key
+        size_hint = f" ({total_bytes // 1024} KiB)" if total_bytes >= 1024 else ""
+        base_header = (
+            f"[context-navigation] eligible={total}{size_hint}. "
+            "Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, "
+            "call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below "
+            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values "
+            "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
+        )
+        budget = NOTE_BYTES - len(base_header.encode()) - 80
+        rows = []
+        used_bytes = 0
+        for item in candidates:
+            cid = item.get("tool_call_id")
+            if not isinstance(cid, str) or not cid or len(cid) > MAX_ID_CHARS:
+                continue
+            row = json.dumps(
+                [
+                    cid,
+                    str(item.get("tool_name", ""))[:24],
+                    str(item.get("hint", ""))[:48],
+                    item["bytes_size"],
+                    item.get("turn", 0),
+                ],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            row_bytes = len(row.encode()) + 1
+            if used_bytes + row_bytes > budget:
+                break
+            rows.append(row)
+            used_bytes += row_bytes
+        omitted = max(0, total - len(rows))
+        more_hint = (
+            f" (+{omitted} via list_context_items(view=candidates))"
+            if omitted > 0
+            else ""
+        )
+        header = (
+            f"[context-navigation] eligible={total}{size_hint}{more_hint}. "
+            "Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, "
+            "call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below "
+            "(skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values "
+            "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
+        )
         return header + ("\n" + "\n".join(rows) if rows else "")

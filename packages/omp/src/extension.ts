@@ -9,6 +9,7 @@ import {
   MAX_CHUNK_RECORDS,
   SUMMARY_TIMEOUT_MS,
   dropHiddenMessages,
+  ompInvocationArgs,
   prepareRequest,
   messageText,
   hash,
@@ -19,7 +20,18 @@ import {
 } from "./context.ts";
 import { registerOverlay } from "./overlay.ts";
 import { childLinkage } from "./subagents.ts";
-import { summaryPrompt, summarySource, summaryWithRetry, MAX_SUMMARY_INPUT_BYTES } from "../../core/src/summary.ts";
+import {
+  MAX_SUMMARY_INPUT_BYTES,
+  SEQUENCE_CHUNK_BYTES,
+  chunkSequenceSteps,
+  composeHybridSlotSummaries,
+  sequenceSummaryPrompt,
+  summaryPrompt,
+  summarySource,
+  summaryWithRetry,
+  validateSequenceChunk,
+  type SequenceStepInput,
+} from "../../core/src/summary.ts";
 import { requiredEvidence } from "../../core/src/policy.ts";
 import { MINIMUM_SQLITE_VERSION, runtimeSqliteVersion, supportedSqliteVersion } from "./sqlite-runtime.ts";
 export * from "./context.ts";
@@ -140,8 +152,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         resultCounts.get(id) !== 1 ||
         !call ||
         found.index >= i ||
-        (call.name !== "read" && call.name !== "bash") ||
-        (message.toolName !== "read" && message.toolName !== "bash") ||
+        typeof call.name !== "string" ||
         call.name !== message.toolName ||
         message.isError !== false ||
         !call.arguments ||
@@ -153,17 +164,8 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         typeof message.content[0].text !== "string"
       )
         continue;
-      let args: Record<string, unknown>;
-      if (call.name === "read") {
-        // Real shape: {i, path} (+ query params for internal URIs). Identity = path only.
-        if (typeof call.arguments.path !== "string" || !call.arguments.path.trim()) continue;
-        args = { path: call.arguments.path };
-      } else {
-        if (typeof call.arguments.command !== "string" || !call.arguments.command.trim()) continue;
-        args = { command: call.arguments.command };
-        if (typeof call.arguments.cwd === "string" && call.arguments.cwd.trim())
-          args.cwd = call.arguments.cwd;
-      }
+      const args = ompInvocationArgs(call.name, call.arguments as Record<string, unknown>);
+      if (!args) continue;
       const content = message.content[0].text;
       records.push({ call_id: id, tool_name: call.name, arguments: args, status: "ok", content });
       positions.set(id, i);
@@ -186,17 +188,6 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     const deadline = Date.now() + SUMMARY_TIMEOUT_MS;
     const users = event.messages.filter((message) => message?.role === "user");
     const turn = users.length ? `${users.length}:${hash(messageText(users.at(-1)))}` : "";
-    let usage: { tokens: number; contextWindow?: number } | undefined;
-    try {
-      usage = ctx.getContextUsage?.();
-    } catch {
-      /* use request estimate */
-    }
-    const tokens =
-      usage && Number.isFinite(usage.tokens) && usage.tokens >= 0
-        ? usage.tokens
-        : Math.ceil(JSON.stringify(event.messages).length / 4);
-    const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? undefined;
     let reminder = reminders.get(session);
     if (!reminder) {
       reminder = new BoundaryReminder();
@@ -205,7 +196,9 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     if (reminders.size > 128) reminders.delete(reminders.keys().next().value!);
     let note: string | null = null;
     let reminderItems: ReminderItem[] = [],
-      eligibleCount = 0;
+      eligibleCount = 0,
+      eligibleBytes = 0,
+      candidateIds: string[] = [];
     const prepared = queue.then(async () => {
       const response = await prepareRequest(
         collected.records,
@@ -216,26 +209,31 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         deadline,
         () => generation === requestGeneration && sessionId(ctx) === session,
       );
-      if (!child && response.ok && collected.records.length && reminder.due(turn, tokens, window)) {
-        const listed = await rpcOnce(
-          "list_candidates",
-          { session_id: session, snapshot_id: next.token, limit: 3 },
-          2000,
+      if (!child && response.ok) {
+        const rawItems = Array.isArray(response.reminder_items)
+          ? (response.reminder_items as ReminderItem[])
+          : [];
+        reminderItems = rawItems
+          .filter(
+            (item) =>
+              typeof item?.tool_call_id === "string" && typeof item.bytes_size === "number",
+          )
+          .map((item) => ({
+            ...item,
+            turn: event.messages
+              .slice(0, (collected.positions.get(item.tool_call_id) ?? -1) + 1)
+              .filter((message) => message.role === "user").length,
+          }));
+        eligibleCount = Number(response.eligible_count ?? reminderItems.length);
+        eligibleBytes = Number(
+          response.eligible_bytes ??
+            reminderItems.reduce((sum, item) => sum + item.bytes_size, 0),
         );
-        if (listed.ok && Array.isArray(listed.items)) {
-          reminderItems = (listed.items as ReminderItem[])
-            .filter(
-              (item) =>
-                typeof item?.tool_call_id === "string" && typeof item.bytes_size === "number",
+        candidateIds = Array.isArray(response.candidate_ids)
+          ? (response.candidate_ids as unknown[]).filter(
+              (id): id is string => typeof id === "string",
             )
-            .map((item) => ({
-              ...item,
-              turn: event.messages
-                .slice(0, (collected.positions.get(item.tool_call_id) ?? -1) + 1)
-                .filter((message) => message.role === "user").length,
-            }));
-          eligibleCount = Number(listed.total ?? reminderItems.length);
-        }
+          : reminderItems.map((item) => item.tool_call_id);
       }
       return response;
     });
@@ -329,11 +327,39 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         ? (response.hidden_messages as unknown[]).filter((k): k is string => typeof k === "string")
         : [],
     );
-    messages = dropHiddenMessages(messages ?? event.messages, hidden) ?? messages;
-    const saved = messages
-      ? Math.ceil((JSON.stringify(event.messages).length - JSON.stringify(messages).length) / 4)
-      : 0;
-    note = child ? null : reminder.note(turn, Math.max(0, tokens - saved), window, eligibleCount, reminderItems);
+    const effective = messages ?? event.messages;
+    const afterHidden = dropHiddenMessages(effective, hidden);
+    if (afterHidden) messages = afterHidden;
+    const activeMessages = messages ?? event.messages;
+    let afterTool = false;
+    for (let idx = activeMessages.length - 1; idx >= 0; idx--) {
+      const msg = activeMessages[idx];
+      if (msg?.role !== "toolResult") break;
+      const toolName = String(msg.toolName ?? "");
+      if (
+        toolName === "manage_context" ||
+        toolName === "hide_context" ||
+        toolName === "summarize_context" ||
+        toolName === "unhide_context"
+      ) {
+        afterTool = false;
+        break;
+      }
+      afterTool = true;
+    }
+    note = child
+      ? null
+      : reminder.note(
+          turn,
+          0,
+          undefined,
+          eligibleCount,
+          reminderItems,
+          eligibleBytes,
+          candidateIds,
+          afterTool,
+          activeMessages.length,
+        );
     if (note)
       messages = [
         ...(messages ?? event.messages),
@@ -408,55 +434,66 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     });
     return result && typeof result === "object" && "summary" in result ? String(result.summary) : null;
   }
-  async function summarizeAttempt(
-    ctx: unknown, content: string, timeout: number, signal?: AbortSignal, feedback?: string,
+  function resolveModelWindow(ctx: unknown): number | undefined {
+    if (!ctx || typeof ctx !== "object") return undefined;
+    const c = ctx as Record<string, unknown>;
+    const models = c["models"];
+    const current =
+      models && typeof models === "object" && "current" in models
+        ? (models as Record<string, unknown>)["current"]
+        : undefined;
+    const getter = c["getModel"] ?? current ?? c["model"];
+    const model = typeof getter === "function" ? (getter as () => unknown).call(ctx) : getter;
+    if (!model || typeof model !== "object" || !("contextWindow" in model)) return undefined;
+    const win = model.contextWindow;
+    return typeof win === "number" && Number.isFinite(win) ? win : undefined;
+  }
+  async function requestModelCompletion(
+    ctx: unknown,
+    prompt: string,
+    timeout: number,
+    signal?: AbortSignal,
+    feedback?: string,
   ): Promise<string | null> {
-    summarySource(content);
     try {
       if (!ctx || typeof ctx !== "object") return null;
-      const c: Record<string, unknown> = ctx as Record<string, unknown>;
-      const models: unknown = c["models"];
-      const current: unknown =
+      const c = ctx as Record<string, unknown>;
+      const models = c["models"];
+      const current =
         models && typeof models === "object" && "current" in models
           ? (models as Record<string, unknown>)["current"]
           : undefined;
-      const getter: unknown = c["getModel"] ?? current ?? c["model"];
-      const model: unknown =
-        typeof getter === "function" ? (getter as () => unknown).call(ctx) : getter;
+      const getter = c["getModel"] ?? current ?? c["model"];
+      const model = typeof getter === "function" ? (getter as () => unknown).call(ctx) : getter;
       if (!model || typeof model !== "object") return null;
       // D5: session model via modelRegistry.resolver (auth-retry policy).
-      const registry: unknown = c["modelRegistry"];
-      const resolverFn: unknown =
+      const registry = c["modelRegistry"];
+      const resolverFn =
         registry && typeof registry === "object" && "resolver" in registry
           ? (registry as Record<string, unknown>)["resolver"]
           : undefined;
       if (typeof resolverFn !== "function") return null;
-      const sessionId = sessionIdFrom(ctx);
+      const currentSession = sessionIdFrom(ctx);
       let apiKey: unknown;
       try {
         apiKey = (resolverFn as (m: unknown, s?: string) => unknown).call(
           registry,
           model,
-          sessionId ?? undefined,
+          currentSession ?? undefined,
         );
       } catch {
         return null;
       }
       if (!apiKey) return null;
-      // Dynamic import: @oh-my-pi/pi-ai ships with the host, not this extension bundle.
+      // Platform host module shipped by OMP runtime rather than bundled into this extension.
       const mod: unknown = await import("@oh-my-pi/pi-ai");
-      const complete: unknown =
+      const complete =
         mod && typeof mod === "object" && "completeSimple" in mod
           ? (mod as Record<string, unknown>)["completeSimple"]
           : undefined;
       if (typeof complete !== "function") return null;
-      const window = (model as { contextWindow?: number }).contextWindow;
-      const budget = typeof window === "number" && Number.isFinite(window)
-        ? Math.min(MAX_SUMMARY_INPUT_BYTES, Math.max(0, window - 8192)) : MAX_SUMMARY_INPUT_BYTES;
-      const prompt = summaryPrompt(content, budget);
       const params = { messages: [{ role: "user", content: [{ type: "text", text: prompt }] }] };
       if (feedback) params.messages.push({ role: "user", content: [{ type: "text", text: feedback }] });
-      // 25s end-to-end: the RPC timeout after this covers transport, this covers the model call.
       const controller = new AbortController();
       if (signal?.aborted) return null;
       const abort = (): void => controller.abort();
@@ -479,33 +516,111 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         signal?.removeEventListener("abort", abort);
       }
       if (!msg || typeof msg !== "object" || !("content" in msg)) return null;
-      const usage = (msg as { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: { total?: number } } }).usage;
+      const rawUsage = "usage" in msg && msg.usage && typeof msg.usage === "object" ? msg.usage : null;
+      const num = (obj: object | null, key: string) =>
+        obj && key in obj && typeof (obj as Record<string, unknown>)[key] === "number"
+          ? ((obj as Record<string, number>)[key] ?? 0)
+          : 0;
+      const costObj =
+        rawUsage && "cost" in rawUsage && rawUsage.cost && typeof rawUsage.cost === "object"
+          ? rawUsage.cost
+          : null;
+      const totalCost =
+        costObj && "total" in costObj && typeof costObj.total === "number" ? costObj.total : null;
       try {
-        await rpcOnce("record_summary_call", {
-          session_id: sessionId, call_key: `summary:${randomUUID()}`,
-          prompt_tokens: (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0),
-          completion_tokens: usage?.output ?? 0, total_tokens: usage?.totalTokens ?? 0,
-          cost_usd: usage?.cost?.total ?? null,
-        }, 2000);
+        await rpcOnce(
+          "record_summary_call",
+          {
+            session_id: currentSession,
+            call_key: `summary:${randomUUID()}`,
+            prompt_tokens: num(rawUsage, "input") + num(rawUsage, "cacheRead") + num(rawUsage, "cacheWrite"),
+            completion_tokens: num(rawUsage, "output"),
+            total_tokens: num(rawUsage, "totalTokens"),
+            cost_usd: totalCost,
+          },
+          2000,
+        );
       } catch {}
-      const blocks: unknown = (msg as { content: unknown }).content;
+      const blocks = msg.content;
       if (!Array.isArray(blocks)) return null;
       const parts: string[] = [];
       for (const b of blocks) {
-        if (
-          b &&
-          typeof b === "object" &&
-          "text" in b &&
-          typeof (b as { text: unknown }).text === "string"
-        )
-          parts.push((b as { text: string }).text);
+        if (b && typeof b === "object" && "text" in b && typeof b.text === "string") {
+          parts.push(b.text);
+        }
       }
       const text = parts.join("\n").trim();
       return text || null;
-    } catch (error) {
-      if ((error as { reason?: string })?.reason === "input_too_large") throw error;
+    } catch {
       return null;
     }
+  }
+  async function summarizeAttempt(
+    ctx: unknown,
+    content: string,
+    timeout: number,
+    signal?: AbortSignal,
+    feedback?: string,
+  ): Promise<string | null> {
+    summarySource(content);
+    const win = resolveModelWindow(ctx);
+    const budget =
+      win !== undefined
+        ? Math.min(MAX_SUMMARY_INPUT_BYTES, Math.max(0, win - 8192))
+        : MAX_SUMMARY_INPUT_BYTES;
+    const prompt = summaryPrompt(content, budget);
+    return requestModelCompletion(ctx, prompt, timeout, signal, feedback);
+  }
+  async function summarizeSequence(
+    ctx: unknown,
+    orderedRecords: readonly RecordItem[],
+    action: string,
+    isStillValid: () => boolean,
+    signal?: AbortSignal,
+  ): Promise<{ summaries: Record<string, string>; failure?: string }> {
+    const win = resolveModelWindow(ctx);
+    const chunkBudget =
+      win !== undefined && win > 16384
+        ? Math.min(SEQUENCE_CHUNK_BYTES, win - 8192)
+        : SEQUENCE_CHUNK_BYTES;
+    const steps: SequenceStepInput[] = orderedRecords.map((rec) => ({
+      call_id: rec.call_id,
+      tool_name: rec.tool_name,
+      invocation: { tool_name: rec.tool_name, arguments: rec.arguments as Record<string, string> },
+      content: rec.content,
+    }));
+    const chunks = chunkSequenceSteps(steps, chunkBudget);
+    const stepTraces: Record<string, string> = {};
+    let priorSummary = "";
+    for (const chunk of chunks) {
+      if (signal?.aborted || !isStillValid()) return { summaries: {} };
+      const prompt = sequenceSummaryPrompt(chunk, priorSummary || undefined);
+      const first = await requestModelCompletion(ctx, prompt, SUMMARY_TIMEOUT_MS, signal);
+      if (first === null) {
+        if (action === "summarize") return { summaries: {}, failure: "summarizer_unavailable" };
+        continue;
+      }
+      let check = validateSequenceChunk(chunk, first, priorSummary || undefined);
+      if (!check.ok && !signal?.aborted && isStillValid()) {
+        const second = await requestModelCompletion(
+          ctx,
+          prompt,
+          SUMMARY_TIMEOUT_MS,
+          signal,
+          check.feedback,
+        );
+        if (second !== null) {
+          check = validateSequenceChunk(chunk, second, priorSummary || undefined);
+        }
+      }
+      if (!check.ok) {
+        if (action === "summarize") return { summaries: {}, failure: "verification_failed" };
+        continue;
+      }
+      Object.assign(stepTraces, check.steps);
+      priorSummary = check.sequenceSummary;
+    }
+    return { summaries: composeHybridSlotSummaries(steps, stepTraces, priorSummary) };
   }
   function sessionIdFrom(ctx: unknown): string | null {
     try {
@@ -545,6 +660,8 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   pi.registerTool({
     name: "list_context_items",
     label: "List Context Items",
+    loadMode: "essential",
+    approval: "read",
     description:
       "Discover visible cleanup IDs with view=candidates; default items lists stored results. limit is display-only (default 30).",
     parameters: z.object({
@@ -583,67 +700,89 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     if (params.keep_lines !== undefined && action !== "hide")
       return { ok: false, error: "invalid_keep_lines_action" };
     const wanted = [...new Set(ids as string[])];
-    const records = new Map(snapshot.records.map((record) => [record.call_id, record]));
-    const items: any[] = [];
-    for (let offset = 0; offset < wanted.length; offset += MAX_CHUNK_RECORDS) {
-      if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
-      if (signal?.aborted) return { ok: false, error: "cancelled", items };
-      const batch = wanted.slice(offset, offset + MAX_CHUNK_RECORDS);
-      const summaries: Record<string, string> = {};
-      const expectedVersions: Record<string, number> = {};
-      if (action !== "hide") {
+    const summaries: Record<string, string> = {};
+    const expectedVersions: Record<string, number> = {};
+    let summaryFailure: string | undefined;
+    if (action !== "hide") {
+      const eligibleIds = new Set<string>();
+      for (let offset = 0; offset < wanted.length; offset += MAX_CHUNK_RECORDS) {
+        if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items: [] };
+        if (signal?.aborted) return { ok: false, error: "cancelled", items: [] };
+        const slice = wanted.slice(offset, offset + MAX_CHUNK_RECORDS);
         const eligible = await tool(
           "list_candidates",
-          { tool_call_ids: batch, limit: batch.length, include_hidden: action === "summarize" },
+          { tool_call_ids: slice, limit: slice.length, include_hidden: action === "summarize" },
           ctx,
           signal,
         );
         if (!eligible.ok) return eligible;
-        const queue = (eligible.items as { tool_call_id: string }[])
-          .map((item) => records.get(item.tool_call_id))
-          .filter((record): record is RecordItem => !!record);
-        await Promise.all(
-          Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, queue.length) }, async () => {
-            while (queue.length && !signal?.aborted && candidate === snapshot) {
-              const record = queue.shift()!;
-              const state = await tool("summary_state", { tool_call_id: record.call_id }, ctx, signal);
-              if (!state.ok) continue;
-              expectedVersions[record.call_id] = Number(state.expected_version);
-              if (state.cached) continue;
-              let text: string | null;
-              try {
-                text = await summarizeText(ctx, record.content, SUMMARY_TIMEOUT_MS, signal);
-              } catch (error) {
-                if (action === "auto") continue;
-                throw error;
-              }
-              if (text) summaries[record.call_id] = text;
+        if (Array.isArray(eligible.items)) {
+          for (const entry of eligible.items) {
+            if (entry && typeof entry === "object" && "tool_call_id" in entry && typeof entry.tool_call_id === "string") {
+              eligibleIds.add(entry.tool_call_id);
             }
-          }),
-        );
+          }
+        }
       }
+      const uncachedIds = new Set<string>();
+      for (const callId of eligibleIds) {
+        if (candidate !== snapshot || signal?.aborted) break;
+        const state = await tool("summary_state", { tool_call_id: callId }, ctx, signal);
+        if (!state.ok) continue;
+        expectedVersions[callId] = Number(state.expected_version);
+        if (!state.cached) uncachedIds.add(callId);
+      }
+      const orderedUncached = snapshot.records.filter((record) => uncachedIds.has(record.call_id));
+      if (orderedUncached.length > 0) {
+        const outcome = await summarizeSequence(
+          ctx,
+          orderedUncached,
+          String(action),
+          () => candidate === snapshot,
+          signal,
+        );
+        Object.assign(summaries, outcome.summaries);
+        summaryFailure = outcome.failure;
+      }
+    }
+    const items: Record<string, unknown>[] = [];
+    for (let offset = 0; offset < wanted.length; offset += MAX_CHUNK_RECORDS) {
       if (candidate !== snapshot) return { ok: false, error: "unconfirmed_snapshot", items };
+      if (signal?.aborted) return { ok: false, error: "cancelled", items };
+      const batch = wanted.slice(offset, offset + MAX_CHUNK_RECORDS);
+      const batchSummaries: Record<string, string> = {};
+      const batchVersions: Record<string, number> = {};
+      for (const id of batch) {
+        if (summaries[id] !== undefined) batchSummaries[id] = summaries[id];
+        if (expectedVersions[id] !== undefined) batchVersions[id] = expectedVersions[id];
+      }
       const response = await tool(
         "manage",
         {
           tool_call_ids: batch,
           action,
-          expected_versions: expectedVersions,
-          summaries,
+          expected_versions: batchVersions,
+          summaries: batchSummaries,
+          sequence_verified: true,
+          ...(summaryFailure ? { summary_failure: summaryFailure } : {}),
           ...(params.keep_lines !== undefined ? { keep_lines: params.keep_lines } : {}),
         },
         ctx,
         signal,
       );
       if (!Array.isArray(response.items)) return response;
-      items.push(...response.items);
+      for (const entry of response.items) {
+        if (entry && typeof entry === "object") items.push(entry as Record<string, unknown>);
+      }
     }
-    const applied = items.filter((item) => item.ok).length;
+    const applied = items.filter((item) => Boolean(item.ok)).length;
     return { ok: applied === items.length, applied, failed: items.length - applied, items };
   }
   pi.registerTool({
     name: "manage_context",
     label: "Manage Context",
+    loadMode: "essential",
+    approval: "read",
     description:
       "Clean agent-chosen tool_call_ids. action: hide=rules, summarize=session LLM, auto=summary with rule fallback. keep_lines: single-line substrings (hide only, 1024 bytes per target). Whitespace/line-number near misses are normalized. Unmatched or invalid entries are ignored per target with English reasons in keep_lines_ignored; valid entries still apply.",
     parameters: z.object({
@@ -664,6 +803,8 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   pi.registerTool({
     name: "hide_context",
     label: "Hide Context",
+    loadMode: "essential",
+    approval: "read",
     description: "Hide one result with rule excerpts; no LLM.",
     parameters: z.object({ tool_call_id: z.string() }),
     async execute(_id, params, signal, _update, ctx) {
@@ -673,6 +814,8 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   pi.registerTool({
     name: "summarize_context",
     label: "Summarize Context",
+    loadMode: "essential",
+    approval: "read",
     description: "Summarize one result using the session LLM; no rule fallback.",
     parameters: z.object({ tool_call_id: z.string() }),
     async execute(_id, params, signal, _update, ctx) {
@@ -715,10 +858,15 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   pi.registerTool({
     name: "unhide_context",
     label: "Unhide Context",
+    loadMode: "essential",
+    approval: "read",
     description: "Restore an original by item_id without re-execution.",
     parameters: z.object({ item_id: z.string() }),
     async execute(_id, params, signal, _update, ctx) {
-      return result(await tool("restore", params, ctx, signal));
+      const reply = await tool("restore", params, ctx, signal);
+      const sid = sessionId(ctx);
+      if (reply.ok && sid) reminders.get(sid)?.suppressUnhide();
+      return result(reply);
     },
   });
   registerOverlay(pi, {

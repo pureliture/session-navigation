@@ -181,7 +181,7 @@ export function loadTimeline(home: string, scope: string): Timeline {
       results.get(callId) === 1 &&
       found &&
       found.index < index &&
-      ["read", "bash"].includes(tool) &&
+      typeof tool === "string" &&
       found.block.name === tool &&
       message.isError === false &&
       arguments_ &&
@@ -192,16 +192,8 @@ export function loadTimeline(home: string, scope: string): Timeline {
       message.content[0]?.type === "text" &&
       typeof message.content[0].text === "string"
     ) {
-      const argument = tool === "read" ? arguments_.path : arguments_.command;
-      if (typeof argument === "string" && argument.trim()) {
-        const args: Record<string, Json> =
-          tool === "read" ? { path: argument } : { command: argument };
-        if (
-          tool === "bash" &&
-          typeof arguments_.cwd === "string" &&
-          arguments_.cwd.trim()
-        )
-          args.cwd = arguments_.cwd;
+      const args = ompInvocationArgs(tool, arguments_ as Record<string, unknown>);
+      if (args) {
         const invocation = { tool_name: tool, arguments: args };
         totalBytes += bytes(text);
         if (totalBytes <= 4 * 1024 * 1024 && records.size < 1000) {
@@ -240,6 +232,72 @@ export function loadTimeline(home: string, scope: string): Timeline {
     });
   });
   return { rows, records, history };
+}
+
+function ompInvocationArgs(
+  tool: string,
+  raw: Record<string, unknown>,
+): Record<string, Json> | null {
+  const str = (key: string) =>
+    typeof raw[key] === "string" && (raw[key] as string).trim()
+      ? (raw[key] as string)
+      : undefined;
+  switch (tool) {
+    case "read": {
+      const path = str("path");
+      return path && !path.trim().startsWith("xd://") ? { path } : null;
+    }
+    case "bash": {
+      const command = str("command");
+      if (!command) return null;
+      const cwd = str("cwd");
+      return cwd ? { command, cwd } : { command };
+    }
+    case "grep": {
+      const pattern = str("pattern");
+      if (!pattern) return null;
+      const path = str("path");
+      return path ? { pattern, path } : { pattern };
+    }
+    case "glob":
+      return { path: str("path") ?? "." };
+    case "web_search": {
+      const query = str("query");
+      return query ? { query } : null;
+    }
+    case "get_agent_activity":
+    case "get_agent_status": {
+      const agentId = str("agentId");
+      return agentId ? { agentId } : null;
+    }
+    case "list_models":
+    case "inspect_provider": {
+      const provider = str("provider");
+      return provider ? { provider } : null;
+    }
+    case "capture_terminal": {
+      const terminalId = str("terminalId");
+      return terminalId ? { terminalId } : null;
+    }
+    case "browser_snapshot":
+    case "browser_logs": {
+      const browserId = str("browserId");
+      return browserId ? { browserId } : null;
+    }
+    case "list_agents":
+    case "list_workspaces":
+    case "list_providers":
+    case "list_profiles": {
+      const out: Record<string, Json> = {};
+      const cwd = str("cwd");
+      const serverId = str("serverId");
+      if (cwd) out.cwd = cwd;
+      if (serverId) out.serverId = serverId;
+      return out;
+    }
+    default:
+      return null;
+  }
 }
 
 function pythonJson(value: unknown): string {

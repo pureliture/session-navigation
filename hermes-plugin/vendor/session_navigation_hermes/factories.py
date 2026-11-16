@@ -342,6 +342,7 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
                 return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
             return _dump({"ok": False, "error": err})
         state.presentations.mark_visible(scope.scope_key(), result.item.item_id)
+        state.reminders.suppress_unhide(scope.scope_key())
         return _dump({
             "ok": True,
             "item_id": result.item.item_id,
@@ -374,17 +375,155 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_li
         host_handle=entry.host_handle,
     )
     result = state.engine.compact_sync(scope, record, options_omitted=bool(omitted), keep_lines=keep_lines)
-    diagnostics = {}
+    diagnostics: dict[str, Any] = {}
     if result.keep_lines_ignored:
         diagnostics["keep_lines_ignored"] = list(result.keep_lines_ignored)
     if result.keep_lines_normalized:
         diagnostics["keep_lines_normalized"] = list(result.keep_lines_normalized)
+    if not result.ok and result.error == "verification_failed" and refusal_reason(record, state.engine.config) is None:
+        from session_navigation.model import ContextItem
+        from session_navigation.policy import (
+            MAX_EXCERPT_BYTES, MAX_EXCERPT_LINE, normalize_keep_lines,
+            render_compaction, selectable_text, verified_facts,
+        )
+        source = selectable_text(record.content)
+        lines = source.splitlines()
+        eligible = [idx for idx, line in enumerate(lines) if 0 < len(line) <= MAX_EXCERPT_LINE]
+        if eligible and (keep_lines is None or isinstance(keep_lines, list)):
+            accepted, ignored, normalized = normalize_keep_lines(record.content, keep_lines) if isinstance(keep_lines, list) else ([], [], [])
+            if ignored:
+                diagnostics["keep_lines_ignored"] = list(ignored)
+            if normalized:
+                diagnostics["keep_lines_normalized"] = list(normalized)
+            selected = sorted({*eligible[:3], *eligible[-2:], *(idx for idx, line in enumerate(lines) if len(line) <= MAX_EXCERPT_LINE and any(part in line for part in accepted))})
+            excerpt = tuple(lines[idx] for idx in selected)
+            excerpt_bytes = sum(len(line.encode("utf-8")) + 1 for line in excerpt)
+            item_id = _item_id(scope.scope_key(), record.call_id, record.content_sha256, record.invocation_digest, record.result_position)
+            compacted = render_compaction(item_id, excerpt, facts=verified_facts(record.content), options_omitted=bool(omitted))
+            if excerpt_bytes <= MAX_EXCERPT_BYTES and len(compacted.encode("utf-8")) < len(record.content.encode("utf-8")):
+                existing = state.engine.store.get(scope, item_id)
+                stored = ContextItem(
+                    item_id=item_id,
+                    tool_call_id=record.call_id,
+                    content_sha256=record.content_sha256,
+                    invocation_digest=record.invocation_digest,
+                    original=record.content,
+                    compacted=compacted,
+                    excerpt_lines=excerpt,
+                    visibility="hidden",
+                    version=(existing.version + 1) if existing else 1,
+                    tool_name=record.invocation.get("tool_name", ""),
+                    compaction_source="rule",
+                    invocation_snapshot=record.invocation,
+                    invocation_options_omitted=bool(omitted),
+                    result_position=record.result_position,
+                    created_at=existing.created_at if existing else 0.0,
+                    updated_at=0.0,
+                )
+                saved = state.engine.store.put(scope, stored, expected_version=existing.version if existing else None)
+                if saved.ok:
+                    state.presentations.record_compacted(scope.scope_key(), item_id, len(record.content.encode("utf-8")))
+                    return True, None, item_id, diagnostics
+            elif accepted and excerpt_bytes > MAX_EXCERPT_BYTES:
+                return False, "keep_lines_too_broad", None, diagnostics
     if not result.ok or result.plan is None:
         return False, result.error or "not_found", None, diagnostics
     state.presentations.record_compacted(
         scope.scope_key(), result.plan.item_id, len(record.content.encode("utf-8")))
     return True, None, result.plan.item_id, diagnostics
 
+
+def _apply_sequence_summary_for_manage(
+    state: PluginState,
+    scope: Scope,
+    entry: Any,
+    summary_text: str,
+) -> tuple[bool, str | None, str | None]:
+    from session_navigation.model import ContextItem, ToolResultRecord, compute_invocation_digest
+    from session_navigation.policy import (
+        MAX_EXCERPT_LINE,
+        render_compaction,
+        required_evidence_lines,
+        verified_facts,
+    )
+    from session_navigation.summary import has_summary_injection
+    from .allowlist import AdapterRejected, filter_invocation
+
+    if entry.arguments_parse_error or not entry.tool_name:
+        return False, "invalid_invocation", None
+    try:
+        invocation, omitted = filter_invocation(entry.tool_name, entry.raw_arguments)
+    except AdapterRejected as exc:
+        return False, exc.code, None
+    trimmed = summary_text.strip()
+    if not trimmed or len(trimmed) > 1800 or has_summary_injection(trimmed):
+        return False, "verification_failed", None
+    digest = compute_invocation_digest(invocation, omitted if omitted else None)
+    record_check = ToolResultRecord(
+        call_id=entry.call_id,
+        content=entry.content,
+        content_sha256=entry.content_sha256,
+        invocation=invocation,
+        invocation_digest=digest,
+        result_position=entry.result_position,
+        status="ok",
+    )
+    refused = refusal_reason(record_check, state.engine.config)
+    if refused is not None:
+        return False, refused, None
+    item_id = _item_id(
+        scope.scope_key(), entry.call_id, entry.content_sha256, digest, entry.result_position
+    )
+    facts = verified_facts(entry.content)
+    req = required_evidence_lines(entry.content)
+    orig_bytes = len(entry.content.encode("utf-8"))
+    excerpt: tuple[str, ...] = ()
+    compacted = render_compaction(
+        item_id, (), summary_text={"summary": trimmed}, facts=facts, options_omitted=bool(omitted)
+    )
+    if 0 < len(req) <= 8 and all(len(line) <= MAX_EXCERPT_LINE for line in req):
+        with_req = render_compaction(
+            item_id, req, summary_text={"summary": trimmed}, facts=facts, options_omitted=bool(omitted)
+        )
+        if len(with_req.encode("utf-8")) <= orig_bytes * 0.8:
+            excerpt = req
+            compacted = with_req
+    if len(compacted.encode("utf-8")) >= orig_bytes and "\n[Sequence summary] " in trimmed:
+        step_only = trimmed.split("\n[Sequence summary] ", 1)[0]
+        compacted = render_compaction(
+            item_id, (), summary_text={"summary": step_only}, facts=facts, options_omitted=bool(omitted)
+        )
+        excerpt = ()
+    if len(compacted.encode("utf-8")) >= orig_bytes:
+        return False, "verification_failed", None
+    existing = state.engine.store.get(scope, item_id)
+    stored = ContextItem(
+        item_id=item_id,
+        tool_call_id=entry.call_id,
+        content_sha256=entry.content_sha256,
+        invocation_digest=digest,
+        original=entry.content,
+        compacted=compacted,
+        excerpt_lines=excerpt,
+        visibility="hidden",
+        version=(existing.version + 1) if existing else 1,
+        tool_name=invocation.get("tool_name", ""),
+        compaction_source="llm",
+        invocation_snapshot=invocation,
+        invocation_options_omitted=bool(omitted),
+        result_position=entry.result_position,
+        created_at=existing.created_at if existing else 0.0,
+        updated_at=0.0,
+    )
+    saved = state.engine.store.put(
+        scope,
+        stored,
+        expected_version=existing.version if existing else None,
+    )
+    if not saved.ok:
+        return False, saved.error or "db_error", None
+    state.presentations.record_compacted(scope.scope_key(), item_id, orig_bytes)
+    return True, None, item_id
 
 def _cleanup_error(state: PluginState, scope: Scope, entry: Any) -> str | None:
     if len(state.store.lookup(scope.scope_key(), entry.call_id)) != 1:
@@ -435,7 +574,46 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         if action == "summarize" and state.summarizer is None:
             return _dump({"ok": False, "error": "summarizer_unavailable"})
         results: list[dict[str, Any]] = []
-        for call_id in dict.fromkeys(want):
+        wanted_ids = list(dict.fromkeys(want))
+        sequence_summaries: dict[str, str] = {}
+        sequence_failure: str | None = None
+        use_sequence = (
+            action in ("summarize", "auto")
+            and state.summarizer is not None
+            and callable(getattr(state.summarizer, "summarize_sequence", None))
+        )
+        if use_sequence:
+            from .allowlist import AdapterRejected, filter_invocation
+
+            eligible_by_id: dict[str, Any] = {}
+            for call_id in wanted_ids:
+                matches = state.store.lookup(scope.scope_key(), call_id)
+                if matches and _cleanup_error(state, scope, matches[0]) is None:
+                    eligible_by_id[call_id] = matches[0]
+            ordered_entries = [
+                entry
+                for entry in state.store.entries(scope.scope_key())
+                if entry.call_id in eligible_by_id
+            ]
+            seq_steps: list[dict[str, Any]] = []
+            for entry in ordered_entries:
+                try:
+                    inv, _ = filter_invocation(entry.tool_name, entry.raw_arguments)
+                except AdapterRejected:
+                    continue
+                seq_steps.append({
+                    "call_id": entry.call_id,
+                    "tool_name": entry.tool_name,
+                    "invocation": inv,
+                    "content": entry.content,
+                })
+            if seq_steps:
+                if hasattr(state.summarizer, "current_scope_key"):
+                    state.summarizer.current_scope_key = scope.scope_key()
+                sequence_summaries, sequence_failure = state.summarizer.summarize_sequence(
+                    seq_steps, action=action, scope_key=scope.scope_key()
+                )
+        for call_id in wanted_ids:
             matches = state.store.lookup(scope.scope_key(), call_id)
             error = _cleanup_error(state, scope, matches[0]) if matches else "not_found"
             if error is not None:
@@ -444,7 +622,22 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
             entry = matches[0]
             use_summarizer = action == "summarize" or (action == "auto" and state.summarizer is not None)
             item_id: str | None = None
-            if use_summarizer:
+            if use_sequence:
+                seq_text = sequence_summaries.get(entry.call_id)
+                if seq_text:
+                    ok_seq, err_seq, item_id = _apply_sequence_summary_for_manage(
+                        state, scope, entry, seq_text
+                    )
+                    if ok_seq and item_id is not None:
+                        results.append({"tool_call_id": entry.call_id, "ok": True, "item_id": item_id})
+                        continue
+                    if action == "summarize":
+                        results.append({"tool_call_id": entry.call_id, "ok": False, "error": err_seq or "verification_failed"})
+                        continue
+                elif action == "summarize":
+                    results.append({"tool_call_id": entry.call_id, "ok": False, "error": sequence_failure or "summarizer_unavailable"})
+                    continue
+            elif use_summarizer:
                 if state.summarizer is not None and hasattr(state.summarizer, "current_scope_key"):
                     state.summarizer.current_scope_key = scope.scope_key()
                 outcome = _engine_summarize(
@@ -604,10 +797,54 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                                            "hint": entry.raw_arguments.get("command") or entry.raw_arguments.get("path") or "",
                                            "bytes_size": len(entry.content.encode()),
                                            "turn": sum(i <= index for i, _text in users)})
+                    mutation_names = ("manage_context", "hide_context", "summarize_context", "unhide_context")
+                    after_tool = False
+                    seq_len: int | None = None
+                    if api_mode == "chat_completions" and isinstance(request_out.get("messages"), list):
+                        seq = request_out["messages"]
+                        seq_len = len(seq)
+                        mut_ids: set[str] = set()
+                        for m in seq:
+                            if isinstance(m, dict) and isinstance(m.get("tool_calls"), list):
+                                for tc in m["tool_calls"]:
+                                    fn = tc.get("function") if isinstance(tc, dict) else None
+                                    if not isinstance(fn, dict):
+                                        continue
+                                    fname = str(fn.get("name") or "")
+                                    fargs = str(fn.get("arguments") or "")
+                                    if fname in mutation_names or (fname == "tool_call" and any(n in fargs for n in mutation_names)):
+                                        if isinstance(tc.get("id"), str):
+                                            mut_ids.add(tc["id"])
+                        for m in reversed(seq):
+                            if not isinstance(m, dict) or m.get("role") != "tool":
+                                break
+                            if m.get("tool_call_id") in mut_ids:
+                                after_tool = False
+                                break
+                            after_tool = True
+                    elif isinstance(request_out.get("input"), list):
+                        seq = request_out["input"]
+                        seq_len = len(seq)
+                        mut_ids = set()
+                        for item in seq:
+                            if isinstance(item, dict) and item.get("type") == "function_call":
+                                fname = str(item.get("name") or "")
+                                fargs = str(item.get("arguments") or "")
+                                if fname in mutation_names or (fname == "tool_call" and any(n in fargs for n in mutation_names)):
+                                    if isinstance(item.get("call_id"), str):
+                                        mut_ids.add(item["call_id"])
+                        for item in reversed(seq):
+                            if not isinstance(item, dict) or item.get("type") != "function_call_output":
+                                break
+                            if item.get("call_id") in mut_ids:
+                                after_tool = False
+                                break
+                            after_tool = True
                     turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
                     note = state.reminders.note(scope.scope_key(), turn,
                         estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
-                        kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates)
+                        kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates,
+                        after_tool=after_tool, step_key=seq_len)
                     if note:
                         request_out = copy.deepcopy(request_out)
                         if api_mode == "chat_completions":

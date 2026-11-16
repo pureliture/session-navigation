@@ -7,7 +7,15 @@ import time
 from typing import Any
 
 from session_navigation.policy import required_evidence_lines
-from session_navigation.summary import validate_summary_text, summary_source, summary_feedback
+from session_navigation.summary import (
+    chunk_sequence_steps,
+    compose_hybrid_slot_summaries,
+    sequence_summary_prompt,
+    summary_feedback,
+    summary_source,
+    validate_sequence_chunk,
+    validate_summary_text,
+)
 from session_navigation.transport import Summarizer, SummarizerError, SummarizerUnavailable
 
 
@@ -107,6 +115,60 @@ class CtxLlmSummarizer:
                 ])
         raise SummarizerUnavailable("verification_failed")
 
+
+    def summarize_sequence(
+        self,
+        steps: list[dict[str, Any]],
+        *,
+        action: str = "auto",
+        scope_key: str | None = None,
+    ) -> tuple[dict[str, str], str | None]:
+        llm = self.ctx_llm
+        if llm is None:
+            return {}, "summarizer_unavailable"
+        resolved_scope = scope_key or self.current_scope_key or self._scope_key
+        chunks = chunk_sequence_steps(steps)
+        step_traces: dict[str, str] = {}
+        prior_summary = ""
+        for chunk in chunks:
+            prompt = sequence_summary_prompt(chunk, prior_summary or None)
+            messages = [{"role": "user", "content": prompt}]
+            out_tokens = max(self._max_tokens, min(2048, 256 + 96 * len(chunk)))
+            chunk_ok = False
+            last_reason = "verification_failed"
+            for attempt in range(2):
+                try:
+                    result = llm.complete(
+                        messages=list(messages),
+                        timeout=self._timeout,
+                        max_tokens=out_tokens,
+                        purpose="session-navigation-summarize",
+                    )
+                except Exception as exc:
+                    reason = getattr(exc, "reason", None) or getattr(exc, "code", None)
+                    last_reason = reason if isinstance(reason, str) and reason else "request_failed"
+                    break
+                self._record_usage(result, resolved_scope)
+                text = getattr(result, "text", None)
+                if not isinstance(text, str) or not text.strip():
+                    last_reason = "missing_text"
+                    break
+                ok, seq_text, parsed_steps, feedback = validate_sequence_chunk(
+                    chunk, text, prior_summary or None
+                )
+                if ok:
+                    step_traces.update(parsed_steps)
+                    prior_summary = seq_text
+                    chunk_ok = True
+                    break
+                if attempt == 0:
+                    messages.extend([
+                        {"role": "assistant", "content": text},
+                        {"role": "user", "content": feedback},
+                    ])
+            if not chunk_ok and action == "summarize":
+                return {}, last_reason
+        return compose_hybrid_slot_summaries(steps, step_traces, prior_summary), None
     def _record_usage(self, result: Any, scope_key: str | None) -> None:
         usage = getattr(result, "usage", None)
         if self._store is not None and hasattr(self._store, "record_call"):

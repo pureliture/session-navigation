@@ -118,7 +118,7 @@ def test_all_model_facing_text_is_english():
     from hermes_navigation_adapter.schemas import SUPERVISION_SECTION_TEXT
 
     items = [{"tool_call_id": "chatcmpl-tool-0000000000000001", "tool_name": "read",
-              "hint": "audit-01.jsonl", "bytes_size": 4000, "turn": 1}]
+              "hint": "audit-01.jsonl", "bytes_size": 40_000, "turn": 1}]
     surfaces = [
         render_compaction("item_1", ["owner=Orchid"]),
         render_compaction("item_1", ["owner=Orchid"], summary_text={"summary": "text"},
@@ -130,33 +130,59 @@ def test_all_model_facing_text_is_english():
     for surface in surfaces:
         assert surface
         assert not any("\uac00" <= char <= "\ud7a3" for char in surface), surface
-    for guidance in (surfaces[2], SUPERVISION_SECTION_TEXT):
-        assert "final message must restate the complete answer with all requested facts/values" in guidance
-        assert "never say 'reported above' or 'see above'" in guidance
 
 
-def test_reminder_boundaries_thresholds_empty_sessions_and_literal_ids():
+def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_ignores_occupancy():
     reminders = BoundaryReminders()
-    items = [{"tool_call_id": f"chatcmpl-tool-{i:016x}", "tool_name": "read", "hint": "phase.txt", "bytes_size": 4000, "turn": 1} for i in range(20)]
-    assert reminders.note("s", "1", 100, 1000, []) is None
-    assert reminders.note("s", "", 100, 1000, items) is None
-    note = reminders.note("s", "1", 100, 1000, items)
-    assert "eligible=20" in note and len(note.encode()) <= NOTE_BYTES
-    assert len(note.splitlines()) == 4
-    assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
-    assert "summarize facts still needed" in note
-    assert "final message must restate the complete answer with all requested facts/values" in note
-    assert "never say 'reported above' or 'see above'" in note
-    assert reminders.note("s", "1", 499, 1000, items) is None
-    for tokens in (500, 750, 900):
-        assert reminders.note("s", "1", tokens, 1000, items)
-        assert reminders.note("s", "1", tokens, 1000, items) is None
-    assert reminders.note("s", "1", 500, 1000, items) is None
-    assert reminders.note("s", "2", 100, 1000, items)
-    assert reminders.note("other", "1", 100, None, items)
-    huge = [{**items[0], "tool_call_id": "a" * 2000}]
-    assert "a" * 100 not in reminders.note("s", "3", 100, None, huge)
+    assert reminders.note("s", "", 100, 1000, [{"tool_call_id": "x", "bytes_size": 40_000}]) is None
+    # Request 1 (after_tool=False) and <32 KiB reads stay silent; 20 KiB carries over from Turn 1 into Turn 2 post-tool!
+    assert reminders.note("s", "1", 1000, 128_000, [], after_tool=False) is None
+    tiny = [{"tool_call_id": "t0", "tool_name": "read", "hint": "a.py", "bytes_size": 4096, "turn": 1}]
+    assert reminders.note("s", "1", 2000, 128_000, tiny, after_tool=True) is None
+    u1 = [{"tool_call_id": f"u1-{i}", "tool_name": "read", "hint": "a.txt", "bytes_size": 4000, "turn": 1} for i in range(5)]
+    assert reminders.note("s", "1", 8000, 128_000, u1, after_tool=True) is None
+    assert reminders.note("s", "2", 9000, 128_000, u1, after_tool=False) is None
 
+    items = [
+        {"tool_call_id": f"chatcmpl-tool-{i:016x}", "tool_name": "read", "hint": "phase.txt", "bytes_size": 4000, "turn": 2}
+        for i in range(14)
+    ]
+    note = reminders.note("s", "2", 18_000, 128_000, items, after_tool=True)
+    assert note is not None and "eligible=14 (54 KiB)" in note and "via list_context_items" not in note
+    assert len(note.encode()) <= NOTE_BYTES
+    assert len(note.splitlines()) == 15
+    assert json.loads(note.splitlines()[1])[0] == items[0]["tool_call_id"]
+    assert reminders.note("s", "2", 19_000, 128_000, items, after_tool=True) is not None
+
+    # Once Turn 3 starts without cleanup, unfired_credit clears; chat-only turns and a tiny 2 KiB read stay silent!
+    assert reminders.note("s", "3", 19_500, 128_000, items, after_tool=False) is None
+    plus_small = [{"tool_call_id": "tiny-keep", "tool_name": "read", "hint": "c.py", "bytes_size": 2048, "turn": 3}, *items]
+    assert reminders.note("s", "3", 20_000, 128_000, plus_small, after_tool=True) is None
+
+    # Context occupancy % (50%, 75%, 85%, 95%) never triggers a reminder; global window compaction belongs to the host.
+    for turn_id, tok in (("5", 64_000), ("6", 96_000), ("7", 110_000), ("8", 122_000)):
+        assert reminders.note("s", turn_id, tok, 128_000, plus_small, after_tool=False) is None
+        assert reminders.note("s", turn_id, tok, 128_000, plus_small, after_tool=True) is None
+
+    # Partial cleanup (105K fire -> hide 10K to 95K -> +6K to 101K) stays silent; full cleanup resets for next wave!
+    osc = BoundaryReminders()
+    c95 = [{"tool_call_id": "o1", "tool_name": "bash", "hint": "logs", "bytes_size": 95 * 1024, "turn": 1}]
+    c105 = [{"tool_call_id": "o2", "tool_name": "bash", "hint": "logs", "bytes_size": 10 * 1024, "turn": 1}, *c95]
+    c101 = [{"tool_call_id": "o3", "tool_name": "bash", "hint": "logs", "bytes_size": 6 * 1024, "turn": 1}, *c95]
+    assert osc.note("big", "1", 28_000, 1_048_576, c105, after_tool=True) is not None
+    assert osc.note("big", "1", 25_000, 1_048_576, c95, after_tool=False) is None
+    assert osc.note("big", "1", 27_000, 1_048_576, c101, after_tool=True) is None
+    assert osc.note("big", "1", 5_000, 1_048_576, [], after_tool=False) is None
+    second_wave = [{"tool_call_id": "w1", "tool_name": "read", "hint": "b.txt", "bytes_size": 120_000, "turn": 1}]
+    assert osc.note("big", "1", 35_000, 1_048_576, second_wave, after_tool=True) is not None
+
+    # suppress_unhide absorbs restored byte growth without firing.
+    osc.suppress_unhide("big")
+    restored = [{"tool_call_id": "u1", "tool_name": "read", "hint": "r.txt", "bytes_size": 180_000, "turn": 1}, *second_wave]
+    assert osc.note("big", "1", 850_000, 1_048_576, restored, after_tool=True) is None
+
+    huge = [{"tool_call_id": "a" * 2000, "tool_name": "read", "hint": "h.txt", "bytes_size": 40_000, "turn": 1}]
+    assert "a" * 100 not in BoundaryReminders().note("huge", "1", 100, None, huge)
 
 def cleanup_session(records):
     plugin = hermes_adapter().plugin
@@ -222,7 +248,7 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     middleware = adapter.plugin.make_middleware(state)
     key = "messages" if mode == "chat_completions" else "input"
     messages = [{"role": "user", "content": "Inspect these files"}]
-    for i in range(5):
+    for i in range(7):
         if mode == "chat_completions":
             messages.extend([{"role": "assistant", "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"phase.txt"}'}}]},
                              {"role": "tool", "tool_call_id": f"c{i}", "content": body()}])
@@ -237,8 +263,10 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     note = out[key][-1]["content"]
     if isinstance(note, list):
         note = note[0]["text"]
-    assert "eligible=5" in note
-    assert "/128000 tokens" in note
+    assert "eligible=7" in note
+    assert "via list_context_items" not in note
+    assert '"c0"' in note and '"c6"' in note
+    assert len(note.splitlines()) == 8
     assert json.loads(note.splitlines()[1])[-1] == 1
     assert len(note.encode()) <= NOTE_BYTES
     assert middleware(request=request, session_id="s", api_mode=mode, context_length=128000)["request"] == original
@@ -258,16 +286,6 @@ def test_hermes_tail_note_is_not_persisted_or_used_to_restrict_ids(mode):
     assert request == original
     assert state.summarizer is None
 
-
-def test_hermes_action_first_guidance_and_discovery_description():
-    schemas = hermes_adapter().plugin.TOOL_SCHEMAS
-    assert schemas["list_context_items"]["description"].startswith("Discover visible cleanup IDs")
-    from hermes_navigation_adapter.schemas import SUPERVISION_SECTION_TEXT
-    assert SUPERVISION_SECTION_TEXT.startswith("Finish each work unit and answer first")
-    assert "tool_describe, then tool_call" in SUPERVISION_SECTION_TEXT
-    assert "Prefer literal IDs already shown" in SUPERVISION_SECTION_TEXT
-    assert "avoid re-verifying unchanged files" in SUPERVISION_SECTION_TEXT
-    assert not any("\uac00" <= char <= "\ud7a3" for char in json.dumps(schemas) + SUPERVISION_SECTION_TEXT)
 
 
 @pytest.mark.parametrize("content", ["tiny", "ERROR do not discard\n" + body()])

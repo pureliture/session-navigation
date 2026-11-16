@@ -7,36 +7,149 @@ export type ReminderItem = {
   bytes_size: number;
   turn?: number;
 };
-const REMINDER_BYTES = 1000;
-const REMINDER_ITEMS = 3;
+const REMINDER_BYTES = 16 * 1024;
+const REMINDER_MAX_ID_CHARS = 128;
+const REMINDER_MAX_NOTES_PER_WAVE = 4;
+export const REMINDER_ELIGIBLE_STEP_BYTES = 100 * 1024;
+export const REMINDER_WORTHWHILE_BYTES = 32 * 1024;
+type ReminderState = {
+  turn: string;
+  watermark: number;
+  intraCredit: number;
+  unfiredCredit: number;
+  firedInTurn: boolean;
+  notesInWave: number;
+  lastFiredStep: number | null;
+  suppressNextGrowth: boolean;
+};
+
 export class BoundaryReminder {
-  private seen: { turn: string; tier: number } | undefined;
-  private tier(tokens: number, window?: number) {
-    return window && window > 0
-      ? [50, 75, 90].filter((t) => (100 * tokens) / window >= t).length
-      : 0;
+  private state: ReminderState | undefined;
+
+  suppressUnhide(): void {
+    if (this.state) this.state.suppressNextGrowth = true;
+    else {
+      this.state = {
+        turn: "",
+        watermark: 0,
+        intraCredit: 0,
+        unfiredCredit: 0,
+        firedInTurn: false,
+        notesInWave: 0,
+        lastFiredStep: null,
+        suppressNextGrowth: true,
+      };
+    }
   }
-  due(turn: string, tokens: number, window?: number): boolean {
-    return (
-      !!turn &&
-      (!this.seen || this.seen.turn !== turn || this.tier(tokens, window) > this.seen.tier)
-    );
-  }
+
   note(
     turn: string,
-    tokens: number,
-    window: number | undefined,
+    _tokens: number,
+    _window: number | undefined,
     total: number,
     items: ReminderItem[],
+    eligibleBytes?: number,
+    _candidateIds?: readonly string[],
+    afterTool = true,
+    stepKey?: number,
   ): string | null {
-    if (!total || !this.due(turn, tokens, window)) return null;
-    const usage =
-      window && window > 0
-        ? `~${tokens}/${window} tokens (${Math.round((100 * tokens) / window)}%)`
-        : `~${tokens}/? tokens (?%)`;
-    const header = `[context-navigation] ${usage}; eligible=${total}. Finish the work unit and answer first; then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM). Prefer literal IDs already shown here; avoid re-verifying unchanged files. Display only; any valid ID is accepted. Use list_context_items(view=candidates) only when needed. Rows: [id,tool,path/command,bytes,turn].`;
+    if (!turn) return null;
+    const bytesTotal =
+      total <= 0
+        ? 0
+        : typeof eligibleBytes === "number" && Number.isFinite(eligibleBytes) && eligibleBytes >= 0
+          ? eligibleBytes
+          : items.reduce(
+              (sum, item) =>
+                sum +
+                (typeof item?.bytes_size === "number" && item.bytes_size > 0 ? item.bytes_size : 0),
+              0,
+            );
+    const state =
+      this.state ??
+      (this.state = {
+        turn: "",
+        watermark: 0,
+        intraCredit: 0,
+        unfiredCredit: 0,
+        firedInTurn: false,
+        notesInWave: 0,
+        lastFiredStep: null,
+        suppressNextGrowth: false,
+      });
+
+    const isNewTurn = state.turn !== turn;
+    const delta = bytesTotal - state.watermark;
+    const wasSuppressed = state.suppressNextGrowth;
+    state.suppressNextGrowth = false;
+    state.turn = turn;
+    state.watermark = bytesTotal;
+
+    if (wasSuppressed) {
+      if (isNewTurn) {
+        if (state.firedInTurn) state.unfiredCredit = 0;
+        state.intraCredit = 0;
+        state.firedInTurn = false;
+        state.notesInWave = 0;
+        state.lastFiredStep = null;
+      }
+      if (bytesTotal < state.unfiredCredit) state.unfiredCredit = bytesTotal;
+      return null;
+    }
+
+    if (delta < 0) {
+      state.unfiredCredit = 0;
+      state.intraCredit = 0;
+      state.firedInTurn = false;
+      state.notesInWave = 0;
+      state.lastFiredStep = null;
+    } else {
+      const gain = delta > 0 ? delta : 0;
+      if (isNewTurn) {
+        state.unfiredCredit = state.firedInTurn
+          ? Math.min(bytesTotal, gain)
+          : Math.min(bytesTotal, state.unfiredCredit + gain);
+        state.intraCredit = gain;
+        state.firedInTurn = false;
+        state.notesInWave = 0;
+        state.lastFiredStep = null;
+      } else {
+        state.unfiredCredit = Math.min(bytesTotal, state.unfiredCredit + gain);
+        state.intraCredit += gain;
+        if (state.intraCredit >= REMINDER_ELIGIBLE_STEP_BYTES) {
+          state.intraCredit = 0;
+          state.notesInWave = 0;
+          state.lastFiredStep = null;
+        }
+      }
+    }
+    if (
+      !afterTool ||
+      total <= 0 ||
+      bytesTotal < REMINDER_WORTHWHILE_BYTES ||
+      state.unfiredCredit < REMINDER_WORTHWHILE_BYTES ||
+      state.notesInWave >= REMINDER_MAX_NOTES_PER_WAVE ||
+      (stepKey !== undefined && state.lastFiredStep === stepKey)
+    ) {
+      return null;
+    }
+
+    state.firedInTurn = true;
+    state.notesInWave += 1;
+    state.lastFiredStep = stepKey ?? null;
+
+    const sizeHint = bytesTotal >= 1024 ? ` (${Math.floor(bytesTotal / 1024)} KiB)` : "";
+    const baseHeader = `[context-navigation] eligible=${total}${sizeHint}. Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below (skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values (never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
+    const budget = REMINDER_BYTES - Buffer.byteLength(baseHeader, "utf8") - 80;
     const rows: string[] = [];
+    let usedBytes = 0;
     for (const item of items) {
+      if (
+        typeof item.tool_call_id !== "string" ||
+        !item.tool_call_id ||
+        item.tool_call_id.length > REMINDER_MAX_ID_CHARS
+      )
+        continue;
       const row = JSON.stringify([
         item.tool_call_id,
         (item.tool_name ?? "").slice(0, 24),
@@ -44,11 +157,15 @@ export class BoundaryReminder {
         item.bytes_size,
         item.turn ?? 0,
       ]);
-      if (Buffer.byteLength([header, ...rows, row].join("\n"), "utf8") <= REMINDER_BYTES)
-        rows.push(row);
-      if (rows.length === REMINDER_ITEMS) break;
+      const rowBytes = Buffer.byteLength(row, "utf8") + 1;
+      if (usedBytes + rowBytes > budget) break;
+      rows.push(row);
+      usedBytes += rowBytes;
     }
-    this.seen = { turn, tier: this.tier(tokens, window) };
+    const omitted = Math.max(0, total - rows.length);
+    const moreHint =
+      omitted > 0 ? ` (+${omitted} via list_context_items(view=candidates))` : "";
+    const header = `[context-navigation] eligible=${total}${sizeHint}${moreHint}. Before your final answer (or after a large tool batch), if completed outputs below are no longer needed in full and the user did not ask to wait or restore originals, call manage_context once to batch-clean all unneeded tool_call_ids directly from Rows below (skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values (never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,hint,bytes,turn].`;
     return [header, ...rows].join("\n");
   }
 }
@@ -80,10 +197,73 @@ export const MAX_CHUNK_RECORDS = 64;
 export const MAX_SUMMARY_CONCURRENCY = 4;
 export const SUMMARY_TIMEOUT_MS = 25_000;
 export const CLEANUP_GUIDANCE =
-  "Finish each work unit and answer first. Then, if useful, batch cleanup in one call. After cleanup, the final message must restate the complete answer with all requested facts/values; never say 'reported above' or 'see above'. You decide when/what/how: hide unneeded results (rules), summarize facts still needed (session LLM); auto prefers summary with rule fallback. Prefer literal IDs already shown in context notes; use list_context_items(view=candidates) only when needed, and avoid re-verifying unchanged files. Display limits never restrict targets. Originals remain restorable.";
+  "When [context-navigation] lists unneeded completed tool outputs (or after a large tool batch), before sending your final answer — unless the user asked to defer cleanup or restore originals — call manage_context once to batch-clean all unneeded tool_call_ids directly from [context-navigation] (call list_context_items(view=candidates) only if no note is shown; keep outputs you still reference), then emit one complete final answer with all requested facts/values; never write the answer twice, never re-hide an item in the same turn you unhide_context it, and never say 'reported above' or 'see above'. Choose hide (rules), summarize (session LLM), or auto (summary with rule fallback); avoid re-verifying unchanged files. Originals remain restorable.";
 export const hash = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
+export function ompInvocationArgs(
+  tool: string,
+  raw: Record<string, unknown>,
+): Record<string, string> | null {
+  const str = (key: string) =>
+    typeof raw[key] === "string" && (raw[key] as string).trim() ? (raw[key] as string) : undefined;
+  switch (tool) {
+    case "read": {
+      const path = str("path");
+      return path && !path.trim().startsWith("xd://") ? { path } : null;
+    }
+    case "bash": {
+      const command = str("command");
+      if (!command) return null;
+      const cwd = str("cwd");
+      return cwd ? { command, cwd } : { command };
+    }
+    case "grep": {
+      const pattern = str("pattern");
+      if (!pattern) return null;
+      const path = str("path");
+      return path ? { pattern, path } : { pattern };
+    }
+    case "glob":
+      return { path: str("path") ?? "." };
+    case "web_search": {
+      const query = str("query");
+      return query ? { query } : null;
+    }
+    case "get_agent_activity":
+    case "get_agent_status": {
+      const agentId = str("agentId");
+      return agentId ? { agentId } : null;
+    }
+    case "list_models":
+    case "inspect_provider": {
+      const provider = str("provider");
+      return provider ? { provider } : null;
+    }
+    case "capture_terminal": {
+      const terminalId = str("terminalId");
+      return terminalId ? { terminalId } : null;
+    }
+    case "browser_snapshot":
+    case "browser_logs": {
+      const browserId = str("browserId");
+      return browserId ? { browserId } : null;
+    }
+    case "list_agents":
+    case "list_workspaces":
+    case "list_providers":
+    case "list_profiles": {
+      const out: Record<string, string> = {};
+      const cwd = str("cwd");
+      const serverId = str("serverId");
+      if (cwd) out.cwd = cwd;
+      if (serverId) out.serverId = serverId;
+      return out;
+    }
+    default:
+      return null;
+  }
+}
 export function messageText(message: any): string {
   if (typeof message?.content === "string") return message.content;
   if (!Array.isArray(message?.content)) return "";

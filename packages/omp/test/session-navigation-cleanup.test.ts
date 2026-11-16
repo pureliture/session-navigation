@@ -22,29 +22,57 @@ let beforeComplete: (() => Promise<void>) | undefined;
 let packets: any[] = [];
 mock.module("@oh-my-pi/pi-ai", () => ({
   completeSimple: async (_model: any, request: any, options: any) => {
-    inputs.push(request.messages[0].content[0].text);
+    const promptText: string = request.messages[0].content[0].text;
+    inputs.push(promptText);
     packets.push(request);
-    const text = request.messages[0].content[0].text.split("\n\n")[1];
-    calls.push(text.split("\n")[0]);
+    const isSequence = promptText.startsWith("Summarize this chronological tool-execution sequence");
+    const text = promptText.split("\n\n")[1] ?? "";
+    calls.push(isSequence ? `sequence:${calls.length}` : text.split("\n")[0]);
     peak = Math.max(peak, ++active);
-    if (hanging)
-      return new Promise((_resolve, reject) => {
-        options.signal.addEventListener(
-          "abort",
-          () => {
-            --active;
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    if (hanging) {
+      const { promise, reject } = Promise.withResolvers<never>();
+      options.signal.addEventListener(
+        "abort",
+        () => {
+          --active;
+          reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+      return promise;
+    }
+    await Promise.resolve();
     --active;
     if (unavailable) throw new Error("model unavailable");
     if (beforeComplete) await beforeComplete();
-    if (scripted) return { content: [{ type: "text", text: scripted.shift() ?? "Count 100." }],
-      usage: { input: 10, output: 5, totalTokens: 15, cost: { total: .01 } } };
+    if (scripted)
+      return {
+        content: [{ type: "text", text: scripted.shift() ?? "Count 100." }],
+        usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.01 } },
+      };
     if (invalid) return { content: [{ type: "text", text: "Invented 999999 observations." }] };
+    if (isSequence) {
+      const steps: Record<string, string> = {};
+      const blocks = promptText.split("--- call_id: ").slice(1);
+      const ids: string[] = [];
+      for (const block of blocks) {
+        const callId = block.split(" | ")[0].trim();
+        const firstLine = (block.split("---\n")[1] ?? "").split("\n")[0].trim();
+        steps[callId] = firstLine || "Observed step output.";
+        ids.push(callId);
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              sequence_summary: `Verified sequence across ${ids.join(", ")}.`,
+              steps,
+            }),
+          },
+        ],
+      };
+    }
     return { content: [{ type: "text", text: text.split("\n")[0] }] };
   },
 }));
@@ -322,33 +350,57 @@ test("cleanup discovers IDs, requires explicit choices, limits model concurrency
         (i: any) => i.tool_call_id,
       ),
     ).toEqual(["c89", "c88"]);
-    const chosen = Array.from({ length: 70 }, (_, i) => `c${i}`);
+    // Pass IDs in reverse discovery order; manage_context must sort chronologically, chunk with rolling carry-over, and place [Sequence summary] on c69.
+    const chosen = Array.from({ length: 70 }, (_, i) => `c${69 - i}`);
     const first = await execute("manage_context", { tool_call_ids: chosen, action: "summarize" });
     expect(first.applied).toBe(70);
-    expect(calls.length).toBe(70);
-    expect(new Set(calls.map((line) => line.split(" ")[1]))).toEqual(new Set(chosen));
-    expect(peak).toBe(4);
+    const chunkCallCount = calls.length;
+    expect(chunkCallCount).toBeGreaterThan(1);
+    expect(chunkCallCount).toBeLessThan(20);
+    expect(inputs[1]).toContain("Prior steps context");
     await execute("manage_context", {
       tool_call_ids: ["c0", "short", "danger", "missing"],
       action: "summarize",
     });
-    expect(calls.length).toBe(70);
+    expect(calls.length).toBe(chunkCallCount);
+    // Single >32 KiB item in manage_context(action="summarize") succeeds via bounded high-signal excerpting without input_too_large.
+    const oversizeBody = Array.from(
+      { length: 1400 },
+      (_, i) => `Oversize step row ${i.toString().padStart(4, "0")}: telemetry detail payload`,
+    ).join("\n");
+    expect(Buffer.byteLength(oversizeBody, "utf8")).toBeGreaterThan(60_000);
+    input.push(...pair("oversize-item", oversizeBody, "bash", { command: "kubectl logs api" } as unknown as { path: string }));
+    await prepare();
+    const oversizeResult = await execute("manage_context", {
+      tool_call_ids: ["oversize-item"],
+      action: "summarize",
+    });
+    expect(oversizeResult).toMatchObject({ ok: true, applied: 1, failed: 0 });
     input.push(...pair("next-turn"));
     await prepare();
     const next = await execute("manage_context", { tool_call_ids: ["next-turn"], action: "hide" });
     expect(next.applied).toBe(1);
-    expect(calls.length).toBe(70);
+    const callsBeforeUnavailable = calls.length;
     unavailable = true;
     const failure = await execute("manage_context", {
       tool_call_ids: ["c89"],
       action: "summarize",
     });
     expect(failure.items[0].error).toBe("summarizer_unavailable");
-    expect(calls.length).toBe(71);
-    const patched = await events.context({ messages: input }, ctx);
-    const outputs = patched.messages.filter((m: any) => m.role === "toolResult");
-    expect(outputs[0].content[0].text).not.toBe(input[1].content[0].text);
+    expect(calls.length).toBe(callsBeforeUnavailable + 1);
+    let patched = await events.context({ messages: input }, ctx);
+    let outputs = patched.messages.filter((m: { role?: string }) => m.role === "toolResult");
+    expect(outputs[0].content[0].text).toContain("[read: sample.txt]");
+    expect(outputs[0].content[0].text).not.toContain("[Sequence summary]");
+    expect(outputs[69].content[0].text).toContain("[Sequence summary]");
     expect(outputs[89].content[0].text).toBe(input[179].content[0].text);
+    // Unhiding the anchor slot c69 restores its verbatim original while c0..c68 remain self-contained.
+    const anchorItemId = first.items.find((item: { tool_call_id: string }) => item.tool_call_id === "c69").item_id;
+    expect((await execute("unhide_context", { item_id: anchorItemId })).ok).toBe(true);
+    patched = await events.context({ messages: input }, ctx);
+    outputs = patched.messages.filter((m: { role?: string }) => m.role === "toolResult");
+    expect(outputs[69].content[0].text).toBe(input[139].content[0].text);
+    expect(outputs[0].content[0].text).toContain("[read: sample.txt]");
   } finally {
     unavailable = false;
     await events.session_shutdown();
