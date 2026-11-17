@@ -2,7 +2,7 @@ import { Worker } from "node:worker_threads";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import workerSource from "./worker-source.ts";
-import type { Reply } from "./service.ts";
+export type Reply = { ok: boolean; [key: string]: any };
 
 export function runtimeSupported(version = process.versions.node): boolean {
   const [major, minor] = version.split(".").map(Number);
