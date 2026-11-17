@@ -12,7 +12,7 @@ import {
 } from "../../packages/core/src/index.ts";
 import type { Item } from "../../packages/core/src/index.ts";
 import { loadHermesTimeline } from "./hermesHistory.ts";
-import { toolResultText } from "../../packages/omp/src/context.ts";
+import { ompInvocationArgs as sharedOmpInvocationArgs, toolResultText } from "../../packages/omp/src/context.ts";
 
 export type Message = Record<string, any>;
 export type History = {
@@ -270,88 +270,7 @@ function ompInvocationArgs(
   tool: string,
   raw: Record<string, unknown>,
 ): Record<string, Json> | null {
-  const str = (key: string) =>
-    typeof raw[key] === "string" && (raw[key] as string).trim()
-      ? (raw[key] as string)
-      : undefined;
-  switch (tool) {
-    case "eval":
-      return typeof raw.code === "string" && raw.code
-        ? { code: raw.code, ...(typeof raw.language === "string" ? { language: raw.language } : {}) }
-        : null;
-    case "browser_list_tabs":
-    case "list_hosts":
-    case "list_terminals":
-    case "list_schedules":
-      return {};
-    case "inspect_schedule":
-    case "schedule_logs":
-      return typeof raw.id === "string" && raw.id ? { id: raw.id } : null;
-    case "read": {
-      const path = str("path");
-      return path && !path.trim().startsWith("xd://") ? { path } : null;
-    }
-    case "bash": {
-      const command = str("command");
-      if (!command) return null;
-      const cwd = str("cwd");
-      return cwd ? { command, cwd } : { command };
-    }
-    case "grep": {
-      const pattern = str("pattern");
-      if (!pattern) return null;
-      const path = str("path");
-      return path ? { pattern, path } : { pattern };
-    }
-    case "glob":
-      return { path: str("path") ?? "." };
-    case "web_search": {
-      const query = str("query");
-      return query ? { query } : null;
-    }
-    case "get_agent_activity":
-    case "get_agent_status": {
-      const agentId = str("agentId");
-      return agentId ? { agentId } : null;
-    }
-    case "list_models":
-    case "inspect_provider": {
-      const provider = str("provider");
-      return provider ? { provider } : null;
-    }
-    case "capture_terminal": {
-      const terminalId = str("terminalId");
-      return terminalId ? { terminalId } : null;
-    }
-    case "browser_snapshot":
-    case "browser_logs": {
-      const browserId = str("browserId");
-      return browserId ? { browserId } : null;
-    }
-    case "list_agents":
-    case "list_workspaces":
-    case "list_providers":
-    case "list_profiles": {
-      const out: Record<string, string> = {};
-      const cwd = str("cwd");
-      const serverId = str("serverId");
-      if (cwd) out.cwd = cwd;
-      if (serverId) out.serverId = serverId;
-      return out;
-    }
-    default:
-      if (
-        ["memory_authority_pack_read", "brain_memory_search", "brain_context_resolve"].includes(tool) ||
-        (tool.startsWith("mcp_") && /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i.test(tool))
-      ) {
-        try {
-          return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b)))));
-        } catch {
-          return null;
-        }
-      }
-      return null;
-  }
+  return sharedOmpInvocationArgs(tool, raw) as Record<string, Json> | null;
 }
 
 function pythonJson(value: unknown): string {

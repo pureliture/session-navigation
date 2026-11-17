@@ -833,3 +833,78 @@ test("clicking an older mounted row dispatches upward wheel intent to release Pa
   expect(await pending).toBe(false);
   expect(notFoundFired).toBe(false);
 });
+
+test("Markdown bold/code messages match HTML-rendered chat DOM, two <paseo-system> notices never collide on XML header, and Paseo virtualizer data-index=38 scrolls UP to row 1085", async () => {
+  // 1. Markdown-formatted Outline row matches rendered HTML textContent (without ** or `)
+  const mdRow: Row = {
+    ...row("msg:assistant:100:abc", "assistant"),
+    summary_line: "지시하신 대로 **코드는 일절 수정하지 않고**, **`OMP Free`** 에이전트로 조사했습니다.",
+    message_text: "지시하신 대로 **코드는 일절 수정하지 않고**, **`OMP Free`** 에이전트로 조사했습니다.",
+  };
+  const mdRoot = new Element({ "data-testid": "agent-chat-scroll" });
+  const mdNode = new Element(
+    { "data-history-row-id": "native-md" },
+    "지시하신 대로 코드는 일절 수정하지 않고, OMP Free 에이전트로 조사했습니다.",
+  );
+  mdRoot.add(mdNode);
+  expect(await scrollToMessageInChat(mdRow, [mdRow], { document: new Element().add(mdRoot) })).toBe(true);
+  expect(mdNode.scrolled).toBe(true);
+
+  // 2. Two distinct <paseo-system> subagent notifications never collide on '<paseo-system version="1"...'
+  const noticeA = '<paseo-system version="1" kind="agent-notification" source-agent-id="sub-aaa111" source-agent-title="Audit Alpha" event="finished"><agent-response>Alpha result</agent-response></paseo-system>';
+  const noticeB = '<paseo-system version="1" kind="agent-notification" source-agent-id="sub-bbb222" source-agent-title="Audit Beta" event="finished"><agent-response>Beta result</agent-response></paseo-system>';
+  const rowB: Row = { ...row("msg:user:2:b", "user"), summary_line: "[Subagent finished] Audit Beta", message_text: noticeB };
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "user_message", text: noticeA } }] }, rowB)).toBe(false);
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "plugin", data: { title: "Audit Beta" } } }] }, rowB)).toBe(true);
+
+  // 3. Long 1150-row session at bottom of Paseo 40-item virtualizer (data-index="38" at scrollTop=9200):
+  // Clicking row 1085 MUST scroll UPWARD and find row 1085 instead of confusing data-index=38 with row 38!
+  const vRoot = new Element({ "data-testid": "agent-chat-scroll" });
+  vRoot.scrollHeight = 10_000;
+  vRoot.clientHeight = 800;
+  vRoot.scrollTop = 9_200;
+  const tailNode = new Element({ "data-history-row-id": "stream-38", "data-index": "38" }, "Checklist Progress OMP TODO");
+  vRoot.add(tailNode);
+  const allRows = Array.from({ length: 1150 }, (_, idx) => ({
+    ...row(`r_${idx}`, idx % 2 === 0 ? "user" : "assistant"),
+    summary_line: idx === 1085 ? "이건수정바로하지말고 검토만해 세션이 그렇게 길지않은데" : `Turn item ${idx}`,
+    message_text: idx === 1085 ? "이건수정바로하지말고 검토만해 세션이 그렇게 길지않은데" : `Turn item ${idx}`,
+  }));
+  const vDoc = {
+    defaultView: {
+      WheelEvent: class {
+        type: string;
+        deltaY?: number;
+        constructor(type: string, init?: { deltaY?: number }) {
+          this.type = type;
+          this.deltaY = init?.deltaY;
+        }
+      },
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    },
+    querySelectorAll: (sel: string) => (sel.includes("agent-chat-scroll") ? [vRoot] : vRoot.querySelectorAll(sel)),
+  };
+  let targetMounted: any = null;
+  let clock = 1000;
+  const found = await scrollToMessageInChat(allRows[1085], allRows, {
+    document: vDoc,
+    now: () => (clock += 120),
+    afterLoad: async () => {
+      if (vRoot.scrollTop < 9_000 && !targetMounted) {
+        targetMounted = new Element(
+          { "data-history-row-id": "stream-32", "data-index": "32" },
+          "이건수정바로하지말고 검토만해 세션이 그렇게 길지않은데",
+        );
+        vRoot.children = [targetMounted];
+        targetMounted.parent = vRoot;
+      }
+    },
+  });
+  expect(found).toBe(true);
+  expect(targetMounted?.scrolled).toBe(true);
+});

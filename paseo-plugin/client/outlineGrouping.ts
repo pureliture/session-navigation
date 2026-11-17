@@ -90,19 +90,19 @@ export function messageSummarySnippet(text: string | undefined | null): string {
     .join("\n");
 }
 
-const SUMMARY_SOURCES = new Set([
-  "rule_summary",
-  "llm",
-  "llm_summary",
-  "summarize",
-  "summarize_pending",
-]);
+const SUMMARY_SOURCES: Record<string, true> = {
+  rule_summary: true,
+  llm: true,
+  llm_summary: true,
+  summarize: true,
+  summarize_pending: true,
+};
 
 export function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boolean {
   const src = String(row.source ?? "")
     .trim()
     .toLowerCase();
-  if (SUMMARY_SOURCES.has(src)) return true;
+  if (Object.hasOwn(SUMMARY_SOURCES, src)) return true;
   if (src === "explicit_user_hide") return localMode === "summarize";
   return localMode === "summarize";
 }

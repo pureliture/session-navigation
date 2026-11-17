@@ -219,6 +219,7 @@ export class OutlineAutoScroller {
 
 export interface OutlineScrollListHandle {
   scrollToEnd?: (params?: { animated?: boolean }) => void;
+  scrollTo?: (params: { x?: number; y: number; animated?: boolean }) => void;
   scrollToOffset?: (params: { offset: number; animated?: boolean }) => void;
   getScrollableNode?: () => any;
   _listRef?: { _scrollRef?: { getScrollableNode?: () => any } };
@@ -287,7 +288,11 @@ export class OutlineScrollDriver {
         : Math.max(0, targetTop);
     const clamped = Math.min(Math.max(0, targetTop), maxTop);
     this.metrics.scrollTop = clamped;
-    list.scrollToOffset?.({ offset: clamped, animated: false });
+    if (typeof list.scrollToOffset === "function") {
+      list.scrollToOffset({ offset: clamped, animated: false });
+    } else {
+      list.scrollTo?.({ y: clamped, animated: false });
+    }
     const dom = this.domScrollable(list);
     if (dom && typeof dom.scrollHeight === "number") {
       dom.scrollTop = clamped;
@@ -299,13 +304,23 @@ export class OutlineScrollDriver {
     if (!list) return false;
     this.scroller.markProgrammaticScroll(now);
     list.scrollToEnd?.({ animated: false });
+    const dom = this.domScrollable(list);
+    if (dom && typeof dom.scrollHeight === "number") {
+      const bottomTop = Math.max(0, dom.scrollHeight - (dom.clientHeight ?? 0));
+      dom.scrollTop = bottomTop;
+      this.metrics.scrollTop = bottomTop;
+      this.metrics.scrollHeight = dom.scrollHeight;
+      if (typeof dom.clientHeight === "number" && dom.clientHeight > 0) {
+        this.metrics.clientHeight = dom.clientHeight;
+      }
+      return true;
+    }
     const m = this.readMetrics(list);
     if (m.scrollHeight > 0) {
       const bottomTop = Math.max(0, m.scrollHeight - m.clientHeight);
       this.metrics.scrollTop = bottomTop;
-      const dom = this.domScrollable(list);
-      if (dom && typeof dom.scrollHeight === "number") {
-        dom.scrollTop = bottomTop;
+      if (typeof list.scrollTo === "function" && typeof list.scrollToEnd !== "function") {
+        list.scrollTo({ y: bottomTop, animated: false });
       }
     }
     return true;
@@ -403,6 +418,17 @@ export class OutlineScrollDriver {
           }
         }
       });
+      if (opts?.scheduleFrame === undefined && typeof setTimeout === "function") {
+        setTimeout(() => {
+          if (!this.scroller.isUserScrolledUp() && this.scroller.isStuckToBottom()) {
+            try {
+              this.scrollToBottom(list);
+            } catch {
+              // Ignore unmount during settle timer.
+            }
+          }
+        }, 60);
+      }
     } catch {
       // Ignore non-scrollable mock environments.
     }

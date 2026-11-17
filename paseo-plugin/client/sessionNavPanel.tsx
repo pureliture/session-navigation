@@ -1,9 +1,9 @@
 import type { PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { useAgent, usePaseo, useRpc, useTabState } from "@getpaseo/plugin/client";
-import { FlatList as UiFlatList, Icon, ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
+import { Icon, ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { FlatList as RnFlatList, Pressable, ScrollView as RnScrollView, Text, TextInput as RnTextInput, View } from "react-native";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Pressable, ScrollView as RnScrollView, Text, TextInput as RnTextInput, View } from "react-native";
 import { z } from "zod";
 import {
   dbChoiceRpc,
@@ -43,7 +43,7 @@ import {
   utf8ByteLength,
   type OutlineRow,
 } from "./outlineGrouping";
-import { initialRenderCount, OutlineScrollDriver } from "./outlineScroll";
+import { OutlineScrollDriver } from "./outlineScroll";
 
 const panelTabStateSchema = z.object({
   query: z.string().default(""),
@@ -116,7 +116,6 @@ function ActionSvgIcon({
   );
 }
 
-const FlatList = UiFlatList ?? RnFlatList;
 const ScrollView = UiScrollView ?? RnScrollView;
 const TextInput = UiTextInput ?? RnTextInput;
 
@@ -156,6 +155,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const setTabState = childScope ? setInlineState : setStoredState;
   const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [dbErrorOpen, setDbErrorOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -174,6 +174,13 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       notice === SUMMARY_QUEUED_NOTICE ? 6000 : 4000);
     return () => clearTimeout(timer);
   }, [notice]);
+  useEffect(() => {
+    if (!highlightedId || previewOpen) return;
+    const timer = setTimeout(() => {
+      setHighlightedId((current) => (current === highlightedId ? null : current));
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [highlightedId, previewOpen]);
   const [lastActionByItem, setLastActionByItem] = useState<Record<string, "hide" | "summarize">>({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [pendingGroupId, setPendingGroupId] = useState<string | null>(null);
@@ -967,12 +974,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     } else {
       scrollDriverRef.current?.prepareDrawerToggle(listRef.current, false);
       setPreviewOpen(false);
+      setHighlightedId(null);
     }
   };
 
   useEffect(() => {
     cancelChatNavigation();
     setSelectedId(null);
+    setHighlightedId(null);
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
@@ -981,7 +990,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   useEffect(() => () => cancelChatNavigation(), []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     scrollDriverRef.current?.maybeSync(listRef.current, scrollState);
   }, [groupedRows.length, isScrollLoading, isOutlineListMounted, sessionViewKey, query]);
   const styles = useMemo(() => {
@@ -1350,6 +1359,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const handleRowPress = async (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
+    setHighlightedId((current) => (!previewOpen && current === rowKey ? null : rowKey));
     if (!hasDocument) {
       openPreviewDrawer();
       return;
@@ -1371,7 +1381,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       openAgent: displayOnly && navigation ? { agentId, open: () => navigation.openAgent({ agentId }) } : undefined,
       onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
       onNotFound: () => setNotice("Not loaded in chat"),
-      getHistory: () => queryClient.fetchQuery(historyQueryOptions),
+      getHistory: () => queryClient.fetchQuery({ ...historyQueryOptions, staleTime: 0 }),
     });
   };
 
@@ -1414,7 +1424,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   const renderRow = (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
-    const isSelected = (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey;
+    const isSelected = previewOpen
+      ? (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey
+      : highlightedId === rowKey;
     const isHidden = row.status === "hidden";
     const kind =
       row.kind ?? (row.tool_name === "user" ? "user" : row.tool_name === "assistant" ? "assistant" : "tool");
@@ -1763,7 +1775,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const renderChildRow = (child: OutlineRow & { type: "child" }) => {
     const row = child.row;
     const rowKey = row.item_id ?? row.tool_call_id;
-    const isSelected = (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey;
+    const isSelected = previewOpen
+      ? (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey
+      : highlightedId === rowKey;
     const isHidden = row.status === "hidden";
     const shortCallId =
       row.tool_call_id.length > 12
@@ -2091,19 +2105,13 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             onWheel: (ev: any) => scrollDriverRef.current?.handleWheel(ev),
           } as Record<string, unknown>)}
         >
-          <FlatList
+          <ScrollView
             ref={listRef}
             key={sessionViewKey || "outline-list"}
             style={styles.list}
             contentContainerStyle={styles.listContent}
             nestedScrollEnabled={true}
-            initialNumToRender={initialRenderCount(groupedRows.length)}
-            maxToRenderPerBatch={200}
-            windowSize={21}
             scrollEventThrottle={16}
-            data={groupedRows}
-            keyExtractor={(item) => item.key}
-            extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
             onScrollBeginDrag={() => scrollDriverRef.current?.handleDragStart()}
             onScroll={(ev: any) => scrollDriverRef.current?.handleScrollEvent(ev)}
             onScrollEndDrag={(ev: any) => scrollDriverRef.current?.handleScrollEvent(ev)}
@@ -2112,11 +2120,24 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             onContentSizeChange={(_w: number, h: number) =>
               scrollDriverRef.current?.handleContentSizeChange(listRef.current, h, scrollState)
             }
-            renderItem={({ item }) => {
-              if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
-              return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
-            }}
-          />
+          >
+            {groupedRows.map((item) => {
+              if (item.type === "group") {
+                return (
+                  <View key={item.key}>
+                    {renderGroupRow(item)}
+                    {!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}
+                  </View>
+                );
+              }
+              return (
+                <View key={item.key}>
+                  {item.type === "child" ? renderChildRow(item) : renderRow(item.row)}
+                  {renderLinkedChildren([item.row.tool_call_id])}
+                </View>
+              );
+            })}
+          </ScrollView>
         </View>
       )}
 

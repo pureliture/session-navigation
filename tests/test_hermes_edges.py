@@ -545,3 +545,36 @@ db.close();
 """
     proc = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_codex_strict_schema_null_optional_args_and_integer_ids_parity() -> None:
+    import shutil, subprocess
+    filter_invocation = _adapter.allowlist.filter_invocation
+
+    # Codex strict tool schemas emit explicit null for omitted optional parameters
+    inv_rf, om_rf = filter_invocation("read_file", '{"path": "src/app.py", "offset": null, "limit": null}')
+    assert inv_rf == {"tool_name": "read_file", "arguments": {"path": "src/app.py"}} and om_rf == {}
+    inv_tm, om_tm = filter_invocation("terminal", '{"command": "ls -la", "workdir": null, "timeout": null}')
+    assert inv_tm == {"tool_name": "terminal", "arguments": {"command": "ls -la"}} and om_tm == {}
+    inv_bs, om_bs = filter_invocation("browser_snapshot", '{"tab_id": 2, "selector": null}')
+    assert inv_bs == {"tool_name": "browser_snapshot", "arguments": {"tab_id": 2}} and om_bs == {}
+
+    bun = shutil.which("bun")
+    if bun:
+        proc = subprocess.run(
+            [
+                bun,
+                "-e",
+                'import { hermesFilterInvocation } from "./paseo-plugin/server/hermesHistory.ts";'
+                'const a = hermesFilterInvocation("read_file", \'{"path":"src/app.py","offset":null,"limit":null}\');'
+                'const b = hermesFilterInvocation("terminal", \'{"command":"ls -la","workdir":null,"timeout":null}\');'
+                'const c = hermesFilterInvocation("browser_snapshot", \'{"tab_id":2,"selector":null}\');'
+                'if (JSON.stringify(a?.invocation?.arguments) !== \'{"path":"src/app.py"}\') process.exit(2);'
+                'if (JSON.stringify(b?.invocation?.arguments) !== \'{"command":"ls -la"}\') process.exit(3);'
+                'if (JSON.stringify(c?.invocation?.arguments) !== \'{"tab_id":2}\') process.exit(4);',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -9,8 +9,15 @@ const ROW = "[data-message-id], [data-history-row-id]";
 const TURN_SUMMARY = '[data-testid="turn-summary"]';
 const FOLLOWING = 4;
 
-function normalized(text: string) {
-  return text.replace(/\s+/g, " ").trim();
+function normalized(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]+\)/gu, "$1")
+    .replace(/`+/gu, "")
+    .replace(/\*\*|__|~~/gu, "")
+    .replace(/(?:^|\s)[#>*-]+\s+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase();
 }
 
 const IDENTITY_ATTRIBUTES = ["data-message-id", "data-history-row-id", "data-call-id", "data-item-id", "data-turn-id", "id"];
@@ -39,8 +46,14 @@ function messageHints(row: Row): string[] {
   const raw = row.message_text.trim();
   const decoded = raw.replace(/&quot;/gu, '"').replace(/&lt;/gu, "<").replace(/&gt;/gu, ">")
     .replace(/&apos;/gu, "'").replace(/&amp;/gu, "&");
-  push(raw.split(/\r?\n/u).map((line) => line.trim()).find(Boolean));
   if (!decoded.startsWith("<paseo-system")) {
+    for (const line of decoded.split(/\r?\n/u)) {
+      const clean = line.replace(/<[^>]+>/gu, " ").trim();
+      if (clean && normalized(clean).length >= 4) {
+        push(clean);
+        if (hints.length >= 4) break;
+      }
+    }
     push(decoded.replace(/<[^>]+>/gu, " ").trim());
     return hints;
   }
@@ -110,20 +123,39 @@ function toolHint(row: Pick<Row, "tool_input">): string | undefined {
 
 export function historyContainsRow(history: TimelineHistory, row: Row): boolean {
   const kind = row.kind ?? "tool";
+  const isSystemNotice = Boolean(
+    row.message_text?.trimStart().startsWith("<paseo-system") ||
+    row.summary_line?.startsWith("[Subagent "),
+  );
   return history.entries.some(({ item }) => {
     if (!item) return false;
-    const type = item.type;
-    if (kind === "user" ? type !== "user_message" : kind === "assistant" ? type !== "assistant_message" :
-      !["tool_call", "command", "terminal", "bash", "shell"].includes(String(type))) return false;
+    const type = String(item.type ?? "");
+    if (kind === "user") {
+      if (type !== "user_message" && !(isSystemNotice && ["plugin", "notification", "tool_call"].includes(type))) {
+        return false;
+      }
+    } else if (kind === "assistant") {
+      if (type !== "assistant_message" && type !== "error" && type !== "notification") return false;
+    } else if (!["tool_call", "command", "terminal", "bash", "shell", "todo"].includes(type)) {
+      return false;
+    }
     const detail = typeof item.detail === "object" && item.detail !== null
       ? item.detail as Record<string, unknown> : {};
     const ids = [item.messageId, item.clientMessageId, item.id, item.callId, detail.call_id];
     if (ids.some((value) => typeof value === "string" &&
       [row.item_id, row.tool_call_id].some((id) => id && identityMatches(value, id)))) return true;
     const preview = fallbackToolPreview(item, detail);
-    const texts = kind === "tool" ? [preview.tool_input, toolHint(preview), preview.tool_output, detail.text, detail.label] : [item.text];
+    const todoText = Array.isArray(item.items)
+      ? item.items.map((entry: any) => (typeof entry?.text === "string" ? entry.text : "")).join(" ")
+      : undefined;
+    const pluginText = item.data !== undefined ? JSON.stringify(item.data) : undefined;
+    const texts = kind === "tool"
+      ? [preview.tool_input, toolHint(preview), preview.tool_output, detail.text, detail.label, todoText]
+      : [item.text, item.message, pluginText];
     const hints = kind === "tool" ? [row.summary_line, row.tool_output, toolHint(row)] : messageHints(row);
-    return textNeedles(hints).some((needle) => texts.some((text) => typeof text === "string" && normalized(text).includes(needle)));
+    return textNeedles(hints).some((needle) =>
+      texts.some((text) => typeof text === "string" && normalized(text).includes(needle)),
+    );
   });
 }
 
@@ -256,8 +288,16 @@ function turnCollapsed(root: any, turn: Turn): boolean {
 }
 
 function visible(node: any): boolean {
-  if (typeof node.getClientRects !== "function") return true;
-  return node.getClientRects().length > 0;
+  if (!node) return false;
+  if (typeof node.getClientRects === "function" && node.getClientRects().length === 0) return false;
+  if (typeof node.closest === "function" && node.closest('[aria-hidden="true"], [hidden], [inert]')) return false;
+  try {
+    const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node);
+    if (style && (style.visibility === "hidden" || style.display === "none")) return false;
+  } catch {
+    // Ignore mock DOMs without getComputedStyle.
+  }
+  return true;
 }
 
 // Paseo keeps other agents' chats mounted (hidden); bind to the one showing this session.
@@ -331,16 +371,14 @@ function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual
       ),
     );
     if (idIndex >= 0) return [idIndex];
-    const rawIdx = node.getAttribute?.("data-index");
-    if (rawIdx != null && /^\d+$/u.test(rawIdx)) {
-      const parsed = Number(rawIdx);
-      if (parsed >= 0 && parsed < rows.length) return [parsed];
-    }
+    // Never treat Paseo's 40-item virtualizer `data-index` as an index into Outline `rows`.
     const text = normalized(node.textContent ?? "");
     let longest = 0;
     let matched: number[] = [];
     rows.forEach((candidate, candidateIndex) => {
-      const needles = textNeedles(candidate.kind === "tool" ? [candidate.summary_line] : messageHints(candidate));
+      const needles = textNeedles(
+        candidate.kind === "tool" ? [toolHint(candidate), candidate.summary_line] : messageHints(candidate),
+      );
       const needle = needles.filter((value) => text.includes(value)).sort((x, y) => y.length - x.length)[0];
       if (needle) {
         if (needle.length > longest) {
@@ -366,10 +404,9 @@ function seekMountedWindow(
   const targetIndex = rowPositionIndex(rows, target);
   if (targetIndex < 0) return "needOlder";
   const { indices: mounted, virtual } = mountedRowIndices(root, rows);
-  const older = mounted.length > 0 ? targetIndex < (Math.min(...mounted) + Math.max(...mounted)) / 2 : targetIndex < rows.length / 2;
   const scrollable = chatScroller(root);
   const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
-  if (!(extent > 0)) return older ? "needOlder" : "unknown";
+  if (!(extent > 0)) return targetIndex < rows.length / 2 ? "needOlder" : "unknown";
   const style = doc?.defaultView?.getComputedStyle?.(scrollable);
   const negative = style?.flexDirection === "column-reverse" || scrollable.scrollTop < 0;
   const inverted =
@@ -381,6 +418,12 @@ function seekMountedWindow(
     : inverted
       ? extent - scrollable.scrollTop
       : scrollable.scrollTop;
+  const older =
+    mounted.length > 0
+      ? targetIndex < (Math.min(...mounted) + Math.max(...mounted)) / 2
+      : position >= extent - 2
+        ? true
+        : (targetIndex / Math.max(1, rows.length - 1)) <= (position / extent);
   if (bounds.extent !== extent) {
     bounds.low = undefined;
     bounds.high = undefined;

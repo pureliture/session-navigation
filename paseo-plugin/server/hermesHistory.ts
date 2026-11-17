@@ -88,6 +88,15 @@ const HERMES_INTERNAL: Record<string, true> = {
 
 const TERMINAL_BLOCKED_TRUTHY_OPTIONS = ["background", "pty", "persist_on_release", "notify"] as const;
 const MCP_READ_PATTERN = /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i;
+const INT_OR_STR_ID_KEYS: Record<string, true> = {
+  id: true,
+  tabId: true,
+  tab_id: true,
+  scheduleId: true,
+  schedule_id: true,
+  terminalId: true,
+  terminal_id: true,
+};
 const MAX_HERMES_RECORD_BYTES = 32 * 1024 * 1024;
 const MAX_HERMES_RECORDS = 5000;
 
@@ -192,7 +201,7 @@ export function hermesFilterInvocation(
     for (const flag of TERMINAL_BLOCKED_TRUTHY_OPTIONS) {
       if (Object.hasOwn(args, flag) && isTruthy(args[flag])) return null;
     }
-    if (Object.hasOwn(args, "timeout")) {
+    if (Object.hasOwn(args, "timeout") && args.timeout !== null) {
       const t = args.timeout;
       if (typeof t !== "number" || !Number.isSafeInteger(t) || t < 1) return null;
     }
@@ -222,6 +231,7 @@ export function hermesFilterInvocation(
   const omitted: Record<string, Json> = {};
   for (const key of Object.keys(args).sort(unicodeCompare)) {
     const val = args[key];
+    if (val === null || val === undefined) continue;
     if (fieldSet.has(key)) {
       if (name === "read_file" && (key === "offset" || key === "limit")) {
         if (typeof val !== "number" || !Number.isSafeInteger(val) || val < 1) return null;
@@ -243,6 +253,8 @@ export function hermesFilterInvocation(
         } else {
           return null;
         }
+      } else if (Object.hasOwn(INT_OR_STR_ID_KEYS, key) && typeof val === "number" && Number.isSafeInteger(val)) {
+        filtered[key] = val;
       } else {
         if (typeof val !== "string") return null;
         filtered[key] = val;

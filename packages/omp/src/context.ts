@@ -201,6 +201,38 @@ export const CLEANUP_GUIDANCE =
 export const hash = (value: string): string =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
+function codepointCompare(left: string, right: string): number {
+  const l = [...left];
+  const r = [...right];
+  for (let i = 0; i < Math.min(l.length, r.length); i++) {
+    const diff = l[i].codePointAt(0)! - r[i].codePointAt(0)!;
+    if (diff) return diff;
+  }
+  return l.length - r.length;
+}
+
+function canonicalJsonObject(value: unknown): unknown {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+      throw new Error("invalid_json_number");
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(canonicalJsonObject);
+  if (value && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw new Error("invalid_json_object");
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj).sort(codepointCompare)) {
+      if (obj[key] === undefined) continue;
+      out[key] = canonicalJsonObject(obj[key]);
+    }
+    return out;
+  }
+  throw new Error("invalid_json_value");
+}
 export function ompInvocationArgs(
   tool: string,
   raw: Record<string, unknown>,
@@ -278,7 +310,7 @@ export function ompInvocationArgs(
         (tool.startsWith("mcp_") && /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i.test(tool))
       ) {
         try {
-          return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b)))));
+          return canonicalJsonObject(raw) as Record<string, unknown>;
         } catch {
           return null;
         }
