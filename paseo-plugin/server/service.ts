@@ -212,8 +212,18 @@ export class PaseoService {
           capabilities: this.capabilities(scope),
         };
       });
-    return { ok: true, scopes: bindAgents(this.home, scopes.filter((row) =>
-      parentScope === undefined || row.parent_scope === parentScope)) };
+    const filtered = scopes.filter(
+      (row) => parentScope === undefined || row.parent_scope === parentScope,
+    );
+    return {
+      ok: true,
+      scopes:
+        parentScope === undefined
+          ? bindAgents(this.home, filtered, undefined, (scopeKey) =>
+              this.capabilities(scopeKey),
+            )
+          : bindAgents(this.home, filtered),
+    };
   }
 
   private timeline(
@@ -281,9 +291,9 @@ export class PaseoService {
       tokens_display: "—",
       source: item.compaction_source,
       summary_line:
-        summaryLine(
-          item.visibility === "hidden" ? item.compacted : item.original,
-        ) || summaryLine(item.original),
+        summaryLine(item.original) ||
+        summaryLine(item.compacted) ||
+        `[${item.tool_name}]`,
       bytes_size: bytes(item.original),
       tool_output: preview(item.original),
       ...(item.invocation_snapshot &&
@@ -324,15 +334,23 @@ export class PaseoService {
       seen.add(row.item_id);
       let merged: Message;
       const item = stored.get(row.item_id);
-      if (item)
+      if (item) {
+        const itemProps = this.itemRow(item);
+        const preservedSummary =
+          typeof row.summary_line === "string" &&
+          row.summary_line &&
+          !row.summary_line.startsWith("[hidden:")
+            ? row.summary_line
+            : itemProps.summary_line;
         merged = {
           ...row,
-          ...this.itemRow(item),
+          ...itemProps,
+          summary_line: preservedSummary,
           ...(row.tool_input !== undefined
             ? { tool_input: row.tool_input }
             : {}),
         };
-      else {
+      } else {
         const unit = units.get(row.item_id);
         const hidden = unit?.visibility === "hidden";
         const version = Number(unit?.version ?? 1);
@@ -553,6 +571,13 @@ export class PaseoService {
               String(t.tool_call_id) === record.call_id &&
               String(t.item_id) === fallbackId,
           );
+        const defaultCompacted =
+          evaluated?.rendered ??
+          `[hidden: ${record.invocation.tool_name} ${record.call_id}]\n${excerpt}`;
+        const compacted =
+          bytes(defaultCompacted) >= bytes(record.content)
+            ? `[hidden:${fallbackId}]`
+            : defaultCompacted;
         const fallback: Item = {
           item_id: fallbackId,
           tool_call_id: record.call_id,
@@ -560,9 +585,7 @@ export class PaseoService {
           content_sha256: record.content_sha256,
           invocation_digest: record.invocation_digest,
           original: record.content,
-          compacted:
-            evaluated?.rendered ??
-            `[hidden: ${record.invocation.tool_name} ${record.call_id}]\n${excerpt}`,
+          compacted,
           excerpt_lines: evaluated?.choice?.lines ?? [...head, ...tail],
           visibility: "hidden",
           version: evaluated?.rendered ? 2 : 1,

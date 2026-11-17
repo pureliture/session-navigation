@@ -2,7 +2,7 @@ import type { PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { useAgent, usePaseo, useRpc, useTabState } from "@getpaseo/plugin/client";
 import { Icon, ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView as RnScrollView, Text, TextInput as RnTextInput, View } from "react-native";
 import { z } from "zod";
 import {
@@ -118,6 +118,574 @@ function ActionSvgIcon({
 
 const ScrollView = UiScrollView ?? RnScrollView;
 const TextInput = UiTextInput ?? RnTextInput;
+const EMPTY_LINKED_CHILDREN: readonly ChildScope[] = [];
+
+type MemoRowProps = {
+  item: OutlineRow;
+  isSelected: boolean;
+  isExpanded: boolean;
+  isPending: boolean;
+  displayOnly: boolean;
+  resolvedScopeKey: string | null;
+  capabilities: Capabilities | undefined;
+  lastActionMode: "hide" | "summarize" | undefined;
+  compact: boolean;
+  hasDocument: boolean;
+  theme: PluginAgentPanelProps["theme"];
+  styles: any;
+  linkedChildren: readonly ChildScope[];
+  onPressRow: (row: Row) => void;
+  onToggleGroup: (groupId: string, currentlyExpanded: boolean) => void;
+  onHideRow: (row: Row, mode: "hide" | "summarize") => void;
+  onUnhideRow: (row: Row) => void;
+  onGroupBatch: (group: OutlineRow & { type: "group" }, action: "hide" | "summarize" | "unhide") => void;
+  renderLinkedChildren?: (children: readonly ChildScope[]) => any;
+};
+
+const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
+  item,
+  isSelected,
+  isExpanded,
+  isPending,
+  displayOnly,
+  resolvedScopeKey,
+  capabilities,
+  lastActionMode,
+  compact,
+  hasDocument,
+  theme,
+  styles,
+  linkedChildren,
+  onPressRow,
+  onToggleGroup,
+  onHideRow,
+  onUnhideRow,
+  onGroupBatch,
+  renderLinkedChildren,
+}: MemoRowProps) {
+  const renderMessageHideToggle = (row: Row) => {
+    if (displayOnly || !resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
+    const hidden = row.status === "hidden";
+    const iconSize = compact ? 13 : 14;
+    return (
+      <View style={styles.actionsContainer}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={hidden ? "Unhide message" : "Hide message"}
+          disabled={!actionAllowed(row, capabilities, hidden ? "unhide" : "hide")}
+          style={hidden ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
+          onPress={(e) => {
+            e.stopPropagation();
+            if (hidden) onUnhideRow(row);
+            else onHideRow(row, "hide");
+          }}
+        >
+          <ActionSvgIcon kind="hide" slashed={hidden} size={iconSize} color={theme.colors.foregroundMuted} />
+        </Pressable>
+      </View>
+    );
+  };
+
+  const renderMessageSnippet = (row: Row, empty: string) => {
+    const normalized = messageSummarySnippet(row.summary_line ?? row.message_text);
+    return row.status === "hidden" ? (
+      <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
+        {hiddenRowSnippet(row, false, normalized.split("\n")[0] || "tap icon to restore")}
+      </Text>
+    ) : (
+      <Text style={styles.summarySnippet} numberOfLines={2}>
+        {normalized || empty}
+      </Text>
+    );
+  };
+
+  if (item.type === "group") {
+    const group = item;
+    const eyeAction = groupEyeAction(group);
+    const noRemainingManageableVisible = group.allHidden || group.allManageableHidden;
+    const restoreIconKind = groupRestoreIconKind(group);
+    const badgeText = groupBadgeText(group);
+    const subtitleText = groupSubtitleText(group);
+    const iconSize = compact ? 13 : 14;
+
+    return (
+      <View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Tool group: ${group.title}`}
+          style={[
+            styles.rowItem,
+            styles.groupRowItem,
+            isSelected ? styles.rowItemSelected : null,
+            group.allHidden ? styles.rowItemHidden : null,
+          ]}
+          onPress={() => {
+            if (isExpanded) {
+              onToggleGroup(group.groupId, true);
+              return;
+            }
+            onToggleGroup(group.groupId, false);
+            if (hasDocument && group.children.length > 0) {
+              onPressRow(group.children[0]);
+            }
+          }}
+        >
+          <View style={styles.rowMainLine}>
+            <View style={styles.rowLeftWrap}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={isExpanded ? "Collapse group" : "Expand group"}
+                style={styles.expandToggleBtn}
+                hitSlop={8}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onToggleGroup(group.groupId, isExpanded);
+                }}
+              >
+                <Text style={styles.expandToggleText}>{isExpanded ? "▾" : "▸"}</Text>
+              </Pressable>
+
+              <Text style={[styles.itemIcon, group.allHidden ? { color: theme.colors.foregroundMuted } : null]}>
+                {group.allHidden ? "⊘" : "⚡"}
+              </Text>
+
+              <Text
+                style={[
+                  styles.toolNameText,
+                  group.allHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
+                ]}
+                numberOfLines={1}
+              >
+                {group.title}
+              </Text>
+
+              {badgeText ? (
+                <View style={styles.mixedBadge}>
+                  <Text style={styles.mixedBadgeText}>
+                    {badgeText}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Right inline slot: [Group Hide/Summarize Action Icons] + [Total Bytes] */}
+            <View style={styles.rowRightWrap}>
+              {!displayOnly && resolvedScopeKey && group.children.some((row) => actionAllowed(row, capabilities, row.status === "hidden" ? "unhide" : "hide") || actionAllowed(row, capabilities, "summarize")) ? (
+                <View style={[styles.actionsContainer, isPending ? { opacity: 0.5 } : null]}>
+                  {noRemainingManageableVisible ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Unhide all in ${group.groupId}`}
+                      style={styles.inlineIconBtnSlashed}
+                      disabled={isPending}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onGroupBatch(group, "unhide");
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind={restoreIconKind}
+                        slashed={true}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                  ) : (
+                    <>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`${eyeAction === "unhide" ? "Unhide hidden" : "Hide all"} in ${group.groupId}`}
+                        style={eyeAction === "unhide" ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
+                        disabled={isPending || (eyeAction !== "unhide" && !capabilities?.hide)}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onGroupBatch(group, eyeAction);
+                        }}
+                      >
+                        <ActionSvgIcon
+                          kind={eyeAction === "unhide" ? restoreIconKind : "hide"}
+                          slashed={eyeAction === "unhide"}
+                          size={iconSize}
+                          color={theme.colors.foregroundMuted}
+                        />
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Summarize all in ${group.groupId}`}
+                        style={styles.inlineIconBtn}
+                        disabled={isPending || !capabilities?.summarize}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onGroupBatch(group, "summarize");
+                        }}
+                      >
+                        <ActionSvgIcon
+                          kind="summarize"
+                          slashed={false}
+                          size={iconSize}
+                          color={theme.colors.foregroundMuted}
+                        />
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+              ) : null}
+
+              <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
+                {groupMetric(group)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.treeLineContainer}>
+            <Text style={noRemainingManageableVisible ? styles.summaryHiddenSnippet : styles.summarySnippet} numberOfLines={1}>
+              {subtitleText}
+            </Text>
+          </View>
+        </Pressable>
+        {!isExpanded && linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
+      </View>
+    );
+  }
+
+  if (item.type === "child") {
+    const row = item.row;
+    const isHidden = row.status === "hidden";
+    const shortCallId =
+      row.tool_call_id.length > 12
+        ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
+        : row.tool_call_id;
+    const metricText = rowMetric(row);
+    const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
+    const summarized = isSummarizedRow(row, lastActionMode);
+    const iconSize = compact ? 12 : 13;
+
+    return (
+      <View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Select tool ${row.tool_call_id}`}
+          style={[
+            styles.rowItem,
+            styles.childRowItem,
+            isSelected ? styles.rowItemSelected : null,
+            isHidden ? styles.rowItemHidden : null,
+          ]}
+          onPress={() => onPressRow(row)}
+        >
+          <View style={styles.rowMainLine}>
+            <View style={styles.rowLeftWrap}>
+              <Text
+                style={[
+                  styles.itemIcon,
+                  isHidden ? { color: theme.colors.foregroundMuted } : null,
+                  { fontSize: 9 },
+                ]}
+              >
+                {isHidden ? "⊘" : "↳"}
+              </Text>
+              <Text
+                style={[
+                  styles.toolNameText,
+                  { fontSize: compact ? 10 : 11 },
+                  isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
+                ]}
+                numberOfLines={1}
+              >
+                {row.tool_name ?? "tool"}
+              </Text>
+              {shortCallId ? (
+                <Text style={styles.callIdText} numberOfLines={1}>
+                  {shortCallId}
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={styles.rowRightWrap}>
+              {!displayOnly && resolvedScopeKey && row.manageable !== false ? (
+                <View style={styles.actionsContainer}>
+                  {isHidden ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Unhide ${row.tool_call_id}`}
+                      style={styles.inlineIconBtnSlashed}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onUnhideRow(row);
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind={summarized ? "summarize" : "hide"}
+                        slashed={true}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                  ) : (
+                    <>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Hide ${row.tool_call_id}`}
+                        disabled={!actionAllowed(row, capabilities, "hide")}
+                        style={styles.inlineIconBtn}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onHideRow(row, "hide");
+                        }}
+                      >
+                        <ActionSvgIcon
+                          kind="hide"
+                          slashed={false}
+                          size={iconSize}
+                          color={theme.colors.foregroundMuted}
+                        />
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Summarize ${row.tool_call_id}`}
+                        disabled={!actionAllowed(row, capabilities, "summarize")}
+                        style={styles.inlineIconBtn}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onHideRow(row, "summarize");
+                        }}
+                      >
+                        <ActionSvgIcon
+                          kind="summarize"
+                          slashed={false}
+                          size={iconSize}
+                          color={theme.colors.foregroundMuted}
+                        />
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+              ) : null}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
+                {metricText}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.treeLineContainer, { marginLeft: compact ? 8 : 12 }]}>
+            {isHidden ? (
+              <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
+                {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap icon to restore")}
+              </Text>
+            ) : (
+              <Text style={styles.summarySnippet} numberOfLines={1}>
+                {firstSummaryLine || "(no summary)"}
+              </Text>
+            )}
+          </View>
+        </Pressable>
+        {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
+      </View>
+    );
+  }
+
+  const row = item.row;
+  const isHidden = row.status === "hidden";
+  const kind =
+    row.kind ?? (row.tool_name === "user" ? "user" : row.tool_name === "assistant" ? "assistant" : "tool");
+
+  if (kind === "user") {
+    return (
+      <View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="User prompt"
+          style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
+          onPress={() => onPressRow(row)}
+        >
+          <View style={styles.rowMainLine}>
+            <View style={styles.rowLeftWrap}>
+              <Text style={{ fontSize: 13, lineHeight: 15, color: theme.colors.accent, flexShrink: 0 }}>◈</Text>
+              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
+                User
+              </Text>
+            </View>
+            <View style={styles.rowRightWrap}>
+              {renderMessageHideToggle(row)}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
+            </View>
+          </View>
+          <View style={styles.treeLineContainer}>
+            {renderMessageSnippet(row, "(empty prompt)")}
+          </View>
+        </Pressable>
+        {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
+      </View>
+    );
+  }
+
+  if (kind === "assistant" || kind === "agent") {
+    const agentLabel =
+      kind === "agent" && row.tool_name && row.tool_name !== "assistant"
+        ? `Agent · ${row.tool_name}`
+        : "Agent";
+    return (
+      <View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Agent response"
+          style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
+          onPress={() => onPressRow(row)}
+        >
+          <View style={styles.rowMainLine}>
+            <View style={styles.rowLeftWrap}>
+              <Text
+                style={{
+                  fontSize: 12,
+                  lineHeight: 15,
+                  color: /^#[c-fC-F]/.test(theme.colors.surface0) ? "#2563eb" : "#3b82f6",
+                  flexShrink: 0,
+                }}
+              >
+                ✦
+              </Text>
+              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
+                {agentLabel}
+              </Text>
+            </View>
+            <View style={styles.rowRightWrap}>
+              {renderMessageHideToggle(row)}
+              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
+            </View>
+          </View>
+          <View style={styles.treeLineContainer}>
+            {renderMessageSnippet(row, "(empty response)")}
+          </View>
+        </Pressable>
+        {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
+      </View>
+    );
+  }
+
+  const shortCallId =
+    row.tool_call_id.length > 12
+      ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
+      : row.tool_call_id;
+  const metricText = rowMetric(row);
+  const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
+  const summarized = isSummarizedRow(row, lastActionMode);
+  const iconSize = compact ? 13 : 14;
+
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Select row ${row.tool_call_id}`}
+        style={[
+          styles.rowItem,
+          isSelected ? styles.rowItemSelected : null,
+          isHidden ? styles.rowItemHidden : null,
+        ]}
+        onPress={() => onPressRow(row)}
+      >
+        <View style={styles.rowMainLine}>
+          <View style={styles.rowLeftWrap}>
+            <Text style={[styles.itemIcon, isHidden ? { color: theme.colors.foregroundMuted } : null]}>
+              {isHidden ? "⊘" : "◇"}
+            </Text>
+            <Text
+              style={[
+                styles.toolNameText,
+                isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
+              ]}
+              numberOfLines={1}
+            >
+              {row.tool_name ?? "tool"}
+            </Text>
+            {shortCallId ? (
+              <Text style={styles.callIdText} numberOfLines={1}>
+                {shortCallId}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.rowRightWrap}>
+            {!displayOnly && resolvedScopeKey && row.manageable !== false ? (
+              <View style={styles.actionsContainer}>
+                {isHidden ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Unhide ${row.tool_call_id}`}
+                    style={styles.inlineIconBtnSlashed}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      onUnhideRow(row);
+                    }}
+                  >
+                    <ActionSvgIcon
+                      kind={summarized ? "summarize" : "hide"}
+                      slashed={true}
+                      size={iconSize}
+                      color={theme.colors.foregroundMuted}
+                    />
+                  </Pressable>
+                ) : (
+                  <>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Hide ${row.tool_call_id}`}
+                      disabled={!actionAllowed(row, capabilities, "hide")}
+                      style={styles.inlineIconBtn}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onHideRow(row, "hide");
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind="hide"
+                        slashed={false}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Summarize ${row.tool_call_id}`}
+                      disabled={!actionAllowed(row, capabilities, "summarize")}
+                      style={styles.inlineIconBtn}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onHideRow(row, "summarize");
+                      }}
+                    >
+                      <ActionSvgIcon
+                        kind="summarize"
+                        slashed={false}
+                        size={iconSize}
+                        color={theme.colors.foregroundMuted}
+                      />
+                    </Pressable>
+                  </>
+                )}
+              </View>
+            ) : null}
+            <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
+              {metricText}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.treeLineContainer}>
+          {isHidden ? (
+            <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
+              {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap slashed icon to restore")}
+            </Text>
+          ) : (
+            <Text style={styles.summarySnippet} numberOfLines={1}>
+              {firstSummaryLine || "(no summary)"}
+            </Text>
+          )}
+        </View>
+      </Pressable>
+      {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
+    </View>
+  );
+});
 
 export function SessionNavPanel({ theme, layout, params, navigation, tab, followVisible = true, candidateAgentIds, childScope, ancestry = [], ...panelProps }: PluginAgentPanelProps & {
   followVisible?: boolean;
@@ -196,12 +764,33 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   });
 
   const scopes = scopesQuery.data ?? [];
+  const scopesRef = useRef(scopes);
+  scopesRef.current = scopes;
+  const scopesSignature = useMemo(
+    () =>
+      scopes
+        .map(
+          (s) =>
+            `${s.scope_key}|${s.agent_id ?? ""}|${s.parent_scope ?? ""}|${s.subagent_id ?? ""}|${s.tool_call_id ?? ""}`,
+        )
+        .join("\n"),
+    [scopes],
+  );
   const hostProp: unknown = "host" in panelProps && typeof panelProps.host === "object" && panelProps.host !== null &&
     "id" in panelProps.host ? panelProps.host.id : undefined;
   const hostId = typeof hostProp === "string" ? hostProp : "";
   const workspaceProp: unknown = "workspaceId" in panelProps ? panelProps.workspaceId : undefined;
   const panelWorkspaceId = typeof workspaceProp === "string" ? workspaceProp : undefined;
   const hasDocument = hasDomDocument();
+
+  useEffect(() => {
+    setFocusedTab((current) => {
+      if (!current) return null;
+      if (current.kind === "provider_subagent" && agentId && current.parentAgentId !== agentId) return null;
+      if (current.kind === "agent" && agentId && current.agentId !== agentId) return null;
+      return current;
+    });
+  }, [agentId]);
 
   useEffect(() => {
     const doc = "document" in globalThis ? Reflect.get(globalThis, "document") : undefined;
@@ -219,8 +808,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       },
     });
     const applySelection = async (focused: SessionTab | null, values: string[] | null) => {
+      const currentScopes = scopesRef.current;
       const fallback = await subagentMainTarget(focused, parentOf);
-      const managed = focused?.kind === "agent" && scopes.some((scope) => scope.agent_id === focused.agentId);
+      const managed = focused?.kind === "agent" && currentScopes.some((scope) => scope.agent_id === focused.agentId);
       const useFallback = fallback.subagent && !managed;
       const needsTimelineScan =
         followVisible && focused?.kind !== "provider_subagent" && focused?.kind !== "agent" && !useFallback;
@@ -231,7 +821,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             visibleValues: values,
             candidates: sessionFollowCandidates(
               candidateAgentIds,
-              scopes.map((s) => s.agent_id).filter((id): id is string => !!id),
+              currentScopes.map((s) => s.agent_id).filter((id): id is string => !!id),
             ),
             timelineIds: async (id) =>
               (
@@ -402,10 +992,20 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       unsubscribe();
       clearInterval(timer);
     };
-  }, [paseo, params.agentId, scopes, queryClient, followVisible, candidateAgentIds, childScope, hasDocument, hostId, panelWorkspaceId]);
+  }, [paseo, params.agentId, scopesSignature, queryClient, followVisible, candidateAgentIds, childScope, hasDocument, hostId, panelWorkspaceId]);
+  const effectiveFocusedTab = useMemo(() => {
+    if (!focusedTab) return null;
+    if (focusedTab.kind === "provider_subagent" && agentId && focusedTab.parentAgentId !== agentId) {
+      return null;
+    }
+    if (focusedTab.kind === "agent" && agentId && focusedTab.agentId !== agentId) {
+      return null;
+    }
+    return focusedTab;
+  }, [focusedTab, agentId]);
   const parentScopeKey = scopeForAgent(scopes, agentId);
 
-  const activeChild = childScope ?? resolveChildScope(focusedTab, parentScopeKey, scopes);
+  const activeChild = childScope ?? resolveChildScope(effectiveFocusedTab, parentScopeKey, scopes);
   const displayOnly = subagentFallback && !activeChild;
   const resolvedScopeKey = activeChild?.scope_key ?? parentScopeKey;
   const childLabel = activeChild?.subagent_id;
@@ -840,6 +1440,149 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               summary_line: summary,
               ...fallbackToolPreview(item, detail),
             });
+          } else if (itemType === "todo") {
+            const todoItems = Array.isArray(item.items) ? item.items : [];
+            const itemLines = todoItems
+              .map((todo: any) => {
+                const label =
+                  typeof todo?.text === "string"
+                    ? todo.text
+                    : typeof todo?.title === "string"
+                      ? todo.title
+                      : typeof todo?.content === "string"
+                        ? todo.content
+                        : "";
+                if (!label) return "";
+                const done = Boolean(
+                  todo?.completed || todo?.done || todo?.status === "completed" || todo?.status === "done",
+                );
+                return `${done ? "[x]" : "[ ]"} ${label}`;
+              })
+              .filter(Boolean);
+            const doneCount = todoItems.filter((todo: any) =>
+              Boolean(todo?.completed || todo?.done || todo?.status === "completed" || todo?.status === "done"),
+            ).length;
+            const fullText =
+              itemLines.length > 0
+                ? itemLines.join("\n")
+                : typeof item.text === "string" && item.text
+                  ? item.text
+                  : "Todo list updated";
+            const headline =
+              todoItems.length > 0
+                ? `[Todo ${doneCount}/${todoItems.length}] ${itemLines[0] ?? ""}`.trim()
+                : `[Todo] ${messageSummarySnippet(fullText)}`;
+            result.push({
+              item_id: rawMsgId ?? `todo-${entry?.seqStart ?? i}`,
+              tool_call_id: rawMsgId ?? "",
+              kind: "agent",
+              tool_name: "todo",
+              status: "visible",
+              version: 1,
+              tokens_display: "—",
+              manageable: false,
+              bytes_size: utf8ByteLength(fullText),
+              summary_line: messageSummarySnippet(headline) || "[Todo]",
+              message_text: fullText,
+            });
+          } else if (itemType === "error") {
+            const detailObj =
+              typeof item.detail === "object" && item.detail !== null
+                ? (item.detail as Record<string, unknown>)
+                : null;
+            const errText =
+              typeof item.message === "string" && item.message
+                ? item.message
+                : typeof item.text === "string" && item.text
+                  ? item.text
+                  : typeof item.error === "string" && item.error
+                    ? item.error
+                    : typeof detailObj?.message === "string" && detailObj.message
+                      ? detailObj.message
+                      : "Unknown error";
+            result.push({
+              item_id: rawMsgId ?? `error-${entry?.seqStart ?? i}`,
+              tool_call_id: rawMsgId ?? "",
+              kind: "agent",
+              tool_name: "error",
+              status: "visible",
+              version: 1,
+              tokens_display: "—",
+              manageable: false,
+              bytes_size: utf8ByteLength(errText),
+              summary_line: messageSummarySnippet(`[Error] ${errText}`) || "[Error]",
+              message_text: errText,
+            });
+          } else if (itemType === "compaction") {
+            const compactText =
+              typeof item.summary === "string" && item.summary
+                ? item.summary
+                : typeof item.text === "string" && item.text
+                  ? item.text
+                  : typeof item.message === "string" && item.message
+                    ? item.message
+                    : typeof item.reason === "string" && item.reason
+                      ? item.reason
+                      : "Context compacted";
+            result.push({
+              item_id: rawMsgId ?? `compaction-${entry?.seqStart ?? i}`,
+              tool_call_id: rawMsgId ?? "",
+              kind: "agent",
+              tool_name: "compaction",
+              status: "visible",
+              version: 1,
+              tokens_display: "—",
+              manageable: false,
+              bytes_size: utf8ByteLength(compactText),
+              summary_line: messageSummarySnippet(`[Compaction] ${compactText}`) || "[Compaction]",
+              message_text: compactText,
+            });
+          } else if (itemType === "plugin") {
+            const dataObj =
+              typeof item.data === "object" && item.data !== null
+                ? (item.data as Record<string, unknown>)
+                : null;
+            const pluginTitle =
+              typeof item.title === "string" && item.title
+                ? item.title
+                : typeof dataObj?.title === "string" && dataObj.title
+                  ? dataObj.title
+                  : typeof item.pluginId === "string" && item.pluginId
+                    ? item.pluginId
+                    : "";
+            const pluginBody =
+              typeof item.text === "string" && item.text
+                ? item.text
+                : typeof item.message === "string" && item.message
+                  ? item.message
+                  : typeof dataObj?.text === "string" && dataObj.text
+                    ? dataObj.text
+                    : typeof dataObj?.message === "string" && dataObj.message
+                      ? dataObj.message
+                      : typeof dataObj?.summary === "string" && dataObj.summary
+                        ? dataObj.summary
+                        : item.data !== undefined
+                          ? JSON.stringify(item.data)
+                          : "";
+            const fullText = [pluginTitle, pluginBody].filter(Boolean).join("\n") || "Plugin notice";
+            const headline = pluginTitle && pluginBody
+              ? `[Plugin · ${pluginTitle}] ${pluginBody}`
+              : pluginTitle
+                ? `[Plugin] ${pluginTitle}`
+                : `[Plugin] ${pluginBody || "event"}`;
+            result.push({
+              item_id: rawMsgId ?? `plugin-${entry?.seqStart ?? i}`,
+              tool_call_id: rawMsgId ?? "",
+              kind: "agent",
+              tool_name: "plugin",
+              status: "visible",
+              version: 1,
+              tokens_display: "—",
+              manageable: false,
+              bytes_size: utf8ByteLength(fullText),
+              summary_line: messageSummarySnippet(headline) || "[Plugin]",
+              message_text: fullText,
+            });
           }
         }
         return result;
@@ -863,13 +1606,24 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const hasServerTimeline = Boolean(listQuery.data?.server_timeline);
   const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
 
-  const rawRows = resolvedScopeKey
-    ? activeChild
-      ? listQuery.data?.items ?? []
-      : needsHermesFallbackMerge
-        ? mergeHermesTimelineRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
-        : mergeLinkedParentRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
-    : fallbackTimelineQuery.data ?? [];
+  const rawRows = useMemo(
+    () =>
+      resolvedScopeKey
+        ? activeChild
+          ? listQuery.data?.items ?? []
+          : needsHermesFallbackMerge
+            ? mergeHermesTimelineRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
+            : mergeLinkedParentRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
+        : fallbackTimelineQuery.data ?? [],
+    [
+      resolvedScopeKey,
+      activeChild,
+      listQuery.data?.items,
+      needsHermesFallbackMerge,
+      fallbackTimelineQuery.data,
+      scopes,
+    ],
+  );
   const rows = useMemo(() => {
     if (!query) return rawRows;
     const q = query.toLowerCase();
@@ -988,7 +1742,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
-  useEffect(() => () => cancelChatNavigation(), []);
+  useEffect(() => () => {
+    cancelChatNavigation();
+    scrollDriverRef.current?.dispose();
+  }, []);
 
   useLayoutEffect(() => {
     scrollDriverRef.current?.maybeSync(listRef.current, scrollState);
@@ -1385,537 +2142,56 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     });
   };
 
-  // Prompts and responses can only be hidden (removed from the outgoing context), never summarized.
-  const renderMessageHideToggle = (row: Row) => {
-    if (displayOnly || !resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
-    const hidden = row.status === "hidden";
-    const iconSize = layout.compact ? 13 : 14;
-    return (
-      <View style={styles.actionsContainer}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={hidden ? "Unhide message" : "Hide message"}
-          disabled={!actionAllowed(row, capabilities, hidden ? "unhide" : "hide")}
-          style={hidden ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
-          onPress={(e) => {
-            e.stopPropagation();
-            if (hidden) unhideMutation.mutate(row);
-            else hideMutation.mutate({ row, mode: "hide" });
-          }}
-        >
-          <ActionSvgIcon kind="hide" slashed={hidden} size={iconSize} color={theme.colors.foregroundMuted} />
-        </Pressable>
-      </View>
-    );
+  const rowActionsRef = useRef({
+    press: handleRowPress,
+    hide: (row: Row, mode: "hide" | "summarize") => hideMutation.mutate({ row, mode }),
+    unhide: (row: Row) => unhideMutation.mutate(row),
+    toggleGroup: toggleGroupExpanded,
+    groupBatch: runGroupBatch,
+  });
+  rowActionsRef.current = {
+    press: handleRowPress,
+    hide: (row: Row, mode: "hide" | "summarize") => hideMutation.mutate({ row, mode }),
+    unhide: (row: Row) => unhideMutation.mutate(row),
+    toggleGroup: toggleGroupExpanded,
+    groupBatch: runGroupBatch,
   };
+  const onPressRow = useCallback((row: Row) => {
+    void rowActionsRef.current.press(row);
+  }, []);
+  const onHideRow = useCallback((row: Row, mode: "hide" | "summarize") => {
+    rowActionsRef.current.hide(row, mode);
+  }, []);
+  const onUnhideRow = useCallback((row: Row) => {
+    rowActionsRef.current.unhide(row);
+  }, []);
+  const onToggleGroup = useCallback((groupId: string, currentlyExpanded: boolean) => {
+    rowActionsRef.current.toggleGroup(groupId, currentlyExpanded);
+  }, []);
+  const onGroupBatch = useCallback(
+    (group: OutlineRow & { type: "group" }, action: "hide" | "summarize" | "unhide") => {
+      void rowActionsRef.current.groupBatch(group, action);
+    },
+    [],
+  );
 
-  const renderMessageSnippet = (row: Row, empty: string) => {
-    const normalized = messageSummarySnippet(row.summary_line ?? row.message_text);
-    return row.status === "hidden" ? (
-      <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-        {hiddenRowSnippet(row, false, normalized.split("\n")[0] || "tap icon to restore")}
-      </Text>
-    ) : (
-      <Text style={styles.summarySnippet} numberOfLines={2}>
-        {normalized || empty}
-      </Text>
-    );
-  };
-
-  const renderRow = (row: Row) => {
-    const rowKey = row.item_id ?? row.tool_call_id;
-    const isSelected = previewOpen
-      ? (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey
-      : highlightedId === rowKey;
-    const isHidden = row.status === "hidden";
-    const kind =
-      row.kind ?? (row.tool_name === "user" ? "user" : row.tool_name === "assistant" ? "assistant" : "tool");
-
-    if (kind === "user") {
-      return (
-        <Pressable
-          key={rowKey}
-          accessibilityRole="button"
-          accessibilityLabel="User prompt"
-          style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
-          onPress={() => handleRowPress(row)}
-        >
-          <View style={styles.rowMainLine}>
-            <View style={styles.rowLeftWrap}>
-              <Text style={{ fontSize: 13, lineHeight: 15, color: theme.colors.accent, flexShrink: 0 }}>◈</Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
-                User
-              </Text>
-            </View>
-            <View style={styles.rowRightWrap}>
-              {renderMessageHideToggle(row)}
-              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
-            </View>
-          </View>
-          <View style={styles.treeLineContainer}>
-            {renderMessageSnippet(row, "(empty prompt)")}
-          </View>
-        </Pressable>
-      );
+  const linkedChildrenByCallId = useMemo(() => {
+    const map = new Map<string, ChildScope[]>();
+    if (displayOnly || !resolvedScopeKey) return map;
+    for (const s of scopes) {
+      if (s.tool_call_id) {
+        if (map.has(s.tool_call_id)) continue;
+        const found = childrenForCall(scopes, resolvedScopeKey, s.tool_call_id).filter(
+          (child) => !ancestry.includes(child.scope_key),
+        );
+        if (found.length > 0) map.set(s.tool_call_id, found);
+      }
     }
+    return map;
+  }, [displayOnly, resolvedScopeKey, scopes, ancestry]);
 
-    if (kind === "assistant") {
-      return (
-        <Pressable
-          key={rowKey}
-          accessibilityRole="button"
-          accessibilityLabel="Agent response"
-          style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
-          onPress={() => handleRowPress(row)}
-        >
-          <View style={styles.rowMainLine}>
-            <View style={styles.rowLeftWrap}>
-              <Text
-                style={{
-                  fontSize: 12,
-                  lineHeight: 15,
-                  color: /^#[c-fC-F]/.test(theme.colors.surface0) ? "#2563eb" : "#3b82f6",
-                  flexShrink: 0,
-                }}
-              >
-                ✦
-              </Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
-                Agent
-              </Text>
-            </View>
-            <View style={styles.rowRightWrap}>
-              {renderMessageHideToggle(row)}
-              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
-            </View>
-          </View>
-          <View style={styles.treeLineContainer}>
-            {renderMessageSnippet(row, "(empty response)")}
-          </View>
-        </Pressable>
-      );
-    }
-
-    const shortCallId =
-      row.tool_call_id.length > 12
-        ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
-        : row.tool_call_id;
-
-    const metricText =
-      rowMetric(row);
-
-    const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
-    const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
-    const iconSize = layout.compact ? 13 : 14;
-
-    return (
-      <Pressable
-        key={rowKey}
-        accessibilityRole="button"
-        accessibilityLabel={`Select row ${row.tool_call_id}`}
-        style={[
-          styles.rowItem,
-          isSelected ? styles.rowItemSelected : null,
-          isHidden ? styles.rowItemHidden : null,
-        ]}
-        onPress={() => handleRowPress(row)}
-      >
-        <View style={styles.rowMainLine}>
-          <View style={styles.rowLeftWrap}>
-            <Text style={[styles.itemIcon, isHidden ? { color: theme.colors.foregroundMuted } : null]}>
-              {isHidden ? "⊘" : "◇"}
-            </Text>
-            <Text
-              style={[
-                styles.toolNameText,
-                isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
-              ]}
-              numberOfLines={1}
-            >
-              {row.tool_name ?? "tool"}
-            </Text>
-            {shortCallId ? (
-              <Text style={styles.callIdText} numberOfLines={1}>
-                {shortCallId}
-              </Text>
-            ) : null}
-          </View>
-
-          {/* Right inline slot: [Hide/Summarize Icons] + [Bytes/Tokens] */}
-          <View style={styles.rowRightWrap}>
-            {!displayOnly && resolvedScopeKey && row.manageable !== false ? (
-              <View style={styles.actionsContainer}>
-                {isHidden ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Unhide ${row.tool_call_id}`}
-                    style={styles.inlineIconBtnSlashed}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      unhideMutation.mutate(row);
-                    }}
-                  >
-                    <ActionSvgIcon
-                      kind={summarized ? "summarize" : "hide"}
-                      slashed={true}
-                      size={iconSize}
-                      color={theme.colors.foregroundMuted}
-                    />
-                  </Pressable>
-                ) : (
-                  <>
-                    <Pressable
-                      accessibilityRole="button"
-                    accessibilityLabel={`Hide ${row.tool_call_id}`}
-                      disabled={!actionAllowed(row, capabilities, "hide")}
-                      style={styles.inlineIconBtn}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        hideMutation.mutate({ row, mode: "hide" });
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="hide"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Summarize ${row.tool_call_id}`}
-                      disabled={!actionAllowed(row, capabilities, "summarize")}
-                      style={styles.inlineIconBtn}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        hideMutation.mutate({ row, mode: "summarize" });
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="summarize"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                  </>
-                )}
-              </View>
-            ) : null}
-            <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
-              {metricText}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.treeLineContainer}>
-          {isHidden ? (
-            <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-              {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap slashed icon to restore")}
-            </Text>
-          ) : (
-            <Text style={styles.summarySnippet} numberOfLines={1}>
-              {firstSummaryLine || "(no summary)"}
-            </Text>
-          )}
-        </View>
-      </Pressable>
-    );
-  };
-
-  const renderGroupRow = (group: OutlineRow & { type: "group" }) => {
-    const eyeAction = groupEyeAction(group);
-    const noRemainingManageableVisible = group.allHidden || group.allManageableHidden;
-    const restoreIconKind = groupRestoreIconKind(group);
-    const badgeText = groupBadgeText(group);
-    const subtitleText = groupSubtitleText(group);
-    const isExpanded = !!expandedGroups[group.groupId];
-    const isPending = pendingGroupId === group.groupId;
-    const isSelected =
-      selectedRow &&
-      group.children.some(
-        (c) => (c.item_id ?? c.tool_call_id) === (selectedRow.item_id ?? selectedRow.tool_call_id),
-      );
-    const iconSize = layout.compact ? 13 : 14;
-
-    return (
-      <Pressable
-        key={group.key}
-        accessibilityRole="button"
-        accessibilityLabel={`Tool group: ${group.title}`}
-        style={[
-          styles.rowItem,
-          styles.groupRowItem,
-          isSelected ? styles.rowItemSelected : null,
-          group.allHidden ? styles.rowItemHidden : null,
-        ]}
-        onPress={() => {
-          toggleGroupExpanded(group.groupId, isExpanded);
-          if (group.children.length > 0) {
-            handleRowPress(group.children[0]);
-          }
-        }}
-      >
-        <View style={styles.rowMainLine}>
-          <View style={styles.rowLeftWrap}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={isExpanded ? "Collapse group" : "Expand group"}
-              style={styles.expandToggleBtn}
-              hitSlop={8}
-              onPress={(e) => {
-                e.stopPropagation();
-                toggleGroupExpanded(group.groupId, isExpanded);
-              }}
-            >
-              <Text style={styles.expandToggleText}>{isExpanded ? "▾" : "▸"}</Text>
-            </Pressable>
-
-            <Text style={[styles.itemIcon, group.allHidden ? { color: theme.colors.foregroundMuted } : null]}>
-              {group.allHidden ? "⊘" : "⚡"}
-            </Text>
-
-            <Text
-              style={[
-                styles.toolNameText,
-                group.allHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
-              ]}
-              numberOfLines={1}
-            >
-              {group.title}
-            </Text>
-
-            {badgeText ? (
-              <View style={styles.mixedBadge}>
-                <Text style={styles.mixedBadgeText}>
-                  {badgeText}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-
-          {/* Right inline slot: [Group Hide/Summarize Action Icons] + [Total Bytes] */}
-          <View style={styles.rowRightWrap}>
-            {!displayOnly && resolvedScopeKey && group.children.some((row) => actionAllowed(row, capabilities, row.status === "hidden" ? "unhide" : "hide") || actionAllowed(row, capabilities, "summarize")) ? (
-              <View style={[styles.actionsContainer, isPending ? { opacity: 0.5 } : null]}>
-                {noRemainingManageableVisible ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Unhide all in ${group.groupId}`}
-                    style={styles.inlineIconBtnSlashed}
-                    disabled={isPending}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      void runGroupBatch(group, "unhide");
-                    }}
-                  >
-                    <ActionSvgIcon
-                      kind={restoreIconKind}
-                      slashed={true}
-                      size={iconSize}
-                      color={theme.colors.foregroundMuted}
-                    />
-                  </Pressable>
-                ) : (
-                  <>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`${eyeAction === "unhide" ? "Unhide hidden" : "Hide all"} in ${group.groupId}`}
-                      style={eyeAction === "unhide" ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
-                      disabled={isPending || (eyeAction !== "unhide" && !capabilities?.hide)}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        void runGroupBatch(group, eyeAction);
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind={eyeAction === "unhide" ? restoreIconKind : "hide"}
-                        slashed={eyeAction === "unhide"}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Summarize all in ${group.groupId}`}
-                      style={styles.inlineIconBtn}
-                      disabled={isPending || !capabilities?.summarize}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        void runGroupBatch(group, "summarize");
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="summarize"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                  </>
-                )}
-              </View>
-            ) : null}
-
-            <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
-              {groupMetric(group)}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.treeLineContainer}>
-          <Text style={noRemainingManageableVisible ? styles.summaryHiddenSnippet : styles.summarySnippet} numberOfLines={1}>
-            {subtitleText}
-          </Text>
-        </View>
-      </Pressable>
-    );
-  };
-
-  const renderChildRow = (child: OutlineRow & { type: "child" }) => {
-    const row = child.row;
-    const rowKey = row.item_id ?? row.tool_call_id;
-    const isSelected = previewOpen
-      ? (selectedRow?.item_id ?? selectedRow?.tool_call_id) === rowKey
-      : highlightedId === rowKey;
-    const isHidden = row.status === "hidden";
-    const shortCallId =
-      row.tool_call_id.length > 12
-        ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
-        : row.tool_call_id;
-    const metricText =
-      rowMetric(row);
-    const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
-    const summarized = isSummarizedRow(row, lastActionByItem[rowKey]);
-    const iconSize = layout.compact ? 12 : 13;
-
-    return (
-      <Pressable
-        key={child.key}
-        accessibilityRole="button"
-        accessibilityLabel={`Select tool ${row.tool_call_id}`}
-        style={[
-          styles.rowItem,
-          styles.childRowItem,
-          isSelected ? styles.rowItemSelected : null,
-          isHidden ? styles.rowItemHidden : null,
-        ]}
-        onPress={() => handleRowPress(row)}
-      >
-        <View style={styles.rowMainLine}>
-          <View style={styles.rowLeftWrap}>
-            <Text
-              style={[
-                styles.itemIcon,
-                isHidden ? { color: theme.colors.foregroundMuted } : null,
-                { fontSize: 9 },
-              ]}
-            >
-              {isHidden ? "⊘" : "↳"}
-            </Text>
-            <Text
-              style={[
-                styles.toolNameText,
-                { fontSize: layout.compact ? 10 : 11 },
-                isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
-              ]}
-              numberOfLines={1}
-            >
-              {row.tool_name ?? "tool"}
-            </Text>
-            {shortCallId ? (
-              <Text style={styles.callIdText} numberOfLines={1}>
-                {shortCallId}
-              </Text>
-            ) : null}
-          </View>
-
-          <View style={styles.rowRightWrap}>
-            {!displayOnly && resolvedScopeKey && row.manageable !== false ? (
-              <View style={styles.actionsContainer}>
-                {isHidden ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Unhide ${row.tool_call_id}`}
-                    style={styles.inlineIconBtnSlashed}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      unhideMutation.mutate(row);
-                    }}
-                  >
-                    <ActionSvgIcon
-                      kind={summarized ? "summarize" : "hide"}
-                      slashed={true}
-                      size={iconSize}
-                      color={theme.colors.foregroundMuted}
-                    />
-                  </Pressable>
-                ) : (
-                  <>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Hide ${row.tool_call_id}`}
-                      disabled={!actionAllowed(row, capabilities, "hide")}
-                      style={styles.inlineIconBtn}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        hideMutation.mutate({ row, mode: "hide" });
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="hide"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Summarize ${row.tool_call_id}`}
-                      disabled={!actionAllowed(row, capabilities, "summarize")}
-                      style={styles.inlineIconBtn}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        hideMutation.mutate({ row, mode: "summarize" });
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="summarize"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                  </>
-                )}
-              </View>
-            ) : null}
-            <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
-              {metricText}
-            </Text>
-          </View>
-        </View>
-
-        <View style={[styles.treeLineContainer, { marginLeft: layout.compact ? 8 : 12 }]}>
-          {isHidden ? (
-            <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-              {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap icon to restore")}
-            </Text>
-          ) : (
-            <Text style={styles.summarySnippet} numberOfLines={1}>
-              {firstSummaryLine || "(no summary)"}
-            </Text>
-          )}
-        </View>
-      </Pressable>
-    );
-  };
-
-  const renderLinkedChildren = (callIds: string[]) => {
-    if (displayOnly || !resolvedScopeKey) return null;
-    const linked = callIds.flatMap((id) => childrenForCall(scopes, resolvedScopeKey, id))
-      .filter((child, index, all) => !ancestry.includes(child.scope_key) && all.findIndex((other) => other.scope_key === child.scope_key) === index);
-    return linked.map((child) => (
+  const renderLinkedChildList = (linked: readonly ChildScope[]) =>
+    linked.map((child) => (
       <View key={child.scope_key} style={{ paddingLeft: 12, borderLeftWidth: 2, borderColor: theme.colors.border }}>
         <View style={{ flexDirection: "row", alignItems: "center", padding: 6, gap: 8 }}>
           <Pressable accessibilityRole="button" accessibilityLabel={`Expand subagent ${child.subagent_id}`}
@@ -1938,7 +2214,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         </View> : null}
       </View>
     ));
-  };
+
+  const activeRowKey = previewOpen
+    ? (selectedRow?.item_id ?? selectedRow?.tool_call_id ?? null)
+    : highlightedId;
+  // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
 
   const isResolvingSession = !childScope && followVisible && !followResolved;
   const isCapabilitiesLoading =
@@ -1951,7 +2231,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         : undefined;
   const capabilityMessage =
     runtimeError || (!isCapabilitiesLoading && inView && Boolean(agentId))
-      ? capabilityNotice(runtimeError, capabilities)
+      ? capabilityNotice(runtimeError, capabilities, {
+          provider: agent?.provider ?? null,
+          scopeKey: resolvedScopeKey ?? null,
+          rowCount: query ? rawRows.length : groupedRows.length,
+        })
       : null;
 
   const capNotice = listQuery.data?.records_capped === true && !notice && !capabilityMessage && !displayOnly
@@ -2123,18 +2407,66 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           >
             {groupedRows.map((item) => {
               if (item.type === "group") {
+                const linked =
+                  linkedChildrenByCallId.size === 0
+                    ? EMPTY_LINKED_CHILDREN
+                    : item.children
+                        .flatMap((c) => linkedChildrenByCallId.get(c.tool_call_id) ?? EMPTY_LINKED_CHILDREN)
+                        .filter((c, idx, all) => all.findIndex((o) => o.scope_key === c.scope_key) === idx);
                 return (
-                  <View key={item.key}>
-                    {renderGroupRow(item)}
-                    {!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}
-                  </View>
+                  <MemoOutlineRowItem
+                    key={item.key}
+                    item={item}
+                    isSelected={Boolean(
+                      activeRowKey &&
+                        item.children.some((c) => (c.item_id ?? c.tool_call_id) === activeRowKey),
+                    )}
+                    isExpanded={!!expandedGroups[item.groupId]}
+                    isPending={pendingGroupId === item.groupId}
+                    displayOnly={displayOnly}
+                    resolvedScopeKey={resolvedScopeKey}
+                    capabilities={capabilities}
+                    lastActionMode={undefined}
+                    compact={layout.compact}
+                    hasDocument={hasDocument}
+                    theme={theme}
+                    styles={styles}
+                    linkedChildren={linked.length > 0 ? linked : EMPTY_LINKED_CHILDREN}
+                    onPressRow={onPressRow}
+                    onToggleGroup={onToggleGroup}
+                    onHideRow={onHideRow}
+                    onUnhideRow={onUnhideRow}
+                    onGroupBatch={onGroupBatch}
+                    renderLinkedChildren={linked.length > 0 ? renderLinkedChildList : undefined}
+                  />
                 );
               }
+              const rowKey = item.row.item_id ?? item.row.tool_call_id;
+              const linked =
+                linkedChildrenByCallId.get(item.row.tool_call_id) ?? EMPTY_LINKED_CHILDREN;
               return (
-                <View key={item.key}>
-                  {item.type === "child" ? renderChildRow(item) : renderRow(item.row)}
-                  {renderLinkedChildren([item.row.tool_call_id])}
-                </View>
+                <MemoOutlineRowItem
+                  key={item.key}
+                  item={item}
+                  isSelected={activeRowKey === rowKey}
+                  isExpanded={false}
+                  isPending={false}
+                  displayOnly={displayOnly}
+                  resolvedScopeKey={resolvedScopeKey}
+                  capabilities={capabilities}
+                  lastActionMode={lastActionByItem[rowKey]}
+                  compact={layout.compact}
+                  hasDocument={hasDocument}
+                  theme={theme}
+                  styles={styles}
+                  linkedChildren={linked}
+                  onPressRow={onPressRow}
+                  onToggleGroup={onToggleGroup}
+                  onHideRow={onHideRow}
+                  onUnhideRow={onUnhideRow}
+                  onGroupBatch={onGroupBatch}
+                  renderLinkedChildren={linked.length > 0 ? renderLinkedChildList : undefined}
+                />
               );
             })}
           </ScrollView>

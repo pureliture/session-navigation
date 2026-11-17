@@ -138,6 +138,13 @@ export class OutlineAutoScroller {
     }
   }
 
+  noteObservedSize(rowCount: number, contentHeight?: number): void {
+    this.lastRowCount = rowCount;
+    if (typeof contentHeight === "number" && contentHeight > 0) {
+      this.lastScrollHeight = contentHeight;
+    }
+  }
+
   shouldScrollToLatest(input: {
     sessionKey: string;
     mounted?: boolean;
@@ -169,7 +176,7 @@ export class OutlineAutoScroller {
       this.wasSearching = false;
       const prev = this.savedPreSearch;
       this.savedPreSearch = null;
-      this.lastRowCount = input.rowCount;
+      this.noteObservedSize(input.rowCount, input.contentHeight);
       if (!prev || prev.stickToBottom) {
         this.userScrolledUp = false;
         this.stickToBottom = true;
@@ -187,15 +194,12 @@ export class OutlineAutoScroller {
     if (!this.userScrolledUp) {
       if (input.isLoading) {
         this.settledAt = null;
-        this.lastRowCount = input.rowCount;
+        this.noteObservedSize(input.rowCount, input.contentHeight);
         return true;
       }
       if (this.settledAt === null) {
         this.settledAt = now;
-        this.lastRowCount = input.rowCount;
-        if (typeof input.contentHeight === "number" && input.contentHeight > 0) {
-          this.lastScrollHeight = input.contentHeight;
-        }
+        this.noteObservedSize(input.rowCount, input.contentHeight);
         return true;
       }
       if (now - this.settledAt <= this.settleWindowMs) {
@@ -208,12 +212,14 @@ export class OutlineAutoScroller {
       }
     }
 
-    const grew = input.rowCount > this.lastRowCount;
-    this.lastRowCount = input.rowCount;
-    if (typeof input.contentHeight === "number" && input.contentHeight > 0) {
-      this.lastScrollHeight = input.contentHeight;
-    }
-    return grew && this.stickToBottom && !input.isLoading;
+    const grewRows = input.rowCount > this.lastRowCount;
+    const grewHeight =
+      typeof input.contentHeight === "number" &&
+      input.contentHeight > 0 &&
+      this.lastScrollHeight > 0 &&
+      input.contentHeight > this.lastScrollHeight;
+    this.noteObservedSize(input.rowCount, input.contentHeight);
+    return (grewRows || grewHeight) && !this.userScrolledUp && this.stickToBottom && !input.isLoading;
   }
 }
 
@@ -242,25 +248,55 @@ export class OutlineScrollDriver {
     scrollTop: number;
     stickToBottom: boolean;
   } | null = null;
+  private currentSessionKey = "";
+  private latestList: OutlineScrollListHandle | null | undefined = null;
+  private settleTimerId: ReturnType<typeof setTimeout> | null = null;
+  private rafId: number | null = null;
+  private suppressNextBottomPin: { rowCount: number; sessionKey: string } | null = null;
 
   constructor(settleWindowMs = OUTLINE_SETTLE_WINDOW_MS) {
     this.scroller = new OutlineAutoScroller(settleWindowMs);
   }
 
+  cancelPendingAsync(): void {
+    if (this.settleTimerId !== null && typeof clearTimeout === "function") {
+      clearTimeout(this.settleTimerId);
+      this.settleTimerId = null;
+    }
+    if (this.rafId !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+  }
+
+  dispose(): void {
+    this.cancelPendingAsync();
+    this.latestList = null;
+    this.currentSessionKey = "";
+    this.pendingExpand = null;
+    this.pendingDrawer = null;
+    this.suppressNextBottomPin = null;
+  }
+
   syncSession(sessionKey: string, mounted: boolean): boolean {
     const reset = this.scroller.syncSession(sessionKey, mounted);
+    this.currentSessionKey = mounted ? sessionKey : "";
     if (reset) {
+      this.cancelPendingAsync();
       this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
       this.pendingExpand = null;
       this.pendingDrawer = null;
+      this.suppressNextBottomPin = null;
     }
     return reset;
   }
 
   resetTransient(): void {
+    this.cancelPendingAsync();
     this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
     this.pendingExpand = null;
     this.pendingDrawer = null;
+    this.suppressNextBottomPin = null;
   }
 
   private domScrollable(list: OutlineScrollListHandle | null | undefined): any {
@@ -327,7 +363,10 @@ export class OutlineScrollDriver {
   }
 
   prepareGroupExpand(list: OutlineScrollListHandle | null | undefined, currentlyExpanded: boolean): void {
+    this.latestList = list;
     if (!currentlyExpanded) {
+      this.cancelPendingAsync();
+      this.pendingDrawer = null;
       const m = this.readMetrics(list);
       if (m.scrollHeight > 0) {
         this.pendingExpand = { prevScrollHeight: m.scrollHeight, scrollTop: m.scrollTop };
@@ -338,7 +377,10 @@ export class OutlineScrollDriver {
   }
 
   prepareDrawerToggle(list: OutlineScrollListHandle | null | undefined, willOpen: boolean): void {
+    this.latestList = list;
     if (willOpen) {
+      this.cancelPendingAsync();
+      this.pendingExpand = null;
       const m = this.readMetrics(list);
       if (m.clientHeight > 0) {
         this.pendingDrawer = {
@@ -379,6 +421,8 @@ export class OutlineScrollDriver {
     state: OutlineScrollStateSnapshot,
     opts?: { contentHeight?: number; now?: number; scheduleFrame?: (cb: () => void) => void },
   ): void {
+    this.latestList = list;
+    this.currentSessionKey = state.mounted ? state.sessionKey : "";
     const shouldBottom = this.scroller.shouldScrollToLatest({
       sessionKey: state.sessionKey,
       mounted: state.mounted,
@@ -392,37 +436,70 @@ export class OutlineScrollDriver {
       opts?.scheduleFrame ?? (typeof requestAnimationFrame === "function" ? requestAnimationFrame : undefined);
     const restoreTop = this.scroller.consumePendingRestoreScrollTop();
     if (restoreTop !== null) {
+      this.suppressNextBottomPin = null;
+      this.cancelPendingAsync();
+      const capturedKey = this.currentSessionKey;
       try {
         this.scrollToOffset(list, restoreTop, opts?.now);
-        schedule?.(() => {
+        const runRestoreFrame = () => {
+          if (capturedKey !== this.currentSessionKey) return;
           try {
-            this.scrollToOffset(list, restoreTop);
+            this.scrollToOffset(this.latestList ?? list, restoreTop);
           } catch {
             // Ignore unmount during frame callback.
           }
-        });
+        };
+        if (opts?.scheduleFrame) {
+          opts.scheduleFrame(runRestoreFrame);
+        } else if (schedule) {
+          this.rafId = schedule(() => {
+            this.rafId = null;
+            runRestoreFrame();
+          }) as unknown as number;
+        }
       } catch {
         // Ignore mock environments.
       }
       return;
     }
+    if (this.pendingExpand !== null) return;
+    if (this.suppressNextBottomPin) {
+      const suppressed = this.suppressNextBottomPin;
+      this.suppressNextBottomPin = null;
+      if (suppressed.sessionKey === state.sessionKey && state.rowCount <= suppressed.rowCount) {
+        return;
+      }
+    }
     if (!shouldBottom) return;
+    this.cancelPendingAsync();
+    const capturedKey = this.currentSessionKey;
     try {
       if (!this.scrollToBottom(list, opts?.now)) return;
-      schedule?.(() => {
+      const runBottomFrame = () => {
+        if (capturedKey !== this.currentSessionKey) return;
         if (!this.scroller.isUserScrolledUp()) {
           try {
-            this.scrollToBottom(list);
+            this.scrollToBottom(this.latestList ?? list);
           } catch {
             // Ignore transient unmount during frame callback.
           }
         }
-      });
+      };
+      if (opts?.scheduleFrame) {
+        opts.scheduleFrame(runBottomFrame);
+      } else if (schedule) {
+        this.rafId = schedule(() => {
+          this.rafId = null;
+          runBottomFrame();
+        }) as unknown as number;
+      }
       if (opts?.scheduleFrame === undefined && typeof setTimeout === "function") {
-        setTimeout(() => {
+        this.settleTimerId = setTimeout(() => {
+          this.settleTimerId = null;
+          if (capturedKey !== this.currentSessionKey) return;
           if (!this.scroller.isUserScrolledUp() && this.scroller.isStuckToBottom()) {
             try {
-              this.scrollToBottom(list);
+              this.scrollToBottom(this.latestList ?? list);
             } catch {
               // Ignore unmount during settle timer.
             }
@@ -440,6 +517,7 @@ export class OutlineScrollDriver {
     state: OutlineScrollStateSnapshot,
     now?: number,
   ): void {
+    this.latestList = list;
     const layoutH = ev?.nativeEvent?.layout?.height;
     if (typeof layoutH === "number" && layoutH > 0) {
       this.metrics.clientHeight = layoutH;
@@ -471,21 +549,26 @@ export class OutlineScrollDriver {
     state: OutlineScrollStateSnapshot,
     now?: number,
   ): void {
+    this.latestList = list;
     if (typeof h === "number" && h >= 0) {
       this.metrics.scrollHeight = h;
     }
     const expandSnap = this.pendingExpand;
-    if (expandSnap && h > expandSnap.prevScrollHeight) {
+    if (expandSnap) {
       this.pendingExpand = null;
-      const m = this.readMetrics(list);
-      const nextTop = computeExpandedGroupScrollTop({
-        scrollTop: expandSnap.scrollTop,
-        prevScrollHeight: expandSnap.prevScrollHeight,
-        nextScrollHeight: h,
-        clientHeight: m.clientHeight,
-      });
-      if (nextTop !== null) {
-        this.scrollToOffset(list, nextTop, now);
+      if (h > expandSnap.prevScrollHeight) {
+        const m = this.readMetrics(list);
+        this.scroller.noteObservedSize(state.rowCount, h);
+        this.suppressNextBottomPin = { rowCount: state.rowCount, sessionKey: state.sessionKey };
+        const nextTop = computeExpandedGroupScrollTop({
+          scrollTop: expandSnap.scrollTop,
+          prevScrollHeight: expandSnap.prevScrollHeight,
+          nextScrollHeight: h,
+          clientHeight: m.clientHeight,
+        });
+        if (nextTop !== null) {
+          this.scrollToOffset(list, nextTop, now);
+        }
         return;
       }
     }

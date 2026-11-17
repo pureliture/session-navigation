@@ -9,6 +9,13 @@ const ROW = "[data-message-id], [data-history-row-id]";
 const TURN_SUMMARY = '[data-testid="turn-summary"]';
 const FOLLOWING = 4;
 
+const SYSTEM_BLOCK_RE =
+  /<system-reminder>[\s\S]*?<\/system-reminder>|<system-notice>[\s\S]*?<\/system-notice>/gu;
+
+function stripSystemBlocks(text: string): string {
+  return text.replace(SYSTEM_BLOCK_RE, "");
+}
+
 function normalized(text: string): string {
   return text
     .replace(/\[([^\]]+)\]\([^)]+\)/gu, "$1")
@@ -18,6 +25,20 @@ function normalized(text: string): string {
     .replace(/\s+/gu, " ")
     .trim()
     .toLowerCase();
+}
+
+function normalizedClean(text: string): string {
+  return normalized(stripSystemBlocks(text));
+}
+
+function matchesNeedle(rawText: string, needle: string): boolean {
+  if (!needle) return false;
+  if (needle.length >= 4) {
+    return normalizedClean(rawText).includes(needle) || normalized(rawText).includes(needle);
+  }
+  const cleaned = stripSystemBlocks(rawText);
+  if (normalized(cleaned) === needle) return true;
+  return cleaned.split(/\r?\n/u).some((line) => normalized(line) === needle);
 }
 
 const IDENTITY_ATTRIBUTES = ["data-message-id", "data-history-row-id", "data-call-id", "data-item-id", "data-turn-id", "id"];
@@ -30,40 +51,60 @@ export function identityMatches(value: string, id: string): boolean {
 }
 
 function textNeedles(hints: (string | undefined)[]): string[] {
-  return hints
-    .map((hint) => normalized(hint ?? "").slice(0, 36))
-    .filter((needle) => needle.length >= 4);
+  const all = hints
+    .map((hint) => normalizedClean(hint ?? "").slice(0, 36))
+    .filter((needle) => needle.length > 0);
+  const long = all.filter((needle) => needle.length >= 4);
+  if (long.length > 0) return [...new Set(long)];
+  return [...new Set(all)];
 }
 
 /** Candidate needles for a user/assistant row across native, summarized, and rendered chat text. */
 function messageHints(row: Row): string[] {
-  const hints: string[] = [];
+  const longHints: string[] = [];
+  const shortHints: string[] = [];
   const push = (value?: string) => {
-    if (value && normalized(value).length >= 4 && !hints.includes(value)) hints.push(value);
+    if (!value) return;
+    const norm = normalizedClean(value);
+    if (!norm) return;
+    if (norm.length >= 4) {
+      if (!longHints.includes(value)) longHints.push(value);
+    } else if (!shortHints.includes(value)) {
+      shortHints.push(value);
+    }
   };
-  push(row.summary_line);
-  if (!row.message_text) return hints;
-  const raw = row.message_text.trim();
+  if (
+    row.summary_line &&
+    !row.summary_line.startsWith("[Subagent ") &&
+    !row.summary_line.startsWith("[Agent message")
+  ) {
+    for (const line of row.summary_line.split(/\r?\n/u)) {
+      push(line);
+    }
+  }
+  if (!row.message_text) return longHints.length > 0 ? longHints : shortHints;
+  const raw = stripSystemBlocks(row.message_text).trim();
   const decoded = raw.replace(/&quot;/gu, '"').replace(/&lt;/gu, "<").replace(/&gt;/gu, ">")
     .replace(/&apos;/gu, "'").replace(/&amp;/gu, "&");
   if (!decoded.startsWith("<paseo-system")) {
     for (const line of decoded.split(/\r?\n/u)) {
       const clean = line.replace(/<[^>]+>/gu, " ").trim();
-      if (clean && normalized(clean).length >= 4) {
+      if (clean) {
         push(clean);
-        if (hints.length >= 4) break;
+        if (longHints.length >= 4) break;
       }
     }
     push(decoded.replace(/<[^>]+>/gu, " ").trim());
-    return hints;
+    return longHints.length > 0 ? longHints : shortHints;
   }
   push(/source-agent-title="([^"]+)"/u.exec(decoded)?.[1]);
   push(/source-agent-id="([^"]+)"/u.exec(decoded)?.[1]);
   const responseMarker = "<agent-response>";
   const response = /<agent-response>([\s\S]*?)<\/agent-response>/u.exec(decoded)?.[1] ??
     (decoded.includes(responseMarker) ? decoded.slice(decoded.indexOf(responseMarker) + responseMarker.length) : undefined);
-  push(response?.replace(/<[^>]+>/gu, " ").split(/\r?\n/u).map((line) => line.trim()).find(Boolean));
-  return hints;
+  const innerBody = response ?? decoded.replace(/^<paseo-system\b[^>]*(?:>|$)/u, "").replace(/<\/paseo-system>/gu, "");
+  push(innerBody.replace(/<[^>]+>/gu, " ").split(/\r?\n/u).map((line) => line.trim()).find(Boolean));
+  return longHints.length > 0 ? longHints : shortHints;
 }
 
 /** Identity attributes rendered in the chat currently on screen; null when no session chat is visible. */
@@ -89,13 +130,17 @@ function findIdentity(root: any, row: Row): any {
   return null;
 }
 
-function findText(root: any, snippet?: string | string[], selector = ROW, preferLast = false): any {
+function findTextMatches(root: any, snippet?: string | string[], selector = ROW): any[] {
   const needles = textNeedles(Array.isArray(snippet) ? snippet : [snippet]);
-  if (needles.length === 0) return null;
-  const matches = (Array.from(root.querySelectorAll(selector)) as any[]).filter((node) => {
-    const text = normalized(node.textContent ?? "");
-    return needles.some((needle) => text.includes(needle));
+  if (needles.length === 0) return [];
+  return (Array.from(root.querySelectorAll(selector)) as any[]).filter((node) => {
+    const raw = node.textContent ?? "";
+    return needles.some((needle) => matchesNeedle(raw, needle));
   });
+}
+
+function findText(root: any, snippet?: string | string[], selector = ROW, preferLast = false): any {
+  const matches = findTextMatches(root, snippet, selector);
   if (matches.length === 0) return null;
   return preferLast ? matches[matches.length - 1] : matches[0];
 }
@@ -134,8 +179,9 @@ export function historyContainsRow(history: TimelineHistory, row: Row): boolean 
       if (type !== "user_message" && !(isSystemNotice && ["plugin", "notification", "tool_call"].includes(type))) {
         return false;
       }
-    } else if (kind === "assistant") {
-      if (type !== "assistant_message" && type !== "error" && type !== "notification") return false;
+    } else if (kind === "assistant" || kind === "agent") {
+      if (type !== "assistant_message" && type !== "error" && type !== "notification" &&
+        type !== "plugin" && type !== "todo" && type !== "compaction") return false;
     } else if (!["tool_call", "command", "terminal", "bash", "shell", "todo"].includes(type)) {
       return false;
     }
@@ -151,10 +197,10 @@ export function historyContainsRow(history: TimelineHistory, row: Row): boolean 
     const pluginText = item.data !== undefined ? JSON.stringify(item.data) : undefined;
     const texts = kind === "tool"
       ? [preview.tool_input, toolHint(preview), preview.tool_output, detail.text, detail.label, todoText]
-      : [item.text, item.message, pluginText];
+      : [item.text, item.message, pluginText, todoText];
     const hints = kind === "tool" ? [row.summary_line, row.tool_output, toolHint(row)] : messageHints(row);
     return textNeedles(hints).some((needle) =>
-      texts.some((text) => typeof text === "string" && normalized(text).includes(needle)),
+      texts.some((text) => typeof text === "string" && matchesNeedle(text, needle)),
     );
   });
 }
@@ -249,9 +295,123 @@ function anchorOf(root: any, row: Row, from?: any): any {
   const needles = textNeedles(messageHints(row));
   if (needles.length === 0) return null;
   return (Array.from(root.querySelectorAll(ROW)) as any[]).find((node) => {
-    const text = normalized(node.textContent ?? "");
-    return (!from || after(node, from)) && needles.some((needle) => text.includes(needle));
+    const raw = node.textContent ?? "";
+    return (!from || after(node, from)) && needles.some((needle) => matchesNeedle(raw, needle));
   }) ?? null;
+}
+
+function rowComparisonOrder(nodes: any[], node: any, anchor: any, direction: "after" | "before"): boolean {
+  const nodeIdx = nodes.indexOf(node);
+  const anchorIdx = nodes.indexOf(anchor);
+  if (nodeIdx >= 0 && anchorIdx >= 0) {
+    return direction === "after" ? nodeIdx > anchorIdx : nodeIdx < anchorIdx;
+  }
+  return direction === "after" ? after(node, anchor) : before(node, anchor);
+}
+
+function rowNeedles(candidate: Row): string[] {
+  return textNeedles(
+    candidate.kind === "tool" ? [toolHint(candidate), candidate.summary_line] : messageHints(candidate),
+  );
+}
+
+function findUniqueRowAnchor(root: any, candidate: Row): any {
+  const direct = findIdentity(root, candidate);
+  if (direct) return direct;
+  const matches = findTextMatches(root, messageHints(candidate), ROW);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function findRowMessageNode(
+  root: any,
+  rows: Row[],
+  targetIdx: number,
+  row: Row,
+  mountedIndices?: number[],
+): any {
+  const needles = rowNeedles(row);
+  if (needles.length === 0) return null;
+  const domRows = Array.from(root.querySelectorAll(ROW)) as any[];
+  const allMatches = domRows.filter((node) => {
+    const raw = node.textContent ?? "";
+    return needles.some((needle) => matchesNeedle(raw, needle));
+  });
+  if (allMatches.length === 0) return null;
+  if (allMatches.length === 1 || targetIdx < 0 || rows.length === 0) {
+    return allMatches[0];
+  }
+
+  let lowerIdx = -1;
+  let lowerNode: any = null;
+  for (let i = targetIdx - 1; i >= 0; i--) {
+    if (rows[i].kind === "tool") continue;
+    const anchor = findUniqueRowAnchor(root, rows[i]);
+    if (anchor) {
+      lowerIdx = i;
+      lowerNode = anchor;
+      break;
+    }
+  }
+
+  let upperIdx = rows.length;
+  let upperNode: any = null;
+  for (let j = targetIdx + 1; j < rows.length; j++) {
+    if (rows[j].kind === "tool") continue;
+    const anchor = findUniqueRowAnchor(root, rows[j]);
+    if (anchor && (!lowerNode || rowComparisonOrder(domRows, anchor, lowerNode, "after"))) {
+      upperIdx = j;
+      upperNode = anchor;
+      break;
+    }
+  }
+
+  const boundedMatches = allMatches.filter(
+    (node) =>
+      (!lowerNode || rowComparisonOrder(domRows, node, lowerNode, "after")) &&
+      (!upperNode || rowComparisonOrder(domRows, node, upperNode, "before")),
+  );
+  if (boundedMatches.length === 0) return null;
+  if (boundedMatches.length === 1) return boundedMatches[0];
+
+  const primaryNeedle = needles[0];
+  const peerIndices: number[] = [];
+  for (let k = lowerIdx + 1; k < upperIdx; k++) {
+    const candidate = rows[k];
+    if ((row.kind === "tool") !== (candidate.kind === "tool")) continue;
+    const cNeedles = rowNeedles(candidate);
+    if (cNeedles.includes(primaryNeedle) || needles.some((n) => cNeedles.includes(n))) {
+      peerIndices.push(k);
+    }
+  }
+  const ordFromStart = peerIndices.indexOf(targetIdx);
+  if (ordFromStart < 0) {
+    return targetIdx >= rows.length / 2
+      ? boundedMatches[boundedMatches.length - 1]
+      : boundedMatches[0];
+  }
+  const ordFromEnd = peerIndices.length - 1 - ordFromStart;
+  if (boundedMatches.length === peerIndices.length) {
+    return boundedMatches[ordFromStart];
+  }
+  if (lowerNode && !upperNode) {
+    return boundedMatches[Math.min(ordFromStart, boundedMatches.length - 1)];
+  }
+  if (upperNode && !lowerNode) {
+    return boundedMatches[Math.max(0, boundedMatches.length - 1 - ordFromEnd)];
+  }
+  if (!lowerNode && !upperNode && mountedIndices && mountedIndices.length > 0) {
+    const minMounted = Math.min(...mountedIndices);
+    const maxMounted = Math.max(...mountedIndices);
+    if (minMounted > 0 && maxMounted >= rows.length - 3) {
+      return boundedMatches[Math.max(0, boundedMatches.length - 1 - ordFromEnd)];
+    }
+    if (maxMounted < rows.length - 1 && minMounted <= 2) {
+      return boundedMatches[Math.min(ordFromStart, boundedMatches.length - 1)];
+    }
+  }
+  return targetIdx < rows.length / 2
+    ? boundedMatches[Math.min(ordFromStart, boundedMatches.length - 1)]
+    : boundedMatches[Math.max(0, boundedMatches.length - 1 - ordFromEnd)];
 }
 
 // Paseo folds finished turns behind a "turn-summary" badge rendered after the user message.
@@ -372,14 +532,14 @@ function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual
     );
     if (idIndex >= 0) return [idIndex];
     // Never treat Paseo's 40-item virtualizer `data-index` as an index into Outline `rows`.
-    const text = normalized(node.textContent ?? "");
+    const raw = node.textContent ?? "";
     let longest = 0;
     let matched: number[] = [];
     rows.forEach((candidate, candidateIndex) => {
       const needles = textNeedles(
         candidate.kind === "tool" ? [toolHint(candidate), candidate.summary_line] : messageHints(candidate),
       );
-      const needle = needles.filter((value) => text.includes(value)).sort((x, y) => y.length - x.length)[0];
+      const needle = needles.filter((value) => matchesNeedle(raw, value)).sort((x, y) => y.length - x.length)[0];
       if (needle) {
         if (needle.length > longest) {
           longest = needle.length;
@@ -543,13 +703,15 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
   const targetIdx = rowPositionIndex(rows, row);
   if (findIdentity(root, row)) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
-  } else if (findText(root, messageHints(row), ROW, targetIdx >= 0 && targetIdx >= rows.length / 2)) {
+  } else {
     const { indices: mounted } = mountedRowIndices(root, rows);
-    const windowCoversTarget =
-      mounted.length === 0 ||
-      targetIdx < 0 ||
-      (targetIdx >= Math.min(...mounted) - 2 && targetIdx <= Math.max(...mounted) + 2);
-    if (windowCoversTarget && (await navigateLoaded(row, rows, root, version, options))) return true;
+    if (findRowMessageNode(root, rows, targetIdx, row, mounted)) {
+      const windowCoversTarget =
+        mounted.length === 0 ||
+        targetIdx < 0 ||
+        (targetIdx >= Math.min(...mounted) - 2 && targetIdx <= Math.max(...mounted) + 2);
+      if (windowCoversTarget && (await navigateLoaded(row, rows, root, version, options))) return true;
+    }
   }
   const history = options.getHistory
     ? await withTimeout(options.getHistory(), options.historyTimeoutMs ?? 3000) : undefined;
@@ -607,7 +769,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     ) {
       return false;
     }
-    return highlightAndScroll(findText(root, messageHints(row), ROW, preferLast), hlOpts);
+    return highlightAndScroll(findRowMessageNode(root, rows, targetIdx, row, mounted), hlOpts);
   }
 
   const index = targetIdx;
@@ -629,7 +791,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   }
   if (!group && start > 0) {
     const previous = rows[start - 1];
-    const anchor = findIdentity(root, previous) ?? findText(root, messageHints(previous), ROW, start >= rows.length / 2);
+    const anchor = findIdentity(root, previous) ?? findRowMessageNode(root, rows, start - 1, previous);
     const nextMsg = end < rows.length ? rows[end] : undefined;
     const nextAnchor = nextMsg && anchor ? anchorOf(root, nextMsg, anchor) : null;
     if (anchor) {
@@ -638,6 +800,38 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
       );
     }
   }
+  const pickMemberBadge = (badges: any[]) => {
+    const toolNeedles = textNeedles([toolHint(row), row.summary_line, ...messageHints(row)]);
+    if (toolNeedles.length > 0) {
+      const matchingBadges = badges.filter((node) => {
+        const raw = node.textContent ?? "";
+        return toolNeedles.some((needle) => matchesNeedle(raw, needle));
+      });
+      if (matchingBadges.length === 1) return matchingBadges[0];
+      if (matchingBadges.length > 1) {
+        const memberIndex = members.indexOf(row);
+        if (memberIndex >= 0) {
+          const matchingMembers = members.filter((m) => {
+            const mNeedles = textNeedles([toolHint(m), m.summary_line]);
+            return toolNeedles.some((n) => mNeedles.includes(n));
+          });
+          const ord = matchingMembers.indexOf(row);
+          if (ord >= 0 && matchingBadges.length === matchingMembers.length) {
+            return matchingBadges[ord];
+          }
+          if (badges.length === members.length && memberIndex < badges.length) {
+            return matchingBadges.includes(badges[memberIndex]) ? badges[memberIndex] : matchingBadges[0];
+          }
+          if (ord >= 0) {
+            return matchingBadges[Math.min(ord, matchingBadges.length - 1)];
+          }
+        }
+        return preferLast ? matchingBadges[matchingBadges.length - 1] : matchingBadges[0];
+      }
+    }
+    if (badges.length === members.length) return badges[members.indexOf(row)] ?? null;
+    return null;
+  };
   if (!group && !direct && !options.turnExpanded) {
     const turn = findTurn(root, rows, start, end);
     if (turn) {
@@ -657,18 +851,19 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
         return navigateLoaded(row, rows, root, version, { ...options, turnExpanded: true });
       }
       const badges = turnNodes(root, turn, BADGE);
-      const needle = (text?: string) => normalized(text ?? "").slice(0, 36);
-      const hint = [toolHint(row), row.summary_line].map(needle).find((text) => text.length >= 4);
-      const match = hint ? badges.find((node) => normalized(node.textContent ?? "").includes(hint)) : undefined;
-      if (match) return highlightAndScroll(match, groupHlOpts);
-      if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)], groupHlOpts);
+      const matched = pickMemberBadge(badges);
+      if (matched) return highlightAndScroll(matched, groupHlOpts);
       return highlightAndScroll(summary, groupHlOpts);
     }
   }
-  if (!group) return highlightAndScroll(direct ?? findText(root, messageHints(row), ROW, preferLast), groupHlOpts);
+  if (!group) return highlightAndScroll(direct ?? findRowMessageNode(root, rows, targetIdx, row), groupHlOpts);
 
   const toggle = group.querySelector('[role="button"][aria-expanded]');
   const collapsed = toggle?.getAttribute("aria-expanded") === "false";
+  const viewportWidth = doc?.defaultView?.innerWidth;
+  if (collapsed && typeof viewportWidth === "number" && viewportWidth < 600) {
+    return highlightAndScroll(group, groupHlOpts);
+  }
   if (collapsed) {
     try { toggle.click(); } catch { return highlightAndScroll(group, groupHlOpts); }
   }
@@ -681,9 +876,8 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     if (targetBadge && !target.querySelector(GROUP)) return highlightAndScroll(targetBadge, groupHlOpts);
     // Paseo 0.15.3 only puts row IDs on the group's host, not its child badges.
     const badges = Array.from(group.querySelectorAll(BADGE)) as any[];
-    const hint = findText(group, toolHint(row), BADGE, preferLast) ?? findText(group, messageHints(row), BADGE, preferLast);
-    if (hint) return highlightAndScroll(hint, groupHlOpts);
-    if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)], groupHlOpts);
+    const matched = pickMemberBadge(badges);
+    if (matched) return highlightAndScroll(matched, groupHlOpts);
   }
   return highlightAndScroll(group, groupHlOpts);
 }

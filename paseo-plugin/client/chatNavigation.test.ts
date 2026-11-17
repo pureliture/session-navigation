@@ -908,3 +908,58 @@ test("Markdown bold/code messages match HTML-rendered chat DOM, two <paseo-syste
   expect(found).toBe(true);
   expect(targetMounted?.scrolled).toBe(true);
 });
+
+test("short messages (<4 chars) match exact text/lines without substring false positives like ok in token", async () => {
+  const shortMsgs = ["진행해", "ㅇㅇ", "ok", "고쳐"];
+  for (const phrase of shortMsgs) {
+    const root = new Element({ "data-testid": "agent-chat-scroll" });
+    const falseMatch = new Element({ "data-history-row-id": "n-false" }, `token book ${phrase} extra words`);
+    const targetNode = new Element({ "data-history-row-id": "n-exact" }, phrase);
+    root.add(falseMatch, targetNode);
+    const doc = new Element().add(root);
+    const r = { ...row("short-id", "user"), summary_line: phrase, message_text: `<system-reminder>long block</system-reminder>\n${phrase}` };
+
+    expect(await scrollToMessageInChat(r, [r], { document: doc })).toBe(true);
+    expect(falseMatch.scrolled).toBe(false);
+    expect(targetNode.scrolled).toBe(true);
+
+    expect(historyContainsRow({ complete: true, entries: [{ item: { type: "user_message", text: `token book ${phrase} longer` } }] }, r)).toBe(false);
+    expect(
+      historyContainsRow(
+        { complete: true, entries: [{ item: { type: "user_message", text: `<system-notice>notice</system-notice>\n${phrase}` } }] },
+        r,
+      ),
+    ).toBe(true);
+  }
+});
+
+test("duplicate phrase in middle turn jumps to exact ordinal node using adjacent unique boundaries", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc = new Element().add(root);
+  const rows: Row[] = [
+    { ...row("u0", "user"), summary_line: "npm test", message_text: "npm test" },
+    { ...row("a1", "assistant"), summary_line: "Unique milestone alpha", message_text: "Unique milestone alpha" },
+    { ...row("u2", "user"), summary_line: "npm test", message_text: "npm test" },
+    { ...row("u3", "user"), summary_line: "npm test", message_text: "npm test" },
+    { ...row("a4", "assistant"), summary_line: "Unique milestone beta", message_text: "Unique milestone beta" },
+    { ...row("u5", "user"), summary_line: "npm test", message_text: "npm test" },
+  ];
+  const domNodes = rows.map((r, i) => new Element({ "data-history-row-id": `dom-${i}` }, r.summary_line));
+  root.add(...domNodes);
+
+  // Target index 3 (second "npm test" between milestone alpha and beta)
+  expect(await scrollToMessageInChat(rows[3], rows, { document: doc })).toBe(true);
+  expect(domNodes[0].scrolled).toBe(false);
+  expect(domNodes[2].scrolled).toBe(false);
+  expect(domNodes[3].scrolled).toBe(true);
+  expect(domNodes[5].scrolled).toBe(false);
+});
+
+test("narrow viewport (<600px) does not click collapsed tool-call-group toggle to avoid opening ToolCallSheetModal", async () => {
+  const f = fixture();
+  (f.doc as any).defaultView = { innerWidth: 390 };
+  expect(await scrollToMessageInChat(f.second, f.rows, f.options)).toBe(true);
+  expect(f.clicks()).toBe(0);
+  expect(f.group.scrolled).toBe(true);
+  expect(f.group.style.backgroundColor).toContain("rgba");
+});

@@ -4,6 +4,7 @@ import {
   computeExpandedGroupScrollTop,
   initialRenderCount,
   OutlineAutoScroller,
+  OutlineScrollDriver,
 } from "./outlineScroll";
 
 describe("OutlineAutoScroller", () => {
@@ -173,5 +174,46 @@ describe("OutlineAutoScroller", () => {
       }),
     ).toBeNull();
     expect(initialRenderCount(120)).toBe(120);
+  });
+
+  test("cancels pending 60ms settle timer on session switch/dispose, prevents expand overwrite, and tracks streaming height growth", async () => {
+    const driver = new OutlineScrollDriver(1500);
+    let endCalls = 0;
+    const offsets: number[] = [];
+    const listA = {
+      scrollToEnd: () => {
+        endCalls++;
+      },
+      scrollToOffset: ({ offset }: { offset: number }) => {
+        offsets.push(offset);
+      },
+    };
+    const stateA = { sessionKey: "sessA", mounted: true, rowCount: 20, isLoading: false, hasSearchQuery: false };
+    driver.maybeSync(listA, stateA, { now: 1000 });
+    expect(endCalls).toBe(1);
+    // Switch session immediately before 60ms settle timer fires -> timer must be cancelled
+    driver.syncSession("sessB", true);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(endCalls).toBe(1);
+
+    // Expand group near bottom: handleContentSizeChange adjusts scrollToOffset and suppresses same-commit maybeSync bottom pin
+    endCalls = 0;
+    offsets.length = 0;
+    driver.handleLayout(listA, { nativeEvent: { layout: { height: 500 } } }, { ...stateA, sessionKey: "sessB" }, 2000);
+    driver.handleContentSizeChange(listA, 1500, { ...stateA, sessionKey: "sessB" }, 2010);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 1000 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 500 } } }, 2020);
+    endCalls = 0;
+    driver.prepareGroupExpand(listA, false);
+    driver.handleContentSizeChange(listA, 1750, { ...stateA, sessionKey: "sessB", rowCount: 24 }, 2100);
+    driver.maybeSync(listA, { ...stateA, sessionKey: "sessB", rowCount: 24 }, { now: 2110, scheduleFrame: () => {} });
+    expect(offsets.length).toBe(1);
+    expect(endCalls).toBe(0);
+    driver.dispose();
+
+    // Streaming height growth with constant rowCount keeps bottom pinned when stuck to bottom
+    const scroller = new OutlineAutoScroller(1500);
+    expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 800, isLoading: false, now: 1000 })).toBe(true);
+    expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 800, isLoading: false, now: 4000 })).toBe(false);
+    expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 920, isLoading: false, now: 4500 })).toBe(true);
   });
 });

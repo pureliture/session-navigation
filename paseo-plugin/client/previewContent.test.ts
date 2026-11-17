@@ -43,6 +43,12 @@ test("empty selection, legacy unavailable fields, and display-only details stay 
   expect(previewContent({ ...tool, manageable: false, tool_input: undefined, tool_output: undefined, summary_line: "display info" }).sections).toEqual([
     { label: "Details", text: "display info" }, { label: "Read-only", text: "Display-only item; context controls unavailable." },
   ]);
+  const agentItem = previewContent({ ...tool, kind: "agent", tool_name: "todo", manageable: false, message_text: "[ ] verify tests", summary_line: "[Todo 0/1] [ ] verify tests" });
+  expect(agentItem.subtitle).toBe("Agent");
+  expect(agentItem.sections).toEqual([
+    { label: "Message", text: "[ ] verify tests" },
+    { label: "Read-only", text: "Display-only item; context controls unavailable." },
+  ]);
 });
 
 test("drawer preserves narrow-width guards, bounded code scrolling, selectable metadata, and empty state", () => {

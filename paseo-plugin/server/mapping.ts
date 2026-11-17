@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { hasHermesSession } from "./hermesHistory.ts";
+import { findSession } from "./history.ts";
 
 interface ScopeEntry {
   scope_key: string;
@@ -52,6 +54,7 @@ export function bindAgents<T extends ScopeEntry>(
   paseoHome = home === homedir()
     ? process.env.PASEO_HOME ?? join(home, ".paseo")
     : join(home, ".paseo"),
+  capabilitiesFn?: (scopeKey: string) => T["capabilities"],
 ): T[] {
   let providers: Record<string, any> = {};
   const config = join(paseoHome, "config.json");
@@ -100,7 +103,8 @@ export function bindAgents<T extends ScopeEntry>(
         configured?.extends === "acp";
       if (!omp && !acp) continue;
       const canonical = `${omp ? "omp" : "hermes"}:${profile}:${session}:${omp ? "default" : "unknown"}`;
-      let selected = scopes.find((scope) => scope.scope_key === canonical);
+      const existingCanonical = scopes.find((scope) => scope.scope_key === canonical);
+      let selected = existingCanonical;
       if (omp && selected?.capabilities.state === "adapter_not_detected")
         selected = undefined;
       if (!selected && omp)
@@ -109,10 +113,30 @@ export function bindAgents<T extends ScopeEntry>(
             scope.scope_key === `pi:${profile}:${session}:default` &&
             scope.capabilities.unhide,
         );
+      if (!selected && omp && existingCanonical) {
+        selected = existingCanonical;
+      }
       if (!selected && acp)
         selected = scopes.find(
           (scope) => scope.scope_key === `hermes:${profile}:${session}:default`,
         );
+      if (!selected && capabilitiesFn) {
+        const existsOnDisk = omp
+          ? Boolean(findSession(home, session))
+          : hasHermesSession(home, profile, session);
+        if (existsOnDisk) {
+          scopes.push({
+            scope_key: canonical,
+            items: 0,
+            parent_scope: null,
+            tool_call_id: null,
+            subagent_id: null,
+            capabilities: capabilitiesFn(canonical),
+            agent_id: agent.id,
+          } as unknown as T);
+          continue;
+        }
+      }
       if (selected) selected.agent_id = agent.id;
     }
   }

@@ -30,9 +30,14 @@ export function fmtTokens(n: number): string {
 
 export function effectiveRowBytes(row: Row): number {
   if (row.status === "hidden") {
-    if (typeof row.compacted_bytes_size === "number") return row.compacted_bytes_size;
-    if (typeof row.replacement_text === "string") return utf8ByteLength(row.replacement_text);
-    if (row.kind === "user" || row.kind === "assistant") return 0;
+    let post: number | undefined;
+    if (typeof row.compacted_bytes_size === "number") post = row.compacted_bytes_size;
+    else if (typeof row.replacement_text === "string") post = utf8ByteLength(row.replacement_text);
+    else if (row.kind === "user" || row.kind === "assistant" || row.kind === "agent") post = 0;
+    if (post !== undefined) {
+      const clamped = Math.max(0, post);
+      return typeof row.bytes_size === "number" ? Math.min(Math.max(0, row.bytes_size), clamped) : clamped;
+    }
   }
   return row.bytes_size ?? 0;
 }
@@ -59,10 +64,42 @@ export function utf8ByteLength(text: string): number {
 }
 
 const LEADING_REASONING_BLOCK = /^\s*💭\s*\*\*Reasoning:\*\*\s*\r?\n```[^\n]*\r?\n([\s\S]*?)\r?\n```(?:\s*\r?\n)*/u;
+const SYSTEM_BLOCK_RE =
+  /<system-reminder>[\s\S]*?<\/system-reminder>|<system-notice>[\s\S]*?<\/system-notice>/gu;
+
+function sliceCodepoints(text: string, maxLen: number): string {
+  return [...text].slice(0, maxLen).join("");
+}
+
+function formatPaseoSystemSnippet(trimmed: string): string {
+  const titleMatch = /source-agent-title="([^"]+)"/u.exec(trimmed);
+  const eventMatch = /event="([^"]+)"/u.exec(trimmed);
+  const idMatch = /source-agent-id="([^"]+)"/u.exec(trimmed);
+  const kindMatch = /kind="([^"]+)"/u.exec(trimmed);
+  const label = titleMatch?.[1]?.trim() || (idMatch?.[1] ? idMatch[1].slice(0, 8) : "");
+  if (eventMatch?.[1]) {
+    return sliceCodepoints(`[Subagent ${eventMatch[1]}] ${label || "subagent"}`, 220);
+  }
+  if (kindMatch?.[1] === "agent-notification") {
+    return sliceCodepoints(`[Subagent notification] ${label || "subagent"}`, 220);
+  }
+  const body = trimmed
+    .replace(/^<paseo-system\b[^>]*(?:>|$)/u, "")
+    .replace(/<\/paseo-system>/gu, "")
+    .replace(/<[^>]+>/gu, " ");
+  const bodyLine = body
+    .split(/\r?\n/u)
+    .map((line) => line.trim().replace(/\s+/gu, " "))
+    .find(Boolean);
+  const formatted = bodyLine
+    ? `[Agent message${label ? ` · ${label}` : ""}] ${bodyLine}`
+    : `[Agent message] ${label || "subagent"}`;
+  return sliceCodepoints(formatted, 220);
+}
 
 export function messageSummarySnippet(text: string | undefined | null): string {
   if (!text) return "";
-  let source = text;
+  let source = text.replace(SYSTEM_BLOCK_RE, "");
   const match = source.match(LEADING_REASONING_BLOCK);
   if (match) {
     const remainder = source.slice(match[0].length).trim();
@@ -75,6 +112,10 @@ export function messageSummarySnippet(text: string | undefined | null): string {
         .find(Boolean);
       return innerLine ? `💭 **Reasoning:**\n${innerLine}` : "💭 **Reasoning:**";
     }
+  }
+  const trimmed = source.trimStart();
+  if (trimmed.startsWith("<paseo-system")) {
+    return formatPaseoSystemSnippet(trimmed);
   }
   return source
     .split(/\r?\n/u)
@@ -256,7 +297,7 @@ export function buildGroupedRows(
         type: "user",
         row,
       });
-    } else if (kind === "assistant") {
+    } else if (kind === "assistant" || kind === "agent") {
       flushGroup();
       result.push({
         key: row.item_id ?? row.tool_call_id,

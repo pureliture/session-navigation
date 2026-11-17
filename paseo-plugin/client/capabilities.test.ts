@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   actionAllowed,
   capabilityNotice,
+  isManagedAdapterProvider,
   type Capabilities,
 } from "./capabilities";
 import type { Row } from "../shared/sessionNav";
@@ -39,4 +40,17 @@ test("UI capability gates retain display and offline Unhide, and distinguish ada
   expect(capabilityNotice("runtime_unsupported")).toContain("Node >=22.13");
   expect(capabilityNotice("engine_error")).toContain("Engine/runtime error");
   expect(capabilityNotice(undefined, ready)).toBeNull();
+
+  // Unmanaged providers and empty initial sessions suppress "Adapter not detected"
+  for (const provider of ["antigravity", "claude", "codex", "junie", "opencode"]) {
+    expect(isManagedAdapterProvider(provider, null)).toBe(false);
+    expect(capabilityNotice(undefined, undefined, { provider, scopeKey: null, rowCount: 5 })).toBeNull();
+  }
+  expect(isManagedAdapterProvider("omp", null)).toBe(true);
+  expect(isManagedAdapterProvider("hermes-atlas", null)).toBe(true);
+  expect(capabilityNotice(undefined, undefined, { provider: "omp", scopeKey: null, rowCount: 0 })).toBeNull();
+  expect(capabilityNotice(undefined, undefined, { provider: "omp", scopeKey: null, rowCount: 2 })).toContain(
+    "Adapter not detected",
+  );
+  expect(capabilityNotice("db_error", undefined, { provider: "claude", rowCount: 0 })).toContain("Database error");
 });

@@ -578,3 +578,160 @@ def test_codex_strict_schema_null_optional_args_and_integer_ids_parity() -> None
             timeout=30,
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_python_payload_ts_hermes_history_message_key_parity_both_modes(tmp_path) -> None:
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is required for TypeScript hermesHistory verification")
+
+    repo = Path(__file__).resolve().parents[1]
+    payload_mod = _adapter.payload
+
+    chat_payload = {
+        "messages": [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Run status check"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_chat_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path":"a.txt"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": " call_chat_1 ", "content": "contents of a.txt"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_chat_2",
+                        "type": "function",
+                        "function": {"name": "terminal", "arguments": '{"command":"ls"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_chat_2", "content": "file1\nfile2"},
+            {"role": "assistant", "content": "Both checks finished."},
+            {"role": "user", "content": "Thanks!"},
+        ]
+    }
+    chat_expected = [key for key, _role, _idx, text in payload_mod.message_keys("chat_completions", chat_payload) if text.strip()]
+
+    codex_payload = {
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Inspect pods"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Running kubectl"}]},
+            {"type": "function_call", "call_id": "call_cx_1", "name": "terminal", "arguments": '{"command":"kubectl get pods"}'},
+            {"type": "function_call_output", "call_id": " call_cx_1 ", "output": "pod-1 Running"},
+            {"type": "function_call", "call_id": "call_cx_2", "name": "read_file", "arguments": '{"path":"b.txt"}'},
+            {"type": "function_call_output", "call_id": "call_cx_2", "output": "b-body"},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Pods are healthy."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Great"}]},
+        ]
+    }
+    codex_expected = [key for key, _role, _idx, text in payload_mod.message_keys("codex_responses", codex_payload) if text.strip()]
+
+    script = f"""
+import {{ DatabaseSync }} from "node:sqlite";
+import {{ mkdirSync }} from "node:fs";
+import {{ join }} from "node:path";
+import {{ loadHermesTimeline }} from {json.dumps(str(repo / "paseo-plugin/server/hermesHistory.ts"))};
+
+const home = {json.dumps(str(tmp_path / "parity-home"))};
+mkdirSync(join(home, ".hermes"), {{ recursive: true }});
+const db = new DatabaseSync(join(home, ".hermes/state.db"));
+db.exec(`
+  CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+  CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,
+    tool_name TEXT,
+    codex_message_items TEXT,
+    api_content TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    compacted INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const insSess = db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)");
+const insMsg = db.prepare(`
+  INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, codex_message_items, api_content)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+// 1. chat_completions with empty-string and null-content tool_calls assistant rows + trimmed call_id
+insSess.run("s-chat", JSON.stringify({{ gateway_runtime: {{ api_mode: "chat_completions" }} }}));
+insMsg.run("s-chat", "user", "Run status check", null, null, null, null, null);
+insMsg.run("s-chat", "assistant", "", null, JSON.stringify([{{ id: "call_chat_1", type: "function", function: {{ name: "read_file", arguments: '{{"path":"a.txt"}}' }} }}]), null, null, null);
+insMsg.run("s-chat", "tool", "contents of a.txt", " call_chat_1 ", null, "read_file", null, null);
+insMsg.run("s-chat", "assistant", null, null, JSON.stringify([{{ id: "call_chat_2", type: "function", function: {{ name: "terminal", arguments: '{{"command":"ls"}}' }} }}]), null, null, null);
+insMsg.run("s-chat", "tool", "file1\\nfile2", "call_chat_2", null, "terminal", null, null);
+insMsg.run("s-chat", "assistant", "Both checks finished.", null, null, null, null, null);
+insMsg.run("s-chat", "user", "Thanks!", null, null, null, null, null);
+
+const tlChat = loadHermesTimeline(home, "hermes:default:s-chat:unknown");
+if (!tlChat) throw new Error("missing chat timeline");
+const chatActual = tlChat.rows.filter((r) => r.kind === "user" || r.kind === "assistant").map((r) => r.item_id);
+const chatExpected = {json.dumps(chat_expected)};
+if (JSON.stringify(chatActual) !== JSON.stringify(chatExpected)) {{
+  console.error("CHAT_PARITY_MISMATCH", JSON.stringify({{ chatActual, chatExpected }}));
+  process.exit(1);
+}}
+const trimmedTool = tlChat.rows.find((r) => r.tool_call_id === "call_chat_1");
+if (!trimmedTool || !trimmedTool.manageable || !tlChat.records.has("call_chat_1")) {{
+  console.error("TRIM_CALL_ID_FAIL", trimmedTool);
+  process.exit(2);
+}}
+
+// 2. codex_responses with codex_message_items and tool-only assistant row without message item
+insSess.run("s-codex", JSON.stringify({{ gateway_runtime: {{ api_mode: "codex_responses" }} }}));
+insMsg.run("s-codex", "user", "Inspect pods", null, null, null, null, "Inspect pods");
+insMsg.run(
+  "s-codex",
+  "assistant",
+  "",
+  null,
+  JSON.stringify([{{ call_id: "call_cx_1", type: "function", function: {{ name: "terminal", arguments: '{{"command":"kubectl get pods"}}' }} }}]),
+  null,
+  JSON.stringify([{{ type: "message", role: "assistant", content: [{{ type: "output_text", text: "Running kubectl" }}] }}]),
+  null,
+);
+insMsg.run("s-codex", "tool", "pod-1 Running", " call_cx_1 ", null, "terminal", null, null);
+insMsg.run(
+  "s-codex",
+  "assistant",
+  "",
+  null,
+  JSON.stringify([{{ call_id: "call_cx_2", type: "function", function: {{ name: "read_file", arguments: '{{"path":"b.txt"}}' }} }}]),
+  null,
+  null,
+  null,
+);
+insMsg.run("s-codex", "tool", "b-body", "call_cx_2", null, "read_file", null, null);
+insMsg.run("s-codex", "assistant", "Pods are healthy.", null, null, null, null, null);
+insMsg.run("s-codex", "user", "Great", null, null, null, null, "Great");
+
+const tlCodex = loadHermesTimeline(home, "hermes:default:s-codex:unknown");
+if (!tlCodex) throw new Error("missing codex timeline");
+const codexActual = tlCodex.rows.filter((r) => r.kind === "user" || r.kind === "assistant").map((r) => r.item_id);
+const codexExpected = {json.dumps(codex_expected)};
+if (JSON.stringify(codexActual) !== JSON.stringify(codexExpected)) {{
+  console.error("CODEX_PARITY_MISMATCH", JSON.stringify({{ codexActual, codexExpected }}));
+  process.exit(3);
+}}
+db.close();
+"""
+    proc = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr

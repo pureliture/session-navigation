@@ -29,7 +29,8 @@ export interface Timeline {
 }
 
 export function findSession(home: string, session: string): string | undefined {
-  if (!session || /[\\/:]/.test(session)) return;
+  const sessionId = session.includes(":") ? (session.split(":")[2] ?? "") : session;
+  if (!sessionId || /[\\/:]/.test(sessionId)) return;
   function search(directory: string): string | undefined {
     if (!existsSync(directory)) return;
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
@@ -39,7 +40,7 @@ export function findSession(home: string, session: string): string | undefined {
       if (entry.isDirectory()) {
         const result = search(filename);
         if (result) return result;
-      } else if (entry.isFile() && entry.name.endsWith(`_${session}.jsonl`))
+      } else if (entry.isFile() && entry.name.endsWith(`_${sessionId}.jsonl`))
         return filename;
     }
   }
@@ -114,9 +115,50 @@ export function preview(value: unknown): string {
   return encoded.subarray(0, end).toString("utf8") + "\n… [truncated]";
 }
 
+const SYSTEM_BLOCK_RE =
+  /<system-reminder>[\s\S]*?<\/system-reminder>|<system-notice>[\s\S]*?<\/system-notice>/gu;
+
+function stripSystemBlocks(text: string): string {
+  return text.replace(SYSTEM_BLOCK_RE, "");
+}
+
+function sliceCodepoints(text: string, maxLen: number): string {
+  return [...text].slice(0, maxLen).join("");
+}
+
+function formatPaseoSystemSummary(trimmed: string): string {
+  const titleMatch = /source-agent-title="([^"]+)"/u.exec(trimmed);
+  const eventMatch = /event="([^"]+)"/u.exec(trimmed);
+  const idMatch = /source-agent-id="([^"]+)"/u.exec(trimmed);
+  const kindMatch = /kind="([^"]+)"/u.exec(trimmed);
+  const label = titleMatch?.[1]?.trim() || (idMatch?.[1] ? idMatch[1].slice(0, 8) : "");
+  if (eventMatch?.[1]) {
+    return sliceCodepoints(`[Subagent ${eventMatch[1]}] ${label || "subagent"}`, 220);
+  }
+  if (kindMatch?.[1] === "agent-notification") {
+    return sliceCodepoints(`[Subagent notification] ${label || "subagent"}`, 220);
+  }
+  const body = trimmed
+    .replace(/^<paseo-system\b[^>]*(?:>|$)/u, "")
+    .replace(/<\/paseo-system>/gu, "")
+    .replace(/<[^>]+>/gu, " ");
+  const bodyLine = splitLines(body)
+    .map((line) => line.trim().replace(/\s+/gu, " "))
+    .find(Boolean);
+  const formatted = bodyLine
+    ? `[Agent message${label ? ` · ${label}` : ""}] ${bodyLine}`
+    : `[Agent message] ${label || "subagent"}`;
+  return sliceCodepoints(formatted, 220);
+}
+
 export function summaryLine(text: string): string {
-  return [
-    ...splitLines(text)
+  const stripped = stripSystemBlocks(text);
+  const trimmed = stripped.trimStart();
+  if (trimmed.startsWith("<paseo-system")) {
+    return formatPaseoSystemSummary(trimmed);
+  }
+  return sliceCodepoints(
+    splitLines(stripped)
       .map((line) => line.trim().replace(/\s+/gu, " "))
       .filter(
         (line) =>
@@ -126,9 +168,8 @@ export function summaryLine(text: string): string {
       )
       .slice(0, 2)
       .join("\n"),
-  ]
-    .slice(0, 220)
-    .join("");
+    220,
+  );
 }
 
 export function formatToolSummary(tool: string, text: string): string {

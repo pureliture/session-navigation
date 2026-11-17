@@ -49,7 +49,7 @@ export function mergeHermesTimelineRows(
   const consumed = new Set<string>();
   const merged: Row[] = [];
   for (const tRow of timeline) {
-    if (tRow.kind === "user" || tRow.kind === "assistant") {
+    if (tRow.kind === "user" || tRow.kind === "assistant" || tRow.kind === "agent") {
       merged.push({ ...tRow, item_id: null, manageable: false });
       continue;
     }

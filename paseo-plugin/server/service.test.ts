@@ -1034,3 +1034,214 @@ test("Hermes local state.db loads full chronological timeline on the server, ena
   const storedTool = store.get(hermesScope, listed.items[2].item_id);
   expect(storedTool?.invocation_options_omitted).toBe(true);
 });
+
+test("unregistered Hermes custom profiles and new OMP sessions get virtual scopes and immediate server_timeline", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, service } = fixture([], false);
+  const agentsDir = join(home, ".paseo/agents/ws");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    join(home, ".paseo/config.json"),
+    JSON.stringify({
+      agents: {
+        providers: {
+          "hermes-ariadne": { extends: "acp", command: ["hermes", "-p", "ariadne", "acp"] },
+        },
+      },
+    }),
+  );
+  // 1. Registered on disk (OMP JSONL + Hermes profile DB), but NOT in adapter_sessions/items/units
+  writeFileSync(
+    join(agentsDir, "omp-new.json"),
+    JSON.stringify({ id: "agent-omp-new", provider: "omp", persistence: { provider: "omp", sessionId: "sid", metadata: {} } }),
+  );
+  writeFileSync(
+    join(agentsDir, "ariadne.json"),
+    JSON.stringify({
+      id: "agent-ariadne",
+      provider: "hermes-ariadne",
+      persistence: { provider: "hermes-ariadne", sessionId: "ariadne-sid", metadata: { provider: "acp" } },
+    }),
+  );
+  writeFileSync(
+    join(agentsDir, "claude-acp.json"),
+    JSON.stringify({
+      id: "agent-claude-acp",
+      provider: "claude",
+      persistence: { provider: "acp", sessionId: "claude-sid", metadata: { provider: "acp" } },
+    }),
+  );
+  const sessionsDir = join(home, ".omp/agent/sessions/project");
+  writeFileSync(
+    join(sessionsDir, "2026_sid.jsonl"),
+    JSON.stringify({ type: "message", message: { role: "user", timestamp: 1, content: "hello omp" } }),
+  );
+  const ariadneDir = join(home, ".hermes/profiles/ariadne");
+  mkdirSync(ariadneDir, { recursive: true });
+  const db = new DatabaseSync(join(ariadneDir, "state.db"));
+  try {
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("ariadne-sid", "{}");
+    db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+      "ariadne-sid",
+      "user",
+      "hello ariadne",
+    );
+  } finally {
+    db.close();
+  }
+
+  const scopesReply = await service.handle("scopes", {});
+  expect(scopesReply.ok).toBe(true);
+  const byAgent = new Map(scopesReply.scopes.map((s: any) => [s.agent_id, s]));
+  expect(byAgent.get("agent-omp-new")).toMatchObject({
+    scope_key: "omp:default:sid:default",
+    items: 0,
+  });
+  expect(byAgent.get("agent-ariadne")).toMatchObject({
+    scope_key: "hermes:ariadne:ariadne-sid:unknown",
+    items: 0,
+  });
+  expect(byAgent.has("agent-claude-acp")).toBe(false);
+
+  const ariadneList = await service.handle("list", { scope_key: "hermes:ariadne:ariadne-sid:unknown" });
+  expect(ariadneList.ok).toBe(true);
+  expect(ariadneList.server_timeline).toBe(true);
+  expect(ariadneList.items[0].summary_line).toBe("hello ariadne");
+
+  const { hasHermesSession } = await import("./hermesHistory.ts");
+  expect(hasHermesSession(home, "ariadne", "ariadne-sid")).toBe(true);
+  expect(hasHermesSession(home, "ariadne", "claude-sid")).toBe(false);
+});
+
+test("OMP summary_line normalizes <paseo-system>, <system-reminder>, <system-notice> and preserves hidden tool summaries", async () => {
+  const { call, store } = fixture([
+    {
+      role: "user",
+      timestamp: 100,
+      content:
+        '<system-reminder>Secret reminder block</system-reminder><paseo-system version="1" kind="agent-message" source-agent-id="sub-999999" source-agent-title="Reviewer">Please inspect the diff carefully.\nSecond line</paseo-system>',
+    },
+    {
+      role: "user",
+      timestamp: 200,
+      content:
+        '<system-notice>Notice text</system-notice><paseo-system version="1" kind="agent-notification" source-agent-id="sub-123" source-agent-title="Worker" event="finished">Done</paseo-system>',
+    },
+    {
+      role: "user",
+      timestamp: 300,
+      content: "<system-reminder>Ignored</system-reminder>\n진행해",
+    },
+    {
+      role: "assistant",
+      timestamp: 400,
+      content: [{ type: "toolCall", id: "c_short", name: "bash", arguments: { command: "ls -la" } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c_short",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "short" }],
+    },
+  ]);
+
+  const listedBefore = await call("list");
+  expect(listedBefore.items[0].summary_line).toBe("[Agent message · Reviewer] Please inspect the diff carefully.");
+  expect(listedBefore.items[1].summary_line).toBe("[Subagent finished] Worker");
+  expect(listedBefore.items[2].summary_line).toBe("진행해");
+
+  const toolRow = listedBefore.items[3];
+  const hidden = await call("hide", { item_id: toolRow.item_id, mode: "hide" });
+  expect(hidden.ok).toBe(true);
+  const stored = store.get(scope, toolRow.item_id)!;
+  expect(stored.compacted).toBe(`[hidden:${toolRow.item_id}]`);
+
+  const listedAfter = await call("list");
+  const hiddenToolRow = listedAfter.items.find((r: any) => r.item_id === toolRow.item_id);
+  expect(hiddenToolRow.status).toBe("hidden");
+  expect(hiddenToolRow.summary_line).toBe("short");
+});
+
+test("hermesHistory normalizes trimmed call_id and increments result_position per call occurrence", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { loadHermesTimeline } = await import("./hermesHistory.ts");
+  const { home } = fixture([]);
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const db = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("dup-pos", "{}");
+    const ins = db.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+    ins.run("dup-pos", "assistant", "", null, JSON.stringify([{ id: " call_dup ", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } }]), null);
+    ins.run("dup-pos", "tool", "first result", " call_dup ", null, "read_file");
+    ins.run("dup-pos", "tool", "second result", "call_dup", null, "read_file");
+  } finally {
+    db.close();
+  }
+  const scopeKey = "hermes:default:dup-pos:unknown";
+  const inv = { tool_name: "read_file", arguments: { path: "a.txt" } };
+  const digest = invocationDigest(inv);
+  const item0: Item = {
+    item_id: itemId(scopeKey, "call_dup", sha256("first result"), digest, 0),
+    tool_call_id: "call_dup",
+    result_position: 0,
+    content_sha256: sha256("first result"),
+    invocation_digest: digest,
+    original: "first result",
+    compacted: "[hidden:0]",
+    excerpt_lines: [],
+    visibility: "hidden",
+    version: 2,
+    tool_name: "read_file",
+    compaction_source: "explicit_user_hide",
+    invocation_snapshot: inv,
+    context_hint: null,
+    invocation_options_omitted: false,
+    created_at: 0,
+    updated_at: 0,
+  };
+  const item1: Item = {
+    ...item0,
+    item_id: itemId(scopeKey, "call_dup", sha256("second result"), digest, 1),
+    result_position: 1,
+    content_sha256: sha256("second result"),
+    original: "second result",
+    compacted: "[hidden:1]",
+  };
+  const tl = loadHermesTimeline(home, scopeKey, [item0, item1]);
+  expect(tl).not.toBeNull();
+  const toolRows = tl!.rows.filter((r) => r.kind === "tool");
+  expect(toolRows.map((r) => r.item_id)).toEqual([item0.item_id, item1.item_id]);
+});

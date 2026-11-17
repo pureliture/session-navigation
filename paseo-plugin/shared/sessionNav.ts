@@ -21,7 +21,7 @@ export const RowSchema = z.object({
   item_id: z.string().nullable(),
   tool_call_id: z.string(),
   tool_name: z.string().nullable().optional(),
-  kind: z.enum(["user", "assistant", "tool"]).optional(),
+  kind: z.enum(["user", "assistant", "agent", "tool"]).optional(),
   status: StatusSchema,
   visibility: z.enum(["hidden", "visible"]).optional(),
   version: z.number().int(),

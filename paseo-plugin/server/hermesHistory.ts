@@ -301,16 +301,42 @@ function candidateHermesDbs(home: string, profile: string): string[] {
 }
 
 function formatMessageSummaryLine(text: string): string {
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith("<paseo-system")) {
-    const titleMatch = /source-agent-title="([^"]+)"/.exec(trimmed);
-    const eventMatch = /event="([^"]+)"/.exec(trimmed);
-    const idMatch = /source-agent-id="([^"]+)"/.exec(trimmed);
-    const label = titleMatch?.[1] ?? (idMatch?.[1] ? idMatch[1].slice(0, 8) : "subagent");
-    const ev = eventMatch?.[1] ?? "notification";
-    return `[Subagent ${ev}] ${label}`;
-  }
   return summaryLine(text);
+}
+
+export function hasHermesSession(home: string, profile: string, sessionId: string): boolean {
+  if (!sessionId || /[\\/:]/.test(sessionId)) return false;
+  for (const dbPath of candidateHermesDbs(home, profile)) {
+    let db: DatabaseSync | undefined;
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      let found = false;
+      try {
+        found = Boolean(db.prepare("SELECT 1 FROM sessions WHERE id = ? LIMIT 1").get(sessionId));
+      } catch {
+        // Ignore missing sessions table in malformed/partial DBs.
+      }
+      if (!found) {
+        try {
+          found = Boolean(
+            db.prepare("SELECT 1 FROM messages WHERE session_id = ? AND active = 1 LIMIT 1").get(sessionId),
+          );
+        } catch {
+          // Ignore missing messages table.
+        }
+      }
+      if (found) return true;
+    } catch {
+      // Ignore unreadable or busy candidate DBs and try next candidate.
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        // Ignore close errors.
+      }
+    }
+  }
+  return false;
 }
 
 export function loadHermesTimeline(
@@ -332,11 +358,16 @@ export function loadHermesTimeline(
       const sessionRow = db
         .prepare("SELECT id, model_config FROM sessions WHERE id = ?")
         .get(sessionId) as { id?: string; model_config?: string | null } | undefined;
-      if (!sessionRow?.id) continue;
+      const hasSession = sessionRow?.id
+        ? true
+        : Boolean(
+            db.prepare("SELECT 1 FROM messages WHERE session_id = ? AND active = 1 LIMIT 1").get(sessionId),
+          );
+      if (!hasSession) continue;
 
       let apiMode = "chat_completions";
       let usedTokens: number | undefined;
-      if (typeof sessionRow.model_config === "string" && sessionRow.model_config) {
+      if (typeof sessionRow?.model_config === "string" && sessionRow.model_config) {
         try {
           const cfg = JSON.parse(sessionRow.model_config) as Record<string, any>;
           if (typeof cfg?.gateway_runtime?.api_mode === "string") {
@@ -374,6 +405,7 @@ export function loadHermesTimeline(
       const calls = new Map<string, { name: string; rawArgs: unknown; parsedArgs: unknown; index: number }>();
       const duplicate = new Set<string>();
       const resultCounts = new Map<string, number>();
+      const rowResultPos = new Map<number, number>();
 
       dbRows.forEach((row, index) => {
         if (row.role === "assistant" && typeof row.tool_calls === "string" && row.tool_calls.trim()) {
@@ -381,12 +413,13 @@ export function loadHermesTimeline(
             const parsedCalls = JSON.parse(row.tool_calls);
             if (Array.isArray(parsedCalls)) {
               for (const entry of parsedCalls) {
-                const cid =
-                  typeof entry?.call_id === "string" && entry.call_id
+                const rawCid =
+                  typeof entry?.call_id === "string" && entry.call_id.trim()
                     ? entry.call_id
                     : typeof entry?.id === "string"
                       ? entry.id
                       : "";
+                const cid = rawCid.trim();
                 const fnName = typeof entry?.function?.name === "string" ? entry.function.name : "";
                 if (!cid) continue;
                 const rawArgs = entry?.function?.arguments ?? {};
@@ -405,15 +438,22 @@ export function loadHermesTimeline(
           } catch {
             // Ignore malformed tool_calls JSON.
           }
-        } else if (row.role === "tool" && typeof row.tool_call_id === "string" && row.tool_call_id) {
-          resultCounts.set(row.tool_call_id, (resultCounts.get(row.tool_call_id) ?? 0) + 1);
+        } else if (row.role === "tool" && typeof row.tool_call_id === "string") {
+          const cid = row.tool_call_id.trim();
+          if (cid) {
+            const pos = resultCounts.get(cid) ?? 0;
+            rowResultPos.set(index, pos);
+            resultCounts.set(cid, pos + 1);
+          }
         }
       });
 
-      const storedByCallId = new Map<string, Item>();
+      const storedByCallPos = new Map<string, Item>();
       for (const item of storedItems) {
-        if (!storedByCallId.has(item.tool_call_id)) {
-          storedByCallId.set(item.tool_call_id, item);
+        const cid = item.tool_call_id.trim();
+        const posKey = `${cid}\0${item.result_position}`;
+        if (!storedByCallPos.has(posKey)) {
+          storedByCallPos.set(posKey, item);
         }
       }
 
@@ -458,7 +498,7 @@ export function loadHermesTimeline(
       for (let index = dbRows.length - 1; index >= 0; index--) {
         const row = dbRows[index];
         if (row.role !== "tool") continue;
-        const callId = row.tool_call_id ?? "";
+        const callId = (row.tool_call_id ?? "").trim();
         const found = calls.get(callId);
         const toolName = row.tool_name || found?.name || "tool";
         if (
@@ -475,6 +515,7 @@ export function loadHermesTimeline(
         if (!filtered) continue;
         const text = row.content ?? "";
         const size = bytes(text);
+        const resultPos = rowResultPos.get(index) ?? 0;
         if (totalRecordBytes + size <= MAX_HERMES_RECORD_BYTES && records.size < MAX_HERMES_RECORDS) {
           totalRecordBytes += size;
           const digest = invocationDigest(filtered.invocation, filtered.omitted);
@@ -484,7 +525,7 @@ export function loadHermesTimeline(
             content_sha256: sha256(text),
             invocation: filtered.invocation,
             invocation_digest: digest,
-            result_position: 0,
+            result_position: resultPos,
             status: "ok",
             ...(filtered.omitted ? { options_omitted: true } : {}),
           });
@@ -493,15 +534,15 @@ export function loadHermesTimeline(
         }
       }
 
-      dbRows.forEach((row) => {
+      const isCodexMode = apiMode === "codex_responses";
+      dbRows.forEach((row, index) => {
         const isUncompacted = Number(row.compacted ?? 0) === 0;
         if (row.role === "user") {
           const displayText = row.content ?? row.api_content ?? "";
           let rowId = `hist_user_${row.id}`;
           if (isUncompacted) {
             const rawApi = row.api_content !== null ? row.api_content : (row.content ?? "");
-            const wireContent =
-              apiMode === "codex_responses" ? [{ text: rawApi, type: "input_text" }] : rawApi;
+            const wireContent = isCodexMode ? [{ text: rawApi, type: "input_text" }] : rawApi;
             rowId = resolveMsgUnitId("user", msgPos, wireContent);
             msgPos += 1;
           }
@@ -566,43 +607,79 @@ export function loadHermesTimeline(
               handledViaCodexItems = false;
             }
           }
-          if (!handledViaCodexItems && typeof row.content === "string" && row.content.length > 0) {
-            const text = row.content;
-            let rowId = `hist_ast_${row.id}`;
-            if (isUncompacted) {
+          if (!handledViaCodexItems) {
+            if (isCodexMode) {
+              if (typeof row.content === "string" && row.content.length > 0) {
+                const text = row.content;
+                let rowId = `hist_ast_${row.id}`;
+                if (isUncompacted) {
+                  const wireContent = [{ text, type: "output_text" }];
+                  rowId = resolveMsgUnitId("assistant", msgPos, wireContent);
+                  msgPos += 1;
+                }
+                if (text.trim()) {
+                  rows.push({
+                    item_id: rowId,
+                    tool_call_id: "",
+                    kind: "assistant",
+                    tool_name: "assistant",
+                    summary_line: summaryLine(text),
+                    message_text: preview(text),
+                    bytes_size: bytes(text),
+                    manageable: isUncompacted,
+                  });
+                }
+              }
+            } else {
               const wireContent =
-                apiMode === "codex_responses" ? [{ text, type: "output_text" }] : text;
-              rowId = resolveMsgUnitId("assistant", msgPos, wireContent);
-              msgPos += 1;
-            }
-            if (text.trim()) {
-              rows.push({
-                item_id: rowId,
-                tool_call_id: "",
-                kind: "assistant",
-                tool_name: "assistant",
-                summary_line: summaryLine(text),
-                message_text: preview(text),
-                bytes_size: bytes(text),
-                manageable: isUncompacted,
-              });
+                typeof row.api_content === "string"
+                  ? row.api_content
+                  : typeof row.content === "string"
+                    ? row.content
+                    : "";
+              const text =
+                typeof row.content === "string" && row.content.length > 0
+                  ? row.content
+                  : typeof row.api_content === "string"
+                    ? row.api_content
+                    : "";
+              let rowId = `hist_ast_${row.id}`;
+              if (isUncompacted) {
+                rowId = resolveMsgUnitId("assistant", msgPos, wireContent);
+                msgPos += 1;
+              }
+              if (text.trim()) {
+                rows.push({
+                  item_id: rowId,
+                  tool_call_id: "",
+                  kind: "assistant",
+                  tool_name: "assistant",
+                  summary_line: summaryLine(text),
+                  message_text: preview(text),
+                  bytes_size: bytes(text),
+                  manageable: isUncompacted,
+                });
+              }
             }
           }
           return;
         }
 
         if (row.role !== "tool") return;
-        const callId = row.tool_call_id ?? "";
+        const callId = (row.tool_call_id ?? "").trim();
+        const resultPos = rowResultPos.get(index) ?? 0;
         const found = calls.get(callId);
         const toolName = row.tool_name || found?.name || "tool";
         const text = row.content ?? "";
-        const storedItem = callId ? storedByCallId.get(callId) : undefined;
+        const storedItem = callId
+          ? storedByCallPos.get(`${callId}\0${resultPos}`)
+          : undefined;
         const record = callId ? records.get(callId) : undefined;
 
         const resolvedItemId = storedItem
           ? storedItem.item_id
           : record
-            ? itemId(scope, callId, record.content_sha256, record.invocation_digest, 0)
+            ? itemId(scope, callId, record.content_sha256, record.invocation_digest, record.result_position)
             : `display_hermes_${row.id}`;
 
         rows.push({
