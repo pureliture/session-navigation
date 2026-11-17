@@ -142,7 +142,7 @@ class SessionNavigationEngine:
             max_line_length=self.config.max_excerpt_line_length,
         )
         baseline = selector.select(rule_source, keep_lines=tuple(keep_lines)) if keep_lines else selector.select(rule_source)
-        if baseline is None:
+        if baseline is None and (summarizer is None or allow_fallback):
             error = "keep_lines_too_broad" if keep_lines and selector.select(rule_source) is not None else "verification_failed"
             return MutationResult(ok=False, error=error)
 
@@ -192,7 +192,7 @@ class SessionNavigationEngine:
                 original=record.content,
                 item_id=item_id,
                 rule_source=rule_source,
-                baseline=baseline,
+                baseline=baseline if baseline is not None else SpanChoice((), "rule"),
                 choice=choice,
                 invocation=record.invocation,
                 options_omitted=options_omitted,

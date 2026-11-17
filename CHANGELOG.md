@@ -97,6 +97,12 @@ Publication and registry/catalog approval are separate steps; see
   tab remount reset, live `stick-to-bottom`, search scroll restore, bottom group
   expand / `PreviewDrawer` reveal, `cancelChatNavigation`, and Paseo chat
   `followOutput` release on older-row jumps).
+- Raise `MAX_EVIDENCE_EXCERPTS` (`max_evidence_excerpts`) from `8` to `20` across
+  the Python and TypeScript engines, allow explicit `summarize_context` (`allow_fallback=false`)
+  to proceed even when rule-based baseline exceeds excerpt caps, and extend the
+  explicit head/tail hide fallback to `hide_context` (`/nav hide`) in both Hermes
+  and OMP so multi-file `git status` / `git diff --stat` outputs never fail with
+  `verification_failed` or remain stranded in candidate reminders.
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

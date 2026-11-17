@@ -496,12 +496,17 @@ export class OmpService {
     const existing = this.store.get(scope, identity(scope, record));
     if (expectedVersion !== undefined && expectedVersion !== (existing?.version ?? 0))
       return { ok: false, error: "version_conflict" };
-    if (!summarize)
-      return this.engine.hide(
+    if (!summarize) {
+      const res = await this.engine.hide(
         scope,
         record,
         keepLines === undefined ? {} : { keep_lines: keepLines as Json },
       );
+      if (!res.ok && res.error === "verification_failed" && !refusalReason(record, this.engine.config)) {
+        return this.explicitManageFallback(scope, record, undefined, keepLines, expectedVersion);
+      }
+      return res;
+    }
     if (existing && ["llm", "llm_summary"].includes(existing.compaction_source))
       return this.engine.summarize(scope, record, async () => { throw new Error("cached summary"); });
     if (typeof text !== "string" || !text.trim())

@@ -23,7 +23,8 @@
     {"name":"numbered-envelope","line":"Routine catalog annotation","repeat":80,"suffix":"tail","envelope":true,"numbered":true},
     {"name":"keep-lines","line":"Routine catalog annotation","repeat":80,"suffix":"specific middle result\nlast line","keep":["  88: specific middle result  ","missing",null,"","last line"]},
     {"name":"short","line":"tiny","repeat":1,"suffix":""},
-    {"name":"many-evidence","line":"/known/result.json","repeat":20,"suffix":""}
+    {"name":"many-evidence","line":"/known/result.json","repeat":20,"suffix":""},
+    {"name":"over-max-evidence","line":"/known/result.json","repeat":25,"suffix":""}
   ],
   "summaries": [
     {"source":"1234 checks passed; exit code 0.","text":"1,234 checks passed; exit code 0."},

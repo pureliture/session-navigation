@@ -89,7 +89,7 @@ export const defaults: Config = {
   max_pending: 4,
   head_excerpts: 3,
   tail_excerpts: 2,
-  max_evidence_excerpts: 8,
+  max_evidence_excerpts: 20,
   max_excerpt_line_length: 240,
   max_invocation_bytes: 2048,
 };
