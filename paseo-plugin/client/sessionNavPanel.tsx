@@ -1082,23 +1082,24 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         paddingVertical: layout.compact ? 5 : 6,
         paddingHorizontal: pad,
         borderBottomWidth: 1,
-        borderColor: theme.colors.border + "33",
+        borderBottomColor: theme.colors.border,
         borderLeftWidth: 3,
         borderLeftColor: "transparent",
       },
       rowItemSelected: {
         borderLeftColor: theme.colors.accent,
-        backgroundColor: theme.colors.surface1 + "66",
+        backgroundColor: theme.colors.accent + "14",
       },
       rowItemHidden: {
-        opacity: 0.65,
+        opacity: 0.72,
       },
       groupRowItem: {
-        backgroundColor: theme.colors.surface0,
+        backgroundColor: theme.colors.surface1,
       },
       childRowItem: {
         paddingLeft: pad + (layout.compact ? 12 : 16),
-        backgroundColor: theme.colors.surface1 + "18",
+        backgroundColor: theme.colors.surface1 + "80",
+        borderBottomColor: theme.colors.border + "B3",
       },
       expandToggleBtn: {
         width: 14,
