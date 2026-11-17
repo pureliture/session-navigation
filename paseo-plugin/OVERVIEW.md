@@ -72,7 +72,9 @@ Scopes come from persisted registrations and state, including zero-item register
 sessions. OMP binds to registered `omp:` scopes through explicit provider/session
 metadata. Legacy `pi:` scopes are display/restore-only. Custom ACP providers bind to
 published Hermes scopes with their explicit session/profile (`unknown` branch, with
-legacy `default` discovery). Hermes mutable originals come from `adapter_targets`.
+legacy `default` discovery). Local Hermes timelines and mutable tool records are read
+directly from `~/.hermes/.../state.db` in read-only mode (`adapter_targets` and the ACP
+timeline back up remote or unmapped sessions).
 Manage requires explicit tool-call IDs; it never chooses cleanup targets automatically.
 
 For source changes, run `npm ci`, `npm run build`, `npm run typecheck` and `npm test`

@@ -103,6 +103,12 @@ Publication and registry/catalog approval are separate steps; see
   explicit head/tail hide fallback to `hide_context` (`/nav hide`) in both Hermes
   and OMP so multi-file `git status` / `git diff --stat` outputs never fail with
   `verification_failed` or remain stranded in candidate reminders.
+- Unify Paseo's Hermes timeline loading with OMP on the server (`server/hermesHistory.ts`)
+  by reading `~/.hermes/.../state.db` in read-only mode (`DatabaseSync` `readOnly: true`),
+  preserving full pre/post-interruption chronological history, Codex `codex_message_items`,
+  `msg:*` prompt/response hide/unhide parity, manageable `terminal`/`read_file`/`search_files`
+  records with `options_omitted`, and `_usage_anchor` context token totals (keeping ACP
+  timeline merge only as a fallback when no local `state.db` is present).
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

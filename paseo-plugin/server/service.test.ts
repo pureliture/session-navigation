@@ -889,3 +889,135 @@ test("manage_context tool calls appear in Outline, format legacy JSON output cle
   expect(searched.ok).toBe(true);
   expect(searched.items.map((r: any) => r.tool_call_id)).toContain("call_mc_1");
 });
+
+test("Hermes local state.db loads full chronological timeline on the server, enables msg:* prompt hide/unhide, and preserves options_omitted on tool hide", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, store, service } = fixture([]);
+  const hermesSession = "local-hermes-unified-test";
+  const hermesScope = `hermes:atlas:${hermesSession}:unknown`;
+  store.register(hermesScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "hermes-test",
+  });
+
+  const profileDir = join(home, ".hermes/profiles/atlas");
+  mkdirSync(profileDir, { recursive: true });
+  const hdb = new DatabaseSync(join(profileDir, "state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    hdb
+      .prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)")
+      .run(
+        hermesSession,
+        JSON.stringify({
+          gateway_runtime: { api_mode: "codex_responses" },
+          _usage_anchor: { prompt_tokens: 42000, completion_tokens: 800 },
+        }),
+      );
+    const ins = hdb.prepare(`
+      INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, codex_message_items, api_content)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    ins.run(hermesSession, "user", "Pre-interruption user prompt", null, null, null, null, "Pre-interruption user prompt\n<session_context>");
+    ins.run(
+      hermesSession,
+      "assistant",
+      "",
+      null,
+      JSON.stringify([
+        {
+          call_id: "call_h_term",
+          type: "function",
+          function: {
+            name: "terminal",
+            arguments: JSON.stringify({ command: "kubectl get pods -n neurons", timeout: 30 }),
+          },
+        },
+      ]),
+      null,
+      JSON.stringify([
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Checking neurons pods before interrupt" }],
+        },
+      ]),
+      null,
+    );
+    const longOut = Array.from({ length: 40 }, (_, i) => `neurons-pod-${i}   1/1   Running   0   5d`).join("\n");
+    ins.run(hermesSession, "tool", longOut, "call_h_term", null, "terminal", null, null);
+    ins.run(
+      hermesSession,
+      "user",
+      '<paseo-system version="1" kind="agent-notification" source-agent-id="sub-1" source-agent-title="Audit pods" event="finished">done</paseo-system>',
+      null,
+      null,
+      null,
+      null,
+      null,
+    );
+    ins.run(hermesSession, "assistant", "Operation interrupted: waiting for model response (3.5s elapsed).", null, null, null, null, null);
+    ins.run(hermesSession, "user", "Post-interruption follow-up prompt", null, null, null, null, "Post-interruption follow-up prompt");
+  } finally {
+    hdb.close();
+  }
+
+  const listed = await service.handle("list", { scope_key: hermesScope });
+  expect(listed.ok).toBe(true);
+  expect(listed.server_timeline).toBe(true);
+  expect(listed.context).toEqual({
+    used_tokens: 42800,
+    max_tokens: null,
+    source: "hermes_session_usage",
+  });
+  expect(listed.items.map((r: any) => r.kind)).toEqual([
+    "user",
+    "assistant",
+    "tool",
+    "user",
+    "assistant",
+    "user",
+  ]);
+  expect(listed.items[0].summary_line).toBe("Pre-interruption user prompt");
+  expect(listed.items[0].item_id).toStartWith("msg:user:p0:");
+  expect(listed.items[0].manageable).toBe(true);
+  expect(listed.items[1].summary_line).toBe("Checking neurons pods before interrupt");
+  expect(listed.items[2].tool_call_id).toBe("call_h_term");
+  expect(listed.items[2].manageable).toBe(true);
+  expect(listed.items[3].summary_line).toBe("[Subagent finished] Audit pods");
+
+  // Hide and unhide the Hermes user prompt via msg:* unit ID
+  const hidePrompt = await service.handle("hide", {
+    scope_key: hermesScope,
+    item_id: listed.items[0].item_id,
+  });
+  expect(hidePrompt.ok).toBe(true);
+  expect(hidePrompt.visibility).toBe("hidden");
+
+  // Hide the Hermes terminal tool call (with timeout: 30 -> invocation_options_omitted = true)
+  const hideTool = await service.handle("hide", {
+    scope_key: hermesScope,
+    item_id: listed.items[2].item_id,
+  });
+  expect(hideTool.ok).toBe(true);
+  const storedTool = store.get(hermesScope, listed.items[2].item_id);
+  expect(storedTool?.invocation_options_omitted).toBe(true);
+});

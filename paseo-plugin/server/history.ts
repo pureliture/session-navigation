@@ -10,13 +10,16 @@ import {
   type Json,
   type RecordInput,
 } from "../../packages/core/src/index.ts";
+import type { Item } from "../../packages/core/src/index.ts";
+import { loadHermesTimeline } from "./hermesHistory.ts";
 
 export type Message = Record<string, any>;
-export interface History {
+export type History = {
   messages: Message[];
   boundaries: number[];
   injected: [number, number][];
-}
+  externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
+};
 export interface Timeline {
   rows: Message[];
   records: Map<string, RecordInput>;
@@ -126,7 +129,7 @@ export function summaryLine(text: string): string {
     .join("");
 }
 
-function formatToolSummary(tool: string, text: string): string {
+export function formatToolSummary(tool: string, text: string): string {
   if (tool === "manage_context" && text.trim().startsWith("{")) {
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;
@@ -142,7 +145,16 @@ function formatToolSummary(tool: string, text: string): string {
   return summaryLine(text);
 }
 
-export function loadTimeline(home: string, scope: string): Timeline {
+export function loadTimeline(
+  home: string,
+  scope: string,
+  storedItems: readonly Item[] = [],
+  storedUnits: readonly Record<string, unknown>[] = [],
+): Timeline {
+  if (scope.startsWith("hermes:")) {
+    const hermes = loadHermesTimeline(home, scope, storedItems, storedUnits);
+    if (hermes) return hermes;
+  }
   const history = readHistory(home, scope);
   const calls = new Map<string, { block: Message; index: number }>();
   const duplicate = new Set<string>();
@@ -461,7 +473,11 @@ export function measuredTokens(
     previousTokens = tokens;
     previousTimestamp = message.timestamp;
   }
-  if (!anchors.length) return { tokens: totals };
+  if (!anchors.length) {
+    return history.externalContext
+      ? { tokens: totals, context: history.externalContext }
+      : { tokens: totals };
+  }
   messages.slice(anchors.at(-1)!).forEach((message, offset) =>
     messageWeights(anchors.at(-1)! + offset, message).forEach(([key]) => {
       if (key) incomplete.add(key);

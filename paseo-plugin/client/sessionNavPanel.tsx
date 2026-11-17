@@ -21,7 +21,7 @@ import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
-import { childrenForCall, mergeHermesTimelineRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
+import { childrenForCall, mergeHermesTimelineRows, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import {
   buildGroupedRows,
@@ -574,13 +574,13 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) return { items: [], context: undefined, capabilities: undefined };
+      if (!resolvedScopeKey) return { items: [], context: undefined, capabilities: undefined, server_timeline: false };
       const result = await listRpc({ scope_key: scopeKey, query: query || undefined });
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
       }
-      return { items: result.items, context: result.context, capabilities: result.capabilities };
+      return { items: result.items, context: result.context, capabilities: result.capabilities, server_timeline: Boolean(result.server_timeline) };
     },
     enabled: !!resolvedScopeKey,
     placeholderData: (previousData, previousQuery) =>
@@ -834,7 +834,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         return [];
       }
     },
-    enabled: (!resolvedScopeKey || isHermesScope || needsLinkedTimeline) && !!agentId && !activeChild,
+    enabled:
+      (!resolvedScopeKey ||
+        (isHermesScope && listQuery.data !== undefined && !listQuery.data.server_timeline) ||
+        needsLinkedTimeline) &&
+      !!agentId &&
+      !activeChild,
     refetchInterval: 3000,
   });
 
@@ -842,18 +847,25 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
   }, [scopeKey, queryClient]);
 
+  const hasServerTimeline = Boolean(listQuery.data?.server_timeline);
+  const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
+
   const rawRows = resolvedScopeKey
     ? activeChild
       ? listQuery.data?.items ?? []
-      : mergeHermesTimelineRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
+      : needsHermesFallbackMerge
+        ? mergeHermesTimelineRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
+        : mergeLinkedParentRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
     : fallbackTimelineQuery.data ?? [];
   const rows = useMemo(() => {
     if (!query) return rawRows;
     const q = query.toLowerCase();
     return rawRows.filter(
       (r) =>
+        (r.item_id && r.item_id.toLowerCase().includes(q)) ||
         (r.tool_name && r.tool_name.toLowerCase().includes(q)) ||
         (r.summary_line && r.summary_line.toLowerCase().includes(q)) ||
+        (r.tool_input && r.tool_input.toLowerCase().includes(q)) ||
         (r.tool_call_id && r.tool_call_id.toLowerCase().includes(q)),
     );
   }, [rawRows, query]);
@@ -908,13 +920,13 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
   scrollDriverRef.current.syncSession(sessionViewKey, isOutlineListMounted);
 
-  if (isHermesScope && !fallbackTimelineQuery.isFetching && fallbackTimelineQuery.data !== undefined) {
+  if (needsHermesFallbackMerge && !fallbackTimelineQuery.isFetching && fallbackTimelineQuery.data !== undefined) {
     hermesSettledKeyRef.current = sessionViewKey;
   }
 
   const isLoading = resolvedScopeKey
     ? (listQuery.isPending && listQuery.fetchStatus !== "idle") ||
-      ((isHermesScope || needsLinkedTimeline) &&
+      ((needsHermesFallbackMerge || needsLinkedTimeline) &&
         fallbackTimelineQuery.isPending &&
         fallbackTimelineQuery.fetchStatus !== "idle")
     : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
@@ -922,8 +934,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const isScrollLoading =
     isLoading ||
     Boolean(query && listQuery.isFetching) ||
-    (isHermesScope && fallbackTimelineQuery.isFetching && hermesSettledKeyRef.current !== sessionViewKey);
-
+    (needsHermesFallbackMerge && fallbackTimelineQuery.isFetching && hermesSettledKeyRef.current !== sessionViewKey);
   const scrollState = {
     sessionKey: sessionViewKey,
     mounted: isOutlineListMounted,
