@@ -116,7 +116,7 @@ export class Engine {
     if (existing && existing.invocation_digest !== record.invocation_digest)
       return { ok: false, error: "invocation_conflict" };
     const baseline = selectRule(selectableText(record.content), keepLines, this.config);
-    if (!baseline) {
+    if (!baseline && (!options.summarizer || options.allow_fallback !== false)) {
       return { ok: false, error: keepLines.length && selectRule(selectableText(record.content), [], this.config)
         ? "keep_lines_too_broad" : "verification_failed" };
     }
@@ -150,7 +150,7 @@ export class Engine {
         record.content,
         itemIdentity,
         selectableText(record.content),
-        baseline,
+        baseline ?? [],
         summary,
         record.invocation,
         options.options_omitted,

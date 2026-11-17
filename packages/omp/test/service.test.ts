@@ -421,3 +421,25 @@ test("SQLite write refusal during prepare returns explicit request failure choic
     expect(adapter.store.items(sessionScope("a"))).toEqual([]);
   } finally { adapter.store.driver.exec("PRAGMA query_only=OFF"); }
 });
+
+test("git diff --stat outputs with >8 (14) and >20 (30) evidence lines compact cleanly via explicit hide_context", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "omp-many-evidence-"));
+  directories.push(directory);
+  const adapter = service(join(directory, "state.sqlite3"));
+  const makeStat = (count: number) =>
+    [
+      "On branch main",
+      ...Array.from({ length: count }, (_, i) => ` src/pkg_${i}/file.ts | 8 ++++----`),
+      ...Array.from({ length: 50 }, (_, i) => `plain diff context line ${i} without paths`),
+      `${count} files changed`,
+    ].join("\n");
+  const r14 = record("call-14", makeStat(14));
+  const r30 = record("call-30", makeStat(30));
+  await call(adapter, "prepare", { snapshot_id: "snap-ev", records: [r14, r30] });
+  const h14 = await call(adapter, "compact", { snapshot_id: "snap-ev", tool_call_id: "call-14" });
+  const h30 = await call(adapter, "compact", { snapshot_id: "snap-ev", tool_call_id: "call-30" });
+  expect(h14.ok).toBe(true);
+  expect(h30.ok).toBe(true);
+  const cands = await call(adapter, "list_candidates", { snapshot_id: "snap-ev" });
+  expect(cands.total).toBe(0);
+});

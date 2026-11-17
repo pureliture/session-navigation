@@ -205,6 +205,19 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
         result = _engine_compact(
             state.engine, state.store, scope, target.strip(),
         )
+        if not result.ok and result.error == "verification_failed":
+            matches = state.store.lookup(scope.scope_key(), target.strip())
+            if matches and _cleanup_error(state, scope, matches[0]) is None:
+                ok_fb, err_fb, fb_item_id, _ = _apply_hide_for_manage(state, scope, matches[0])
+                if ok_fb and fb_item_id is not None:
+                    stored_fb = state.engine.store.get(scope, fb_item_id)
+                    return _dump({
+                        "ok": True,
+                        "item_id": fb_item_id,
+                        "visibility_version": stored_fb.version if stored_fb is not None else 1,
+                    })
+                if err_fb:
+                    return _dump({"ok": False, "error": err_fb})
         if not result.ok or result.plan is None:
             err = result.error or "not_found"
             if err == "db_error":

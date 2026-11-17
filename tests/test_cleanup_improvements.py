@@ -312,3 +312,54 @@ def test_keep_lines_from_decoded_hermes_envelope():
     assert "rare middle sentence" in result.item.compacted
     assert "owner=Orchid" in result.item.compacted
     assert result.item.original == envelope
+
+
+def test_git_diff_stat_with_more_than_8_and_more_than_20_evidence_lines_hides_and_summarizes_cleanly():
+    adapter = hermes_adapter()
+    state = adapter.plugin.PluginState(is_enabled=lambda: True, count_middlewares=lambda: 0)
+    stat_14 = "\n".join(
+        [
+            "On branch main",
+            *[f" src/module_{i:02d}/handler.py | 12 ++++++------" for i in range(14)],
+            *[f"diff context filler line {i:03d} without slashes" for i in range(45)],
+            "14 files changed, 84 insertions(+), 84 deletions(-)",
+        ]
+    )
+    stat_30 = "\n".join(
+        [
+            "On branch main",
+            *[f" src/module_{i:02d}/handler.py | 12 ++++++------" for i in range(30)],
+            *[f"diff context filler line {i:03d} without slashes" for i in range(60)],
+            "30 files changed, 180 insertions(+), 180 deletions(-)",
+        ]
+    )
+    # 1. 14 evidence lines (>8, <=20) succeeds directly in RuleSpanSelector retaining all 14 lines
+    choice_14 = RuleSpanSelector().select(stat_14)
+    assert choice_14 is not None
+    for i in range(14):
+        assert f" src/module_{i:02d}/handler.py | 12 ++++++------" in choice_14.lines
+
+    # 2. Both 14-line and 30-line (>20) git diff --stat outputs hide cleanly via explicit hide_context in Hermes
+    request = {
+        "messages": [
+            {"role": "user", "content": "check git diff"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "g14", "type": "function", "function": {"name": "terminal", "arguments": '{"command":"git status && git diff --stat"}'}},
+                    {"id": "g30", "type": "function", "function": {"name": "terminal", "arguments": '{"command":"git status && git diff --stat"}'}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "g14", "content": stat_14},
+            {"role": "tool", "tool_call_id": "g30", "content": stat_30},
+        ]
+    }
+    adapter.plugin.make_middleware(state)(request=request, session_id="s-git", api_mode="chat_completions")
+    hide = adapter.plugin.make_hide_handler(state)
+    res_14 = json.loads(hide({"tool_call_id": "g14"}, session_id="s-git"))
+    res_30 = json.loads(hide({"tool_call_id": "g30"}, session_id="s-git"))
+    assert res_14["ok"] is True, res_14
+    assert res_30["ok"] is True, res_30
+    # Candidates list must now be completely empty (0 stranded eligible items!)
+    cands = json.loads(adapter.plugin.make_list_handler(state)({"view": "candidates"}, session_id="s-git"))
+    assert cands["items"] == []

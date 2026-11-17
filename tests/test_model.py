@@ -149,7 +149,7 @@ def test_engine_config_defaults():
     cfg = EngineConfig()
     assert cfg.min_chars == 800
     assert cfg.max_pending == 4
-    assert cfg.max_evidence_excerpts == 8
+    assert cfg.max_evidence_excerpts == 20
     assert cfg.max_excerpt_line_length == 240
     assert cfg.max_summary_length == 1600
     assert cfg.max_invocation_bytes == 2048

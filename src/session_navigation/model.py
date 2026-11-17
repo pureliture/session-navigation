@@ -213,7 +213,7 @@ class EngineConfig:
     max_pending: int = 4
     head_excerpts: int = 3
     tail_excerpts: int = 2
-    max_evidence_excerpts: int = 8
+    max_evidence_excerpts: int = 20
     max_excerpt_line_length: int = 240
     max_summary_length: int = 1600
     max_invocation_bytes: int = 2048
