@@ -299,3 +299,36 @@ test("duplicate mobile tab switcher rows never hide the focused agent", () => {
   ] };
   expect(focusedSessionTab(doc)).toEqual({ kind: "agent", agentId: "agent-a" });
 });
+
+test("inactive aria-hidden/hidden workspace tabs are ignored and multi-workspace transitions narrow to workspaceAgentIds", () => {
+  const row = (testId: string, hiddenAncestor = false) => ({
+    getAttribute: () => testId,
+    closest: (sel: string) => (hiddenAncestor && sel.includes("aria-hidden") ? {} : null),
+  });
+  const stackedDoc = {
+    querySelectorAll: () => [
+      row("workspace-tab-agent_atlas-agent", true),
+      row("workspace-tab-agent_dev-projects-agent", false),
+    ],
+  };
+  expect(focusedSessionTab(stackedDoc)).toEqual({ kind: "agent", agentId: "dev-projects-agent" });
+
+  const transitionDoc = {
+    querySelectorAll: () => [
+      row("workspace-tab-agent_atlas-agent", false),
+      row("workspace-tab-agent_dev-projects-agent", false),
+    ],
+  };
+  expect(focusedSessionTab(transitionDoc, "0.16.0", ["dev-projects-agent"])).toEqual({
+    kind: "agent",
+    agentId: "dev-projects-agent",
+  });
+  // Brand-new single visible tab in active workspace works immediately even before 15s workspace-agents refresh
+  const brandNewDoc = {
+    querySelectorAll: () => [row("workspace-tab-agent_brand-new-agent", false)],
+  };
+  expect(focusedSessionTab(brandNewDoc, "0.16.0", ["older-agent"])).toEqual({
+    kind: "agent",
+    agentId: "brand-new-agent",
+  });
+});
