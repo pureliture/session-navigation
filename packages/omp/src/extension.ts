@@ -420,6 +420,60 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   function result(value: Reply) {
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value };
   }
+  function fmtBytes(n: number): string {
+    if (!Number.isFinite(n) || n <= 0) return "0 B";
+    return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`;
+  }
+  function formatManageText(value: Reply): string {
+    if (!Array.isArray(value.items)) return JSON.stringify(value);
+    const items = value.items as Record<string, unknown>[];
+    const applied = items.filter((item) => Boolean(item.ok));
+    const failed = items.filter((item) => !item.ok);
+    const sumCount = applied.filter((item) => item.mode === "summarize").length;
+    const hideCount = applied.length - sumCount;
+    const parts: string[] = [];
+    if (hideCount > 0) parts.push(`${hideCount} hide`);
+    if (sumCount > 0) parts.push(`${sumCount} summarize`);
+    if (failed.length > 0) parts.push(`${failed.length} failed`);
+    const postTotal = applied.reduce(
+      (sum, item) => sum + (typeof item.compacted_bytes === "number" ? item.compacted_bytes : 0),
+      0,
+    );
+    const preTotal = applied.reduce(
+      (sum, item) => sum + (typeof item.original_bytes === "number" ? item.original_bytes : 0),
+      0,
+    );
+    const headerSize = preTotal > 0 ? ` · ${fmtBytes(postTotal)} / ${fmtBytes(preTotal)}` : "";
+    const breakdown = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+    const lines = [`${applied.length} managed${breakdown}${headerSize}`];
+    for (const item of items) {
+      const toolName =
+        typeof item.tool_name === "string" && item.tool_name
+          ? item.tool_name
+          : typeof item.tool_call_id === "string"
+            ? item.tool_call_id
+            : "tool";
+      const hint = typeof item.hint === "string" && item.hint ? ` ${item.hint}` : "";
+      if (item.ok) {
+        const mode = item.mode === "summarize" ? "summarize" : "hide";
+        const size =
+          typeof item.compacted_bytes === "number" && typeof item.original_bytes === "number"
+            ? ` · ${fmtBytes(item.compacted_bytes)} / ${fmtBytes(item.original_bytes)}`
+            : "";
+        lines.push(`- [${mode}] ${toolName}${hint}${size}`);
+      } else {
+        const err = typeof item.error === "string" ? item.error : "failed";
+        lines.push(`- [failed: ${err}] ${toolName}${hint}`);
+      }
+      if (Array.isArray(item.keep_lines_ignored) && item.keep_lines_ignored.length > 0) {
+        lines.push(`  keep_lines_ignored: ${JSON.stringify(item.keep_lines_ignored)}`);
+      }
+    }
+    return lines.join("\n");
+  }
+  function manageResult(value: Reply) {
+    return { content: [{ type: "text" as const, text: formatManageText(value) }], details: value };
+  }
   // D5: session-model-only summary. Returns target text or null when no session
   // model is available. Budget refusals propagate as input_too_large.
   async function summarizeText(
@@ -780,8 +834,24 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         if (entry && typeof entry === "object") items.push(entry as Record<string, unknown>);
       }
     }
-    const applied = items.filter((item) => Boolean(item.ok)).length;
-    return { ok: applied === items.length, applied, failed: items.length - applied, items };
+    const appliedItems = items.filter((item) => Boolean(item.ok));
+    const applied = appliedItems.length;
+    const compactedBytes = appliedItems.reduce(
+      (sum, item) => sum + (typeof item.compacted_bytes === "number" ? item.compacted_bytes : 0),
+      0,
+    );
+    const originalBytes = appliedItems.reduce(
+      (sum, item) => sum + (typeof item.original_bytes === "number" ? item.original_bytes : 0),
+      0,
+    );
+    return {
+      ok: applied === items.length,
+      applied,
+      failed: items.length - applied,
+      compacted_bytes: compactedBytes,
+      original_bytes: originalBytes,
+      items,
+    };
   }
   pi.registerTool({
     name: "manage_context",
@@ -797,7 +867,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     }),
     async execute(_id, params, signal, _update, ctx) {
       try {
-        return result(await manageChosen(params as Record<string, unknown>, ctx, signal));
+        return manageResult(await manageChosen(params as Record<string, unknown>, ctx, signal));
       } catch (error) {
         if ((error as { reason?: string })?.reason === "input_too_large")
           return result({ ok: false, error: "input_too_large" });

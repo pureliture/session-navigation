@@ -31,6 +31,7 @@ import {
   fmtTokens,
   groupBadgeText,
   groupEyeAction,
+  groupMetric,
   groupMutationItems,
   groupRestoreIconKind,
   groupSubtitleText,
@@ -126,6 +127,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [inView, setInView] = useState(!!params.agentId);
+  const [followResolved, setFollowResolved] = useState(() => !followVisible || !!params.agentId);
   const [subagentFallback, setSubagentFallback] = useState(false);
   const [focusedTab, setFocusedTab] = useState<SessionTab | null>(null);
   const lastMainAgent = useRef(params.agentId || null);
@@ -157,10 +159,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   useEffect(() => {
     setFollowedId(null);
     setInView(!!params.agentId);
+    setFollowResolved(!followVisible || !!params.agentId);
     lastMainAgent.current = params.agentId || null;
     setFocusedTab(null);
     setSubagentFallback(false);
-  }, [params.agentId]);
+  }, [params.agentId, followVisible]);
   useEffect(() => {
     if (notice !== "Not loaded in chat") return;
     const timer = setTimeout(() => setNotice((current) => current === notice ? null : current), 4000);
@@ -222,6 +225,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       setInView(selection.inView);
       if (selection.agentId) lastMainAgent.current = selection.agentId;
       setFollowedId(selection.agentId === params.agentId ? null : selection.agentId);
+      setFollowResolved(true);
     };
     const tick = async () => {
       const explicitSupported = "activeAgentId" in panelProps;
@@ -238,6 +242,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             setSubagentFallback(false);
             setInView(false);
             setFollowedId(null);
+            setFollowResolved(true);
             return;
           }
           let verdict = acceptWorkspaceAgentId({ agentId: targetId, workspaceCandidateIds: candidateAgentIds, panelWorkspaceId });
@@ -262,6 +267,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         setSubagentFallback(false);
         setInView(false);
         setFollowedId(null);
+        setFollowResolved(true);
         return;
       }
       // Web: DOM tab wins; layout-state and workspace-verified heartbeat focus back up compact/empty chats.
@@ -621,7 +627,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             } else if (detailType) {
               toolName = detailType;
             }
-
+            if (toolName === "tool" || toolName === "other" || toolName === "tool_call" || toolName === "unknown") {
+              const hintTitle = typeof detail.title === "string" ? detail.title : typeof detail.label === "string" ? detail.label : "";
+              const navMatch = /\b(manage_context|hide_context|summarize_context|unhide_context|list_context_items)\b/.exec(hintTitle);
+              if (navMatch) {
+                toolName = navMatch[1];
+              } else if (argsObj && Array.isArray(argsObj.tool_call_ids)) {
+                toolName = "manage_context";
+              }
+            }
             // Summary resolution with rich I/O
             let summary = "";
             if (cmdStr) {
@@ -1062,7 +1076,6 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         flexShrink: 0,
       },
       rightMetricsHidden: {
-        textDecorationLine: "line-through" as const,
         color: theme.colors.foregroundMuted,
       },
 
@@ -1323,7 +1336,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         <Pressable
           key={rowKey}
           accessibilityRole="button"
-          accessibilityLabel="Assistant response"
+          accessibilityLabel="Agent response"
           style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
           onPress={() => handleRowPress(row)}
         >
@@ -1331,7 +1344,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             <View style={styles.rowLeftWrap}>
               <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, flexShrink: 0 }}>✦</Text>
               <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
-                Assistant
+                Agent
               </Text>
             </View>
             <View style={styles.rowRightWrap}>
@@ -1610,7 +1623,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             ) : null}
 
             <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
-              {group.totalTokens != null ? fmtTokens(group.totalTokens) : fmtBytes(group.totalBytes)}
+              {groupMetric(group)}
             </Text>
           </View>
         </View>
@@ -1792,7 +1805,19 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     ));
   };
 
-  const capabilityMessage = capabilityNotice(listQuery.error instanceof Error ? listQuery.error.message : scopesQuery.error instanceof Error ? scopesQuery.error.message : undefined, capabilities);
+  const isResolvingSession = !childScope && followVisible && !followResolved;
+  const isCapabilitiesLoading =
+    isResolvingSession || scopesQuery.isPending || (!!resolvedScopeKey && listQuery.isPending && !capabilities);
+  const runtimeError =
+    listQuery.error instanceof Error
+      ? listQuery.error.message
+      : scopesQuery.error instanceof Error
+        ? scopesQuery.error.message
+        : undefined;
+  const capabilityMessage =
+    runtimeError || (!isCapabilitiesLoading && inView && Boolean(agentId))
+      ? capabilityNotice(runtimeError, capabilities)
+      : null;
   const noticeBar = notice || capabilityMessage || displayOnly ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
       {displayOnly ? <Text style={styles.noticeText}>subagent context is not managed</Text> : null}
@@ -1801,6 +1826,20 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   ) : null;
 
   if (!childScope && (followVisible || subagentFallback) && !inView) {
+    if (isResolvingSession) {
+      return (
+        <View style={styles.screen}>
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <Text style={styles.headerTitle}>Outline</Text>
+            </View>
+          </View>
+          <View style={[styles.list, styles.emptyContainer]}>
+            <Text style={styles.emptyText}>Loading outline…</Text>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={styles.screen}>
         {noticeBar}

@@ -11,10 +11,10 @@ worker-source artifact shipped with this plugin. Unsupported runtimes show an ex
 upgrade message rather than attempting to launch Python. The manifest's Node engine
 metadata is informational on Paseo 0.15.3; the server enforces the runtime check.
 
-The manifest requires Paseo 0.15.3 or later; the tested SDK and host are 0.15.3.
+The manifest requires Paseo 0.15.3 or later; versions `>=0.15.3` (including `0.16.x`
+and newer) remain enabled automatically as long as runtime structural guards match.
 Set top-level `pluginsEnabled: true` in the daemon configuration and restart it.
-Other Paseo versions have not been separately verified. The OMP adapter requires
-Bun 1.4.4 or later; the Hermes adapter requires Hermes 0.20.1 or later.
+The OMP adapter requires Bun 1.4.4 or later; the Hermes adapter requires Hermes 0.20.1 or later.
 For OMP request rewriting, install the matching OMP extension as described in the README.
 Other providers can supply display-only timeline rows. Hide and Summarize are enabled
 only for a registered, compatible, enabled session adapter advertising that capability.
@@ -28,8 +28,8 @@ adapter's own model; Paseo never substitutes a separate model.
 Use Explorer's **+ → Session navigation**. On web, the workspace panel follows the
 visible session through tab/layout state and chat/timeline identity matching; empty or
 non-session screens show **No session in view**. On mobile and native clients, it
-follows Paseo 0.15.3 client focus updates within the current workspace and falls back
-to a bound-session chooser when no session is focused or on untested host versions.
+follows Paseo `>=0.15.3` client focus updates within the current workspace and falls back
+to a bound-session chooser when no session is focused or on pre-0.15.3 hosts.
 Tapping a row on native clients opens its read-only **Preview** instead of scrolling
 chat DOM. An optional picker pins an agent; **Follow visible session** clears the pin.
 Paseo remembers open tabs and the follow/pin choice. Closing the tab stays closed;

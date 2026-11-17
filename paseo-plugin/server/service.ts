@@ -388,7 +388,9 @@ export class PaseoService {
           [
             row.item_id,
             row.tool_call_id,
+            row.tool_name,
             row.summary_line,
+            row.tool_input,
             stored.get(row.item_id)?.compacted,
           ].some(
             (value) =>

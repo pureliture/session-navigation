@@ -452,8 +452,8 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     expect(utf8ByteLength("아니 모든 방안을")).toBeGreaterThan("아니 모든 방안을".length);
   });
 
-  test("effectiveRowBytes, rowMetric, and buildGroupedRows reflect compacted_bytes_size after Hide/Summarize instead of staying at original size", () => {
-    const { effectiveRowBytes, rowMetric, buildGroupedRows } = require("./outlineGrouping");
+  test("effectiveRowBytes, rowMetric, groupMetric, and buildGroupedRows display post / pre sizes after Hide/Summarize", () => {
+    const { effectiveRowBytes, rowMetric, groupMetric, buildGroupedRows } = require("./outlineGrouping");
     const visibleTool = {
       item_id: "item_1",
       tool_call_id: "c1",
@@ -487,14 +487,40 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     expect(effectiveRowBytes(hiddenTool)).toBe(512);
     expect(effectiveRowBytes(hiddenMsg)).toBe(0);
     expect(rowMetric(visibleTool)).toBe("5.0K tok");
-    expect(rowMetric(hiddenTool)).toBe("512 B");
-    expect(rowMetric(hiddenMsg)).toBe("0 B");
+    expect(rowMetric(hiddenTool)).toBe("512 B / 20.0 KiB");
+    expect(rowMetric(hiddenMsg)).toBe("0 B / 4.0 KiB");
 
     const grouped = buildGroupedRows([visibleTool, hiddenTool], {}, {});
     const group = grouped[0];
     expect(group.type).toBe("group");
-    // Group total shrinks from 40 KiB to 20.5 KiB (20480 + 512) and clears stale pre-hide token sum!
     expect(group.totalBytes).toBe(20480 + 512);
+    expect(group.originalTotalBytes).toBe(40960);
     expect(group.totalTokens).toBeNull();
+    expect(groupMetric(group)).toBe("20.5 KiB / 40.0 KiB");
+
+    const visibleOnlyGroup = buildGroupedRows([visibleTool], {}, {})[0];
+    expect(groupMetric(visibleOnlyGroup)).toBe("5.0K tok");
+  });
+
+  test("buildGroupedRows pins manage_context in collapsed group subtitle even past 3 tool types", () => {
+    const make = (id: string, name: string): Row => ({
+      item_id: id,
+      tool_call_id: id,
+      kind: "tool",
+      tool_name: name,
+      status: "visible",
+      version: 1,
+      tokens_display: "—",
+      bytes_size: 100,
+    });
+    const rows = [
+      make("1", "todo"),
+      make("2", "eval"),
+      make("3", "read"),
+      make("4", "grep"),
+      make("5", "manage_context"),
+    ];
+    const group = buildGroupedRows(rows, {}, {})[0] as Extract<OutlineRow, { type: "group" }>;
+    expect(group.subTitle).toBe("todo, eval, read, manage_context, +1");
   });
 });

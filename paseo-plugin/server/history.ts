@@ -126,6 +126,22 @@ export function summaryLine(text: string): string {
     .join("");
 }
 
+function formatToolSummary(tool: string, text: string): string {
+  if (tool === "manage_context" && text.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      if (typeof parsed.applied === "number") {
+        const failed = typeof parsed.failed === "number" && parsed.failed > 0 ? `, ${parsed.failed} failed` : "";
+        const size = typeof parsed.size === "string" && parsed.size ? ` · ${parsed.size}` : "";
+        return `${parsed.applied} managed${failed}${size}`;
+      }
+    } catch {
+      // Fall back to plain summaryLine below.
+    }
+  }
+  return summaryLine(text);
+}
+
 export function loadTimeline(home: string, scope: string): Timeline {
   const history = readHistory(home, scope);
   const calls = new Map<string, { block: Message; index: number }>();
@@ -225,7 +241,7 @@ export function loadTimeline(home: string, scope: string): Timeline {
       kind: "tool",
       manageable: !!record,
       source: record ? "unrecorded" : "display_only",
-      summary_line: `${message.isError ? "[error] " : ""}${summaryLine(text) || `[${tool}]`}`,
+      summary_line: `${message.isError ? "[error] " : ""}${formatToolSummary(tool, text) || `[${tool}]`}`,
       bytes_size: bytes(text),
       ...(arguments_ !== undefined ? { tool_input: preview(arguments_) } : {}),
       tool_output: preview(text),

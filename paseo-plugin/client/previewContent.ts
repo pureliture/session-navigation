@@ -22,8 +22,10 @@ export function previewContent(row: Row | null) {
     sections.push({ label: "Details", text: row.summary_line ?? "No details available" });
   }
   if (row.manageable === false) sections.push({ label: "Read-only", text: "Display-only item; context controls unavailable." });
+  const subtitle =
+    row.kind === "assistant" ? "Agent" : row.kind === "user" ? "User" : row.tool_name || row.kind || "Item";
   return {
-    subtitle: row.tool_name || row.kind || "Item",
+    subtitle,
     sections,
     metadata: [row.item_id || row.tool_call_id || "No ID", `v${row.version}`, row.source ?? "timeline", row.tokens_display].join(" · "),
   };

@@ -25,7 +25,8 @@ export function effectiveRowBytes(row: Row): number {
 
 export function rowMetric(row: Row): string {
   if (row.status === "hidden") {
-    return fmtBytes(effectiveRowBytes(row));
+    const post = fmtBytes(effectiveRowBytes(row));
+    return typeof row.bytes_size === "number" ? `${post} / ${fmtBytes(row.bytes_size)}` : post;
   }
   return row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
 }
@@ -92,6 +93,14 @@ export function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boo
   return localMode === "summarize";
 }
 
+const CONTEXT_NAV_TOOL_NAMES: Record<string, true> = {
+  manage_context: true,
+  hide_context: true,
+  summarize_context: true,
+  unhide_context: true,
+  list_context_items: true,
+};
+
 export type OutlineRow =
   | { key: string; type: "user"; row: Row }
   | { key: string; type: "assistant"; row: Row }
@@ -102,6 +111,7 @@ export type OutlineRow =
       title: string;
       subTitle: string;
       totalBytes: number;
+      originalTotalBytes: number;
       totalTokens: number | null;
       children: Row[];
       allHidden: boolean;
@@ -113,6 +123,18 @@ export type OutlineRow =
       visibleManageableCount: number;
     }
   | { key: string; type: "child"; row: Row; groupId: string };
+
+export function groupMetric(group: {
+  totalBytes: number;
+  originalTotalBytes: number;
+  totalTokens: number | null;
+  hiddenCount: number;
+}): string {
+  if (group.hiddenCount > 0) {
+    return `${fmtBytes(group.totalBytes)} / ${fmtBytes(group.originalTotalBytes)}`;
+  }
+  return group.totalTokens != null ? fmtTokens(group.totalTokens) : fmtBytes(group.totalBytes);
+}
 
 export function buildGroupedRows(
   rows: Row[],
@@ -129,6 +151,7 @@ export function buildGroupedRows(
     const hiddenChildren = currentGroupTools.filter((r) => r.status === "hidden");
     const hiddenCount = hiddenChildren.length;
     const totalBytes = currentGroupTools.reduce((sum, r) => sum + effectiveRowBytes(r), 0);
+    const originalTotalBytes = currentGroupTools.reduce((sum, r) => sum + (r.bytes_size ?? 0), 0);
     const totalTokens =
       hiddenCount === 0 && currentGroupTools.every((r) => typeof r.tokens === "number")
         ? currentGroupTools.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
@@ -154,10 +177,14 @@ export function buildGroupedRows(
       const name = r.tool_name || "tool";
       nameCounts[name] = (nameCounts[name] || 0) + 1;
     }
-    const subTitle = Object.entries(nameCounts)
-      .map(([name, count]) => (count > 1 ? `${name} × ${count}` : name))
-      .slice(0, 3)
-      .join(", ");
+    const entries = Object.entries(nameCounts);
+    const formatEntry = ([name, count]: [string, number]) => (count > 1 ? `${name} × ${count}` : name);
+    const head = entries.slice(0, 3);
+    const pinnedNav = entries.slice(3).filter(([name]) => CONTEXT_NAV_TOOL_NAMES[name]);
+    const shown = [...head, ...pinnedNav];
+    const omittedCount = entries.length - shown.length;
+    const subTitle =
+      shown.map(formatEntry).join(", ") + (omittedCount > 0 ? `, +${omittedCount}` : "");
 
     const count = currentGroupTools.length;
     const title = count === 1 ? "1 tool call" : `${count} tool calls`;
@@ -169,6 +196,7 @@ export function buildGroupedRows(
       title,
       subTitle,
       totalBytes,
+      originalTotalBytes,
       totalTokens,
       children: currentGroupTools,
       allHidden,
