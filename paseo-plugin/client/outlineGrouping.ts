@@ -6,6 +6,20 @@ export function fmtBytes(n: number | undefined): string {
   return `${(n / 1024).toFixed(1)} KiB`;
 }
 
+export function fmtBytePair(postBytes: number, preBytes: number): string {
+  const post = Math.max(0, postBytes);
+  const pre = Math.max(0, preBytes);
+  if (pre < 1024 && post < 1024) {
+    return `${post}/${pre} B`;
+  }
+  const preKib = (pre / 1024).toFixed(1);
+  if (post === 0) {
+    return `0/${preKib} KiB`;
+  }
+  const postKib = post / 1024;
+  return postKib < 0.05 ? `<0.1/${preKib} KiB` : `${postKib.toFixed(1)}/${preKib} KiB`;
+}
+
 export function fmtTokenCount(n: number): string {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}K`;
 }
@@ -25,8 +39,8 @@ export function effectiveRowBytes(row: Row): number {
 
 export function rowMetric(row: Row): string {
   if (row.status === "hidden") {
-    const post = fmtBytes(effectiveRowBytes(row));
-    return typeof row.bytes_size === "number" ? `${post} / ${fmtBytes(row.bytes_size)}` : post;
+    const post = effectiveRowBytes(row);
+    return typeof row.bytes_size === "number" ? fmtBytePair(post, row.bytes_size) : fmtBytes(post);
   }
   return row.tokens_display && row.tokens_display !== "—" ? row.tokens_display : fmtBytes(row.bytes_size);
 }
@@ -131,7 +145,7 @@ export function groupMetric(group: {
   hiddenCount: number;
 }): string {
   if (group.hiddenCount > 0) {
-    return `${fmtBytes(group.totalBytes)} / ${fmtBytes(group.originalTotalBytes)}`;
+    return fmtBytePair(group.totalBytes, group.originalTotalBytes);
   }
   return group.totalTokens != null ? fmtTokens(group.totalTokens) : fmtBytes(group.totalBytes);
 }

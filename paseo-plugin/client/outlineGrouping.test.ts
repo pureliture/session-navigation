@@ -487,8 +487,8 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     expect(effectiveRowBytes(hiddenTool)).toBe(512);
     expect(effectiveRowBytes(hiddenMsg)).toBe(0);
     expect(rowMetric(visibleTool)).toBe("5.0K tok");
-    expect(rowMetric(hiddenTool)).toBe("512 B / 20.0 KiB");
-    expect(rowMetric(hiddenMsg)).toBe("0 B / 4.0 KiB");
+    expect(rowMetric(hiddenTool)).toBe("0.5/20.0 KiB");
+    expect(rowMetric(hiddenMsg)).toBe("0/4.0 KiB");
 
     const grouped = buildGroupedRows([visibleTool, hiddenTool], {}, {});
     const group = grouped[0];
@@ -496,8 +496,7 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     expect(group.totalBytes).toBe(20480 + 512);
     expect(group.originalTotalBytes).toBe(40960);
     expect(group.totalTokens).toBeNull();
-    expect(groupMetric(group)).toBe("20.5 KiB / 40.0 KiB");
-
+    expect(groupMetric(group)).toBe("20.5/40.0 KiB");
     const visibleOnlyGroup = buildGroupedRows([visibleTool], {}, {})[0];
     expect(groupMetric(visibleOnlyGroup)).toBe("5.0K tok");
   });

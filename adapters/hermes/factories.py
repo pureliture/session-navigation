@@ -615,11 +615,16 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                 sequence_summaries, sequence_failure = state.summarizer.summarize_sequence(
                     seq_steps, action=action, scope_key=scope.scope_key()
                 )
-        def _fmt_bytes(n: int) -> str:
-            if n <= 0:
-                return "0 B"
-            return f"{n} B" if n < 1024 else f"{n / 1024:.1f} KiB"
-
+        def _fmt_byte_pair(post_b: int, pre_b: int) -> str:
+            post = max(0, post_b)
+            pre = max(0, pre_b)
+            if pre < 1024 and post < 1024:
+                return f"{post}/{pre} B"
+            pre_kib = f"{pre / 1024:.1f}"
+            if post == 0:
+                return f"0/{pre_kib} KiB"
+            post_kib = post / 1024
+            return f"<0.1/{pre_kib} KiB" if post_kib < 0.05 else f"{post_kib:.1f}/{pre_kib} KiB"
         def _item_metrics(target_entry: Any, saved_id: str) -> dict[str, Any]:
             stored_item = state.engine.store.get(scope, saved_id)
             pre_b = len(target_entry.content.encode("utf-8"))
@@ -634,7 +639,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                 "mode": mode,
                 "compacted_bytes": post_b,
                 "original_bytes": pre_b,
-                "size": f"{_fmt_bytes(post_b)} / {_fmt_bytes(pre_b)}",
+                "size": _fmt_byte_pair(post_b, pre_b),
             }
 
         for call_id in wanted_ids:
@@ -727,7 +732,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
             "items": results,
         }
         if applied > 0:
-            payload["size"] = f"{_fmt_bytes(total_post)} / {_fmt_bytes(total_pre)}"
+            payload["size"] = _fmt_byte_pair(total_post, total_pre)
         return _dump(payload)
 
     return _track_mutation(state, manage_context)
