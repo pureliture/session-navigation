@@ -65,7 +65,16 @@ export function parseSessionTab(testId: string): SessionTab | null {
 }
 
 function visible(node: any): boolean {
-  return typeof node.getClientRects !== "function" || node.getClientRects().length > 0;
+  if (!node) return false;
+  if (typeof node.getClientRects === "function" && node.getClientRects().length === 0) return false;
+  if (typeof node.closest === "function" && node.closest('[aria-hidden="true"], [hidden], [inert]')) return false;
+  try {
+    const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node);
+    if (style && (style.visibility === "hidden" || style.display === "none")) return false;
+  } catch {
+    // Ignore mock DOM environments without getComputedStyle.
+  }
+  return true;
 }
 
 function hostVersion(doc: any): string | null {
@@ -257,9 +266,13 @@ export function subscribeHostFocus(serverId: string, listener: () => void, store
   };
 }
 
-export function focusedSessionTab(doc: any, version: string | null | undefined = hostVersion(doc)): SessionTab | null {
+export function focusedSessionTab(
+  doc: any,
+  version: string | null | undefined = hostVersion(doc),
+  workspaceAgentIds?: readonly string[],
+): SessionTab | null {
   const seen = new Set<string>();
-  const tabs = (Array.from(doc?.querySelectorAll?.('[data-testid][aria-selected="true"]') ?? []) as any[])
+  let tabs = (Array.from(doc?.querySelectorAll?.('[data-testid][aria-selected="true"]') ?? []) as any[])
     .filter(visible)
     .map((node): SessionTab | null => {
       const id = node.getAttribute("data-testid") ?? "";
@@ -274,9 +287,22 @@ export function focusedSessionTab(doc: any, version: string | null | undefined =
       seen.add(key);
       return true;
     });
+  if (tabs.length > 1 && Array.isArray(workspaceAgentIds)) {
+    const allowed = new Set(workspaceAgentIds);
+    const narrowed = tabs.filter((tab) =>
+      tab.kind === "agent"
+        ? allowed.has(tab.agentId)
+        : tab.kind === "provider_subagent"
+          ? allowed.has(tab.parentAgentId)
+          : true,
+    );
+    if (narrowed.length > 0) tabs = narrowed;
+  }
   if (tabs.length > 1 && tabs.some((tab) => tab.kind !== "agent")) return { kind: "unresolved_subagent" };
   const tab = tabs.length === 1 ? tabs[0] : null;
-  return tab?.kind === "provider_subagent" && !supportedHostVersion(version) ? { kind: "unresolved_subagent", parentAgentId: tab.parentAgentId } : tab;
+  return tab?.kind === "provider_subagent" && !supportedHostVersion(version)
+    ? { kind: "unresolved_subagent", parentAgentId: tab.parentAgentId }
+    : tab;
 }
 
 function uniqueTestId(doc: any, id: string): any {

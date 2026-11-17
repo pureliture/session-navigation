@@ -209,17 +209,39 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     });
     const applySelection = async (focused: SessionTab | null, values: string[] | null) => {
       const fallback = await subagentMainTarget(focused, parentOf);
-      const resolvedTarget = await resolveSessionTarget({
-        followVisible, boundAgentId: params.agentId, visibleValues: values,
-        candidates: sessionFollowCandidates(candidateAgentIds, scopes.map((s) => s.agent_id).filter((id): id is string => !!id)),
-        timelineIds: async (id) => (await queryClient.fetchQuery({
-          queryKey: ["session-nav-follow", id],
-          staleTime: (query) => query.state.data?.complete ? 10_000 : 0,
-          queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
-        })).ids,
-      });
       const managed = focused?.kind === "agent" && scopes.some((scope) => scope.agent_id === focused.agentId);
-      const selection = selectMainOrFallbackAgent({ tab: focused, managed: !!managed, fallback, followVisible, resolvedTarget, lastMainAgentId: lastMainAgent.current });
+      const useFallback = fallback.subagent && !managed;
+      const needsTimelineScan =
+        followVisible && focused?.kind !== "provider_subagent" && focused?.kind !== "agent" && !useFallback;
+      const resolvedTarget = needsTimelineScan
+        ? await resolveSessionTarget({
+            followVisible,
+            boundAgentId: params.agentId,
+            visibleValues: values,
+            candidates: sessionFollowCandidates(
+              candidateAgentIds,
+              scopes.map((s) => s.agent_id).filter((id): id is string => !!id),
+            ),
+            timelineIds: async (id) =>
+              (
+                await queryClient.fetchQuery({
+                  queryKey: ["session-nav-follow", id],
+                  staleTime: (q) => (q.state.data?.complete ? 10_000 : 0),
+                  queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
+                })
+              ).ids,
+          })
+        : followVisible
+          ? null
+          : params.agentId || null;
+      const selection = selectMainOrFallbackAgent({
+        tab: focused,
+        managed: !!managed,
+        fallback,
+        followVisible,
+        resolvedTarget,
+        lastMainAgentId: lastMainAgent.current,
+      });
       if (cancelled) return;
       setFocusedTab(focused);
       setSubagentFallback(selection.subagentFallback);
@@ -273,9 +295,20 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       }
       // Web: DOM tab wins; layout-state and workspace-verified heartbeat focus back up compact/empty chats.
       const readFocusedTab = (): SessionTab | null => {
-        const dom = focusedSessionTab(doc);
-        if (dom) return dom;
+        const dom = focusedSessionTab(doc, undefined, candidateAgentIds);
         const layoutTab = hostId && panelWorkspaceId ? readWebWorkspaceFocusedTab(hostId, panelWorkspaceId) : null;
+        if (dom) {
+          const domAgentId = dom.kind === "agent" ? dom.agentId : dom.kind === "provider_subagent" ? dom.parentAgentId : null;
+          if (
+            domAgentId &&
+            Array.isArray(candidateAgentIds) &&
+            !candidateAgentIds.includes(domAgentId) &&
+            layoutTab
+          ) {
+            return layoutTab;
+          }
+          return dom;
+        }
         if (layoutTab) return layoutTab;
         const candidateId = explicitSupported
           ? explicitAgentId
@@ -287,6 +320,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           : null;
       };
       const focusTab = readFocusedTab();
+      if (focusTab?.kind === "agent" || focusTab?.kind === "provider_subagent") {
+        if (!cancelled) await applySelection(focusTab, null);
+        return;
+      }
       const values = visibleChatValues(doc);
       if (focusTab && (values === null || values.length === 0)) {
         if (!cancelled && JSON.stringify(readFocusedTab()) === JSON.stringify(focusTab)) {
@@ -297,11 +334,60 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       if (cancelled || JSON.stringify(readFocusedTab()) !== JSON.stringify(focusTab)) return;
       await applySelection(focusTab, values);
     };
-    const unsubscribe = hostId ? subscribeHostFocus(hostId, () => void tick()) : () => {};
+    let rafId: number | null = null;
+    const scheduleTick = () => {
+      if (cancelled) return;
+      if (typeof requestAnimationFrame === "function") {
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          if (!cancelled) void tick();
+        });
+      } else {
+        void tick();
+      }
+    };
+    const unsubscribe = hostId ? subscribeHostFocus(hostId, scheduleTick) : () => {};
+    let observer: { disconnect: () => void } | null = null;
+    const ObserverCtor = (globalThis as Record<string, any>).MutationObserver;
+    const observeRoot = (doc as any)?.body ?? (doc as any)?.documentElement;
+    if (hasDocument && typeof ObserverCtor === "function" && observeRoot) {
+      try {
+        const instance = new ObserverCtor(scheduleTick);
+        instance.observe(observeRoot, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["aria-selected", "aria-hidden", "data-testid"],
+        });
+        observer = instance;
+      } catch {
+        observer = null;
+      }
+    }
+    const win = (doc as any)?.defaultView;
+    const onUiActivity = () => scheduleTick();
+    if (hasDocument && typeof (doc as any)?.addEventListener === "function") {
+      (doc as any).addEventListener("click", onUiActivity, true);
+      (doc as any).addEventListener("keyup", onUiActivity, true);
+    }
+    if (win && typeof win.addEventListener === "function") {
+      win.addEventListener("popstate", onUiActivity);
+      win.addEventListener("focus", onUiActivity);
+    }
     void tick();
     const timer = hasDocument ? setInterval(() => void tick(), 1500) : undefined;
     return () => {
       cancelled = true;
+      if (rafId !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
+      observer?.disconnect();
+      if (hasDocument && typeof (doc as any)?.removeEventListener === "function") {
+        (doc as any).removeEventListener("click", onUiActivity, true);
+        (doc as any).removeEventListener("keyup", onUiActivity, true);
+      }
+      if (win && typeof win.removeEventListener === "function") {
+        win.removeEventListener("popstate", onUiActivity);
+        win.removeEventListener("focus", onUiActivity);
+      }
       unsubscribe();
       clearInterval(timer);
     };
@@ -497,7 +583,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       return { items: result.items, context: result.context, capabilities: result.capabilities };
     },
     enabled: !!resolvedScopeKey,
-    placeholderData: (previousData) => previousData,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey?.[2] === scopeKey ? previousData : undefined,
     refetchInterval: isMutating ? 400 : 4000,
   });
 
@@ -1325,7 +1412,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         >
           <View style={styles.rowMainLine}>
             <View style={styles.rowLeftWrap}>
-              <Text style={{ fontSize: 11, color: theme.colors.accent, flexShrink: 0 }}>◈</Text>
+              <Text style={{ fontSize: 13, lineHeight: 15, color: theme.colors.accent, flexShrink: 0 }}>◈</Text>
               <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
                 User
               </Text>
@@ -1353,7 +1440,16 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         >
           <View style={styles.rowMainLine}>
             <View style={styles.rowLeftWrap}>
-              <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, flexShrink: 0 }}>✦</Text>
+              <Text
+                style={{
+                  fontSize: 12,
+                  lineHeight: 15,
+                  color: /^#[c-fC-F]/.test(theme.colors.surface0) ? "#2563eb" : "#3b82f6",
+                  flexShrink: 0,
+                }}
+              >
+                ✦
+              </Text>
               <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
                 Agent
               </Text>
