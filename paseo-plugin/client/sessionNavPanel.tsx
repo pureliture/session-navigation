@@ -42,6 +42,7 @@ import {
   utf8ByteLength,
   type OutlineRow,
 } from "./outlineGrouping";
+import { initialRenderCount, OutlineAutoScroller } from "./outlineScroll";
 
 const panelTabStateSchema = z.object({
   query: z.string().default(""),
@@ -808,24 +809,58 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   }, [rows, selectedId]);
 
   const listRef = useRef<any>(null);
-  const initialScrolledKeyRef = useRef<string | null>(null);
-  const userScrolledOutlineRef = useRef(false);
+  const autoScrollerRef = useRef<OutlineAutoScroller | null>(null);
+  if (!autoScrollerRef.current) {
+    autoScrollerRef.current = new OutlineAutoScroller();
+  }
   const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
+  autoScrollerRef.current.syncSession(sessionViewKey);
 
-  const scrollOutlineToLatest = () => {
+  const markOutlineUserInteracted = () => {
+    autoScrollerRef.current?.markUserInteracted();
+  };
+
+  const applyDomBottomScroll = () => {
     const list = listRef.current;
     if (!list) return false;
+    list.scrollToEnd?.({ animated: false });
+    const scrollable =
+      list.getScrollableNode?.() ??
+      list._listRef?._scrollRef?.getScrollableNode?.();
+    if (scrollable && typeof scrollable.scrollHeight === "number") {
+      scrollable.scrollTop = Math.max(0, scrollable.scrollHeight - (scrollable.clientHeight ?? 0));
+    }
+    return true;
+  };
+
+  const maybeScrollOutlineToLatest = () => {
+    const scroller = autoScrollerRef.current;
+    if (
+      !scroller ||
+      !scroller.shouldScrollToLatest({
+        sessionKey: sessionViewKey,
+        rowCount: groupedRows.length,
+        isLoading,
+        hasSearchQuery: Boolean(query),
+      })
+    ) {
+      return;
+    }
     try {
-      list.scrollToEnd?.({ animated: false });
-      const scrollable =
-        list.getScrollableNode?.() ??
-        list._listRef?._scrollRef?.getScrollableNode?.();
-      if (scrollable && typeof scrollable.scrollHeight === "number") {
-        scrollable.scrollTop = scrollable.scrollHeight;
+      if (!applyDomBottomScroll()) return;
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => {
+          if (!scroller.isUserInteracted()) {
+            try {
+              applyDomBottomScroll();
+            } catch {
+              // Ignore transient unmount during frame callback.
+            }
+          }
+        });
       }
-      return true;
     } catch {
-      return false;
+      // Ignore non-scrollable mock environments.
     }
   };
 
@@ -835,39 +870,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
-    userScrolledOutlineRef.current = false;
-    initialScrolledKeyRef.current = null;
   }, [sessionViewKey]);
   const isLoading = resolvedScopeKey
     ? (listQuery.isPending && listQuery.fetchStatus !== "idle") || ((isHermesScope || needsLinkedTimeline) && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle")
     : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
 
   useEffect(() => {
-    if (
-      groupedRows.length === 0 ||
-      isLoading ||
-      userScrolledOutlineRef.current ||
-      initialScrolledKeyRef.current === sessionViewKey
-    ) {
-      return;
-    }
-    const raf =
-      typeof requestAnimationFrame === "function"
-        ? requestAnimationFrame
-        : (cb: () => void) => setTimeout(cb, 0);
-    const timer = raf(() => {
-      if (!userScrolledOutlineRef.current && scrollOutlineToLatest()) {
-        initialScrolledKeyRef.current = sessionViewKey;
-      }
-    });
-    return () => {
-      if (typeof cancelAnimationFrame === "function" && typeof timer === "number") {
-        cancelAnimationFrame(timer);
-      } else {
-        clearTimeout(timer);
-      }
-    };
-  }, [groupedRows.length, isLoading, sessionViewKey]);
+    maybeScrollOutlineToLatest();
+  }, [groupedRows.length, isLoading, sessionViewKey, query]);
 
   const styles = useMemo(() => {
     const pad = layout.compact ? 6 : 10;
@@ -1959,37 +1969,35 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           </Text>
         </View>
       ) : (
-        <FlatList
-          ref={listRef}
-          key={sessionViewKey || "outline-list"}
+        <View
           style={styles.list}
-          contentContainerStyle={styles.listContent}
-          nestedScrollEnabled={true}
-          initialNumToRender={30}
-          maxToRenderPerBatch={40}
-          windowSize={12}
-          data={groupedRows}
-          keyExtractor={(item) => item.key}
-          extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
-          onScrollBeginDrag={() => {
-            userScrolledOutlineRef.current = true;
-          }}
-          onContentSizeChange={() => {
-            if (
-              groupedRows.length > 0 &&
-              !userScrolledOutlineRef.current &&
-              initialScrolledKeyRef.current !== sessionViewKey
-            ) {
-              if (scrollOutlineToLatest()) {
-                initialScrolledKeyRef.current = sessionViewKey;
-              }
-            }
-          }}
-          renderItem={({ item }) => {
-            if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
-            return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
-          }}
-        />
+          {...({
+            onWheel: markOutlineUserInteracted,
+            onPointerDown: markOutlineUserInteracted,
+            onTouchStart: markOutlineUserInteracted,
+          } as Record<string, unknown>)}
+        >
+          <FlatList
+            ref={listRef}
+            key={sessionViewKey || "outline-list"}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            nestedScrollEnabled={true}
+            initialNumToRender={initialRenderCount(groupedRows.length)}
+            maxToRenderPerBatch={200}
+            windowSize={21}
+            data={groupedRows}
+            keyExtractor={(item) => item.key}
+            extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
+            onScrollBeginDrag={markOutlineUserInteracted}
+            onLayout={maybeScrollOutlineToLatest}
+            onContentSizeChange={maybeScrollOutlineToLatest}
+            renderItem={({ item }) => {
+              if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
+              return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
+            }}
+          />
+        </View>
       )}
 
       {/* 3. Context Window Gauge Bar */}
