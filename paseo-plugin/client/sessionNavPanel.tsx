@@ -15,7 +15,7 @@ import {
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
-import { clearChatHighlight, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { cancelChatNavigation, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
@@ -42,7 +42,12 @@ import {
   utf8ByteLength,
   type OutlineRow,
 } from "./outlineGrouping";
-import { initialRenderCount, OutlineAutoScroller } from "./outlineScroll";
+import {
+  computeDrawerOpenScrollTop,
+  computeExpandedGroupScrollTop,
+  initialRenderCount,
+  OutlineAutoScroller,
+} from "./outlineScroll";
 
 const panelTabStateSchema = z.object({
   query: z.string().default(""),
@@ -497,6 +502,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       return { items: result.items, context: result.context, capabilities: result.capabilities };
     },
     enabled: !!resolvedScopeKey,
+    placeholderData: (previousData) => previousData,
     refetchInterval: isMutating ? 400 : 4000,
   });
 
@@ -813,44 +819,104 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   if (!autoScrollerRef.current) {
     autoScrollerRef.current = new OutlineAutoScroller();
   }
-  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
-  autoScrollerRef.current.syncSession(sessionViewKey);
+  const hermesSettledKeyRef = useRef<string | null>(null);
+  const pendingExpandRevealRef = useRef<{ prevScrollHeight: number; scrollTop: number } | null>(null);
+  const pendingDrawerRevealRef = useRef<{
+    prevClientHeight: number;
+    scrollTop: number;
+    stickToBottom: boolean;
+  } | null>(null);
 
-  const markOutlineUserInteracted = () => {
-    autoScrollerRef.current?.markUserInteracted();
+  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
+  const isSessionHiddenFromView = !childScope && (followVisible || subagentFallback) && !inView;
+  const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
+  autoScrollerRef.current.syncSession(sessionViewKey, isOutlineListMounted);
+
+  if (isHermesScope && !fallbackTimelineQuery.isFetching && fallbackTimelineQuery.data !== undefined) {
+    hermesSettledKeyRef.current = sessionViewKey;
+  }
+
+  const getOutlineScrollable = () => {
+    const list = listRef.current;
+    if (!list) return null;
+    return list.getScrollableNode?.() ?? list._listRef?._scrollRef?.getScrollableNode?.() ?? null;
+  };
+
+  const setOutlineScrollTop = (targetTop: number) => {
+    const list = listRef.current;
+    if (!list) return false;
+    autoScrollerRef.current?.markProgrammaticScroll();
+    const top = Math.max(0, targetTop);
+    list.scrollToOffset?.({ offset: top, animated: false });
+    const scrollable = getOutlineScrollable();
+    if (scrollable && typeof scrollable.scrollHeight === "number") {
+      scrollable.scrollTop = Math.min(
+        top,
+        Math.max(0, scrollable.scrollHeight - (scrollable.clientHeight ?? 0)),
+      );
+    }
+    return true;
   };
 
   const applyDomBottomScroll = () => {
     const list = listRef.current;
     if (!list) return false;
+    autoScrollerRef.current?.markProgrammaticScroll();
     list.scrollToEnd?.({ animated: false });
-    const scrollable =
-      list.getScrollableNode?.() ??
-      list._listRef?._scrollRef?.getScrollableNode?.();
+    const scrollable = getOutlineScrollable();
     if (scrollable && typeof scrollable.scrollHeight === "number") {
       scrollable.scrollTop = Math.max(0, scrollable.scrollHeight - (scrollable.clientHeight ?? 0));
     }
     return true;
   };
 
-  const maybeScrollOutlineToLatest = () => {
+  const isLoading = resolvedScopeKey
+    ? (listQuery.isPending && listQuery.fetchStatus !== "idle") ||
+      ((isHermesScope || needsLinkedTimeline) &&
+        fallbackTimelineQuery.isPending &&
+        fallbackTimelineQuery.fetchStatus !== "idle")
+    : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
+
+  const isScrollLoading =
+    isLoading ||
+    Boolean(query && listQuery.isFetching) ||
+    (isHermesScope && fallbackTimelineQuery.isFetching && hermesSettledKeyRef.current !== sessionViewKey);
+
+  const maybeScrollOutlineToLatest = (contentHeight?: number) => {
     const scroller = autoScrollerRef.current;
-    if (
-      !scroller ||
-      !scroller.shouldScrollToLatest({
-        sessionKey: sessionViewKey,
-        rowCount: groupedRows.length,
-        isLoading,
-        hasSearchQuery: Boolean(query),
-      })
-    ) {
+    if (!scroller) return;
+    const shouldBottom = scroller.shouldScrollToLatest({
+      sessionKey: sessionViewKey,
+      mounted: isOutlineListMounted,
+      rowCount: groupedRows.length,
+      contentHeight,
+      isLoading: isScrollLoading,
+      hasSearchQuery: Boolean(query),
+    });
+    const restoreTop = scroller.consumePendingRestoreScrollTop();
+    if (restoreTop !== null) {
+      try {
+        setOutlineScrollTop(restoreTop);
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => {
+            try {
+              setOutlineScrollTop(restoreTop);
+            } catch {
+              // Ignore unmount during frame callback.
+            }
+          });
+        }
+      } catch {
+        // Ignore mock environments.
+      }
       return;
     }
+    if (!shouldBottom) return;
     try {
       if (!applyDomBottomScroll()) return;
       if (typeof requestAnimationFrame === "function") {
         requestAnimationFrame(() => {
-          if (!scroller.isUserInteracted()) {
+          if (!scroller.isUserScrolledUp()) {
             try {
               applyDomBottomScroll();
             } catch {
@@ -864,21 +930,52 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     }
   };
 
+  const toggleGroupExpanded = (groupId: string, currentlyExpanded: boolean) => {
+    if (!currentlyExpanded) {
+      const scrollable = getOutlineScrollable();
+      if (scrollable && typeof scrollable.scrollHeight === "number") {
+        pendingExpandRevealRef.current = {
+          prevScrollHeight: scrollable.scrollHeight,
+          scrollTop: scrollable.scrollTop ?? 0,
+        };
+      }
+    } else {
+      pendingExpandRevealRef.current = null;
+    }
+    setExpandedGroups((prev) => ({ ...prev, [groupId]: !currentlyExpanded }));
+  };
+
+  const togglePreviewDrawer = () => {
+    if (!previewOpen) {
+      const scrollable = getOutlineScrollable();
+      if (scrollable && typeof scrollable.clientHeight === "number") {
+        pendingDrawerRevealRef.current = {
+          prevClientHeight: scrollable.clientHeight,
+          scrollTop: scrollable.scrollTop ?? 0,
+          stickToBottom: autoScrollerRef.current?.isStuckToBottom() ?? true,
+        };
+      }
+    } else {
+      pendingDrawerRevealRef.current = null;
+    }
+    setPreviewOpen(!previewOpen);
+  };
+
   useEffect(() => {
-    clearChatHighlight();
+    cancelChatNavigation();
     setSelectedId(null);
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
+    pendingExpandRevealRef.current = null;
+    pendingDrawerRevealRef.current = null;
   }, [sessionViewKey]);
-  const isLoading = resolvedScopeKey
-    ? (listQuery.isPending && listQuery.fetchStatus !== "idle") || ((isHermesScope || needsLinkedTimeline) && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle")
-    : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
+
+  useEffect(() => () => cancelChatNavigation(), []);
 
   useEffect(() => {
     maybeScrollOutlineToLatest();
-  }, [groupedRows.length, isLoading, sessionViewKey, query]);
-
+  }, [groupedRows.length, isScrollLoading, isOutlineListMounted, sessionViewKey, query]);
   const styles = useMemo(() => {
     const pad = layout.compact ? 6 : 10;
     return {
@@ -1525,7 +1622,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           group.allHidden ? styles.rowItemHidden : null,
         ]}
         onPress={() => {
-          setExpandedGroups((prev) => ({ ...prev, [group.groupId]: !isExpanded }));
+          toggleGroupExpanded(group.groupId, isExpanded);
           if (group.children.length > 0) {
             handleRowPress(group.children[0]);
           }
@@ -1540,7 +1637,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               hitSlop={8}
               onPress={(e) => {
                 e.stopPropagation();
-                setExpandedGroups((prev) => ({ ...prev, [group.groupId]: !isExpanded }));
+                toggleGroupExpanded(group.groupId, isExpanded);
               }}
             >
               <Text style={styles.expandToggleText}>{isExpanded ? "▾" : "▸"}</Text>
@@ -1972,9 +2069,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         <View
           style={styles.list}
           {...({
-            onWheel: markOutlineUserInteracted,
-            onPointerDown: markOutlineUserInteracted,
-            onTouchStart: markOutlineUserInteracted,
+            onWheel: (ev: any) => {
+              const dy = Number(ev?.nativeEvent?.deltaY ?? ev?.deltaY ?? 0);
+              if (Number.isFinite(dy)) autoScrollerRef.current?.recordWheel(dy);
+            },
           } as Record<string, unknown>)}
         >
           <FlatList
@@ -1986,12 +2084,66 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             initialNumToRender={initialRenderCount(groupedRows.length)}
             maxToRenderPerBatch={200}
             windowSize={21}
+            scrollEventThrottle={16}
             data={groupedRows}
             keyExtractor={(item) => item.key}
             extraData={{ expandedGroups, expandedChildren, scopes, lastActionByItem, pendingGroupId, selectedId }}
-            onScrollBeginDrag={markOutlineUserInteracted}
-            onLayout={maybeScrollOutlineToLatest}
-            onContentSizeChange={maybeScrollOutlineToLatest}
+            onScrollBeginDrag={() => autoScrollerRef.current?.recordDragStart()}
+            onScroll={(ev: any) => {
+              const ne = ev?.nativeEvent;
+              const top = ne?.contentOffset?.y;
+              const sh = ne?.contentSize?.height;
+              const ch = ne?.layoutMeasurement?.height;
+              if (typeof top === "number" && typeof sh === "number" && typeof ch === "number") {
+                autoScrollerRef.current?.recordScroll({
+                  scrollTop: top,
+                  scrollHeight: sh,
+                  clientHeight: ch,
+                });
+              }
+            }}
+            onLayout={() => {
+              const drawerSnap = pendingDrawerRevealRef.current;
+              if (drawerSnap) {
+                const scrollable = getOutlineScrollable();
+                const nextCh = scrollable?.clientHeight;
+                const sh = scrollable?.scrollHeight;
+                if (typeof nextCh === "number" && typeof sh === "number" && nextCh < drawerSnap.prevClientHeight) {
+                  pendingDrawerRevealRef.current = null;
+                  const nextTop = computeDrawerOpenScrollTop({
+                    scrollTop: drawerSnap.scrollTop,
+                    scrollHeight: sh,
+                    prevClientHeight: drawerSnap.prevClientHeight,
+                    nextClientHeight: nextCh,
+                    stickToBottom: drawerSnap.stickToBottom,
+                  });
+                  if (nextTop !== null) {
+                    setOutlineScrollTop(nextTop);
+                    return;
+                  }
+                }
+              }
+              maybeScrollOutlineToLatest();
+            }}
+            onContentSizeChange={(_w: number, h: number) => {
+              const expandSnap = pendingExpandRevealRef.current;
+              if (expandSnap && h > expandSnap.prevScrollHeight) {
+                pendingExpandRevealRef.current = null;
+                const scrollable = getOutlineScrollable();
+                const ch = scrollable?.clientHeight ?? 0;
+                const nextTop = computeExpandedGroupScrollTop({
+                  scrollTop: expandSnap.scrollTop,
+                  prevScrollHeight: expandSnap.prevScrollHeight,
+                  nextScrollHeight: h,
+                  clientHeight: ch,
+                });
+                if (nextTop !== null) {
+                  setOutlineScrollTop(nextTop);
+                  return;
+                }
+              }
+              maybeScrollOutlineToLatest(h);
+            }}
             renderItem={({ item }) => {
               if (item.type === "group") return <View>{renderGroupRow(item)}{!expandedGroups[item.groupId] ? renderLinkedChildren(item.children.map((row) => row.tool_call_id)) : null}</View>;
               return <View>{item.type === "child" ? renderChildRow(item) : renderRow(item.row)}{renderLinkedChildren([item.row.tool_call_id])}</View>;
@@ -2021,7 +2173,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         </View>
       </View>
 
-      <PreviewDrawer row={selectedRow} open={previewOpen} onToggle={() => setPreviewOpen(!previewOpen)} theme={theme} />
+      <PreviewDrawer row={selectedRow} open={previewOpen} onToggle={togglePreviewDrawer} theme={theme} />
 
       {/* DB Error Overlay */}
       {dbErrorOpen ? (

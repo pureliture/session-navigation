@@ -119,13 +119,23 @@ export function clearChatHighlight(): void {
 
 function highlightAndScroll(
   node: any,
-  opts?: { tail?: boolean; root?: any; doc?: any },
+  opts?: { tail?: boolean; releaseFollow?: boolean; root?: any; doc?: any },
 ): boolean {
   if (!node) return false;
   if (activeHighlightedNode && activeHighlightedNode !== node) {
     clearHighlightNode(activeHighlightedNode);
   }
   const isTail = Boolean(opts?.tail);
+  if (!isTail && opts?.releaseFollow && opts?.root && opts?.doc) {
+    const scrollable = chatScroller(opts.root);
+    emitScroll(scrollable, opts.doc, "wheel", -24);
+    if (typeof scrollable?.scrollTop === "number" && scrollable.scrollTop > 0) {
+      const nudged = Math.max(0, scrollable.scrollTop - 16);
+      if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top: nudged, behavior: "instant" });
+      else scrollable.scrollTop = nudged;
+    }
+    emitScroll(scrollable, opts.doc, "scroll", -24);
+  }
   node.scrollIntoView?.({ behavior: isTail ? "instant" : "smooth", block: isTail ? "end" : "center" });
   if (isTail && opts?.root) {
     const scrollable = chatScroller(opts.root);
@@ -232,6 +242,11 @@ function pickChatRoot(doc: any, rows: Row[], target: Row, visibleOnly = false): 
 }
 
 let navigationVersion = 0;
+
+export function cancelChatNavigation(): void {
+  navigationVersion++;
+  clearChatHighlight();
+}
 
 type NavigationOptions = {
   visibleOnly?: boolean;
@@ -495,8 +510,8 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
   const targetIdx = rowPositionIndex(rows, row);
   const preferLast = targetIdx >= 0 && targetIdx >= rows.length / 2;
-  const isTail = rows.length > 1 && targetIdx >= rows.length - 2;
-  const hlOpts = { tail: isTail, root, doc };
+  const isTail = rows.length > 1 && targetIdx >= rows.length - 1;
+  const hlOpts = { tail: isTail, releaseFollow: rows.length > 1 && !isTail, root, doc };
   const direct = findIdentity(root, row);
   if (row.kind !== "tool") {
     if (direct) return highlightAndScroll(direct, hlOpts);
@@ -522,7 +537,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   let end = index + 1;
   while (end < rows.length && rows[end].kind === "tool") end++;
   const isTailGroup = rows.length > 1 && end >= rows.length;
-  const groupHlOpts = { tail: isTail || isTailGroup, root, doc };
+  const groupHlOpts = { tail: isTail || isTailGroup, releaseFollow: rows.length > 1 && !(isTail || isTailGroup), root, doc };
   const members = index < 0 ? [row] : rows.slice(start, end);
   let group = direct?.closest(GROUP) ?? direct?.querySelector(GROUP);
   if (!group && direct?.querySelector(BADGE)) return highlightAndScroll(direct.querySelector(BADGE), groupHlOpts);
@@ -550,7 +565,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
       const { summary } = turn;
       if (turnCollapsed(root, turn)) {
         const button = summary.querySelector?.('button, [role="button"]') ?? summary;
-        try { button.click(); } catch { return highlightAndScroll(summary); }
+        try { button.click(); } catch { return highlightAndScroll(summary, groupHlOpts); }
         const wait = options.afterExpand ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
         for (let attempt = 0; attempt < 4; attempt++) {
           await wait();
@@ -566,9 +581,9 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
       const needle = (text?: string) => normalized(text ?? "").slice(0, 36);
       const hint = [toolHint(row), row.summary_line].map(needle).find((text) => text.length >= 4);
       const match = hint ? badges.find((node) => normalized(node.textContent ?? "").includes(hint)) : undefined;
-      if (match) return highlightAndScroll(match);
-      if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)]);
-      return highlightAndScroll(summary);
+      if (match) return highlightAndScroll(match, groupHlOpts);
+      if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)], groupHlOpts);
+      return highlightAndScroll(summary, groupHlOpts);
     }
   }
   if (!group) return highlightAndScroll(direct ?? findText(root, row.summary_line, ROW, preferLast), groupHlOpts);
