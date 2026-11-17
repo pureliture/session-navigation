@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { QueryClient, onlineManager } from "@tanstack/react-query";
 import type { Row } from "../shared/sessionNav";
-import { historyContainsRow, identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { cancelChatNavigation, historyContainsRow, identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { readTimelineHistory } from "./timelineHistory";
 
 class Element {
@@ -743,4 +743,57 @@ test("jumping from an old virtualized slice back to the newest row scrolls down 
   expect(newNode.scrolled).toBe(true);
   expect(root.scrollTop).toBe(9200);
   expect(wheelDeltas.every((d) => d > 0)).toBe(true);
+});
+
+test("clicking an older mounted row dispatches upward wheel intent to release Paseo followOutput, and cancelChatNavigation aborts in-flight loops without onNotFound", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 4000;
+  root.clientHeight = 800;
+  root.scrollTop = 3200;
+  const wheelDeltas: number[] = [];
+  root.onEvent = (ev) => {
+    if (ev.type === "wheel" && typeof ev.deltaY === "number") wheelDeltas.push(ev.deltaY);
+  };
+  const oldNode = new Element({ "data-history-row-id": "r0" }, "Older prompt");
+  const latestNode = new Element({ "data-history-row-id": "r1" }, "Latest reply");
+  root.add(oldNode, latestNode);
+  const doc = {
+    defaultView: {
+      WheelEvent: class {
+        type: string;
+        deltaY?: number;
+        constructor(type: string, init?: { deltaY?: number }) {
+          this.type = type;
+          this.deltaY = init?.deltaY;
+        }
+      },
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    },
+    querySelectorAll: (sel: string) => (sel.includes("agent-chat-scroll") ? [root] : root.querySelectorAll(sel)),
+  };
+  const r0 = { ...row("r0", "user"), summary_line: "Older prompt" };
+  const r1 = { ...row("r1", "assistant"), summary_line: "Latest reply" };
+  expect(await scrollToMessageInChat(r0, [r0, r1], { document: doc })).toBe(true);
+  expect(oldNode.scrolled).toBe(true);
+  expect(wheelDeltas.some((d) => d < 0)).toBe(true);
+
+  // Now start an in-flight search for an unmounted row and cancel via cancelChatNavigation() (e.g. session switch)
+  let notFoundFired = false;
+  const missing = { ...row("missing_old", "user"), summary_line: "Never arrives" };
+  const pending = scrollToMessageInChat(missing, [missing, r0, r1], {
+    document: doc,
+    onNotFound: () => {
+      notFoundFired = true;
+    },
+    afterLoad: async () => {
+      cancelChatNavigation();
+    },
+  });
+  expect(await pending).toBe(false);
+  expect(notFoundFired).toBe(false);
 });
