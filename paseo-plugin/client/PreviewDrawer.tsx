@@ -22,7 +22,7 @@ export function PreviewDrawer({ row, open, onToggle, theme }: {
       </Pressable>
       {open ? row ? (
         <View style={{ minWidth: 0, flexShrink: 1 }}>
-          <ScrollView style={{ maxHeight: 270, minWidth: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 10 }}>
+          <ScrollView nestedScrollEnabled style={{ maxHeight: 270, minWidth: 0 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 10, gap: 10 }}>
             {content.sections.map((section) => (
               <View key={section.label} style={{ gap: 4, minWidth: 0, flexShrink: 1 }}>
                 <Text style={labelStyle}>{section.label}</Text>
