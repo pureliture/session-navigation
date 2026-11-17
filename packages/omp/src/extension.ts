@@ -420,9 +420,14 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   function result(value: Reply) {
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value };
   }
-  function fmtBytes(n: number): string {
-    if (!Number.isFinite(n) || n <= 0) return "0 B";
-    return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KiB`;
+  function fmtBytePair(postBytes: number, preBytes: number): string {
+    const post = Math.max(0, postBytes);
+    const pre = Math.max(0, preBytes);
+    if (pre < 1024 && post < 1024) return `${post}/${pre} B`;
+    const preKib = (pre / 1024).toFixed(1);
+    if (post === 0) return `0/${preKib} KiB`;
+    const postKib = post / 1024;
+    return postKib < 0.05 ? `<0.1/${preKib} KiB` : `${postKib.toFixed(1)}/${preKib} KiB`;
   }
   function formatManageText(value: Reply): string {
     if (!Array.isArray(value.items)) return JSON.stringify(value);
@@ -443,7 +448,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       (sum, item) => sum + (typeof item.original_bytes === "number" ? item.original_bytes : 0),
       0,
     );
-    const headerSize = preTotal > 0 ? ` · ${fmtBytes(postTotal)} / ${fmtBytes(preTotal)}` : "";
+    const headerSize = preTotal > 0 ? ` · ${fmtBytePair(postTotal, preTotal)}` : "";
     const breakdown = parts.length > 0 ? ` (${parts.join(", ")})` : "";
     const lines = [`${applied.length} managed${breakdown}${headerSize}`];
     for (const item of items) {
@@ -458,7 +463,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         const mode = item.mode === "summarize" ? "summarize" : "hide";
         const size =
           typeof item.compacted_bytes === "number" && typeof item.original_bytes === "number"
-            ? ` · ${fmtBytes(item.compacted_bytes)} / ${fmtBytes(item.original_bytes)}`
+            ? ` · ${fmtBytePair(item.compacted_bytes, item.original_bytes)}`
             : "";
         lines.push(`- [${mode}] ${toolName}${hint}${size}`);
       } else {
