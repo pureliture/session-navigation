@@ -94,6 +94,7 @@ export const ListResultSchema = z.object({
       source: z.string().optional(),
     })
     .optional(),
+  server_timeline: z.boolean().optional(),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });

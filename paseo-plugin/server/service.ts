@@ -216,8 +216,12 @@ export class PaseoService {
       parentScope === undefined || row.parent_scope === parentScope)) };
   }
 
-  private timeline(scope: string): Timeline {
-    const timeline = loadTimeline(this.home, scope);
+  private timeline(
+    scope: string,
+    storedItems: readonly Item[] = this.store.items(scope),
+    storedUnits: readonly Record<string, unknown>[] = this.store.listUnits(scope),
+  ): Timeline {
+    const timeline = loadTimeline(this.home, scope, storedItems, storedUnits);
     if (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope) return timeline;
     for (const target of this.store.targets(scope)) {
       if (timeline.records.has(String(target.tool_call_id))) continue;
@@ -298,11 +302,12 @@ export class PaseoService {
   }
 
   private list(scope: string, query = ""): Reply {
-    const timeline = this.timeline(scope);
     const items = this.store.items(scope);
+    const rawUnits = this.store.listUnits(scope);
+    const timeline = this.timeline(scope, items, rawUnits);
     const stored = new Map(items.map((item) => [item.item_id, item]));
     const units = new Map(
-      this.store.listUnits(scope).map((unit) => [String(unit.unit_id), unit]),
+      rawUnits.map((unit) => [String(unit.unit_id), unit]),
     );
     const spans: [number, number][] = items
       .filter((item) => item.version > 1 || item.visibility === "hidden")
@@ -404,6 +409,7 @@ export class PaseoService {
       scope_key: scope,
       items: filtered,
       capabilities: this.capabilities(scope),
+      server_timeline: timeline.rows.length > 0,
       ...(measured.context ? { context: measured.context } : {}),
     };
   }
@@ -519,7 +525,7 @@ export class PaseoService {
             baseline,
             undefined,
             record.invocation,
-            false,
+            Boolean((record as { options_omitted?: boolean }).options_omitted),
             true,
           )
         : undefined;
@@ -563,7 +569,10 @@ export class PaseoService {
           compaction_source: source,
           invocation_snapshot: record.invocation,
           context_hint: null,
-          invocation_options_omitted: Boolean(matchedTarget?.options_omitted),
+          invocation_options_omitted: Boolean(
+            (record as { options_omitted?: boolean }).options_omitted ||
+              matchedTarget?.options_omitted,
+          ),
           created_at: 0,
           updated_at: 0,
         };
