@@ -232,6 +232,42 @@ test("OMP message text and tool call identity/input/original output match native
   expect(historyContainsRow(history, { ...row("usr_0", "user"), summary_line: "Assistant response here" })).toBe(false);
 });
 
+test("paseo-system notification rows match native history and scroll by title, raw text, or response body", async () => {
+  const message_text = '<paseo-system version="1" kind="agent-notification" source-agent-id="sub-audit-01" source-agent-title="Audit pods" event="finished"><agent-response>\nAll pods healthy\n</agent-response></paseo-system>';
+  const target: Row = { ...row("local-notice", "user"), summary_line: "[Subagent finished] Audit pods", message_text };
+  const history = { complete: true, entries: [
+    { item: { type: "user_message", messageId: "native-notice", text: message_text } },
+  ] };
+  expect(historyContainsRow(history, target)).toBe(true);
+  expect(historyContainsRow(history, { ...target, message_text: undefined })).toBe(false);
+  for (const rendered of ["[Subagent finished] Audit pods", message_text, "All pods healthy"]) {
+    const root = new Element({ "data-testid": "agent-chat-scroll" });
+    const doc = new Element().add(root);
+    const node = new Element({ "data-history-row-id": "native-notice" }, rendered);
+    root.add(node);
+    expect(await scrollToMessageInChat(target, [target], { document: doc })).toBe(true);
+    expect(node.scrolled).toBe(true);
+  }
+});
+
+test("search_files and web_search tool inputs match native tool history via extended hints", () => {
+  const history = { complete: true, entries: [
+    { item: { type: "tool_call", callId: "native-search", args: { pattern: "RouterConfig" } } },
+    { item: { type: "tool_call", callId: "native-web", args: { query: "k3s ingress" } } },
+  ] };
+  expect(historyContainsRow(history, { ...row("local-search"), tool_input: '{"pattern":"RouterConfig"}' })).toBe(true);
+  expect(historyContainsRow(history, { ...row("local-web"), tool_input: '{"query":"k3s ingress"}' })).toBe(true);
+  expect(historyContainsRow(history, { ...row("local-miss"), tool_input: '{"pattern":"NoSuchSymbol"}' })).toBe(false);
+});
+
+test("identityMatches accepts tool-prefixed and long suffix identities only", () => {
+  expect(identityMatches("tool-abcdef1234", "abcdef1234")).toBe(true);
+  expect(identityMatches("tool_call_abcdef1234", "abcdef1234")).toBe(true);
+  expect(identityMatches("chat:abcdef1234", "abcdef1234")).toBe(true);
+  expect(identityMatches("prefix_abcdef1234", "abcdef1234")).toBe(true);
+  expect(identityMatches("call_12", "12")).toBe(false);
+});
+
 test("present target still navigates; incomplete or failed fetch cannot establish absence", async () => {
   const f = fixture();
   for (const getHistory of [

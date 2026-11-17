@@ -35,6 +35,7 @@ import {
   groupMutationItems,
   groupRestoreIconKind,
   groupSubtitleText,
+  hiddenRowSnippet,
   isSummarizedRow,
   messageSummarySnippet,
   rowMetric,
@@ -67,6 +68,8 @@ const SUMMARIZE_SVG =
 
 const SUMMARIZE_SLASHED_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5v5.2"/><path d="m5.7 5.2 2.8 2.8 2.8-2.8"/><path d="M3 12h11.5"/><path d="M8.5 21.5v-5.2"/><path d="m5.7 18.8 2.8-2.8 2.8 2.8"/><path d="M18.5 2.5 19.6 5.4 22.5 6.5 19.6 7.6 18.5 10.5 17.4 7.6 14.5 6.5 17.4 5.4Z"/><path d="m2 2 20 20"/></svg>';
+
+const SUMMARY_QUEUED_NOTICE = "Summary queued — runs on next prompt";
 
 function ActionSvgIcon({
   kind,
@@ -166,8 +169,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     setSubagentFallback(false);
   }, [params.agentId, followVisible]);
   useEffect(() => {
-    if (notice !== "Not loaded in chat") return;
-    const timer = setTimeout(() => setNotice((current) => current === notice ? null : current), 4000);
+    if (notice !== "Not loaded in chat" && notice !== SUMMARY_QUEUED_NOTICE) return;
+    const timer = setTimeout(() => setNotice((current) => current === notice ? null : current),
+      notice === SUMMARY_QUEUED_NOTICE ? 6000 : 4000);
     return () => clearTimeout(timer);
   }, [notice]);
   const [lastActionByItem, setLastActionByItem] = useState<Record<string, "hide" | "summarize">>({});
@@ -456,7 +460,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         mode,
       });
     },
-    onSuccess: (r, { row }, context) => {
+    onSuccess: (r, { row, mode }, context) => {
       if (!r?.ok && context?.changed) {
         const { rowKey, prevActionMode } = context;
         setLastActionByItem((prev) => {
@@ -467,7 +471,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         });
       }
       if (!onMutationError(r)) {
-        setNotice(null);
+        setNotice(mode === "summarize" ? SUMMARY_QUEUED_NOTICE : null);
         if (row.status !== "hidden") notePending([row], -1);
         void invalidate();
       }
@@ -558,7 +562,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         const reasons = [...new Set(failures.map((item) => item.error ?? "failed"))].join(", ");
         setNotice(`${result.applied} applied, ${result.failed} failed — ${reasons}. List refreshed.`);
       } else if (result.ok) {
-        setNotice(null);
+        setNotice(action === "summarize" ? SUMMARY_QUEUED_NOTICE : null);
       }
     } catch {
       rollbackItems(items.map((item) => item.item_id));
@@ -574,13 +578,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) return { items: [], context: undefined, capabilities: undefined, server_timeline: false };
+      if (!resolvedScopeKey) return { items: [], context: undefined, capabilities: undefined, server_timeline: false, records_capped: false };
       const result = await listRpc({ scope_key: scopeKey, query: query || undefined });
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
       }
-      return { items: result.items, context: result.context, capabilities: result.capabilities, server_timeline: Boolean(result.server_timeline) };
+      return { items: result.items, context: result.context, capabilities: result.capabilities,
+        server_timeline: Boolean(result.server_timeline),
+        records_capped: Boolean((result as Record<string, unknown>).records_capped) };
     },
     enabled: !!resolvedScopeKey,
     placeholderData: (previousData, previousQuery) =>
@@ -1397,7 +1403,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     const normalized = messageSummarySnippet(row.summary_line ?? row.message_text);
     return row.status === "hidden" ? (
       <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-        {`[hidden] ${normalized.split("\n")[0] || "tap icon to restore"}`}
+        {hiddenRowSnippet(row, false, normalized.split("\n")[0] || "tap icon to restore")}
       </Text>
     ) : (
       <Text style={styles.summarySnippet} numberOfLines={2}>
@@ -1593,9 +1599,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         <View style={styles.treeLineContainer}>
           {isHidden ? (
             <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-              {summarized
-                ? `[summarized] ${firstSummaryLine || "tap slashed icon to restore"}`
-                : `[hidden] ${firstSummaryLine || "tap slashed icon to restore"}`}
+              {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap slashed icon to restore")}
             </Text>
           ) : (
             <Text style={styles.summarySnippet} numberOfLines={1}>
@@ -1881,9 +1885,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         <View style={[styles.treeLineContainer, { marginLeft: layout.compact ? 8 : 12 }]}>
           {isHidden ? (
             <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-              {summarized
-                ? `[summarized] ${firstSummaryLine || "tap icon to restore"}`
-                : `[hidden] ${firstSummaryLine || "tap icon to restore"}`}
+              {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap icon to restore")}
             </Text>
           ) : (
             <Text style={styles.summarySnippet} numberOfLines={1}>
@@ -1937,10 +1939,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     runtimeError || (!isCapabilitiesLoading && inView && Boolean(agentId))
       ? capabilityNotice(runtimeError, capabilities)
       : null;
-  const noticeBar = notice || capabilityMessage || displayOnly ? (
+
+  const capNotice = listQuery.data?.records_capped === true && !notice && !capabilityMessage && !displayOnly
+    ? "Large session: oldest tool controls omitted"
+    : null;
+  const noticeBar = notice || capabilityMessage || capNotice || displayOnly ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
       {displayOnly ? <Text style={styles.noticeText}>subagent context is not managed</Text> : null}
-      {notice || capabilityMessage ? <Text style={styles.noticeText}>{notice ?? capabilityMessage}</Text> : null}
+      {notice || capabilityMessage || capNotice ?
+        <Text style={styles.noticeText}>{notice ?? capabilityMessage ?? capNotice}</Text> : null}
     </View>
   ) : null;
 

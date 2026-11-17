@@ -118,15 +118,37 @@ def test_pending_uses_host_ctx_llm(tmp_path):
     state.engine.store.close()
 
 
-def test_disable_and_coexistence_revoke_capabilities(tmp_path):
+def test_coexistence_preserves_capabilities_and_disable_revokes(tmp_path):
+    import hashlib
+
     state, kwargs, scope = setup_state(tmp_path)
+    kwargs["request"]["input"].insert(
+        0, {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello user"}]}
+    )
     middleware = adapter.factories.make_middleware(state)
     middleware(**kwargs)
     assert state.engine.store.adapter_can(scope, "hide")
     assert not state.engine.store.adapter_can(scope, "summarize")
+
+    item = pending(state, scope)
+    msg_key, role, _idx, text = adapter.payload.message_keys("codex_responses", kwargs["request"])[0]
+    assert msg_key.startswith("msg:user:p0:")
+    assert state.engine.store.set_message_visibility(
+        scope,
+        msg_key,
+        kind=role,
+        content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        char_count=len(text),
+        visibility="hidden",
+    )["ok"] is True
+
     state.count_middlewares = lambda: 1
-    middleware(**kwargs)
-    assert not state.engine.store.adapter_can(scope, "hide")
+    response = middleware(**kwargs)
+    assert state.engine.store.adapter_can(scope, "hide")
+    assert state.engine.store.adapter_can(scope, "unhide")
+    assert all(entry.get("role") != "user" for entry in response["request"]["input"])
+    assert response["request"]["input"][1]["output"] == item.compacted
+
     state.count_middlewares = lambda: 0
     middleware(**kwargs)
     state.is_enabled = lambda: False

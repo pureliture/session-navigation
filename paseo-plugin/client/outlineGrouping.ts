@@ -107,6 +107,14 @@ export function isSummarizedRow(row: Row, localMode?: "hide" | "summarize"): boo
   return localMode === "summarize";
 }
 
+/** Snippet label for a hidden row; queued summaries are distinct from already-summarized rows. */
+export function hiddenRowSnippet(row: Row, summarized: boolean, text: string): string {
+  const label = row.summary_pending === true
+    ? "[summary queued · next prompt]"
+    : summarized ? "[summarized]" : "[hidden]";
+  return `${label} ${text}`;
+}
+
 const CONTEXT_NAV_TOOL_NAMES: Record<string, true> = {
   manage_context: true,
   hide_context: true,

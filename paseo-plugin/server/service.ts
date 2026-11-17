@@ -410,6 +410,7 @@ export class PaseoService {
       items: filtered,
       capabilities: this.capabilities(scope),
       server_timeline: timeline.rows.length > 0,
+      ...(timeline.history.recordsCapped ? { records_capped: true } : {}),
       ...(measured.context ? { context: measured.context } : {}),
     };
   }

@@ -1,10 +1,17 @@
 import { releaseExtension } from "../src/registration.ts";
 import { beforeEach, test, expect } from "bun:test";
 import { resolve } from "node:path";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension, { prepareRequest } from "../src/extension.ts";
+import { ompInvocationArgs } from "../src/context.ts";
+import { Store } from "../../core/src/index.ts";
+import { BunDriver } from "../../core/src/drivers/bun.ts";
+import { OmpService } from "../src/service.ts";
+import { loadTimeline } from "../../../paseo-plugin/server/history.ts";
+import { PaseoService } from "../../../paseo-plugin/server/service.ts";
+import { ListResultSchema } from "../../../paseo-plugin/shared/sessionNav.ts";
 
 beforeEach(() => releaseExtension());
 
@@ -261,9 +268,35 @@ test("the shared model deadline prevents starting remaining pending jobs", async
         now = 25_001;
         return null;
       },
+      25_000,
     );
     expect(generated).toBe(1);
     expect(failed).toBe(9);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("default batch deadline gives later summary waves their own timeout", async () => {
+  const originalNow = Date.now;
+  let now = 0, generated = 0, prepares = 0;
+  const timeouts: number[] = [];
+  Date.now = () => now;
+  try {
+    await prepareRequest([], "s", "t", async (method) => {
+      if (method !== "prepare") return { ok: true };
+      return { ok: true, patches: [], pending_summaries: ++prepares === 1
+        ? Array.from({ length: 8 }, (_, i) => ({ item_id: `i${i}`, content: "original" }))
+        : [] };
+    }, async (_content, timeout) => {
+      timeouts.push(timeout);
+      generated++;
+      await Promise.resolve();
+      if (generated === 4) now = 24_000;
+      return "summary";
+    });
+    expect(generated).toBe(8);
+    expect(timeouts).toEqual(Array(8).fill(25_000));
   } finally {
     Date.now = originalNow;
   }
@@ -336,13 +369,99 @@ test("worker engine compacts and restores confirmed read results", async () => {
   }
 });
 
-test("실패, 이미지, 중복 ID와 확인되지 않은 세션은 원본을 보존한다", async () => {
+test("eval composite results hide in the request and restore all original blocks", async () => {
+  const store = new Store(new BunDriver(":memory:"));
+  const service = new OmpService(store);
+  const { events, tools } = setup({
+    request: (method, params) => service.handle(method, params),
+    close: () => store.close(),
+  });
+  const blocks = [
+    { type: "text", text: longText },
+    { type: "image", data: "abc", mimeType: "image/png" },
+    { type: "text", text: "second text block" },
+  ];
+  const input = messages(blocks);
+  input[0].content[0] = { type: "toolCall", id: "call-1", name: "eval", arguments: { code: "print(1)", language: "py" } };
+  input[1].toolName = "eval";
+  const original = structuredClone(input);
+  try {
+    await events.context({ messages: input }, ctx);
+    await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
+    const compact = await execute(tools.hide_context, { tool_call_id: "call-1" });
+    expect(compact.ok).toBe(true);
+    const projected = await events.context({ messages: input }, ctx);
+    expect(projected.messages[1].content).toHaveLength(1);
+    expect(projected.messages[1].content[0].text).not.toBe(`${longText}\nsecond text block`);
+    expect(input).toEqual(original);
+    expect((await execute(tools.unhide_context, { item_id: compact.item_id })).ok).toBe(true);
+    const restored = await events.context({ messages: input }, ctx);
+    expect(restored?.messages?.[1]?.content ?? input[1].content).toEqual(original[1].content);
+  } finally {
+    await events.session_shutdown();
+  }
+});
+
+test("timeline budgets newest eligible results and exposes capped records", async () => {
+  const home = mkdtempSync(join(tmpdir(), "sn-timeline-"));
+  const dir = join(home, ".omp/agent/sessions/project");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "2026_sid.jsonl");
+  const scope = "omp:default:sid:default";
+  const pair = (id: string, content: unknown[]) => [
+    { role: "assistant", content: [{ type: "toolCall", id, name: "eval", arguments: { code: "print(1)" } }] },
+    { role: "toolResult", toolCallId: id, toolName: "eval", isError: false, content },
+  ];
+  const history = Array.from({ length: 5001 }, (_, i) => pair(`call-${i}`, [{ type: "text", text: `call-${i}` }])).flat();
+  history.push(...pair("latest", [{ type: "text", text: "first" }, { type: "image", data: "abc" }, { type: "text", text: "second" }]));
+  const writeHistory = (messages: unknown[]) => writeFileSync(file, messages.map(message => JSON.stringify({ type: "message", message })).join("\n"));
+  const store = new Store(new BunDriver(":memory:"));
+  try {
+    writeHistory(history);
+    const timeline = loadTimeline(home, scope);
+    expect(timeline.records.size).toBe(5000);
+    expect(timeline.records.has("call-0")).toBe(false);
+    expect(timeline.records.get("latest")?.content).toBe("first\nsecond");
+    expect(timeline.history.recordsCapped).toBe(true);
+    const response = await new PaseoService(store, home).handle("list", { scope_key: scope });
+    expect(response.records_capped).toBe(true);
+    expect(ListResultSchema.parse(response).records_capped).toBe(true);
+    const big = "x".repeat(17 * 1024 * 1024);
+    writeHistory([...pair("old", [{ type: "text", text: big }]), ...pair("new", [{ type: "text", text: big }])]);
+    const byteLimited = loadTimeline(home, scope);
+    expect(byteLimited.records.has("old")).toBe(false);
+    expect(byteLimited.records.has("new")).toBe(true);
+    expect(byteLimited.history.recordsCapped).toBe(true);
+    const args = { z: [1, { active: true }], a: "value", ignored: undefined };
+    const tools = ["memory_authority_pack_read", "brain_memory_search", "brain_context_resolve", "mcp__brain__query", "list_hosts", "schedule_logs"];
+    const toolMessages = tools.flatMap((tool, index) => {
+      const raw = tool === "schedule_logs" ? { id: "schedule" } : args;
+      return [
+        { role: "assistant", content: [{ type: "toolCall", id: `tool-${index}`, name: tool, arguments: raw }] },
+        { role: "toolResult", toolCallId: `tool-${index}`, toolName: tool, isError: false, content: [{ type: "text", text: "output" }] },
+      ];
+    });
+    writeHistory(toolMessages);
+    const allowed = loadTimeline(home, scope);
+    for (const [index, tool] of tools.entries()) {
+      const raw = tool === "schedule_logs" ? { id: "schedule" } : args;
+      expect(allowed.records.get(`tool-${index}`)?.invocation.arguments).toEqual(ompInvocationArgs(tool, raw));
+    }
+    expect(ompInvocationArgs("mcp__brain__delete", args)).toBeNull();
+    expect(ompInvocationArgs("read", { path: "xd://secret" })).toBeNull();
+    expect(ompInvocationArgs("read", { path: "agent://id" })).toEqual({ path: "agent://id" });
+  } finally {
+    store.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("실패, 이미지 전용, 중복 ID와 확인되지 않은 세션은 원본을 보존한다", async () => {
   const { events, tools } = setup();
   try {
     for (const input of [
       messages(undefined, true),
       messages([
-        { type: "text", text: longText },
         { type: "image", data: "abc" },
       ]),
       [...messages(), messages()[1]],

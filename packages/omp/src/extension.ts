@@ -12,6 +12,7 @@ import {
   ompInvocationArgs,
   prepareRequest,
   messageText,
+  toolResultText,
   hash,
   type Candidate,
   type RecordItem,
@@ -154,19 +155,15 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         found.index >= i ||
         typeof call.name !== "string" ||
         call.name !== message.toolName ||
-        message.isError !== false ||
         !call.arguments ||
         typeof call.arguments !== "object" ||
-        Array.isArray(call.arguments) ||
-        !Array.isArray(message.content) ||
-        message.content.length !== 1 ||
-        message.content[0]?.type !== "text" ||
-        typeof message.content[0].text !== "string"
+        Array.isArray(call.arguments)
       )
         continue;
       const args = ompInvocationArgs(call.name, call.arguments as Record<string, unknown>);
       if (!args) continue;
-      const content = message.content[0].text;
+      const content = toolResultText(message);
+      if (content === null) continue;
       records.push({ call_id: id, tool_name: call.name, arguments: args, status: "ok", content });
       positions.set(id, i);
     }
@@ -185,7 +182,6 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       records: collected.records,
     };
     candidate = next;
-    const deadline = Date.now() + SUMMARY_TIMEOUT_MS;
     const users = event.messages.filter((message) => message?.role === "user");
     const turn = users.length ? `${users.length}:${hash(messageText(users.at(-1)))}` : "";
     let reminder = reminders.get(session);
@@ -206,7 +202,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         next.token,
         rpcOnce,
         (content, timeout) => summarizeText(ctx, content, timeout),
-        deadline,
+        undefined,
         () => generation === requestGeneration && sessionId(ctx) === session,
       );
       if (!child && response.ok) {
@@ -309,18 +305,15 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       const index = collected.positions.get(patch.call_id);
       if (index === undefined) continue;
       const original = event.messages[index];
-      const block = original?.content?.[0];
+      const text = toolResultText(original);
       if (
         original?.toolCallId !== patch.call_id ||
-        original.isError !== false ||
-        original.content.length !== 1 ||
-        block?.type !== "text" ||
-        typeof block.text !== "string" ||
-        hash(block.text) !== patch.sha256
+        text === null ||
+        hash(text) !== patch.sha256
       )
         continue;
       messages ??= event.messages.slice();
-      messages[index] = { ...original, content: [{ ...block, text: patch.text }] };
+      messages[index] = { ...original, content: [{ type: "text", text: patch.text }] };
     }
     const hidden = new Set<string>(
       Array.isArray(response.hidden_messages)

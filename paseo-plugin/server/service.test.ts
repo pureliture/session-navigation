@@ -355,7 +355,7 @@ test("every tool is displayed, but unsupported, duplicate, ambiguous and failed 
     "error",
     "result",
     "order",
-    "multiblock",
+    "image_only",
   ]) {
     const changed = toolMessages("out");
     if (variant === "duplicate") changed[1].content.push(changed[1].content[1]);
@@ -363,8 +363,8 @@ test("every tool is displayed, but unsupported, duplicate, ambiguous and failed 
     if (variant === "result") changed.push(changed[2]);
     if (variant === "order")
       [changed[1], changed[2]] = [changed[2], changed[1]];
-    if (variant === "multiblock")
-      changed[2].content.push({ type: "image", data: "x" });
+    if (variant === "image_only")
+      changed[2].content = [{ type: "image", data: "x" }];
     const current = fixture(changed);
     expect(
       (await current.call("list")).items
@@ -372,11 +372,17 @@ test("every tool is displayed, but unsupported, duplicate, ambiguous and failed 
         .every((row: any) => !row.manageable),
     ).toBe(true);
   }
+  // Multi-block text+image toolResult IS now manageable
+  const multiBlock = toolMessages("a".repeat(900));
+  multiBlock[2].content.push({ type: "image", data: "x" });
+  const mbFixture = fixture(multiBlock);
+  const mbTools = (await mbFixture.call("list")).items.filter((row: any) => row.kind === "tool");
+  expect(mbTools.every((row: any) => row.manageable)).toBe(true);
 });
 
-test("a long outline reaches the final result beyond the 1000-record and 4MiB management caps", () => {
+test("a huge outline prioritizes newest results within the 5000-record and 32MiB management caps and surfaces records_capped", async () => {
   const messages: Message[] = [];
-  for (let index = 0; index < 1005; index++)
+  for (let index = 0; index < 5005; index++)
     messages.push(
       ...toolMessages(`out ${index}`)
         .slice(1, 3)
@@ -384,15 +390,22 @@ test("a long outline reaches the final result beyond the 1000-record and 4MiB ma
           JSON.parse(JSON.stringify(message).replaceAll("c1", `call-${index}`)),
         ),
     );
-  const { home } = fixture(messages);
+  const { home, call } = fixture(messages);
   const timeline = loadTimeline(home, scope);
-  expect(timeline.rows.filter((row) => row.kind === "tool")).toHaveLength(1005);
-  expect(timeline.records.size).toBe(1000);
-  expect(timeline.rows.at(-1)?.manageable).toBe(false);
-  const huge = fixture(toolMessages("x".repeat(4 * 1024 * 1024 + 1)));
-  expect(loadTimeline(huge.home, scope).records.size).toBe(0);
+  const toolRows = timeline.rows.filter((row) => row.kind === "tool");
+  expect(toolRows).toHaveLength(5005);
+  expect(timeline.records.size).toBe(5000);
+  expect(timeline.history.recordsCapped).toBe(true);
+  // Newest results stay manageable; oldest excess results age out to read-only!
+  expect(toolRows.at(-1)?.manageable).toBe(true);
+  expect(toolRows[0]?.manageable).toBe(false);
+  const listed = await call("list");
+  expect(listed.records_capped).toBe(true);
+  const huge = fixture(toolMessages("x".repeat(32 * 1024 * 1024 + 1)));
+  const hugeTimeline = loadTimeline(huge.home, scope);
+  expect(hugeTimeline.records.size).toBe(0);
+  expect(hugeTimeline.history.recordsCapped).toBe(true);
 });
-
 test("preview truncation preserves UTF-8, empty originals and malformed/missing histories", async () => {
   expect(preview("한".repeat(5000))).toEndWith("\n… [truncated]");
   expect(preview("한".repeat(5000))).not.toContain("�");
