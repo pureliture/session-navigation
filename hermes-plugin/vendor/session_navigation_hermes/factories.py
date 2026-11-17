@@ -809,29 +809,13 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             if child:
                 request = _child_request(request)
             state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
-            if state.count_middlewares() > 0:
-                _register_adapter(state, scope, False)
-                # Another llm_request middleware is installed. The installed
-                # chain composes rewrites in registration order, so OUR
-                # replacement is not silently dropped -- but if we run first,
-                # a later middleware can still overwrite it, and if we run
-                # last we overwrite theirs. Report the situation instead of
-                # pretending single ownership: keep recording (tools keep
-                # working) but leave this request untouched.
-                stored, skipped, _error = state.store.record_request(
-                    scope.scope_key(), api_mode, request)
-                logger.debug(
-                    "session-navigation coexistence: recorded %d results, skipped %d, "
-                    "request unchanged", len(stored), len(skipped))
-                return {
-                    "request": copy.deepcopy(request),
-                    "source": SOURCE,
-                    "reason": "other_middleware_present",
-                }
+            other_middlewares = state.count_middlewares()
             supported = api_mode in SUPPORTED_API_MODES
             _register_adapter(state, scope, supported)
             step = _engine_step(state.engine, state.store, scope, api_mode, request,
                                publish_targets=supported, summarizer=state.summarizer)
+            if other_middlewares > 0 and isinstance(step.get("trace"), dict):
+                step["trace"]["other_middlewares"] = other_middlewares
             applied = step["applied"]
             skipped = step["skipped"]
             reason = step["trace"].get("reason", "")
@@ -854,8 +838,8 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             if not reason:
                 reason = f"applied {len(applied)}, skipped {len(skipped)}"
             logger.debug(
-                "session-navigation middleware: %s (found %s)",
-                reason, step["trace"].get("found", 0))
+                "session-navigation middleware: %s (found %s, other_middlewares=%s)",
+                reason, step["trace"].get("found", 0), other_middlewares)
             request_out = step["request"]
             if isinstance(request_out, dict):
                 found = message_keys(api_mode, request_out)

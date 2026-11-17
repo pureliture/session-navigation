@@ -16,8 +16,41 @@ function normalized(text: string) {
 const IDENTITY_ATTRIBUTES = ["data-message-id", "data-history-row-id", "data-call-id", "data-item-id", "data-turn-id", "id"];
 
 export function identityMatches(value: string, id: string): boolean {
-  return value === id || value === `agent_tool_${id}` || value.endsWith(`/${encodeURIComponent(id)}`) ||
-    value === `message-${id}` || value === `call-${id}` || value === `turn-${id}`;
+  if (value === id || value === `agent_tool_${id}` || value.endsWith(`/${encodeURIComponent(id)}`) ||
+    value === `message-${id}` || value === `call-${id}` || value === `turn-${id}` ||
+    value === `tool-${id}` || value === `tool_call_${id}`) return true;
+  return id.length >= 6 && (value.endsWith(`_${id}`) || value.endsWith(`:${id}`));
+}
+
+function textNeedles(hints: (string | undefined)[]): string[] {
+  return hints
+    .map((hint) => normalized(hint ?? "").slice(0, 36))
+    .filter((needle) => needle.length >= 4);
+}
+
+/** Candidate needles for a user/assistant row across native, summarized, and rendered chat text. */
+function messageHints(row: Row): string[] {
+  const hints: string[] = [];
+  const push = (value?: string) => {
+    if (value && normalized(value).length >= 4 && !hints.includes(value)) hints.push(value);
+  };
+  push(row.summary_line);
+  if (!row.message_text) return hints;
+  const raw = row.message_text.trim();
+  const decoded = raw.replace(/&quot;/gu, '"').replace(/&lt;/gu, "<").replace(/&gt;/gu, ">")
+    .replace(/&apos;/gu, "'").replace(/&amp;/gu, "&");
+  push(raw.split(/\r?\n/u).map((line) => line.trim()).find(Boolean));
+  if (!decoded.startsWith("<paseo-system")) {
+    push(decoded.replace(/<[^>]+>/gu, " ").trim());
+    return hints;
+  }
+  push(/source-agent-title="([^"]+)"/u.exec(decoded)?.[1]);
+  push(/source-agent-id="([^"]+)"/u.exec(decoded)?.[1]);
+  const responseMarker = "<agent-response>";
+  const response = /<agent-response>([\s\S]*?)<\/agent-response>/u.exec(decoded)?.[1] ??
+    (decoded.includes(responseMarker) ? decoded.slice(decoded.indexOf(responseMarker) + responseMarker.length) : undefined);
+  push(response?.replace(/<[^>]+>/gu, " ").split(/\r?\n/u).map((line) => line.trim()).find(Boolean));
+  return hints;
 }
 
 /** Identity attributes rendered in the chat currently on screen; null when no session chat is visible. */
@@ -43,11 +76,13 @@ function findIdentity(root: any, row: Row): any {
   return null;
 }
 
-function findText(root: any, snippet?: string, selector = ROW, preferLast = false): any {
-  const needle = normalized(snippet ?? "").slice(0, 36);
-  if (needle.length < 4) return null;
-  const matches = (Array.from(root.querySelectorAll(selector)) as any[]).filter((node) =>
-    normalized(node.textContent ?? "").includes(needle));
+function findText(root: any, snippet?: string | string[], selector = ROW, preferLast = false): any {
+  const needles = textNeedles(Array.isArray(snippet) ? snippet : [snippet]);
+  if (needles.length === 0) return null;
+  const matches = (Array.from(root.querySelectorAll(selector)) as any[]).filter((node) => {
+    const text = normalized(node.textContent ?? "");
+    return needles.some((needle) => text.includes(needle));
+  });
   if (matches.length === 0) return null;
   return preferLast ? matches[matches.length - 1] : matches[0];
 }
@@ -64,7 +99,10 @@ function rowPositionIndex(rows: Row[], target: Row): number {
 function toolHint(row: Pick<Row, "tool_input">): string | undefined {
   try {
     const input = JSON.parse(row.tool_input ?? "null");
-    return input?.command ?? input?.path ?? input?.CommandLine ?? input?.Path ?? row.tool_input;
+    return input?.command ?? input?.path ?? input?.CommandLine ?? input?.Path ??
+      input?.pattern ?? input?.query ?? input?.url ?? input?.code ?? input?.image_path ??
+      input?.name ?? input?.agentId ?? input?.terminalId ??
+      (Array.isArray(input?.urls) ? input.urls[0] : undefined) ?? row.tool_input;
   } catch {
     return row.tool_input;
   }
@@ -84,12 +122,8 @@ export function historyContainsRow(history: TimelineHistory, row: Row): boolean 
       [row.item_id, row.tool_call_id].some((id) => id && identityMatches(value, id)))) return true;
     const preview = fallbackToolPreview(item, detail);
     const texts = kind === "tool" ? [preview.tool_input, toolHint(preview), preview.tool_output, detail.text, detail.label] : [item.text];
-    const hints = kind === "tool" ? [row.summary_line, row.tool_output, toolHint(row)] : [row.summary_line];
-    return hints.some((hint) => {
-      if (typeof hint !== "string") return false;
-      const needle = normalized(hint).slice(0, 36);
-      return needle.length >= 4 && texts.some((text) => typeof text === "string" && normalized(text).includes(needle));
-    });
+    const hints = kind === "tool" ? [row.summary_line, row.tool_output, toolHint(row)] : messageHints(row);
+    return textNeedles(hints).some((needle) => texts.some((text) => typeof text === "string" && normalized(text).includes(needle)));
   });
 }
 
@@ -180,10 +214,12 @@ const after = (node: any, other: any) => (other.compareDocumentPosition(node) & 
 function anchorOf(root: any, row: Row, from?: any): any {
   const direct = findIdentity(root, row);
   if (direct && (!from || after(direct, from))) return direct;
-  const needle = normalized(row.summary_line ?? "").slice(0, 36);
-  if (needle.length < 4) return null;
-  return (Array.from(root.querySelectorAll(ROW)) as any[]).find((node) =>
-    (!from || after(node, from)) && normalized(node.textContent ?? "").includes(needle)) ?? null;
+  const needles = textNeedles(messageHints(row));
+  if (needles.length === 0) return null;
+  return (Array.from(root.querySelectorAll(ROW)) as any[]).find((node) => {
+    const text = normalized(node.textContent ?? "");
+    return (!from || after(node, from)) && needles.some((needle) => text.includes(needle));
+  }) ?? null;
 }
 
 // Paseo folds finished turns behind a "turn-summary" badge rendered after the user message.
@@ -236,7 +272,7 @@ function pickChatRoot(doc: any, rows: Row[], target: Row, visibleOnly = false): 
     findIdentity(root, target) ? 1 : 0,
     messages.filter((candidate) => findIdentity(root, candidate)).length,
     visible(root) ? 1 : 0,
-    messages.filter((candidate) => findText(root, candidate.summary_line)).length,
+    messages.filter((candidate) => findText(root, messageHints(candidate))).length,
   ] as const).sort((x, y) => (y[1] - x[1]) || (y[2] - x[2]) || (y[3] - x[3]) || (y[4] - x[4]));
   return ranked[0][0];
 }
@@ -304,8 +340,9 @@ function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual
     let longest = 0;
     let matched: number[] = [];
     rows.forEach((candidate, candidateIndex) => {
-      const needle = normalized(candidate.summary_line ?? "").slice(0, 36);
-      if (needle.length >= 4 && text.includes(needle)) {
+      const needles = textNeedles(candidate.kind === "tool" ? [candidate.summary_line] : messageHints(candidate));
+      const needle = needles.filter((value) => text.includes(value)).sort((x, y) => y.length - x.length)[0];
+      if (needle) {
         if (needle.length > longest) {
           longest = needle.length;
           matched = [candidateIndex];
@@ -379,7 +416,6 @@ function seekMountedWindow(
         ? (bounds.low + bounds.high) / 2
         : Math.max(0, Math.min(extent, position + (older ? -step : step)));
   const top = negative ? next - extent : inverted ? extent - next : next;
-  emitScroll(scrollable, doc, "wheel", older ? -1 : 1);
   if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top, behavior: "instant" });
   else scrollable.scrollTop = top;
   emitScroll(scrollable, doc, "scroll", older ? -1 : 1);
@@ -464,7 +500,7 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
   const targetIdx = rowPositionIndex(rows, row);
   if (findIdentity(root, row)) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
-  } else if (findText(root, row.summary_line, ROW, targetIdx >= 0 && targetIdx >= rows.length / 2)) {
+  } else if (findText(root, messageHints(row), ROW, targetIdx >= 0 && targetIdx >= rows.length / 2)) {
     const { indices: mounted } = mountedRowIndices(root, rows);
     const windowCoversTarget =
       mounted.length === 0 ||
@@ -528,7 +564,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     ) {
       return false;
     }
-    return highlightAndScroll(findText(root, row.summary_line, ROW, preferLast), hlOpts);
+    return highlightAndScroll(findText(root, messageHints(row), ROW, preferLast), hlOpts);
   }
 
   const index = targetIdx;
@@ -550,7 +586,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   }
   if (!group && start > 0) {
     const previous = rows[start - 1];
-    const anchor = findIdentity(root, previous) ?? findText(root, previous.summary_line, ROW, start >= rows.length / 2);
+    const anchor = findIdentity(root, previous) ?? findText(root, messageHints(previous), ROW, start >= rows.length / 2);
     const nextMsg = end < rows.length ? rows[end] : undefined;
     const nextAnchor = nextMsg && anchor ? anchorOf(root, nextMsg, anchor) : null;
     if (anchor) {
@@ -586,7 +622,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
       return highlightAndScroll(summary, groupHlOpts);
     }
   }
-  if (!group) return highlightAndScroll(direct ?? findText(root, row.summary_line, ROW, preferLast), groupHlOpts);
+  if (!group) return highlightAndScroll(direct ?? findText(root, messageHints(row), ROW, preferLast), groupHlOpts);
 
   const toggle = group.querySelector('[role="button"][aria-expanded]');
   const collapsed = toggle?.getAttribute("aria-expanded") === "false";
@@ -602,7 +638,7 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     if (targetBadge && !target.querySelector(GROUP)) return highlightAndScroll(targetBadge, groupHlOpts);
     // Paseo 0.15.3 only puts row IDs on the group's host, not its child badges.
     const badges = Array.from(group.querySelectorAll(BADGE)) as any[];
-    const hint = findText(group, toolHint(row), BADGE, preferLast) ?? findText(group, row.summary_line, BADGE, preferLast);
+    const hint = findText(group, toolHint(row), BADGE, preferLast) ?? findText(group, messageHints(row), BADGE, preferLast);
     if (hint) return highlightAndScroll(hint, groupHlOpts);
     if (badges.length === members.length) return highlightAndScroll(badges[members.indexOf(row)], groupHlOpts);
   }

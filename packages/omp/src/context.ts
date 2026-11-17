@@ -204,10 +204,22 @@ export const hash = (value: string): string =>
 export function ompInvocationArgs(
   tool: string,
   raw: Record<string, unknown>,
-): Record<string, string> | null {
+): Record<string, unknown> | null {
   const str = (key: string) =>
     typeof raw[key] === "string" && (raw[key] as string).trim() ? (raw[key] as string) : undefined;
   switch (tool) {
+    case "eval":
+      return typeof raw.code === "string" && raw.code
+        ? { code: raw.code, ...(typeof raw.language === "string" ? { language: raw.language } : {}) }
+        : null;
+    case "browser_list_tabs":
+    case "list_hosts":
+    case "list_terminals":
+    case "list_schedules":
+      return {};
+    case "inspect_schedule":
+    case "schedule_logs":
+      return typeof raw.id === "string" && raw.id ? { id: raw.id } : null;
     case "read": {
       const path = str("path");
       return path && !path.trim().startsWith("xd://") ? { path } : null;
@@ -261,8 +273,28 @@ export function ompInvocationArgs(
       return out;
     }
     default:
+      if (
+        ["memory_authority_pack_read", "brain_memory_search", "brain_context_resolve"].includes(tool) ||
+        (tool.startsWith("mcp_") && /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i.test(tool))
+      ) {
+        try {
+          return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b)))));
+        } catch {
+          return null;
+        }
+      }
       return null;
   }
+}
+export function toolResultText(message: unknown): string | null {
+  if (!message || typeof message !== "object" || !("isError" in message) || message.isError !== false ||
+      !("content" in message) || !Array.isArray(message.content)) return null;
+  const texts: string[] = [];
+  for (const block of message.content) {
+    if (block && typeof block === "object" && block.type === "text" && typeof block.text === "string")
+      texts.push(block.text);
+  }
+  return texts.length ? texts.join("\n") : null;
 }
 export function messageText(message: any): string {
   if (typeof message?.content === "string") return message.content;
@@ -393,7 +425,7 @@ export async function prepareRequest(
   token: string,
   send: (method: string, params: object, timeout: number) => Promise<Reply>,
   summarize: (content: string, timeout: number) => Promise<string | null>,
-  deadline = Date.now() + SUMMARY_TIMEOUT_MS,
+  deadline?: number,
   isCurrent: () => boolean = () => true,
 ): Promise<Reply> {
   const response = await prepareSnapshot(records, session, token, send);
@@ -404,14 +436,18 @@ export async function prepareRequest(
       jobs.set(job.item_id, job);
   }
   if (jobs.size === 0) return response;
+  const effectiveDeadline = deadline ?? Date.now() + Math.min(
+    120_000,
+    Math.max(1, Math.ceil(jobs.size / MAX_SUMMARY_CONCURRENCY)) * SUMMARY_TIMEOUT_MS,
+  );
   const waiting = [...jobs.values()];
   const summaries = new Map<string, string>();
   await Promise.all(
     Array.from({ length: Math.min(MAX_SUMMARY_CONCURRENCY, waiting.length) }, async () => {
-      while (waiting.length && Date.now() < deadline && isCurrent()) {
+      while (waiting.length && Date.now() < effectiveDeadline && isCurrent()) {
         const job = waiting.shift()!;
         try {
-          const text = await summarize(job.content, Math.max(1, deadline - Date.now()));
+          const text = await summarize(job.content, Math.max(1, Math.min(SUMMARY_TIMEOUT_MS, effectiveDeadline - Date.now())));
           if (text) summaries.set(job.item_id, text);
         } catch {
           /* retain the rule excerpt */

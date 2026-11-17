@@ -20,6 +20,34 @@ const HERMES_FIELDS: Record<string, readonly string[]> = {
   terminal: ["command", "workdir"],
   read_file: ["path", "offset", "limit"],
   search_files: ["pattern", "target", "path", "file_glob"],
+  web_search: ["query"],
+  web_extract: ["url", "urls"],
+  execute_code: ["code", "language"],
+  vision_analyze: ["image_path", "path", "url"],
+  skill_view: ["name"],
+  tool_describe: ["name", "names"],
+  browser_snapshot: ["browserId", "selector", "tabId", "tab_id", "url"],
+  browser_console: ["browserId", "tabId", "tab_id"],
+  browser_logs: ["browserId", "tabId", "tab_id"],
+  browser_vision: ["browserId", "prompt", "question", "selector", "tabId", "tab_id", "url"],
+  browser_list_tabs: ["browserId"],
+  get_agent_activity: ["agentId", "agent_id", "id"],
+  get_agent_status: ["agentId", "agent_id", "id"],
+  list_agents: ["cwd", "serverId", "server_id"],
+  list_workspaces: ["cwd", "serverId", "server_id"],
+  list_hosts: ["cwd", "serverId", "server_id"],
+  list_models: ["provider", "serverId", "server_id"],
+  list_providers: ["cwd", "serverId", "server_id"],
+  list_profiles: ["cwd", "serverId", "server_id"],
+  inspect_provider: ["provider", "serverId", "server_id"],
+  list_terminals: ["cwd", "serverId", "server_id"],
+  capture_terminal: ["id", "terminalId", "terminal_id"],
+  list_schedules: ["cwd", "serverId", "server_id"],
+  inspect_schedule: ["id", "scheduleId", "schedule_id"],
+  schedule_logs: ["id", "scheduleId", "schedule_id"],
+  memory_authority_pack_read: ["id", "key", "pack_id", "path", "query", "scope", "topic"],
+  brain_memory_search: ["id", "key", "namespace", "path", "query", "scope", "topic"],
+  brain_context_resolve: ["context_id", "id", "key", "namespace", "path", "query", "scope", "topic"],
 };
 
 const HERMES_DEFAULTS: Record<string, Record<string, unknown>> = {
@@ -37,6 +65,7 @@ const HERMES_DEFAULTS: Record<string, Record<string, unknown>> = {
     order: "discovery",
     output_mode: "content",
     context: 0,
+    case_insensitive: false,
   },
 };
 
@@ -44,6 +73,9 @@ const HERMES_REQUIRED: Record<string, string> = {
   terminal: "command",
   read_file: "path",
   search_files: "pattern",
+  web_search: "query",
+  execute_code: "code",
+  skill_view: "name",
 };
 
 const HERMES_INTERNAL: Record<string, true> = {
@@ -53,6 +85,58 @@ const HERMES_INTERNAL: Record<string, true> = {
   unhide_context: true,
   manage_context: true,
 };
+
+const TERMINAL_BLOCKED_TRUTHY_OPTIONS = ["background", "pty", "persist_on_release", "notify"] as const;
+const MCP_READ_PATTERN = /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i;
+const MAX_HERMES_RECORD_BYTES = 32 * 1024 * 1024;
+const MAX_HERMES_RECORDS = 5000;
+
+function unicodeCompare(left: string, right: string): number {
+  const leftChars = [...left];
+  const rightChars = [...right];
+  for (let index = 0; index < Math.min(leftChars.length, rightChars.length); index++) {
+    const difference = leftChars[index].codePointAt(0)! - rightChars[index].codePointAt(0)!;
+    if (difference) return difference;
+  }
+  return leftChars.length - rightChars.length;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function isValidJson(value: unknown): value is Json {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value));
+  }
+  if (Array.isArray(value)) return value.every(isValidJson);
+  if (isPlainObject(value)) return Object.values(value).every(isValidJson);
+  return false;
+}
+
+function canonicalizeJson(value: Json): Json {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJson);
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, Json>;
+    const out: Record<string, Json> = {};
+    for (const key of Object.keys(obj).sort(unicodeCompare)) {
+      out[key] = canonicalizeJson(obj[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function isTruthy(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(value);
+}
 
 function pythonSortedJson(value: unknown): string {
   if (Array.isArray(value)) {
@@ -74,16 +158,19 @@ export function hermesFilterInvocation(
 ): { invocation: { tool_name: string; arguments: Record<string, Json> }; omitted?: Record<string, Json> } | null {
   if (typeof toolName !== "string" || !toolName.trim()) return null;
   const name = toolName.trim();
-  if (HERMES_INTERNAL[name] || !HERMES_FIELDS[name]) return null;
+  if (Object.hasOwn(HERMES_INTERNAL, name)) return null;
+  const hasFields = Object.hasOwn(HERMES_FIELDS, name);
+  const isMcp = name.startsWith("mcp_") && MCP_READ_PATTERN.test(name);
+  if (!hasFields && !isMcp) return null;
 
   let args: Record<string, unknown>;
-  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-    args = rawArgs as Record<string, unknown>;
+  if (isPlainObject(rawArgs)) {
+    args = rawArgs;
   } else if (typeof rawArgs === "string") {
     try {
       const parsed = rawArgs.trim() ? JSON.parse(rawArgs) : {};
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-      args = parsed as Record<string, unknown>;
+      if (!isPlainObject(parsed)) return null;
+      args = parsed;
     } catch {
       return null;
     }
@@ -91,43 +178,84 @@ export function hermesFilterInvocation(
     return null;
   }
 
-  const fieldSet = new Set(HERMES_FIELDS[name]);
-  const defaults = HERMES_DEFAULTS[name];
-  for (const key of Object.keys(args)) {
-    if (fieldSet.has(key)) continue;
-    if (name === "terminal" && key === "timeout") {
+  if (!isValidJson(args)) return null;
+  if (isMcp && !hasFields) {
+    return {
+      invocation: {
+        tool_name: name,
+        arguments: canonicalizeJson(args) as Record<string, Json>,
+      },
+    };
+  }
+
+  if (name === "terminal") {
+    for (const flag of TERMINAL_BLOCKED_TRUTHY_OPTIONS) {
+      if (Object.hasOwn(args, flag) && isTruthy(args[flag])) return null;
+    }
+    if (Object.hasOwn(args, "timeout")) {
       const t = args.timeout;
       if (typeof t !== "number" || !Number.isSafeInteger(t) || t < 1) return null;
-      continue;
     }
-    if (Object.hasOwn(defaults, key)) {
-      const def = defaults[key];
-      if (typeof args[key] !== typeof def || args[key] !== def) return null;
-      continue;
-    }
-    return null;
   }
 
-  const req = HERMES_REQUIRED[name];
-  if (typeof args[req] !== "string" || !(args[req] as string).trim()) return null;
+  if (Object.hasOwn(HERMES_REQUIRED, name)) {
+    const req = HERMES_REQUIRED[name];
+    if (typeof args[req] !== "string" || !(args[req] as string).trim()) return null;
+  } else if (name === "web_extract") {
+    const hasUrl = typeof args.url === "string" && args.url.trim().length > 0;
+    const urlsVal = args.urls;
+    const hasUrls =
+      Array.isArray(urlsVal) &&
+      urlsVal.length > 0 &&
+      urlsVal.every((u) => typeof u === "string" && u.trim().length > 0);
+    if (!hasUrl && !hasUrls) return null;
+  } else if (name === "vision_analyze") {
+    const hasSource = ["image_path", "path", "url"].some(
+      (key) => typeof args[key] === "string" && (args[key] as string).trim().length > 0,
+    );
+    if (!hasSource) return null;
+  }
 
+  const fieldSet = new Set(HERMES_FIELDS[name]);
+  const defaults = HERMES_DEFAULTS[name] ?? {};
   const filtered: Record<string, Json> = {};
-  for (const key of [...HERMES_FIELDS[name]].sort()) {
-    if (!Object.hasOwn(args, key)) continue;
+  const omitted: Record<string, Json> = {};
+  for (const key of Object.keys(args).sort(unicodeCompare)) {
     const val = args[key];
-    if (key === "offset" || key === "limit") {
-      if (typeof val !== "number" || !Number.isSafeInteger(val) || val < 1) return null;
-      filtered[key] = val;
+    if (fieldSet.has(key)) {
+      if (name === "read_file" && (key === "offset" || key === "limit")) {
+        if (typeof val !== "number" || !Number.isSafeInteger(val) || val < 1) return null;
+        filtered[key] = val;
+      } else if (name === "web_extract" && key === "urls") {
+        if (
+          !Array.isArray(val) ||
+          val.length === 0 ||
+          !val.every((u) => typeof u === "string" && u.trim().length > 0)
+        ) {
+          return null;
+        }
+        filtered[key] = [...val];
+      } else if (name === "tool_describe" && (key === "name" || key === "names")) {
+        if (typeof val === "string") {
+          filtered[key] = val;
+        } else if (Array.isArray(val) && val.every((item) => typeof item === "string")) {
+          filtered[key] = [...val];
+        } else {
+          return null;
+        }
+      } else {
+        if (typeof val !== "string") return null;
+        filtered[key] = val;
+      }
     } else {
-      if (typeof val !== "string") return null;
-      filtered[key] = val;
+      if (Object.hasOwn(defaults, key)) {
+        const def = defaults[key];
+        if (typeof val === typeof def && val === def) continue;
+      }
+      omitted[key] = canonicalizeJson(val as Json);
     }
   }
 
-  const omitted: Record<string, Json> = {};
-  for (const [key, val] of Object.entries(args)) {
-    if (!Object.hasOwn(filtered, key)) omitted[key] = val as Json;
-  }
   return {
     invocation: { tool_name: name, arguments: filtered },
     ...(Object.keys(omitted).length > 0 ? { omitted } : {}),
@@ -312,9 +440,48 @@ export function loadHermesTimeline(
       const records = new Map<string, HermesExtendedRecord>();
       const rows: Record<string, any>[] = [];
       let totalRecordBytes = 0;
+      let recordsCapped = false;
       let msgPos = 0;
 
-      dbRows.forEach((row, index) => {
+      for (let index = dbRows.length - 1; index >= 0; index--) {
+        const row = dbRows[index];
+        if (row.role !== "tool") continue;
+        const callId = row.tool_call_id ?? "";
+        const found = calls.get(callId);
+        const toolName = row.tool_name || found?.name || "tool";
+        if (
+          !callId ||
+          duplicate.has(callId) ||
+          resultCounts.get(callId) !== 1 ||
+          !found ||
+          found.index >= index ||
+          found.name !== toolName
+        ) {
+          continue;
+        }
+        const filtered = hermesFilterInvocation(toolName, found.rawArgs);
+        if (!filtered) continue;
+        const text = row.content ?? "";
+        const size = bytes(text);
+        if (totalRecordBytes + size <= MAX_HERMES_RECORD_BYTES && records.size < MAX_HERMES_RECORDS) {
+          totalRecordBytes += size;
+          const digest = invocationDigest(filtered.invocation, filtered.omitted);
+          records.set(callId, {
+            call_id: callId,
+            content: text,
+            content_sha256: sha256(text),
+            invocation: filtered.invocation,
+            invocation_digest: digest,
+            result_position: 0,
+            status: "ok",
+            ...(filtered.omitted ? { options_omitted: true } : {}),
+          });
+        } else {
+          recordsCapped = true;
+        }
+      }
+
+      dbRows.forEach((row) => {
         const isUncompacted = Number(row.compacted ?? 0) === 0;
         if (row.role === "user") {
           const displayText = row.content ?? row.api_content ?? "";
@@ -418,35 +585,7 @@ export function loadHermesTimeline(
         const toolName = row.tool_name || found?.name || "tool";
         const text = row.content ?? "";
         const storedItem = callId ? storedByCallId.get(callId) : undefined;
-        let record: HermesExtendedRecord | undefined;
-
-        if (
-          callId &&
-          !duplicate.has(callId) &&
-          resultCounts.get(callId) === 1 &&
-          found &&
-          found.index < index &&
-          found.name === toolName
-        ) {
-          const filtered = hermesFilterInvocation(toolName, found.rawArgs);
-          if (filtered) {
-            totalRecordBytes += bytes(text);
-            if (totalRecordBytes <= 8 * 1024 * 1024 && records.size < 2000) {
-              const digest = invocationDigest(filtered.invocation, filtered.omitted);
-              record = {
-                call_id: callId,
-                content: text,
-                content_sha256: sha256(text),
-                invocation: filtered.invocation,
-                invocation_digest: digest,
-                result_position: 0,
-                status: "ok",
-                ...(filtered.omitted ? { options_omitted: true } : {}),
-              };
-              records.set(callId, record);
-            }
-          }
-        }
+        const record = callId ? records.get(callId) : undefined;
 
         const resolvedItemId = storedItem
           ? storedItem.item_id
@@ -482,6 +621,9 @@ export function loadHermesTimeline(
             }
           : {}),
       };
+      if (recordsCapped) {
+        (history as any).recordsCapped = true;
+      }
       return { rows, records, history };
     } catch {
       // Ignore unreadable or busy candidate DBs and try next candidate.

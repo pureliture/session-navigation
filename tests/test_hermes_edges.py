@@ -267,3 +267,281 @@ def test_default_middleware_counter_degrades_to_no_others() -> None:
     # Outside a Hermes process the lazy host import fails and must fall
     # back to 0 ("no evidence of others") instead of raising.
     assert plugin._default_count_llm_middlewares() == 0
+
+
+def test_allowlist_single_definition_and_safety_invariants() -> None:
+    allowlist = _adapter.allowlist
+    AdapterRejected = allowlist.AdapterRejected
+    filter_invocation = allowlist.filter_invocation
+
+    assert allowlist.ALLOWED_TOOLS == tuple(allowlist.FIELDS)
+
+    for tool in ("hide_context", "summarize_context", "list_context_items", "unhide_context", "manage_context"):
+        with pytest.raises(AdapterRejected) as exc:
+            filter_invocation(tool, {"tool_call_id": "c1"})
+        assert exc.value.code == "internal_target"
+
+    for tool in ("write_file", "patch", "edit_file", "evil_tool", "mcp__brain__delete", "mcp_write_file", "mcp__github__create_issue"):
+        with pytest.raises(AdapterRejected) as exc:
+            filter_invocation(tool, {"path": "a.txt"})
+        assert exc.value.code == "unsupported_tool"
+
+    for flag in ("background", "pty", "persist_on_release", "notify"):
+        for val in (True, 1, "yes"):
+            with pytest.raises(AdapterRejected) as exc:
+                filter_invocation("terminal", {"command": "ls", flag: val})
+            assert exc.value.code == "unsupported_arguments"
+
+    for bad_timeout in (0, -1, "30", True, 1.5):
+        with pytest.raises(AdapterRejected) as exc:
+            filter_invocation("terminal", {"command": "ls", "timeout": bad_timeout})
+        assert exc.value.code == "unsupported_arguments"
+
+    for bad_tool, bad_args in (
+        ("", {}),
+        ("   ", {}),
+        ("read_file", "not-json{"),
+        ("read_file", '{"path":"a.txt","x":NaN}'),
+        ("read_file", ["not", "a", "dict"]),
+        ("read_file", {"path": "   "}),
+        ("read_file", {"path": "a.txt", "offset": 0}),
+        ("read_file", {"path": "a.txt", "limit": True}),
+        ("search_files", {"pattern": ""}),
+        ("web_search", {"query": "  "}),
+        ("web_extract", {}),
+        ("web_extract", {"urls": []}),
+        ("web_extract", {"url": "https://a.com", "urls": []}),
+        ("execute_code", {"code": ""}),
+        ("vision_analyze", {"prompt": "describe"}),
+        ("skill_view", {"name": ""}),
+        ("tool_describe", {"name": 123}),
+        ("tool_describe", {"names": ["ok", 99]}),
+        ("browser_snapshot", {"browserId": 42}),
+    ):
+        with pytest.raises(AdapterRejected) as exc:
+            filter_invocation(bad_tool, bad_args)
+        assert exc.value.code == "invalid_invocation", (bad_tool, bad_args)
+
+
+def test_allowlist_permissive_options_omitted_and_extended_tools() -> None:
+    allowlist = _adapter.allowlist
+    filter_invocation = allowlist.filter_invocation
+
+    # search_files: defaults ignored, non-default options placed in omitted
+    inv_default, om_default = filter_invocation(
+        "search_files",
+        {"pattern": "Router", "target": "content", "path": "src", "file_glob": "*.py",
+         "limit": 50, "offset": 0, "order": "discovery", "output_mode": "content",
+         "context": 0, "case_insensitive": False},
+    )
+    assert inv_default == {
+        "tool_name": "search_files",
+        "arguments": {"file_glob": "*.py", "path": "src", "pattern": "Router", "target": "content"},
+    }
+    assert om_default == {}
+
+    inv_custom, om_custom = filter_invocation(
+        "search_files",
+        {"pattern": "Router", "limit": 100, "offset": 10, "context": 3,
+         "order": "mtime", "output_mode": "files_with_matches", "case_insensitive": True},
+    )
+    assert inv_custom == {"tool_name": "search_files", "arguments": {"pattern": "Router"}}
+    assert om_custom == {
+        "case_insensitive": True, "context": 3, "limit": 100,
+        "offset": 10, "order": "mtime", "output_mode": "files_with_matches",
+    }
+
+    # read_file & terminal extra options
+    inv_rf, om_rf = filter_invocation("read_file", {"path": "a.py", "offset": 1, "limit": 50, "encoding": "utf-8", "line_numbers": True})
+    assert inv_rf == {"tool_name": "read_file", "arguments": {"limit": 50, "offset": 1, "path": "a.py"}}
+    assert om_rf == {"encoding": "utf-8", "line_numbers": True}
+
+    inv_term, om_term = filter_invocation(
+        "terminal",
+        {"command": "pytest", "workdir": "/app", "background": False, "pty": False,
+         "persist_on_release": False, "notify": False, "heartbeat": 0, "timeout": 30, "label": "tests"},
+    )
+    assert inv_term == {"tool_name": "terminal", "arguments": {"command": "pytest", "workdir": "/app"}}
+    assert om_term == {"label": "tests", "timeout": 30}
+
+    # Extended tools
+    assert filter_invocation("web_search", {"query": "hermes", "num_results": 5}) == (
+        {"tool_name": "web_search", "arguments": {"query": "hermes"}}, {"num_results": 5},
+    )
+    assert filter_invocation("web_extract", {"urls": ["https://a.com", "https://b.com"], "format": "markdown"}) == (
+        {"tool_name": "web_extract", "arguments": {"urls": ["https://a.com", "https://b.com"]}}, {"format": "markdown"},
+    )
+    assert filter_invocation("execute_code", {"code": "print(1)", "language": "python", "timeout": 10}) == (
+        {"tool_name": "execute_code", "arguments": {"code": "print(1)", "language": "python"}}, {"timeout": 10},
+    )
+    assert filter_invocation("vision_analyze", {"image_path": "shot.png", "prompt": "describe"}) == (
+        {"tool_name": "vision_analyze", "arguments": {"image_path": "shot.png"}}, {"prompt": "describe"},
+    )
+    assert filter_invocation("skill_view", {"name": "debug"}) == (
+        {"tool_name": "skill_view", "arguments": {"name": "debug"}}, {},
+    )
+    assert filter_invocation("tool_describe", {}) == ({"tool_name": "tool_describe", "arguments": {}}, {})
+    assert filter_invocation("tool_describe", {"names": ["read_file", "search_files"], "verbose": True}) == (
+        {"tool_name": "tool_describe", "arguments": {"names": ["read_file", "search_files"]}}, {"verbose": True},
+    )
+
+    inspection_tools = (
+        "browser_snapshot", "browser_console", "browser_logs", "browser_vision", "browser_list_tabs",
+        "get_agent_activity", "get_agent_status", "list_agents", "list_workspaces", "list_hosts",
+        "list_models", "list_providers", "list_profiles", "inspect_provider",
+        "list_terminals", "capture_terminal", "list_schedules", "inspect_schedule", "schedule_logs",
+        "memory_authority_pack_read", "brain_memory_search", "brain_context_resolve",
+    )
+    for tool in inspection_tools:
+        assert filter_invocation(tool, {}) == ({"tool_name": tool, "arguments": {}}, {})
+
+    assert filter_invocation("browser_snapshot", {"browserId": "b1", "selector": "#app", "fullPage": True}) == (
+        {"tool_name": "browser_snapshot", "arguments": {"browserId": "b1", "selector": "#app"}}, {"fullPage": True},
+    )
+    assert filter_invocation("mcp__brain__query", {"z": [1, {"b": 2, "a": 1}], "a": "x", "flag": True}) == (
+        {"tool_name": "mcp__brain__query", "arguments": {"a": "x", "flag": True, "z": [1, {"a": 1, "b": 2}]}}, {},
+    )
+    assert filter_invocation("mcp_read_status", {"id": "s1"}) == (
+        {"tool_name": "mcp_read_status", "arguments": {"id": "s1"}}, {},
+    )
+
+
+def test_search_files_non_default_options_set_invocation_options_omitted(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    ctx = FakeCtx(config={"enabled": True})
+    ctx.llm = SimpleNamespace(complete=lambda **_kw: SimpleNamespace(
+        text=json.dumps({"summary": "Output row details for Router match."})
+    ))
+    state = plugin.register(ctx)
+    body = _long_body()
+    req = {
+        "input": [
+            {"type": "function_call", "call_id": "call_sf", "name": "search_files",
+             "arguments": json.dumps({"pattern": "Router", "limit": 100, "context": 3})},
+            {"type": "function_call_output", "call_id": "call_sf", "output": body},
+        ]
+    }
+    plugin.make_middleware(state)(request=req, session_id="sess-sf", api_mode="codex_responses")
+    res = json.loads(ctx.tools["summarize_context"]["handler"]({"tool_call_id": "call_sf"}, session_id="sess-sf"))
+    assert res["ok"] is True
+    scope = plugin.scope_for(state, "sess-sf")
+    assert scope is not None
+    item = state.engine.store.get(scope, res["item_id"])
+    assert item is not None
+    assert item.invocation_options_omitted is True
+
+
+def test_python_ts_allowlist_parity_and_hermes_history_budget(tmp_path) -> None:
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is required for TypeScript hermesHistory verification")
+
+    repo = Path(__file__).resolve().parents[1]
+    allowlist = _adapter.allowlist
+
+    cases = [
+        ("search_files", {"pattern": "Router", "limit": 100, "context": 3, "offset": 0}),
+        ("search_files", {"pattern": "Router", "limit": 50, "case_insensitive": False}),
+        ("read_file", {"path": "a.py", "offset": 1, "limit": 20, "encoding": "utf-8"}),
+        ("terminal", {"command": "pytest", "workdir": "/app", "timeout": 30, "background": False}),
+        ("terminal", {"command": "sleep 5", "background": True}),
+        ("terminal", {"command": "ls", "timeout": 0}),
+        ("web_search", {"query": "session nav", "top_k": 5}),
+        ("web_extract", {"urls": ["https://example.com"], "depth": "basic"}),
+        ("execute_code", {"code": "1+1", "language": "python", "sandbox": True}),
+        ("vision_analyze", {"url": "https://img/a.png", "prompt": "read"}),
+        ("skill_view", {"name": "debug"}),
+        ("tool_describe", {"names": ["read_file"], "full": True}),
+        ("browser_snapshot", {"browserId": "b1", "full": True}),
+        ("memory_authority_pack_read", {"pack_id": "p1", "verbose": True}),
+        ("mcp__brain__query", {"z": [1, {"b": 2, "a": 1}], "a": "ok"}),
+        ("mcp__brain__delete", {"id": "1"}),
+        ("write_file", {"path": "x.txt", "content": "hi"}),
+        ("hide_context", {"tool_call_id": "c1"}),
+    ]
+    py_expected = []
+    for name, args in cases:
+        try:
+            inv, om = allowlist.filter_invocation(name, args)
+            entry = {"invocation": inv}
+            if om:
+                entry["omitted"] = om
+            py_expected.append(entry)
+        except allowlist.AdapterRejected:
+            py_expected.append(None)
+
+    script = f"""
+import {{ DatabaseSync }} from "node:sqlite";
+import {{ mkdirSync }} from "node:fs";
+import {{ join }} from "node:path";
+import {{ hermesFilterInvocation, loadHermesTimeline }} from {json.dumps(str(repo / "paseo-plugin/server/hermesHistory.ts"))};
+
+const cases = {json.dumps(cases)};
+const expected = {json.dumps(py_expected)};
+const actual = cases.map(([name, args]) => hermesFilterInvocation(name, args));
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {{
+  console.error("PARITY_MISMATCH", JSON.stringify({{ actual, expected }}));
+  process.exit(1);
+}}
+
+// Verify 5000 / 32 MiB newest-first cap & recordsCapped=true
+const home = {json.dumps(str(tmp_path / "home"))};
+mkdirSync(join(home, ".hermes"), {{ recursive: true }});
+const db = new DatabaseSync(join(home, ".hermes/state.db"));
+db.exec(`
+  CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+  CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,
+    tool_name TEXT,
+    codex_message_items TEXT,
+    api_content TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    compacted INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const insSess = db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)");
+const insMsg = db.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+
+// Case A: 5005 tools -> newest 5000 stay manageable, oldest 5 capped out
+insSess.run("s-count", "{{}}");
+for (let i = 0; i < 5005; i++) {{
+  const cid = "c_" + i;
+  insMsg.run("s-count", "assistant", "", null, JSON.stringify([{{ id: cid, type: "function", function: {{ name: "read_file", arguments: '{{"path":"f.txt"}}' }} }}]), null);
+  insMsg.run("s-count", "tool", "out " + i, cid, null, "read_file");
+}}
+const tlCount = loadHermesTimeline(home, "hermes:default:s-count:unknown");
+if (!tlCount || tlCount.records.size !== 5000 || tlCount.history.recordsCapped !== true) {{
+  console.error("COUNT_CAP_FAIL", tlCount?.records.size, tlCount?.history.recordsCapped);
+  process.exit(2);
+}}
+if (tlCount.rows[0].manageable !== false || tlCount.rows.at(-1).manageable !== true) {{
+  console.error("NEWEST_FIRST_FAIL", tlCount.rows[0].manageable, tlCount.rows.at(-1).manageable);
+  process.exit(3);
+}}
+
+// Case B: two 17 MiB tools -> only newest fits in 32 MiB budget
+insSess.run("s-bytes", "{{}}");
+const big = "x".repeat(17 * 1024 * 1024);
+for (const cid of ["old_big", "new_big"]) {{
+  insMsg.run("s-bytes", "assistant", "", null, JSON.stringify([{{ id: cid, type: "function", function: {{ name: "read_file", arguments: '{{"path":"big.txt"}}' }} }}]), null);
+  insMsg.run("s-bytes", "tool", big, cid, null, "read_file");
+}}
+const tlBytes = loadHermesTimeline(home, "hermes:default:s-bytes:unknown");
+if (!tlBytes || tlBytes.records.has("old_big") || !tlBytes.records.has("new_big") || tlBytes.history.recordsCapped !== true) {{
+  console.error("BYTES_CAP_FAIL", tlBytes?.records.has("old_big"), tlBytes?.records.has("new_big"), tlBytes?.history.recordsCapped);
+  process.exit(4);
+}}
+db.close();
+"""
+    proc = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -109,6 +109,17 @@ Publication and registry/catalog approval are separate steps; see
   `msg:*` prompt/response hide/unhide parity, manageable `terminal`/`read_file`/`search_files`
   records with `options_omitted`, and `_usage_anchor` context token totals (keeping ACP
   timeline merge only as a fallback when no local `state.db` is present).
+- Close remaining OMP/Hermes/Paseo parity gaps (#1–#6): expand Hermes and OMP
+  manageable tool allowlists (including `web_search`, `web_extract`, `execute_code`,
+  `eval`, `vision_analyze`, `skill_view`, `tool_describe`, browser/Paseo inspection
+  tools, read-only `mcp_*`/`brain_*` tools, and flexible `omitted` options on
+  `search_files`), compose Hermes `llm_request` compaction cleanly alongside other
+  middlewares instead of bypassing hidden items, support multi-block (`text + image`
+  / multiple `text`) `toolResult` compaction in OMP, give queued `Summarize` jobs
+  per-item deadlines with clear `"Summary queued — runs on next prompt"` UI status,
+  raise discovery caps to `32 MiB / 5,000` newest-first with `records_capped`
+  notices, and match `message_text` / `<paseo-system>` / extended tool hints in
+  `chatNavigation.ts`.
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

@@ -12,6 +12,7 @@ import {
 } from "../../packages/core/src/index.ts";
 import type { Item } from "../../packages/core/src/index.ts";
 import { loadHermesTimeline } from "./hermesHistory.ts";
+import { toolResultText } from "../../packages/omp/src/context.ts";
 
 export type Message = Record<string, any>;
 export type History = {
@@ -19,6 +20,7 @@ export type History = {
   boundaries: number[];
   injected: [number, number][];
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
+  recordsCapped?: boolean;
 };
 export interface Timeline {
   rows: Message[];
@@ -181,8 +183,9 @@ export function loadTimeline(
   const records = new Map<string, RecordInput>();
   const rows: Message[] = [];
   let totalBytes = 0;
-  history.messages.forEach((message, index) => {
-    const text = messageText(message);
+  for (let index = history.messages.length - 1; index >= 0; index--) {
+    const message = history.messages[index];
+    const text = message.role === "toolResult" ? toolResultText(message) ?? messageText(message) : messageText(message);
     if (["user", "assistant"].includes(message.role)) {
       if (text.trim())
         rows.push({
@@ -195,9 +198,9 @@ export function loadTimeline(
           bytes_size: bytes(text),
           manageable: Number.isInteger(message.timestamp),
         });
-      return;
+      continue;
     }
-    if (message.role !== "toolResult") return;
+    if (message.role !== "toolResult") continue;
     const callId =
       typeof message.toolCallId === "string" ? message.toolCallId : "";
     const found = calls.get(callId);
@@ -215,16 +218,14 @@ export function loadTimeline(
       arguments_ &&
       !Array.isArray(arguments_) &&
       typeof arguments_ === "object" &&
-      Array.isArray(message.content) &&
-      message.content.length === 1 &&
-      message.content[0]?.type === "text" &&
-      typeof message.content[0].text === "string"
+      toolResultText(message) !== null
     ) {
       const args = ompInvocationArgs(tool, arguments_ as Record<string, unknown>);
       if (args) {
         const invocation = { tool_name: tool, arguments: args };
-        totalBytes += bytes(text);
-        if (totalBytes <= 4 * 1024 * 1024 && records.size < 1000) {
+        const size = bytes(text);
+        if (totalBytes + size <= 32 * 1024 * 1024 && records.size < 5000) {
+          totalBytes += size;
           record = {
             call_id: callId,
             content: text,
@@ -235,6 +236,8 @@ export function loadTimeline(
             status: "ok",
           };
           records.set(callId, record);
+        } else {
+          history.recordsCapped = true;
         }
       }
     }
@@ -258,7 +261,8 @@ export function loadTimeline(
       ...(arguments_ !== undefined ? { tool_input: preview(arguments_) } : {}),
       tool_output: preview(text),
     });
-  });
+  }
+  rows.reverse();
   return { rows, records, history };
 }
 
@@ -271,6 +275,18 @@ function ompInvocationArgs(
       ? (raw[key] as string)
       : undefined;
   switch (tool) {
+    case "eval":
+      return typeof raw.code === "string" && raw.code
+        ? { code: raw.code, ...(typeof raw.language === "string" ? { language: raw.language } : {}) }
+        : null;
+    case "browser_list_tabs":
+    case "list_hosts":
+    case "list_terminals":
+    case "list_schedules":
+      return {};
+    case "inspect_schedule":
+    case "schedule_logs":
+      return typeof raw.id === "string" && raw.id ? { id: raw.id } : null;
     case "read": {
       const path = str("path");
       return path && !path.trim().startsWith("xd://") ? { path } : null;
@@ -316,7 +332,7 @@ function ompInvocationArgs(
     case "list_workspaces":
     case "list_providers":
     case "list_profiles": {
-      const out: Record<string, Json> = {};
+      const out: Record<string, string> = {};
       const cwd = str("cwd");
       const serverId = str("serverId");
       if (cwd) out.cwd = cwd;
@@ -324,6 +340,16 @@ function ompInvocationArgs(
       return out;
     }
     default:
+      if (
+        ["memory_authority_pack_read", "brain_memory_search", "brain_context_resolve"].includes(tool) ||
+        (tool.startsWith("mcp_") && /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i.test(tool))
+      ) {
+        try {
+          return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b)))));
+        } catch {
+          return null;
+        }
+      }
       return null;
   }
 }

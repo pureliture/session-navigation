@@ -229,26 +229,66 @@ def test_count_middlewares_counts_others_not_self() -> None:
     mw = ctx.middlewares["llm_request"][0]
     body = _long_body()
     out = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
-    # Recorded for the tools, but the outgoing request is NOT rewritten.
-    assert out["reason"] == "other_middleware_present"
+    assert out["reason"] == "applied 0, skipped 0"
     assert out["request"]["input"][1]["output"] == body
+    scope = factories.scope_for(registered, "sess-other")
+    assert scope is not None
+    assert registered.engine.store.adapter_can(scope, "hide") is True
     compacted = json.loads(ctx.tools["hide_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-other"))
     assert compacted["ok"] is True, "recording must still feed the tool handlers"
+    projected = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
+    assert projected["reason"] == "applied 1, skipped 0"
+    assert projected["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in projected["request"]["input"][1]["output"]
 
 
-def test_coexistence_records_but_does_not_apply() -> None:
+def test_coexistence_applies_tool_and_message_hiding() -> None:
+    import hashlib
+
     ctx = _enabled_ctx()
     state = plugin.register(ctx)
     state.count_middlewares = lambda: 1  # one OTHER middleware exists
     mw = ctx.middlewares["llm_request"][0]
     body = _long_body()
-    out = mw(**_mw_kwargs(_codex_request(body), "sess-coex", "codex_responses"))
-    assert out["request"]["input"][1]["output"] == body
-    assert out["reason"] == "other_middleware_present"
+    req = {
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "inspect output"}]},
+            *_codex_request(body)["input"],
+        ]
+    }
+    first = mw(**_mw_kwargs(req, "sess-coex", "codex_responses"))
+    assert first["reason"] == "applied 0, skipped 0"
+    assert first["request"]["input"][2]["output"] == body
+
+    scope = factories.scope_for(state, "sess-coex")
+    assert scope is not None
+    assert state.engine.store.adapter_can(scope, "hide") is True
+    assert state.engine.store.adapter_can(scope, "unhide") is True
+
     compact = ctx.tools["hide_context"]["handler"]
     compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-coex"))
     assert compacted["ok"] is True
+
+    msg_key, role, _idx, text = _adapter.payload.message_keys("codex_responses", req)[0]
+    assert msg_key.startswith("msg:user:p0:")
+    toggled = state.engine.store.set_message_visibility(
+        scope,
+        msg_key,
+        kind=role,
+        content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        char_count=len(text),
+        visibility="hidden",
+    )
+    assert toggled["ok"] is True
+
+    second = mw(**_mw_kwargs(req, "sess-coex", "codex_responses"))
+    assert second["reason"] == "applied 1, skipped 0"
+    assert all(item.get("role") != "user" for item in second["request"]["input"])
+    assert len(second["request"]["input"]) == 2
+    assert second["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in second["request"]["input"][1]["output"]
+    assert state.engine.store.adapter_can(scope, "hide") is True
 
 
 def test_middleware_fail_open_on_bad_shapes():
