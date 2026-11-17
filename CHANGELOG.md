@@ -85,6 +85,14 @@ Publication and registry/catalog approval are separate steps; see
   highlight timer races, auto-scroll the Outline to the latest entries when
   switching sessions, and accept empty `keep_lines: []` on strict-schema
   `manage_context` calls.
+- Replace the hardcoded Paseo version whitelist (`0.15.3`/`0.15.4`) with a
+  `>=0.15.3` semver floor backed by runtime structural guards, render
+  `Loading outline…` without false `No session in view` or `Adapter not detected`
+  banners while initial session/scope resolution settles, unify outline message
+  labels to `User` / `Agent`, display `post / pre` sizes (`219 B / 3.2 KiB`) on
+  hidden/summarized rows and groups, format `manage_context` outputs with
+  per-item `[hide]`/`[summarize]` mode, tool name, and `post / pre` sizes, and
+  make `manage_context` call history visible and searchable in Paseo's Outline.
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

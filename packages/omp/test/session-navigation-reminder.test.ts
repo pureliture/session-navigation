@@ -149,18 +149,22 @@ test("OMP context pipeline re-arms after full cleanup (total=0), suppresses unhi
 
     // Hide r0 with keep_lines, r1..r2 with normalized/ignored diagnostics, and r3..r10 to empty ALL candidates (total=0)!
     await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, ctx);
-    let result = (
-      await tools.manage_context.execute(
-        "hide",
-        { tool_call_ids: ["r0"], action: "hide", keep_lines: ["selected middle sentence"] },
-        undefined,
-        undefined,
-        ctx,
-      )
-    ).details;
+    const firstExec = await tools.manage_context.execute(
+      "hide",
+      { tool_call_ids: ["r0"], action: "hide", keep_lines: ["selected middle sentence"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    let result = firstExec.details;
     expect(result.applied).toBe(1);
+    expect(result.items[0].mode).toBe("hide");
+    expect(result.items[0].tool_name).toBe("read");
+    expect(result.items[0].compacted_bytes).toBeLessThan(result.items[0].original_bytes);
+    expect(firstExec.content[0].text).toContain("1 managed (1 hide)");
+    expect(firstExec.content[0].text).toContain("- [hide] read ");
+    expect(firstExec.content[0].text).not.toContain('"tool_call_id"');
     const r0ItemId = result.items[0].item_id;
-
     result = (
       await tools.manage_context.execute(
         "hide",

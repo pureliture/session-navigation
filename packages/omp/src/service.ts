@@ -467,6 +467,24 @@ export class OmpService {
     };
   }
 
+  private recordHint(record: RecordInput, maxLen = 64): string {
+    const args = record.invocation.arguments as { [key: string]: Json };
+    const raw = String(
+      args.command ||
+        args.path ||
+        args.pattern ||
+        args.query ||
+        args.agentId ||
+        args.provider ||
+        args.terminalId ||
+        args.browserId ||
+        "",
+    )
+      .replace(/\r?\n/g, " ")
+      .trim();
+    return raw.length <= maxLen ? raw : `${raw.slice(0, maxLen - 1)}…`;
+  }
+
   private async apply(
     scope: string,
     record: RecordInput,
@@ -780,7 +798,12 @@ export class OmpService {
       const record = snapshot.records.get(callId);
       const error = record ? this.cleanupError(scope, record, action === "summarize") : "not_found";
       if (!record || error) {
-        items.push({ tool_call_id: callId, ok: false, error });
+        items.push({
+          tool_call_id: callId,
+          ...(record ? { tool_name: record.invocation.tool_name } : {}),
+          ok: false,
+          error,
+        });
         continue;
       }
       const text = object(summaries) ? summaries[callId] : undefined;
@@ -814,10 +837,28 @@ export class OmpService {
           expectedVersion,
         );
       }
+      const hint = this.recordHint(record);
+      const savedItem =
+        result.ok && result.plan
+          ? (result.item ?? this.store.get(scope, result.plan.item_id))
+          : undefined;
+      const mode =
+        savedItem && ["llm", "llm_summary"].includes(savedItem.compaction_source)
+          ? "summarize"
+          : "hide";
       items.push({
         tool_call_id: callId,
+        tool_name: record.invocation.tool_name,
+        ...(hint ? { hint } : {}),
         ok: result.ok,
-        ...(result.ok ? { item_id: result.plan!.item_id } : { error: result.error ?? "not_found" }),
+        ...(result.ok
+          ? {
+              item_id: result.plan!.item_id,
+              mode,
+              compacted_bytes: bytes(result.plan!.replacement_text),
+              original_bytes: bytes(record.content),
+            }
+          : { error: result.error ?? "not_found" }),
         ...(result.keep_lines_ignored?.length
           ? { keep_lines_ignored: result.keep_lines_ignored }
           : {}),
@@ -826,7 +867,23 @@ export class OmpService {
           : {}),
       });
     }
-    const applied = items.filter((item) => item.ok).length;
-    return { ok: applied === items.length, applied, failed: items.length - applied, items };
+    const appliedItems = items.filter((item) => item.ok);
+    const applied = appliedItems.length;
+    const compactedBytes = appliedItems.reduce(
+      (sum, item) => sum + (typeof item.compacted_bytes === "number" ? item.compacted_bytes : 0),
+      0,
+    );
+    const originalBytes = appliedItems.reduce(
+      (sum, item) => sum + (typeof item.original_bytes === "number" ? item.original_bytes : 0),
+      0,
+    );
+    return {
+      ok: applied === items.length,
+      applied,
+      failed: items.length - applied,
+      compacted_bytes: compactedBytes,
+      original_bytes: originalBytes,
+      items,
+    };
   }
 }

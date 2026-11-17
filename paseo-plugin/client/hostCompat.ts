@@ -9,14 +9,35 @@ export type HostFocusSnapshot = {
   hasSignal: boolean;
 };
 
-const SUPPORTED_HOST_VERSIONS = new Set(["0.15.3", "0.15.4"]);
+const MIN_PASEO_VERSION: readonly [number, number, number] = [0, 15, 3];
+
+function parseSemver(version?: string | null): [number, number, number] | null {
+  if (typeof version !== "string") return null;
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/.exec(version.trim());
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor) || !Number.isSafeInteger(patch)) return null;
+  return [major, minor, patch];
+}
+
+function meetsMinimumHostVersion(version: [number, number, number]): boolean {
+  const [minMajor, minMinor, minPatch] = MIN_PASEO_VERSION;
+  if (version[0] !== minMajor) return version[0] > minMajor;
+  if (version[1] !== minMinor) return version[1] > minMinor;
+  return version[2] >= minPatch;
+}
 
 export function supportedHostVersion(version?: string | null): boolean {
-  return version == null || SUPPORTED_HOST_VERSIONS.has(version);
+  if (version == null) return true;
+  const parsed = parseSemver(version);
+  return parsed !== null && meetsMinimumHostVersion(parsed);
 }
 
 export function strictSupportedHostVersion(version?: string | null): boolean {
-  return typeof version === "string" && SUPPORTED_HOST_VERSIONS.has(version);
+  const parsed = parseSemver(version);
+  return parsed !== null && meetsMinimumHostVersion(parsed);
 }
 
 function lengthPrefixed(value: string): [string, string] | null {
@@ -28,7 +49,7 @@ function lengthPrefixed(value: string): [string, string] | null {
   return [rest.slice(0, length), rest.slice(length)];
 }
 
-// Private Paseo 0.15.3 DOM contract. Unknown versions require the same structural guards.
+// Paseo >=0.15.3 DOM contract; newer releases remain enabled as long as runtime structural guards match.
 export function parseSessionTab(testId: string): SessionTab | null {
   const agentPrefix = "workspace-tab-agent_";
   if (testId.startsWith(agentPrefix)) {

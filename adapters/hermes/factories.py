@@ -615,11 +615,36 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                 sequence_summaries, sequence_failure = state.summarizer.summarize_sequence(
                     seq_steps, action=action, scope_key=scope.scope_key()
                 )
+        def _fmt_bytes(n: int) -> str:
+            if n <= 0:
+                return "0 B"
+            return f"{n} B" if n < 1024 else f"{n / 1024:.1f} KiB"
+
+        def _item_metrics(target_entry: Any, saved_id: str) -> dict[str, Any]:
+            stored_item = state.engine.store.get(scope, saved_id)
+            pre_b = len(target_entry.content.encode("utf-8"))
+            post_b = len(stored_item.compacted.encode("utf-8")) if stored_item is not None else 0
+            mode = (
+                "summarize"
+                if stored_item is not None and stored_item.compaction_source in ("llm", "llm_summary")
+                else "hide"
+            )
+            return {
+                "tool_name": target_entry.tool_name,
+                "mode": mode,
+                "compacted_bytes": post_b,
+                "original_bytes": pre_b,
+                "size": f"{_fmt_bytes(post_b)} / {_fmt_bytes(pre_b)}",
+            }
+
         for call_id in wanted_ids:
             matches = state.store.lookup(scope.scope_key(), call_id)
             error = _cleanup_error(state, scope, matches[0]) if matches else "not_found"
             if error is not None:
-                results.append({"tool_call_id": call_id, "ok": False, "error": error})
+                failed_row: dict[str, Any] = {"tool_call_id": call_id, "ok": False, "error": error}
+                if matches and matches[0].tool_name:
+                    failed_row["tool_name"] = matches[0].tool_name
+                results.append(failed_row)
                 continue
             entry = matches[0]
             use_summarizer = action == "summarize" or (action == "auto" and state.summarizer is not None)
@@ -631,13 +656,28 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                         state, scope, entry, seq_text
                     )
                     if ok_seq and item_id is not None:
-                        results.append({"tool_call_id": entry.call_id, "ok": True, "item_id": item_id})
+                        results.append({
+                            "tool_call_id": entry.call_id,
+                            "ok": True,
+                            "item_id": item_id,
+                            **_item_metrics(entry, item_id),
+                        })
                         continue
                     if action == "summarize":
-                        results.append({"tool_call_id": entry.call_id, "ok": False, "error": err_seq or "verification_failed"})
+                        results.append({
+                            "tool_call_id": entry.call_id,
+                            "tool_name": entry.tool_name,
+                            "ok": False,
+                            "error": err_seq or "verification_failed",
+                        })
                         continue
                 elif action == "summarize":
-                    results.append({"tool_call_id": entry.call_id, "ok": False, "error": sequence_failure or "summarizer_unavailable"})
+                    results.append({
+                        "tool_call_id": entry.call_id,
+                        "tool_name": entry.tool_name,
+                        "ok": False,
+                        "error": sequence_failure or "summarizer_unavailable",
+                    })
                     continue
             elif use_summarizer:
                 if state.summarizer is not None and hasattr(state.summarizer, "current_scope_key"):
@@ -648,26 +688,47 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
                     item_id = outcome.plan.item_id
                     state.presentations.record_compacted(
                         scope.scope_key(), item_id, len(entry.content.encode("utf-8")))
-                    results.append({"tool_call_id": entry.call_id, "ok": True, "item_id": item_id})
+                    results.append({
+                        "tool_call_id": entry.call_id,
+                        "ok": True,
+                        "item_id": item_id,
+                        **_item_metrics(entry, item_id),
+                    })
                     continue
                 if action == "summarize":
-                    results.append({"tool_call_id": entry.call_id, "ok": False, "error": outcome.error or "not_found"})
+                    results.append({
+                        "tool_call_id": entry.call_id,
+                        "tool_name": entry.tool_name,
+                        "ok": False,
+                        "error": outcome.error or "not_found",
+                    })
                     continue
             ok, error, item_id, diagnostics = _apply_hide_for_manage(state, scope, entry, keep_lines)
             row: dict[str, Any] = {"tool_call_id": entry.call_id, "ok": ok, **diagnostics}
-            if ok:
+            if entry.tool_name:
+                row["tool_name"] = entry.tool_name
+            if ok and item_id is not None:
                 row["item_id"] = item_id
+                row.update(_item_metrics(entry, item_id))
             else:
                 row["error"] = error or "not_found"
             results.append(row)
-        applied = sum(1 for r in results if r["ok"])
+        applied_rows = [r for r in results if r["ok"]]
+        applied = len(applied_rows)
         failed = len(results) - applied
-        return _dump({
+        total_post = sum(int(r.get("compacted_bytes", 0)) for r in applied_rows)
+        total_pre = sum(int(r.get("original_bytes", 0)) for r in applied_rows)
+        payload: dict[str, Any] = {
             "ok": failed == 0,
             "applied": applied,
             "failed": failed,
+            "compacted_bytes": total_post,
+            "original_bytes": total_pre,
             "items": results,
-        })
+        }
+        if applied > 0:
+            payload["size"] = f"{_fmt_bytes(total_post)} / {_fmt_bytes(total_pre)}"
+        return _dump(payload)
 
     return _track_mutation(state, manage_context)
 

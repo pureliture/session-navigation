@@ -27,8 +27,9 @@ test("missing replacement is not invented from summary or original; empty replac
   expect(previewContent({ ...tool, status: "hidden", replacement_text: "" }).sections[0].text).toBe("");
 });
 
-test.each(["user", "assistant"] as const)("%s messages show full text and explicit removal when hidden", (kind) => {
+test.each(["user", "assistant"] as const)("%s messages show full text, User/Agent subtitle, and explicit removal when hidden", (kind) => {
   const row: Row = { ...tool, kind, message_text: "full\nmessage", summary_line: "snippet" };
+  expect(previewContent(row).subtitle).toBe(kind === "assistant" ? "Agent" : "User");
   expect(previewContent(row).sections).toEqual([{ label: "Message", text: "full\nmessage" }]);
   expect(previewContent({ ...row, status: "hidden" }).sections).toEqual([
     { label: "Sent to model", text: "Removed from context" }, { label: "Original message", text: "full\nmessage" },

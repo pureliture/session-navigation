@@ -176,7 +176,8 @@ def _messages_text(state: Any, session_id: str) -> str:
     lines = ["Prompts/responses (" + str(len(rows)) + ") [session=" + (session_id or "—") + "]:"]
     for num, unit in enumerate(rows, 1):
         status = "hidden" if unit.get("visibility") == "hidden" else "visible"
-        lines.append(f"{num:>3} [{status:<7}] {unit.get('kind', ''):<9} {unit.get('char_count', 0)} chars "
+        role_label = "agent" if unit.get("kind") == "assistant" else str(unit.get("kind", ""))
+        lines.append(f"{num:>3} [{status:<7}] {role_label:<9} {unit.get('char_count', 0)} chars "
                      f"v{unit.get('version', 1)} {unit['unit_id']}")
     if not rows:
         lines.append("(none)")

@@ -844,3 +844,48 @@ test("PASEO_HOME redirects only the real home, never an isolated fixture home", 
     else process.env.PASEO_HOME = previous;
   }
 });
+
+test("manage_context tool calls appear in Outline, format legacy JSON output cleanly, and match tool_name search queries", async () => {
+  const { service } = fixture([
+    {
+      role: "assistant",
+      timestamp: 1000,
+      content: [
+        {
+          type: "toolCall",
+          id: "call_mc_1",
+          name: "manage_context",
+          arguments: { action: "hide", tool_call_ids: ["call_read_1", "call_read_2"] },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call_mc_1",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            ok: true,
+            applied: 2,
+            failed: 0,
+            size: "420 B / 18.4 KiB",
+            items: [{ tool_call_id: "call_read_1", ok: true, item_id: "item_1" }],
+          }),
+        },
+      ],
+    },
+  ]);
+
+  const listed = await service.handle("list", { scope_key: scope });
+  expect(listed.ok).toBe(true);
+  const mcRow = listed.items.find((r: any) => r.tool_call_id === "call_mc_1");
+  expect(mcRow).toBeDefined();
+  expect(mcRow.tool_name).toBe("manage_context");
+  expect(mcRow.manageable).toBe(false);
+  expect(mcRow.summary_line).toBe("2 managed · 420 B / 18.4 KiB");
+
+  const searched = await service.handle("list", { scope_key: scope, query: "manage" });
+  expect(searched.ok).toBe(true);
+  expect(searched.items.map((r: any) => r.tool_call_id)).toContain("call_mc_1");
+});

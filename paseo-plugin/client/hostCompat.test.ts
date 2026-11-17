@@ -29,21 +29,25 @@ function fixture() {
   return { doc, clicked, select: (id: string) => { selected = id; } };
 }
 
-test("known untested versions disable following/opening; unknown hosts require structural guards", async () => {
-  expect(supportedHostVersion("0.15.3")).toBe(true);
-  expect(supportedHostVersion("0.15.4")).toBe(true);
+test("hosts below >=0.15.3 disable following/opening; >=0.15.3 hosts work automatically with structural guards", async () => {
+  for (const v of ["0.15.3", "0.15.4", "0.16.0", "0.17.2", "1.0.0", "v0.16.1-rc.1"]) {
+    expect(supportedHostVersion(v)).toBe(true);
+  }
   expect(supportedHostVersion(null)).toBe(true);
-  expect(supportedHostVersion("0.16.0")).toBe(false);
+  for (const v of ["0.15.2", "0.14.9", "unknown", ""]) {
+    expect(supportedHostVersion(v)).toBe(false);
+  }
   const f = fixture(); f.select(childId);
-  const unsupported = focusedSessionTab(f.doc, "0.16.0");
+  expect(focusedSessionTab(f.doc, "0.16.0")).toEqual({ kind: "provider_subagent", parentAgentId: parent, subagentId: child });
+  const unsupported = focusedSessionTab(f.doc, "0.15.2");
   expect(unsupported).toEqual({ kind: "unresolved_subagent", parentAgentId: parent });
   expect(await subagentMainTarget(unsupported, async () => null)).toEqual({ agentId: parent, subagent: true });
-  expect(await openProviderSubagent(f.doc, parent, child, { version: "0.16.0", openParent() {} })).toBe(false);
+  expect(await openProviderSubagent(f.doc, parent, child, { version: "0.15.2", openParent() {} })).toBe(false);
   expect(f.clicked).toEqual([]);
-  const versioned = { ...f.doc, defaultView: { location: { pathname: "/h/host/workspace/w" },
-    __paseoHostRuntimeStore: { getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.16.0" }) }) } } };
-  expect(focusedSessionTab(versioned)).toEqual({ kind: "unresolved_subagent", parentAgentId: parent });
-  expect(await openProviderSubagent(versioned, parent, child, { openParent() {} })).toBe(false);
+  const preFloor = { ...f.doc, defaultView: { location: { pathname: "/h/host/workspace/w" },
+    __paseoHostRuntimeStore: { getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.15.2" }) }) } } };
+  expect(focusedSessionTab(preFloor)).toEqual({ kind: "unresolved_subagent", parentAgentId: parent });
+  expect(await openProviderSubagent(preFloor, parent, child, { openParent() {} })).toBe(false);
 });
 
 test("opener clicks an existing tab or safely opens the parent's native track", async () => {
@@ -94,10 +98,13 @@ test("a document-less opener fails before opening the parent or waiting", async 
   expect(waits).toBe(0);
 });
 
-test("strict host version requires verified 0.15.3 or 0.15.4 contracts", () => {
-  expect(strictSupportedHostVersion("0.15.3")).toBe(true);
-  expect(strictSupportedHostVersion("0.15.4")).toBe(true);
-  for (const version of [null, undefined, "0.16.0", "0.15.2"]) expect(strictSupportedHostVersion(version)).toBe(false);
+test("strict host version accepts Paseo >=0.15.3 and rejects pre-0.15.3 or missing versions", () => {
+  for (const version of ["0.15.3", "0.15.4", "0.16.0", "0.18.0", "1.2.3"]) {
+    expect(strictSupportedHostVersion(version)).toBe(true);
+  }
+  for (const version of [null, undefined, "0.15.2", "0.14.0", "invalid"]) {
+    expect(strictSupportedHostVersion(version)).toBe(false);
+  }
 });
 
 type Heartbeat = { self: unknown; payload: unknown; extra: unknown };
@@ -142,8 +149,8 @@ function focusStore(version: string | null = "0.15.3") {
   return store;
 }
 
-test("focus tracking refuses hosts without the verified heartbeat contract", () => {
-  for (const version of [null, "0.16.0"]) {
+test("focus tracking refuses pre-0.15.3 or unversioned hosts and accepts >=0.16.0 hosts with heartbeat shape", () => {
+  for (const version of [null, "0.15.2"]) {
     const store = focusStore(version);
     const { client, original } = store.connect("server");
     expect(readHostFocus("server", store)).toEqual({ supported: false, focusedAgentId: null, hasSignal: false });
@@ -155,6 +162,9 @@ test("focus tracking refuses hosts without the verified heartbeat contract", () 
     unsubscribe();
     expect(client.sendHeartbeat).toBe(original);
   }
+  const upgraded = focusStore("0.16.0");
+  upgraded.connect("server");
+  expect(readHostFocus("server", upgraded).supported).toBe(true);
 });
 
 test("verified clients forward heartbeats untouched and deduplicate focus signals", () => {
@@ -204,14 +214,14 @@ test("tracker scans already-connected hosts and attaches late connections", () =
   expect(late.client.sendHeartbeat).toBe(late.original);
 });
 
-test("workspace route demand intersects candidates only on verified hosts", () => {
+test("workspace route demand intersects candidates on >=0.15.3 hosts and fails closed on missing shape", () => {
   const store = {
-    getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.15.3" }) }),
+    getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.16.0" }) }),
     directorySyncByServer: new Map([["server", { routeDemandIds: new Set(["agent-a", "agent-c"]) }]]),
   };
   expect(demandedWorkspaceAgents("server", ["agent-a", "agent-b", "agent-c"], store)).toEqual(["agent-a", "agent-c"]);
   expect(demandedWorkspaceAgents("server", [], store)).toEqual([]);
-  const unsupported = { ...store, getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.16.0" }) }) };
+  const unsupported = { ...store, getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.15.2" }) }) };
   expect(demandedWorkspaceAgents("server", ["agent-a"], unsupported)).toEqual([]);
   expect(demandedWorkspaceAgents("server", ["agent-a"], { getClient: store.getClient })).toEqual([]);
   expect(demandedWorkspaceAgents("", ["agent-a"], store)).toEqual([]);
@@ -269,13 +279,15 @@ test("web layout prefers the newest workspace sheet's provider subagent", () => 
     .toEqual({ kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" });
 });
 
-test("web layout rejects malformed storage, unsupported hosts and missing keys", () => {
+test("web layout rejects malformed storage, pre-0.15.3 hosts and missing keys while accepting >=0.16.0", () => {
   const state = layoutState([{ tabId: "agent-tab", target: { kind: "agent", agentId: "agent-a" } }]);
-  expect(readWebWorkspaceFocusedTab("server", "workspace", { getItem: () => "{" }, "0.15.3")).toBeNull();
-  expect(readWebWorkspaceFocusedTab("server", "workspace", { getItem: () => null }, "0.15.3")).toBeNull();
-  expect(readWebWorkspaceFocusedTab("server", "workspace", layoutStorage(state), "0.16.0")).toBeNull();
-  expect(readWebWorkspaceFocusedTab("", "workspace", layoutStorage(state), "0.15.3")).toBeNull();
-  expect(readWebWorkspaceFocusedTab("server", "other", layoutStorage(state), "0.15.3")).toBeNull();
+  expect(readWebWorkspaceFocusedTab("server", "workspace", { getItem: () => "{" }, "0.16.0")).toBeNull();
+  expect(readWebWorkspaceFocusedTab("server", "workspace", { getItem: () => null }, "0.16.0")).toBeNull();
+  expect(readWebWorkspaceFocusedTab("server", "workspace", layoutStorage(state), "0.16.0"))
+    .toEqual({ kind: "agent", agentId: "agent-a" });
+  expect(readWebWorkspaceFocusedTab("server", "workspace", layoutStorage(state), "0.15.2")).toBeNull();
+  expect(readWebWorkspaceFocusedTab("", "workspace", layoutStorage(state), "0.16.0")).toBeNull();
+  expect(readWebWorkspaceFocusedTab("server", "other", layoutStorage(state), "0.16.0")).toBeNull();
 });
 
 test("duplicate mobile tab switcher rows never hide the focused agent", () => {
