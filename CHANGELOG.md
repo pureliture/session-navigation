@@ -89,10 +89,14 @@ Publication and registry/catalog approval are separate steps; see
   `>=0.15.3` semver floor backed by runtime structural guards, render
   `Loading outline…` without false `No session in view` or `Adapter not detected`
   banners while initial session/scope resolution settles, unify outline message
-  labels to `User` / `Agent`, display `post / pre` sizes (`219 B / 3.2 KiB`) on
-  hidden/summarized rows and groups, format `manage_context` outputs with
-  per-item `[hide]`/`[summarize]` mode, tool name, and `post / pre` sizes, and
-  make `manage_context` call history visible and searchable in Paseo's Outline.
+  labels to `User` / `Agent`, display single-unit `post/pre` sizes (`31.4/98.6 KiB`,
+  `0.5/20.0 KiB`) on hidden/summarized rows and groups, format `manage_context`
+  outputs with per-item `[hide]`/`[summarize]` mode, tool name, and `post/pre`
+  sizes, make `manage_context` call history visible and searchable in Paseo's
+  Outline, and harden desktop + mobile React Native scroll behavior (non-session
+  tab remount reset, live `stick-to-bottom`, search scroll restore, bottom group
+  expand / `PreviewDrawer` reveal, `cancelChatNavigation`, and Paseo chat
+  `followOutput` release on older-row jumps).
 - Keep child tools, guidance and reminders suppressed by default. OMP's
   standalone subagent activation remains gated; passive child support does
   not imply universal host/delegation support.

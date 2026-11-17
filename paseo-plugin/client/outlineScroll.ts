@@ -216,3 +216,253 @@ export class OutlineAutoScroller {
     return grew && this.stickToBottom && !input.isLoading;
   }
 }
+
+export interface OutlineScrollListHandle {
+  scrollToEnd?: (params?: { animated?: boolean }) => void;
+  scrollToOffset?: (params: { offset: number; animated?: boolean }) => void;
+  getScrollableNode?: () => any;
+  _listRef?: { _scrollRef?: { getScrollableNode?: () => any } };
+}
+
+export interface OutlineScrollStateSnapshot {
+  sessionKey: string;
+  mounted: boolean;
+  rowCount: number;
+  isLoading: boolean;
+  hasSearchQuery: boolean;
+}
+
+export class OutlineScrollDriver {
+  readonly scroller: OutlineAutoScroller;
+  private metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+  private pendingExpand: { prevScrollHeight: number; scrollTop: number } | null = null;
+  private pendingDrawer: {
+    prevClientHeight: number;
+    scrollTop: number;
+    stickToBottom: boolean;
+  } | null = null;
+
+  constructor(settleWindowMs = OUTLINE_SETTLE_WINDOW_MS) {
+    this.scroller = new OutlineAutoScroller(settleWindowMs);
+  }
+
+  syncSession(sessionKey: string, mounted: boolean): boolean {
+    const reset = this.scroller.syncSession(sessionKey, mounted);
+    if (reset) {
+      this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+      this.pendingExpand = null;
+      this.pendingDrawer = null;
+    }
+    return reset;
+  }
+
+  resetTransient(): void {
+    this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+    this.pendingExpand = null;
+    this.pendingDrawer = null;
+  }
+
+  private domScrollable(list: OutlineScrollListHandle | null | undefined): any {
+    if (!list) return null;
+    const node = list.getScrollableNode?.() ?? list._listRef?._scrollRef?.getScrollableNode?.() ?? null;
+    return node && typeof node === "object" ? node : null;
+  }
+
+  readMetrics(list: OutlineScrollListHandle | null | undefined) {
+    const dom = this.domScrollable(list);
+    return {
+      scrollTop: typeof dom?.scrollTop === "number" ? dom.scrollTop : this.metrics.scrollTop,
+      scrollHeight: typeof dom?.scrollHeight === "number" ? dom.scrollHeight : this.metrics.scrollHeight,
+      clientHeight: typeof dom?.clientHeight === "number" ? dom.clientHeight : this.metrics.clientHeight,
+    };
+  }
+
+  scrollToOffset(list: OutlineScrollListHandle | null | undefined, targetTop: number, now?: number): boolean {
+    if (!list) return false;
+    this.scroller.markProgrammaticScroll(now);
+    const m = this.readMetrics(list);
+    const maxTop =
+      m.scrollHeight > 0 && m.clientHeight > 0
+        ? Math.max(0, m.scrollHeight - m.clientHeight)
+        : Math.max(0, targetTop);
+    const clamped = Math.min(Math.max(0, targetTop), maxTop);
+    this.metrics.scrollTop = clamped;
+    list.scrollToOffset?.({ offset: clamped, animated: false });
+    const dom = this.domScrollable(list);
+    if (dom && typeof dom.scrollHeight === "number") {
+      dom.scrollTop = clamped;
+    }
+    return true;
+  }
+
+  scrollToBottom(list: OutlineScrollListHandle | null | undefined, now?: number): boolean {
+    if (!list) return false;
+    this.scroller.markProgrammaticScroll(now);
+    list.scrollToEnd?.({ animated: false });
+    const m = this.readMetrics(list);
+    if (m.scrollHeight > 0) {
+      const bottomTop = Math.max(0, m.scrollHeight - m.clientHeight);
+      this.metrics.scrollTop = bottomTop;
+      const dom = this.domScrollable(list);
+      if (dom && typeof dom.scrollHeight === "number") {
+        dom.scrollTop = bottomTop;
+      }
+    }
+    return true;
+  }
+
+  prepareGroupExpand(list: OutlineScrollListHandle | null | undefined, currentlyExpanded: boolean): void {
+    if (!currentlyExpanded) {
+      const m = this.readMetrics(list);
+      if (m.scrollHeight > 0) {
+        this.pendingExpand = { prevScrollHeight: m.scrollHeight, scrollTop: m.scrollTop };
+      }
+    } else {
+      this.pendingExpand = null;
+    }
+  }
+
+  prepareDrawerToggle(list: OutlineScrollListHandle | null | undefined, willOpen: boolean): void {
+    if (willOpen) {
+      const m = this.readMetrics(list);
+      if (m.clientHeight > 0) {
+        this.pendingDrawer = {
+          prevClientHeight: m.clientHeight,
+          scrollTop: m.scrollTop,
+          stickToBottom: this.scroller.isStuckToBottom(),
+        };
+      }
+    } else {
+      this.pendingDrawer = null;
+    }
+  }
+
+  handleWheel(ev: any): void {
+    const dy = Number(ev?.nativeEvent?.deltaY ?? ev?.deltaY ?? 0);
+    if (Number.isFinite(dy)) this.scroller.recordWheel(dy);
+  }
+
+  handleDragStart(): void {
+    this.scroller.recordDragStart();
+  }
+
+  handleScrollEvent(ev: any, now?: number): void {
+    const ne = ev?.nativeEvent;
+    const top = ne?.contentOffset?.y;
+    const sh = ne?.contentSize?.height;
+    const ch = ne?.layoutMeasurement?.height;
+    if (typeof top === "number") this.metrics.scrollTop = top;
+    if (typeof sh === "number") this.metrics.scrollHeight = sh;
+    if (typeof ch === "number") this.metrics.clientHeight = ch;
+    if (typeof top === "number" && typeof sh === "number" && typeof ch === "number") {
+      this.scroller.recordScroll({ scrollTop: top, scrollHeight: sh, clientHeight: ch, now });
+    }
+  }
+
+  maybeSync(
+    list: OutlineScrollListHandle | null | undefined,
+    state: OutlineScrollStateSnapshot,
+    opts?: { contentHeight?: number; now?: number; scheduleFrame?: (cb: () => void) => void },
+  ): void {
+    const shouldBottom = this.scroller.shouldScrollToLatest({
+      sessionKey: state.sessionKey,
+      mounted: state.mounted,
+      rowCount: state.rowCount,
+      contentHeight: opts?.contentHeight,
+      isLoading: state.isLoading,
+      hasSearchQuery: state.hasSearchQuery,
+      now: opts?.now,
+    });
+    const schedule =
+      opts?.scheduleFrame ?? (typeof requestAnimationFrame === "function" ? requestAnimationFrame : undefined);
+    const restoreTop = this.scroller.consumePendingRestoreScrollTop();
+    if (restoreTop !== null) {
+      try {
+        this.scrollToOffset(list, restoreTop, opts?.now);
+        schedule?.(() => {
+          try {
+            this.scrollToOffset(list, restoreTop);
+          } catch {
+            // Ignore unmount during frame callback.
+          }
+        });
+      } catch {
+        // Ignore mock environments.
+      }
+      return;
+    }
+    if (!shouldBottom) return;
+    try {
+      if (!this.scrollToBottom(list, opts?.now)) return;
+      schedule?.(() => {
+        if (!this.scroller.isUserScrolledUp()) {
+          try {
+            this.scrollToBottom(list);
+          } catch {
+            // Ignore transient unmount during frame callback.
+          }
+        }
+      });
+    } catch {
+      // Ignore non-scrollable mock environments.
+    }
+  }
+
+  handleLayout(
+    list: OutlineScrollListHandle | null | undefined,
+    ev: any,
+    state: OutlineScrollStateSnapshot,
+    now?: number,
+  ): void {
+    const layoutH = ev?.nativeEvent?.layout?.height;
+    if (typeof layoutH === "number" && layoutH > 0) {
+      this.metrics.clientHeight = layoutH;
+    }
+    const drawerSnap = this.pendingDrawer;
+    if (drawerSnap) {
+      const m = this.readMetrics(list);
+      if (m.clientHeight > 0 && m.scrollHeight > 0 && m.clientHeight < drawerSnap.prevClientHeight) {
+        this.pendingDrawer = null;
+        const nextTop = computeDrawerOpenScrollTop({
+          scrollTop: drawerSnap.scrollTop,
+          scrollHeight: m.scrollHeight,
+          prevClientHeight: drawerSnap.prevClientHeight,
+          nextClientHeight: m.clientHeight,
+          stickToBottom: drawerSnap.stickToBottom,
+        });
+        if (nextTop !== null) {
+          this.scrollToOffset(list, nextTop, now);
+          return;
+        }
+      }
+    }
+    this.maybeSync(list, state, { now });
+  }
+
+  handleContentSizeChange(
+    list: OutlineScrollListHandle | null | undefined,
+    h: number,
+    state: OutlineScrollStateSnapshot,
+    now?: number,
+  ): void {
+    if (typeof h === "number" && h >= 0) {
+      this.metrics.scrollHeight = h;
+    }
+    const expandSnap = this.pendingExpand;
+    if (expandSnap && h > expandSnap.prevScrollHeight) {
+      this.pendingExpand = null;
+      const m = this.readMetrics(list);
+      const nextTop = computeExpandedGroupScrollTop({
+        scrollTop: expandSnap.scrollTop,
+        prevScrollHeight: expandSnap.prevScrollHeight,
+        nextScrollHeight: h,
+        clientHeight: m.clientHeight,
+      });
+      if (nextTop !== null) {
+        this.scrollToOffset(list, nextTop, now);
+        return;
+      }
+    }
+    this.maybeSync(list, state, { contentHeight: h, now });
+  }
+}
