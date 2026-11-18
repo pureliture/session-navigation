@@ -391,24 +391,45 @@ export class OutlineScrollDriver {
 
   preparePrepend(list: OutlineScrollListHandle | null | undefined): void {
     this.latestList = list;
-    this.cancelPendingAsync();
-    this.pendingDrawer = null;
-    this.pendingExpand = null;
-    this.scroller.recordWheel(-1);
     const m = this.readMetrics(list);
-    if (m.scrollHeight > 0) {
-      this.pendingPrepend = {
-        prevScrollHeight: m.scrollHeight,
-        scrollTop: m.scrollTop,
-        sessionKey: this.currentSessionKey,
-      };
-    } else {
-      this.pendingPrepend = null;
-    }
+    if (m.scrollHeight <= 0 || m.clientHeight <= 0) return;
+    this.pendingPrepend = { prevScrollHeight: m.scrollHeight, scrollTop: m.scrollTop, sessionKey: this.currentSessionKey };
   }
 
-  cancelPendingPrepend(): void {
-    this.pendingPrepend = null;
+  private hiddenRestore: { scrollTop: number; sessionKey: string } | null = null;
+
+  /**
+   * Called when layout collapses (display:none retention) or revives. On
+   * collapse, remember the last live scrollTop; on revive with a zeroed DOM
+   * scrollTop, restore it instead of letting prepend/bottom-pin logic jump.
+   */
+  handleVisibility(list: OutlineScrollListHandle | null | undefined, collapsed: boolean, sessionKey: string, now?: number): void {
+    this.latestList = list;
+    if (collapsed) {
+      const m = this.readMetrics(list);
+      const top = m.scrollTop > 0 ? m.scrollTop : this.metrics.scrollTop;
+      const sh = m.scrollHeight > 0 ? m.scrollHeight : this.metrics.scrollHeight;
+      const ch = m.clientHeight > 0 ? m.clientHeight : this.metrics.clientHeight;
+      if (sh > 0 && ch > 0 && top > 0) {
+        this.hiddenRestore = { scrollTop: top, sessionKey };
+      }
+      this.metrics.scrollHeight = 0;
+      this.metrics.clientHeight = 0;
+      return;
+    }
+    const snap = this.hiddenRestore;
+    this.hiddenRestore = null;
+    if (!snap || snap.sessionKey !== sessionKey) return;
+    const m = this.readMetrics(list);
+    if (m.scrollHeight <= 0 || m.clientHeight <= 0) return;
+    if (m.scrollTop <= 2 && snap.scrollTop > 2) {
+      this.pendingPrepend = null;
+      this.pendingExpand = null;
+      this.pendingDrawer = null;
+      this.suppressNextBottomPin = { rowCount: Number.MAX_SAFE_INTEGER, sessionKey };
+      this.scroller.recordScroll({ scrollTop: snap.scrollTop, scrollHeight: m.scrollHeight, clientHeight: m.clientHeight, now });
+      this.scrollToOffset(list, snap.scrollTop, now);
+    }
   }
 
   prepareDrawerToggle(list: OutlineScrollListHandle | null | undefined, willOpen: boolean): void {
@@ -444,12 +465,24 @@ export class OutlineScrollDriver {
     const top = ne?.contentOffset?.y;
     const sh = ne?.contentSize?.height;
     const ch = ne?.layoutMeasurement?.height;
+    // Host retention hides inactive panels with display:none: layout collapses
+    // (sh/ch <= 0) and Chromium reports scrollTop 0. That synthetic event must
+    // not arm upward intent or trigger older-page loads.
+    if (typeof sh === "number" && typeof ch === "number" && (sh <= 0 || ch <= 0)) {
+      return;
+    }
     if (typeof top === "number") this.metrics.scrollTop = top;
     if (typeof sh === "number") this.metrics.scrollHeight = sh;
     if (typeof ch === "number") this.metrics.clientHeight = ch;
     if (typeof top === "number" && typeof sh === "number" && typeof ch === "number") {
       this.scroller.recordScroll({ scrollTop: top, scrollHeight: sh, clientHeight: ch, now });
     }
+  }
+
+  /** True when the scroller has a live layout box (not display:none-collapsed). */
+  hasLiveLayout(list: OutlineScrollListHandle | null | undefined): boolean {
+    const m = this.readMetrics(list);
+    return m.scrollHeight > 0 && m.clientHeight > 0;
   }
 
   maybeSync(
@@ -570,8 +603,17 @@ export class OutlineScrollDriver {
   ): void {
     this.latestList = list;
     const layoutH = ev?.nativeEvent?.layout?.height;
-    if (typeof layoutH === "number" && layoutH > 0) {
+    if (typeof layoutH === "number") {
+      if (layoutH <= 0) {
+        this.handleVisibility(list, true, state.sessionKey, now);
+        return;
+      }
+      const wasCollapsed = this.metrics.clientHeight <= 0;
       this.metrics.clientHeight = layoutH;
+      if (wasCollapsed) {
+        this.handleVisibility(list, false, state.sessionKey, now);
+        return;
+      }
     }
     const drawerSnap = this.pendingDrawer;
     if (drawerSnap) {

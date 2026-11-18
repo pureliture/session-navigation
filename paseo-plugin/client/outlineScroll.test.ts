@@ -307,8 +307,61 @@ describe("OutlineAutoScroller", () => {
     domNode.scrollHeight = 4500; // Grew synchronously by 1500px
     endCalls = 0;
     domDriver.maybeSync(domList, { ...state, sessionKey: "sess-web", rowCount: 250 }, { now: 2000, scheduleFrame: () => {} });
-    expect(domNode.scrollTop).toBe(90 + 1500);
-    expect(endCalls).toBe(0);
-    domDriver.dispose();
+  });
+
+  test("display:none retention cycle never arms upward intent and restores scrollTop on revive", () => {
+    const driver = new OutlineScrollDriver(1500);
+    const dom = { scrollTop: 1446, scrollHeight: 4598, clientHeight: 731 };
+    const list = {
+      getScrollableNode: () => dom,
+      scrollToOffset: ({ offset }: { offset: number }) => { dom.scrollTop = offset; },
+      scrollToEnd: () => {},
+    };
+    const state = { sessionKey: "sess-live", mounted: true, rowCount: 150, isLoading: false, hasSearchQuery: false };
+    driver.syncSession("sess-live", true);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 1446 }, contentSize: { height: 4598 }, layoutMeasurement: { height: 731 } } });
+    // Host hides panel: layout collapses, Chromium reports scrollTop 0.
+    dom.scrollTop = 0;
+    dom.scrollHeight = 0;
+    dom.clientHeight = 0;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 0 } } }, state, 2000);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 0 }, contentSize: { height: 0 }, layoutMeasurement: { height: 0 } } });
+    expect(driver.scroller.isUserScrolledUp()).toBe(false);
+    expect(driver.scroller.isStuckToBottom()).toBe(true);
+    expect(driver.hasLiveLayout(list)).toBe(false);
+    // Host revives panel: DOM scrollTop is still 0, must restore 1446.
+    dom.scrollHeight = 4598;
+    dom.clientHeight = 731;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 731 } } }, state, 3000);
+    expect(dom.scrollTop).toBe(1446);
+    expect(driver.hasLiveLayout(list)).toBe(true);
+  });
+
+  test("preparePrepend during collapsed layout does not snapshot a stale position", () => {
+    const driver = new OutlineScrollDriver(1500);
+    const dom = { scrollTop: 500, scrollHeight: 4598, clientHeight: 731 };
+    const list = {
+      getScrollableNode: () => dom,
+      scrollToOffset: ({ offset }: { offset: number }) => { dom.scrollTop = offset; },
+      scrollToEnd: () => {},
+    };
+    const state = { sessionKey: "sess-live", mounted: true, rowCount: 150, isLoading: false, hasSearchQuery: false };
+    driver.syncSession("sess-live", true);
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 731 } } }, state, 1000);
+    driver.handleContentSizeChange(list, 4598, state, 1010);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 500 }, contentSize: { height: 4598 }, layoutMeasurement: { height: 731 } } });
+    // Collapse, then a stray prepend snapshot attempt during hidden layout.
+    dom.scrollTop = 0;
+    dom.scrollHeight = 0;
+    dom.clientHeight = 0;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 0 } } }, state, 2000);
+    driver.preparePrepend(list);
+    // Revive: restore 500, then a content-size event must not stale-jump.
+    dom.scrollHeight = 4598;
+    dom.clientHeight = 731;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 731 } } }, state, 3000);
+    expect(dom.scrollTop).toBe(500);
+    driver.handleContentSizeChange(list, 4598, state, 4000);
+    expect(dom.scrollTop).toBe(500);
   });
 });

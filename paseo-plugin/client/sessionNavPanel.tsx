@@ -1128,10 +1128,16 @@ export function SessionNavPanel({
     const prevTop = scrollDriverRef.current?.scroller.getLastScrollTop() ?? 0;
     scrollDriverRef.current?.handleScrollEvent(ev);
     const top = ev?.nativeEvent?.contentOffset?.y;
+    const sh = ev?.nativeEvent?.contentSize?.height;
+    const ch = ev?.nativeEvent?.layoutMeasurement?.height;
     const scroller = scrollDriverRef.current?.scroller;
     if (
       typeof top === "number" &&
       top <= OUTLINE_PREPEND_THRESHOLD_PX &&
+      // Synthetic scroll events from a display:none-collapsed layout report top 0;
+      // never treat those as user upward intent.
+      typeof sh === "number" && sh > 0 &&
+      typeof ch === "number" && ch > 0 &&
       hasOlderItems &&
       !isLoadingOlder &&
       !query &&
