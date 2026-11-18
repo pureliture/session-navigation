@@ -36,6 +36,7 @@ import {
 } from "./outlineGrouping";
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
 import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
+import { outlineRefreshQueryKeys } from "./outlineRefresh";
 import { OutlineScrollDriver } from "./outlineScroll";
 import {
   resolveOutlineSettingsValues,
@@ -57,7 +58,6 @@ const DEFAULT_TAB_STATE: PanelTabState = {
 const SUMMARY_QUEUED_NOTICE = "Summary queued — runs on next prompt";
 const OUTLINE_PAGE_SIZE = 150;
 const OUTLINE_PREPEND_THRESHOLD_PX = 160;
-
 type FallbackTimelineCursor = NonNullable<
   Awaited<
     ReturnType<ReturnType<ReturnType<typeof usePaseo>["agents"]["ref"]>["timeline"]["refetch"]>
@@ -461,6 +461,7 @@ export function SessionNavPanel({
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "scopes"] });
     void refreshOlderRef.current?.();
   };
+
 
   const onMutationError = (result: { ok: boolean; error?: string }) => {
     if (!result.ok && result.error === "version_conflict") {
@@ -975,6 +976,29 @@ export function SessionNavPanel({
   };
 
   const isLoadingOlder = isLoadingOlderServer || isLoadingOlderFallback;
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshOutline = useCallback(async () => {
+    if (isRefreshing || isLoadingOlder) return;
+    setIsRefreshing(true);
+    try {
+      cancelChatNavigation();
+      setNotice(null);
+      setSelectedId(null);
+      setHighlightedId(null);
+      setPreviewOpen(false);
+      setExpandedGroups({});
+      setPendingGroupId(null);
+      setOlderServerState(null);
+      setOlderFallbackState(null);
+      loadingOlderKeyRef.current = null;
+      scrollDriverRef.current?.resetTransient();
+      await Promise.all(
+        outlineRefreshQueryKeys(agentId).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+      );
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [agentId, isLoadingOlder, isRefreshing, queryClient]);
   const canLoadOlderServer =
     !query &&
     !!resolvedScopeKey &&
@@ -1837,16 +1861,18 @@ export function SessionNavPanel({
             </Text>
           </Pressable>
           {settingsButton}
-          {navigation ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open agent chat"
-              style={styles.iconBtn}
-              onPress={() => navigation?.openAgent({ agentId })}
-            >
-              <Text style={styles.iconBtnText}>⤢</Text>
-            </Pressable>
-          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh outline"
+            accessibilityState={{ disabled: isRefreshing || isLoadingOlder }}
+            style={[styles.iconBtn, isRefreshing ? styles.iconBtnActive : null]}
+            disabled={isRefreshing || isLoadingOlder}
+            onPress={() => void refreshOutline()}
+          >
+            <Text style={[styles.iconBtnText, isRefreshing ? styles.iconBtnTextActive : null]}>
+              {isRefreshing ? "…" : "↻"}
+            </Text>
+          </Pressable>
         </View>
       </View>
 
