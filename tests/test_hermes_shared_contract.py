@@ -152,8 +152,18 @@ def test_coexistence_preserves_capabilities_and_disable_revokes(tmp_path):
     state.count_middlewares = lambda: 0
     middleware(**kwargs)
     state.is_enabled = lambda: False
-    assert middleware(**kwargs) is None
+    protected = middleware(**kwargs)
+    assert protected is not None
+    assert protected["reason"] == "protection_only (applied 1)"
+    assert all(entry.get("role") != "user" for entry in protected["request"]["input"])
+    assert protected["request"]["input"][1]["output"] == item.compacted
     assert not state.engine.store.adapter_can(scope, "hide")
+    assert state.engine.store.restore(scope, item.item_id).ok is True
+    assert state.engine.store.set_message_visibility(
+        scope, msg_key, kind=role, content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        char_count=len(text), visibility="visible",
+    )["ok"] is True
+    assert middleware(**kwargs) is None
     state.engine.store.close()
 
 

@@ -214,11 +214,16 @@ def test_plugin_registers_through_root_export_default_off() -> None:
         assert entry["toolset"] == "session_navigation"
         assert entry["schema"]["name"] == name
         assert callable(entry["handler"])
-    # No settings at all => everything reports disabled and nothing is recorded.
-    for entry in ctx.tools.values():
-        assert json.loads(entry["handler"]({}, session_id="s1")) == {
+    # No settings at all => mutating tools report disabled; read/restore paths remain safe and nothing is recorded.
+    for name in ("hide_context", "summarize_context", "manage_context"):
+        assert json.loads(ctx.tools[name]["handler"]({}, session_id="s1")) == {
             "ok": False, "error": "disabled",
         }
+    listed = json.loads(ctx.tools["list_context_items"]["handler"]({}, session_id="s1"))
+    assert listed["ok"] is True and listed["items"] == []
+    assert json.loads(ctx.tools["unhide_context"]["handler"]({}, session_id="s1")) == {
+        "ok": False, "error": "not_found",
+    }
     assert ctx.middlewares["llm_request"][0](
         request={"messages": []}, session_id="s1", api_mode="chat_completions"
     ) is None

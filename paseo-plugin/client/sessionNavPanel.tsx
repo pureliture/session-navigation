@@ -1,6 +1,10 @@
 import type { PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { useAgent, usePaseo, useRpc, useTabState } from "@getpaseo/plugin/client";
-import { ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
+import {
+  Icon as UiIcon,
+  ScrollView as UiScrollView,
+  TextInput as UiTextInput,
+} from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView as RnScrollView, Text, TextInput as RnTextInput, View } from "react-native";
@@ -33,6 +37,12 @@ import {
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
 import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
 import { OutlineScrollDriver } from "./outlineScroll";
+import {
+  resolveOutlineSettingsValues,
+  shouldOpenPreviewDrawerOnRowPress,
+  useOutlineSettings,
+} from "./outlineSettingsHook";
+import { openSessionNavSettings } from "./registration";
 
 const panelTabStateSchema = z.object({
   query: z.string().default(""),
@@ -57,22 +67,45 @@ type FallbackTimelineCursor = NonNullable<
 const ScrollView = UiScrollView ?? RnScrollView;
 const TextInput = UiTextInput ?? RnTextInput;
 
-export function SessionNavPanel({ theme, layout, params, navigation, tab, followVisible = true, candidateAgentIds, childScope, ancestry = [], ...panelProps }: PluginAgentPanelProps & {
+export function SessionNavPanel({
+  theme,
+  layout,
+  params,
+  navigation,
+  tab,
+  followVisible = true,
+  openPreviewOnRowClick: openPreviewOnRowClickProp,
+  onOpenSettings,
+  candidateAgentIds,
+  childScope,
+  ancestry = [],
+  ...panelProps
+}: PluginAgentPanelProps & {
   followVisible?: boolean;
+  openPreviewOnRowClick?: boolean;
+  onOpenSettings?: () => void;
   candidateAgentIds?: readonly string[];
   childScope?: ChildScope;
   ancestry?: readonly string[];
 }) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
+  const outlineSettingsState = useOutlineSettings();
+  const outlineValues = resolveOutlineSettingsValues(outlineSettingsState);
+  const effectiveFollowVisible = followVisible && outlineValues.followVisibleSession;
+  const effectiveOpenPreviewOnRowClick =
+    openPreviewOnRowClickProp ?? outlineValues.openPreviewOnRowClick;
   // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [inView, setInView] = useState(!!params.agentId);
-  const [followResolved, setFollowResolved] = useState(() => !followVisible || !!params.agentId);
+  const [followResolved, setFollowResolved] = useState(
+    () => !effectiveFollowVisible || !!params.agentId,
+  );
   const [subagentFallback, setSubagentFallback] = useState(false);
   const [focusedTab, setFocusedTab] = useState<SessionTab | null>(null);
   const lastMainAgent = useRef(params.agentId || null);
-  const agentId = followVisible || subagentFallback ? followedId ?? params.agentId : params.agentId;
+  const agentId =
+    effectiveFollowVisible || subagentFallback ? (followedId ?? params.agentId) : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -101,11 +134,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   useEffect(() => {
     setFollowedId(null);
     setInView(!!params.agentId);
-    setFollowResolved(!followVisible || !!params.agentId);
+    setFollowResolved(!effectiveFollowVisible || !!params.agentId);
     lastMainAgent.current = params.agentId || null;
     setFocusedTab(null);
     setSubagentFallback(false);
-  }, [params.agentId, followVisible]);
+  }, [params.agentId, effectiveFollowVisible]);
   useEffect(() => {
     if (notice !== "Not loaded in chat" && notice !== SUMMARY_QUEUED_NOTICE) return;
     const timer = setTimeout(() => setNotice((current) => current === notice ? null : current),
@@ -183,10 +216,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       const managed = focused?.kind === "agent" && currentScopes.some((scope) => scope.agent_id === focused.agentId);
       const useFallback = fallback.subagent && !managed;
       const needsTimelineScan =
-        followVisible && focused?.kind !== "provider_subagent" && focused?.kind !== "agent" && !useFallback;
+        effectiveFollowVisible && focused?.kind !== "provider_subagent" && focused?.kind !== "agent" && !useFallback;
       const resolvedTarget = needsTimelineScan
         ? await resolveSessionTarget({
-            followVisible,
+            followVisible: effectiveFollowVisible,
             boundAgentId: params.agentId,
             visibleValues: values,
             candidates: sessionFollowCandidates(
@@ -202,14 +235,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
                 })
               ).ids,
           })
-        : followVisible
+        : effectiveFollowVisible
           ? null
           : params.agentId || null;
       const selection = selectMainOrFallbackAgent({
         tab: focused,
         managed: !!managed,
         fallback,
-        followVisible,
+        followVisible: effectiveFollowVisible,
         resolvedTarget,
         lastMainAgentId: lastMainAgent.current,
       });
@@ -229,7 +262,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         const hostFocus = hostId ? readHostFocus(hostId) : { supported: false, focusedAgentId: null, hasSignal: false };
         const hasSignal = explicitSupported || (hostFocus.supported && hostFocus.hasSignal);
         const targetId = explicitSupported ? explicitAgentId : hostFocus.focusedAgentId;
-        if (followVisible && hasSignal) {
+        if (effectiveFollowVisible && hasSignal) {
           if (targetId === null) {
             if (cancelled) return;
             setFocusedTab(null);
@@ -362,7 +395,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       unsubscribe();
       clearInterval(timer);
     };
-  }, [paseo, params.agentId, scopesSignature, queryClient, followVisible, candidateAgentIds, childScope, hasDocument, hostId, panelWorkspaceId]);
+  }, [paseo, params.agentId, scopesSignature, queryClient, effectiveFollowVisible, candidateAgentIds, childScope, hasDocument, hostId, panelWorkspaceId]);
   const effectiveFocusedTab = useMemo(() => {
     if (!focusedTab) return null;
     if (focusedTab.kind === "provider_subagent" && agentId && focusedTab.parentAgentId !== agentId) {
@@ -890,7 +923,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   }
   const hermesSettledKeyRef = useRef<string | null>(null);
 
-  const isSessionHiddenFromView = !childScope && (followVisible || subagentFallback) && !inView;
+  const isSessionHiddenFromView = !childScope && (effectiveFollowVisible || subagentFallback) && !inView;
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
   scrollDriverRef.current.syncSession(sessionViewKey, isOutlineListMounted);
 
@@ -1541,9 +1574,17 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const handleRowPress = async (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
-    setHighlightedId((current) => (!previewOpen && current === rowKey ? null : rowKey));
-    if (!hasDocument) {
+    const shouldOpenPreview = shouldOpenPreviewDrawerOnRowPress({
+      hasDocument,
+      openPreviewOnRowClick: effectiveOpenPreviewOnRowClick,
+    });
+    setHighlightedId((current) =>
+      !previewOpen && !shouldOpenPreview && current === rowKey ? null : rowKey,
+    );
+    if (shouldOpenPreview) {
       openPreviewDrawer();
+    }
+    if (!hasDocument) {
       return;
     }
     if (activeChild) {
@@ -1651,7 +1692,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     : highlightedId;
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
 
-  const isResolvingSession = !childScope && followVisible && !followResolved;
+  const isResolvingSession = !childScope && effectiveFollowVisible && !followResolved;
   const isCapabilitiesLoading =
     isResolvingSession || scopesQuery.isPending || (!!resolvedScopeKey && listQuery.isPending && !capabilities);
   const runtimeError =
@@ -1680,7 +1721,25 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     </View>
   ) : null;
 
-  if (!childScope && (followVisible || subagentFallback) && !inView) {
+  const settingsButton = !childScope ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open session navigation settings"
+      style={styles.iconBtn}
+      onPress={() => {
+        if (onOpenSettings) onOpenSettings();
+        else openSessionNavSettings();
+      }}
+    >
+      {typeof UiIcon === "function" ? (
+        <UiIcon name="Settings" size={13} color={theme.colors.foregroundMuted} />
+      ) : (
+        <Text style={styles.iconBtnText}>⚙</Text>
+      )}
+    </Pressable>
+  ) : null;
+
+  if (!childScope && (effectiveFollowVisible || subagentFallback) && !inView) {
     if (isResolvingSession) {
       return (
         <View style={styles.screen}>
@@ -1688,6 +1747,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             <View style={styles.headerLeft}>
               <Text style={styles.headerTitle}>Outline</Text>
             </View>
+            <View style={styles.headerRight}>{settingsButton}</View>
           </View>
           <View style={[styles.list, styles.emptyContainer]}>
             <Text style={styles.emptyText}>Loading outline…</Text>
@@ -1702,6 +1762,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           <View style={styles.headerLeft}>
             <Text style={styles.headerTitle}>Outline</Text>
           </View>
+          <View style={styles.headerRight}>{settingsButton}</View>
         </View>
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 8 }}>
           <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
@@ -1733,6 +1794,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               · {childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
             </Text>
           </View>
+          <View style={styles.headerRight}>{settingsButton}</View>
         </View>
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 8 }}>
           <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
@@ -1774,6 +1836,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               {searchOpen ? "✕" : "🔍"}
             </Text>
           </Pressable>
+          {settingsButton}
           {navigation ? (
             <Pressable
               accessibilityRole="button"

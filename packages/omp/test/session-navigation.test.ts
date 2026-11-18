@@ -770,3 +770,81 @@ test("worker service patches hides across chunks and confirms the whole snapshot
     await events.session_shutdown();
   }
 });
+
+test("extension enters protection_only when omp adapter_control is off and still permits recovery", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "omp-ext-off-"));
+  const dbPath = join(dir, "state.sqlite3");
+  const store = new Store(new BunDriver(dbPath));
+  const svc = new OmpService(store);
+  const { events, tools } = setup({
+    request: (method, params) => svc.handle(method, params),
+    close: () => {},
+  });
+  const context = { sessionManager: { getSessionId: () => "ext-off-session" } };
+  const input = [
+    ...messages(),
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-2", name: "read", arguments: { path: "other.txt" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-2",
+      toolName: "read",
+      content: [{ type: "text", text: longText }],
+      isError: false,
+      timestamp: 2,
+    },
+  ];
+  try {
+    expect(await events.context({ messages: input }, context)).toBeUndefined();
+    await events.assistant_message({ message: { role: "assistant", stopReason: "toolUse" } }, context);
+    const hidden = await execute(tools.hide_context, { tool_call_id: "call-1" }, context);
+    expect(hidden.ok).toBe(true);
+
+    // Turning OMP off switches extension into protection_only
+    store.setAdapterControl("omp", false);
+
+    const agentStart = await events.before_agent_start({ systemPrompt: ["base"] }, context);
+    expect(agentStart.systemPrompt).toEqual(["base"]);
+
+    const transformed = await events.context({ messages: input }, context);
+    expect(transformed).toBeDefined();
+    expect(transformed.messages[1].content[0].text).not.toBe(longText);
+    expect(transformed.messages[3].content[0].text).toBe(longText);
+    expect(
+      JSON.stringify(transformed.messages).includes("[context-navigation]"),
+    ).toBe(false);
+
+    expect((await execute(tools.hide_context, { tool_call_id: "call-2" }, context)).error).toBe(
+      "adapter_disabled",
+    );
+    expect((await execute(tools.summarize_context, { tool_call_id: "call-2" }, context)).error).toBe(
+      "adapter_disabled",
+    );
+    expect(
+      (
+        await execute(
+          tools.manage_context,
+          { tool_call_ids: ["call-2"], action: "hide" },
+          context,
+        )
+      ).error,
+    ).toBe("adapter_disabled");
+
+    const listed = await execute(tools.list_context_items, {}, context);
+    expect(listed.ok).toBe(true);
+    expect((listed.items as any[]).some((item) => item.item_id === hidden.item_id)).toBe(true);
+
+    const restored = await execute(tools.unhide_context, { item_id: hidden.item_id }, context);
+    expect(restored.ok).toBe(true);
+
+    expect(await events.context({ messages: input }, context)).toBeUndefined();
+  } finally {
+    await events.session_shutdown();
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

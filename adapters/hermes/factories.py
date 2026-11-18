@@ -63,9 +63,16 @@ from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
 from .handlers import restore as _engine_restore
 from .handlers import summarize as _engine_summarize
-from .payload import SUPPORTED_API_MODES, drop_messages, message_keys
+from .payload import (
+    SUPPORTED_API_MODES,
+    UNSUPPORTED_API_MODE,
+    apply_replacements,
+    drop_messages,
+    find_tool_results,
+    message_keys,
+)
 from .presentation import PresentationRegistry, decorate_items
-from .session import SessionTranscriptStore
+from .session import SessionTranscriptStore, _extract_invocations
 from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
 from session_navigation.policy import refusal_reason, is_destructive_command
@@ -146,6 +153,20 @@ def scope_for(state: PluginState, session_id: Any) -> Scope | None:
     )
 
 
+def _is_effectively_enabled(state: PluginState) -> bool:
+    if not state.is_enabled():
+        return False
+    try:
+        get_ctrl = getattr(state.engine.store, "get_adapter_control", None)
+        if callable(get_ctrl):
+            ctrl = get_ctrl(ADAPTER_ID)
+            if isinstance(ctrl, dict) and ctrl.get("enabled") is False:
+                return False
+    except Exception:
+        pass
+    return True
+
+
 def delegation_request(state: PluginState, **kwargs: Any) -> None:
     if kwargs.get("tool_name") == "delegate_task":
         state.delegation_call.set((kwargs.get("session_id", ""), kwargs.get("tool_call_id")))
@@ -160,7 +181,7 @@ def subagent_started(state: PluginState, **kwargs: Any) -> None:
     captured = state.delegation_call.get()
     call = captured[1] if captured and (not captured[0] or captured[0] == parent.session_id) else None
     state.child_links[child.session_id] = dict(parent_scope=parent.scope_key(), tool_call_id=call, subagent_id=subagent)
-    if state.is_enabled():
+    if _is_effectively_enabled(state):
         _register_adapter(state, child, True)
 
 
@@ -178,7 +199,7 @@ def _track_mutation(state: PluginState, handler: Callable[..., str]) -> Callable
 
     def tracked(args: Any = None, session_id: str = "", **extra: Any) -> str:
         scope = scope_for(state, session_id)
-        before = savings(scope) if scope is not None and state.is_enabled() else None
+        before = savings(scope) if scope is not None else None
         result = handler(args, session_id=session_id, **extra)
         if before is not None:
             after = savings(scope)
@@ -193,7 +214,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
     """Build the `hide_context` tool handler bound to this registration."""
 
     def hide_context(args: Any, session_id: str = "", **_extra: Any) -> str:
-        if not state.is_enabled():
+        if not _is_effectively_enabled(state):
             return _dump({"ok": False, "error": "disabled"})
         target = args.get("tool_call_id") if isinstance(args, dict) else None
         if not isinstance(target, str) or not target.strip():
@@ -240,7 +261,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
     """Build the `summarize_context` tool handler bound to this registration."""
 
     def summarize_context(args: Any, session_id: str = "", **_extra: Any) -> str:
-        if not state.is_enabled():
+        if not _is_effectively_enabled(state):
             return _dump({"ok": False, "error": "disabled"})
         if state.summarizer is None:
             return _dump({"ok": False, "error": "summarizer_unavailable"})
@@ -278,8 +299,6 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
     """Build the `list_context_items` tool handler bound to this registration."""
 
     def list_context_items(args: Any = None, session_id: str = "", **_extra: Any) -> str:
-        if not state.is_enabled():
-            return _dump({"ok": False, "error": "disabled"})
         query = ""
         if isinstance(args, dict) and isinstance(args.get("query"), str):
             query = args["query"]
@@ -290,6 +309,8 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
             limit = args.get("limit", 30)
             if type(limit) is not int or not 1 <= limit <= 200:
                 return _dump({"ok": False, "error": "invalid_limit"})
+            if not _is_effectively_enabled(state):
+                return _dump({"ok": True, "items": []})
             candidates = []
             for entry in reversed(state.store.entries(scope.scope_key())):
                 if _cleanup_error(state, scope, entry) is not None:
@@ -332,8 +353,6 @@ def make_unhide_handler(state: PluginState) -> Callable[..., str]:
     """Build the `unhide_context` tool handler bound to this registration."""
 
     def unhide_context(args: Any, session_id: str = "", **_extra: Any) -> str:
-        if not state.is_enabled():
-            return _dump({"ok": False, "error": "disabled"})
         target = args.get("item_id") if isinstance(args, dict) else None
         if not isinstance(target, str) or not target.strip():
             return _dump({"ok": False, "error": "not_found"})
@@ -567,7 +586,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
     """Build the `manage_context` orchestrator tool handler."""
 
     def manage_context(args: Any = None, session_id: str = "", **_extra: Any) -> str:
-        if not state.is_enabled():
+        if not _is_effectively_enabled(state):
             return _dump({"ok": False, "error": "disabled"})
         scope = scope_for(state, session_id)
         if scope is None:
@@ -776,20 +795,110 @@ def _child_request(request: dict[str, Any]) -> dict[str, Any]:
     return request
 
 
+def _protection_only_rewrite(
+    state: PluginState,
+    scope: Scope,
+    api_mode: str,
+    request: dict[str, Any],
+    hidden_items: list[Any],
+    hidden_messages: set[str],
+) -> dict[str, Any]:
+    if api_mode not in SUPPORTED_API_MODES:
+        return {
+            "request": copy.deepcopy(request),
+            "source": SOURCE,
+            "reason": UNSUPPORTED_API_MODE,
+        }
+    request_out = copy.deepcopy(request)
+    applied: list[str] = []
+    if hidden_items:
+        found, _skipped, _err = find_tool_results(api_mode, request_out)
+        invocations = _extract_invocations(api_mode, request_out)
+        positions: dict[str, int] = {}
+        records: list[ToolResultRecord] = []
+        for entry in found:
+            pos = positions.get(entry.call_id, 0)
+            positions[entry.call_id] = pos + 1
+            tool_name, raw_args, parse_error = invocations.get(entry.call_id, ("", {}, True))
+            if parse_error or not tool_name:
+                continue
+            try:
+                invocation, omitted = filter_invocation(tool_name, raw_args)
+            except AdapterRejected:
+                continue
+            records.append(
+                ToolResultRecord(
+                    call_id=entry.call_id,
+                    result_position=pos,
+                    content=entry.content,
+                    content_sha256=hashlib.sha256(entry.content.encode("utf-8")).hexdigest(),
+                    invocation=invocation,
+                    invocation_digest=compute_invocation_digest(
+                        invocation, omitted if omitted else None
+                    ),
+                    status="ok",
+                    host_handle=entry.host_handle,
+                )
+            )
+        plans = state.engine.project(scope, records)
+        plan_dicts = [
+            {
+                "item_id": plan.item_id,
+                "host_handle": plan.host_handle,
+                "expected_content_sha256": plan.expected_content_sha256,
+                "replacement_text": plan.replacement_text,
+            }
+            for plan in plans
+        ]
+        request_out, applied, _ = apply_replacements(api_mode, request_out, plan_dicts)
+    if hidden_messages:
+        request_out = drop_messages(api_mode, request_out, hidden_messages)
+    return {
+        "request": request_out,
+        "source": SOURCE,
+        "reason": f"protection_only (applied {len(applied)})",
+    }
+
+
 def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
     """Build the `llm_request` middleware callback for this registration."""
 
     def on_llm_request(**kwargs: Any) -> dict[str, Any] | None:
         try:
-            if not state.is_enabled():
+            if not _is_effectively_enabled(state):
                 scope = scope_for(state, kwargs.get("session_id", ""))
                 registration = state.engine.store.adapter_session(scope) if scope is not None else None
-                if registration is not None:
+                hidden_items = (
+                    [item for item in state.engine.store.items(scope) if item.visibility == "hidden"]
+                    if scope is not None
+                    else []
+                )
+                hidden_messages = (
+                    set(state.engine.store.hidden_message_keys(scope))
+                    if scope is not None
+                    else set()
+                )
+                if scope is not None and (registration is not None or hidden_items or hidden_messages):
                     _register_adapter(state, scope, False)
-                if scope is not None and (state.child_links.get(scope.session_id) or (registration and registration.get("parent_scope"))):
-                    request = kwargs.get("request")
-                    if isinstance(request, dict):
-                        return {"request": _child_request(request), "source": SOURCE}
+                request = kwargs.get("request")
+                child = bool(
+                    scope is not None
+                    and (state.child_links.get(scope.session_id) or (registration and registration.get("parent_scope")))
+                )
+                if child and isinstance(request, dict):
+                    request = _child_request(request)
+                if scope is not None and isinstance(request, dict) and (hidden_items or hidden_messages):
+                    api_mode = kwargs.get("api_mode", "")
+                    return _protection_only_rewrite(
+                        state,
+                        scope,
+                        api_mode if isinstance(api_mode, str) else "",
+                        request,
+                        hidden_items,
+                        hidden_messages,
+                    )
+                if child and isinstance(request, dict):
+                    return {"request": request, "source": SOURCE}
                 return None
             request = kwargs.get("request")
             if not isinstance(request, dict):

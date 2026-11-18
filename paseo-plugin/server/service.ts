@@ -20,6 +20,7 @@ import {
   type Result,
 } from "../../packages/core/src/index.ts";
 import { bindAgents } from "./mapping.ts";
+import { inspectHermesToggle, setHermesToggleAcrossProfiles } from "./adapterToggles.ts";
 import {
   loadTimeline,
   measuredTokens,
@@ -102,12 +103,18 @@ export class PaseoService {
       "SELECT * FROM adapter_sessions WHERE scope_key=?",
       [scope],
     );
+    const adapterId = scope.startsWith("hermes:")
+      ? "hermes"
+      : scope.startsWith("omp:")
+        ? "omp"
+        : null;
+    const control = adapterId ? this.store.getAdapterControl(adapterId) : null;
     const state =
       !registration || scope.startsWith("pi:")
         ? "adapter_not_detected"
         : registration.adapter_protocol !== 1
           ? "incompatible_protocol"
-          : !registration.enabled
+          : !registration.enabled || (control !== null && !control.enabled)
             ? "adapter_disabled"
             : "ready";
     return {
@@ -128,8 +135,61 @@ export class PaseoService {
     };
   }
 
+  getAdapterToggles(): Reply {
+    const ompEnabled = this.store.getAdapterControl("omp")?.enabled ?? true;
+    const omp = {
+      installed: true,
+      enabled: ompEnabled,
+      statusText: ompEnabled ? "Active" : "Paused (existing hidden items protected)",
+    };
+    const hermesCtrl = this.store.getAdapterControl("hermes");
+    const hermes = inspectHermesToggle(this.home, hermesCtrl?.enabled);
+    return { ok: true, omp, hermes };
+  }
+
+  setAdapterToggle(input: Record<string, any>): Reply {
+    const adapter = input?.adapter;
+    const enabled = input?.enabled;
+    if ((adapter !== "omp" && adapter !== "hermes") || typeof enabled !== "boolean") {
+      return { ...this.getAdapterToggles(), ok: false, error: "invalid_params" };
+    }
+    if (adapter === "omp") {
+      this.store.setAdapterControl("omp", enabled);
+      this.store.driver.run(
+        "UPDATE adapter_sessions SET enabled=? WHERE adapter_id='omp' OR scope_key LIKE 'omp:%'",
+        [Number(enabled)],
+      );
+      return this.getAdapterToggles();
+    }
+    const writeRes = setHermesToggleAcrossProfiles(this.home, enabled);
+    if (!writeRes.ok) {
+      const current = this.getAdapterToggles();
+      return {
+        ...current,
+        ok: false,
+        error: writeRes.error ?? "hermes_toggle_failed",
+        hermes: {
+          ...current.hermes,
+          error: writeRes.error ?? "Failed to update Hermes config",
+        },
+      };
+    }
+    this.store.setAdapterControl("hermes", enabled);
+    this.store.driver.run(
+      "UPDATE adapter_sessions SET enabled=? WHERE adapter_id='hermes' OR scope_key LIKE 'hermes:%'",
+      [Number(enabled)],
+    );
+    return this.getAdapterToggles();
+  }
+
   async handle(method: string, input: Record<string, any>): Promise<Reply> {
     try {
+      if (method === "getAdapterToggles" || method === "session-nav.get-adapter-toggles") {
+        return this.getAdapterToggles();
+      }
+      if (method === "setAdapterToggle" || method === "session-nav.set-adapter-toggle") {
+        return this.setAdapterToggle(input);
+      }
       if (method === "scopes") return this.scopes(input.parent_scope);
       const requested = input.scope_key;
       if (typeof requested !== "string" || requested.split(":").length !== 4)

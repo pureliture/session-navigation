@@ -1,11 +1,13 @@
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { usePaseo, useRpc, useTabState } from "@getpaseo/plugin/client";
-import { ScrollView as UiScrollView } from "@getpaseo/plugin/client/ui";
+import { Icon as UiIcon, ScrollView as UiScrollView } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView as RnScrollView, Text, View } from "react-native";
 import { listScopesRpc } from "../shared/sessionNav";
 import { demandedWorkspaceAgents, readHostFocus, subscribeHostFocus } from "./hostCompat";
+import { resolveOutlineSettingsValues, useOutlineSettings } from "./outlineSettingsHook";
+import { openSessionNavSettings } from "./registration";
 import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, resolveWorkspaceSessionState } from "./sessionFollowing";
 import { SessionNavPanel } from "./sessionNavPanel";
 import { listWorkspaceAgents } from "./workspaceAgents";
@@ -19,6 +21,8 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
   const hasDocument = hasDomDocument();
   const [state, setState] = useTabState(props.tab, workspaceTabSchema, defaultWorkspaceState);
   const [choosing, setChoosing] = useState(false);
+  const outlineSettingsState = useOutlineSettings();
+  const { followVisibleSession } = resolveOutlineSettingsValues(outlineSettingsState);
   const agents = useQuery({
     queryKey: ["session-nav", "workspace-agents", props.host.id, props.workspaceId],
     queryFn: ({ signal }) => listWorkspaceAgents(paseo, props.workspaceId, signal),
@@ -126,19 +130,20 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
     demandedAgentIds: demandedIds,
     boundSessions,
     workspaceAgentIds: candidateAgentIds,
+    followVisible: followVisibleSession,
   });
 
   const effectiveSelected = agents.data?.find((agent) => agent.id === resolution.effectiveAgentId);
   const headerText = state.agentId
     ? `Pinned · ${selected?.title ?? state.agentId.slice(0, 8)} ▾`
-    : !hasDocument && resolution.mode === "chooser"
+    : resolution.mode === "chooser"
       ? "Choose a session ▾"
       : !hasDocument && resolution.effectiveAgentId
         ? `${resolution.mode === "single-auto" ? "Session" : "Following"} · ${effectiveSelected?.title ?? resolution.effectiveAgentId.slice(0, 8)} ▾`
         : "Follow visible session ▾";
 
   const showChooser = choosing || resolution.mode === "chooser";
-  const showFollowOption = hasDocument || hostFocus.supported || explicitActiveSupported;
+  const showFollowOption = followVisibleSession && (hasDocument || hostFocus.supported || explicitActiveSupported);
   const boundIds = useMemo(() => new Set(boundSessions.map((session) => session.agentId)), [boundSessions]);
   const otherAgents = useMemo(
     () => (agents.data ?? []).filter((agent) => !boundIds.has(agent.id) && (choosing ? true : !agent.archived)),
@@ -149,10 +154,45 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
   const muted = props.theme.colors.foregroundMuted;
   return (
     <View style={{ flex: 1, minHeight: 0 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Choose navigator agent" onPress={() => setChoosing(!choosing)}
-        style={{ padding: 10, borderBottomWidth: 1, borderColor: props.theme.colors.border }}>
-        <Text numberOfLines={1} style={{ color }}>{headerText}</Text>
-      </Pressable>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          borderBottomWidth: 1,
+          borderColor: props.theme.colors.border,
+          paddingRight: 8,
+        }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choose navigator agent"
+          onPress={() => setChoosing(!choosing)}
+          style={{ flex: 1, minWidth: 0, padding: 10 }}
+        >
+          <Text numberOfLines={1} style={{ color }}>{headerText}</Text>
+        </Pressable>
+        {resolution.mode === "chooser" ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open session navigation settings"
+            onPress={() => openSessionNavSettings()}
+            style={{
+              paddingHorizontal: 6,
+              paddingVertical: 4,
+              borderRadius: 4,
+              borderWidth: 1,
+              borderColor: props.theme.colors.border,
+              backgroundColor: props.theme.colors.surface1,
+            }}
+          >
+            {typeof UiIcon === "function" ? (
+              <UiIcon name="Settings" size={13} color={muted} />
+            ) : (
+              <Text style={{ color: muted, fontSize: 11, fontWeight: "700" }}>⚙</Text>
+            )}
+          </Pressable>
+        ) : null}
+      </View>
       {showChooser ? (
         <ScrollView
           nestedScrollEnabled={true}
@@ -193,10 +233,10 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
         </ScrollView>
       ) : null}
       {resolution.mode === "chooser" ? null : (
-        <SessionNavPanel {...props} key={state.agentId ?? (hasDocument ? "follow" : `native-${resolution.effectiveAgentId}`)}
+        <SessionNavPanel {...props} key={state.agentId ?? (hasDocument && followVisibleSession ? "follow" : `native-${resolution.effectiveAgentId}`)}
           context="agent" agentId={state.agentId ?? resolution.effectiveAgentId ?? ""}
           params={{ agentId: state.agentId ?? resolution.effectiveAgentId ?? "" }}
-          followVisible={!state.agentId} candidateAgentIds={candidateAgentIds}
+          followVisible={!state.agentId && followVisibleSession} candidateAgentIds={candidateAgentIds}
           tab={{ state: state.outline, setState: (outline) => setState({ ...state, outline }), setModified: props.tab.setModified }} />
       )}
     </View>

@@ -1,5 +1,11 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+export {
+  DEFAULT_OUTLINE_SETTINGS,
+  outlineSettings,
+  outlineSettingsSchema,
+  type OutlineSettingsValues,
+} from "./outlineSettings";
 
 export const StatusSchema = z.enum(["hidden", "visible", "unhidden"]);
 
@@ -261,6 +267,46 @@ export const dbChoiceRpc = defineRpc({
   }),
   output: DbChoiceResultSchema,
 });
+
+export const OmpAdapterToggleSchema = z.object({
+  installed: z.boolean(),
+  enabled: z.boolean(),
+  statusText: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export const HermesAdapterToggleSchema = z.object({
+  installed: z.boolean(),
+  enabled: z.boolean(),
+  profileCount: z.number().int().nonnegative(),
+  mixed: z.boolean().optional(),
+  statusText: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export const AdapterTogglesResultSchema = z.object({
+  ok: z.boolean(),
+  omp: OmpAdapterToggleSchema,
+  hermes: HermesAdapterToggleSchema,
+  error: z.string().optional(),
+});
+
+export const getAdapterTogglesRpc = defineRpc({
+  name: "session-nav.get-adapter-toggles",
+  input: z.object({}),
+  output: AdapterTogglesResultSchema,
+});
+
+export const setAdapterToggleRpc = defineRpc({
+  name: "session-nav.set-adapter-toggle",
+  input: z.object({
+    adapter: z.enum(["omp", "hermes"]),
+    enabled: z.boolean(),
+  }),
+  output: AdapterTogglesResultSchema,
+});
+
+export type AdapterTogglesResult = z.infer<typeof AdapterTogglesResultSchema>;
 
 export interface ScopeContext {
   adapterId?: string;

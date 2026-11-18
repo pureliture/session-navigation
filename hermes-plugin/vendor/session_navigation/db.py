@@ -230,6 +230,13 @@ _SCHEMA_SQL = """
             PRIMARY KEY(scope_key,item_id)
         );
         CREATE INDEX IF NOT EXISTS idx_adapter_targets_scope_seq ON adapter_targets(scope_key,seq);
+
+        CREATE TABLE IF NOT EXISTS adapter_control (
+            adapter_id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            updated_at REAL NOT NULL
+        );
         """
 
 
@@ -268,7 +275,7 @@ def open_db(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
         # tables (meta-first scripts commit mid-way; meta presence alone is
         # not proof the schema is complete). Read-only fast path first: a
         # complete schema never needs a write transaction.
-        required = {"meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets"}
+        required = {"meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets", "adapter_control"}
         try:
             have = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}

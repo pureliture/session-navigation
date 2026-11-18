@@ -154,3 +154,56 @@ class AdapterRegistryMixin:
             return []
         with self._lock:
             return [dict(row) for row in self.connection.execute("SELECT * FROM adapter_targets WHERE scope_key=? ORDER BY seq", (session["scope_key"],))]
+
+    def get_adapter_control(self, adapter_id: str):
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            return None
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT * FROM adapter_control WHERE adapter_id=?",
+                (adapter_id.strip(),),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "adapter_id": str(row["adapter_id"]),
+                "enabled": bool(row["enabled"]),
+                "revision": int(row["revision"]),
+                "updated_at": float(row["updated_at"]),
+            }
+
+    def set_adapter_control(self, adapter_id: str, enabled: bool, *, now: float | None = None):
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            raise ValueError("invalid_adapter_registration")
+        aid = adapter_id.strip()
+        flag = bool(enabled)
+        stamp = time.time() if now is None else float(now)
+        with self._lock, self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT revision FROM adapter_control WHERE adapter_id=?",
+                (aid,),
+            ).fetchone()
+            revision = (int(row["revision"]) + 1) if row is not None else 1
+            self.connection.execute(
+                """INSERT INTO adapter_control(adapter_id, enabled, revision, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(adapter_id) DO UPDATE SET
+                     enabled=excluded.enabled,
+                     revision=excluded.revision,
+                     updated_at=excluded.updated_at""",
+                (aid, int(flag), revision, stamp),
+            )
+            self.connection.execute(
+                "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=?",
+                (int(flag), aid),
+            )
+            return {
+                "adapter_id": aid,
+                "enabled": flag,
+                "revision": revision,
+                "updated_at": stamp,
+            }
+
+    getAdapterControl = get_adapter_control
+    setAdapterControl = set_adapter_control

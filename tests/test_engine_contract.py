@@ -156,3 +156,23 @@ def test_target_byte_bound_and_missing_adapter(tmp_path, monkeypatch):
     store.publish_targets(scope, [(record(2, "z" * 201), {})])
     assert len(store.adapter_targets(scope)) == 1
     store.close()
+
+
+def test_adapter_control_persists_revisions_and_syncs_sessions(tmp_path):
+    path = tmp_path / "control.db"
+    store = SQLiteContextStore(path)
+    assert store.get_adapter_control("hermes") is None
+    assert store.getAdapterControl("omp") is None
+    scope = "hermes:default:s1:unknown"
+    register(store, scope=scope)
+    first = store.set_adapter_control("hermes", False, now=100.0)
+    assert first == {"adapter_id": "hermes", "enabled": False, "revision": 1, "updated_at": 100.0}
+    assert store.adapter_session(scope)["enabled"] is False
+    assert not store.adapter_can(scope, "hide")
+    second = store.setAdapterControl("hermes", True, now=200.0)
+    assert second == {"adapter_id": "hermes", "enabled": True, "revision": 2, "updated_at": 200.0}
+    assert store.adapter_session(scope)["enabled"] is True
+    store.close()
+    reopened = SQLiteContextStore(path)
+    assert reopened.get_adapter_control("hermes") == second
+    reopened.close()

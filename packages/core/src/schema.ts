@@ -87,4 +87,10 @@ export const schema: string[] = [
         PRIMARY KEY (scope_key, item_id)
       )`,
   `CREATE INDEX IF NOT EXISTS idx_adapter_targets_scope_seq ON adapter_targets (scope_key, seq)`,
+  `CREATE TABLE IF NOT EXISTS adapter_control (
+        adapter_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL,
+        revision INTEGER NOT NULL,
+        updated_at REAL NOT NULL
+      )`,
 ];

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -1806,4 +1806,154 @@ test("list RPC supports limit + before_index cursor pagination, preserves contig
   const searchRes = await call("list", { query: "First prompt", limit: 2 });
   expect(searchRes.items.map((r: any) => r.timeline_index)).toEqual([0]);
   expect(searchRes.has_older).toBe(false);
+});
+
+test("session-nav adapter toggles inspect, update multi-profile Hermes YAML atomically, sync capabilities, and reject symlinks", async () => {
+  const { home, store, service, register } = fixture([], true);
+
+  // Default state before .hermes exists
+  const initial = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(initial.ok).toBe(true);
+  expect(initial.omp).toMatchObject({ installed: true, enabled: true });
+  expect(initial.hermes).toMatchObject({ installed: false, enabled: false, profileCount: 0 });
+
+  // Build default + 2 named Hermes profiles inside temp home
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  const tycheDir = join(hermesRoot, "profiles", "tyche");
+  mkdirSync(atlasDir, { recursive: true });
+  mkdirSync(tycheDir, { recursive: true });
+
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const tycheCfg = join(tycheDir, "config.yaml");
+
+  writeFileSync(
+    rootCfg,
+    [
+      "# Global Hermes configuration",
+      "model: claude-3-7-sonnet # keep model intact",
+      "plugins:",
+      "  entries:",
+      "    other-plugin:",
+      "      enabled: true",
+      "    session-navigation:",
+      "      enabled: true # still valid",
+      "      settings:",
+      "        enabled: true # toggle comment preserved",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    atlasCfg,
+    [
+      "# Atlas profile config",
+      "model: gpt-5",
+      "plugins:",
+      "  entries:",
+      "    session-navigation:",
+      "      settings:",
+      "        enabled: false",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    tycheCfg,
+    [
+      "# Tyche profile config without session-navigation entry yet",
+      "model: gemini-2.5-pro",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  // Register hermes scope with a hidden message so unhide stays true when paused
+  const hermesScope = "hermes:atlas:sid:main";
+  register(hermesScope);
+  expect(
+    store.setMessageVisibility(hermesScope, "msg:user:1", "user", "sha", 4, "hidden", 1).ok,
+  ).toBe(true);
+
+  const mixed = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(mixed.ok).toBe(true);
+  expect(mixed.hermes).toMatchObject({
+    installed: true,
+    enabled: true,
+    mixed: true,
+    profileCount: 3,
+  });
+
+  // Disable Hermes globally across all 3 profiles
+  const disabledHermes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(disabledHermes.ok).toBe(true);
+  expect(disabledHermes.hermes).toMatchObject({
+    installed: true,
+    enabled: false,
+    profileCount: 3,
+  });
+  expect(disabledHermes.hermes.mixed).toBeUndefined();
+
+  for (const cfgPath of [rootCfg, atlasCfg, tycheCfg]) {
+    const content = readFileSync(cfgPath, "utf8");
+    expect(content).toContain("# ");
+    expect(content).toContain("model:");
+    expect(content).toContain("enabled: false");
+  }
+  const rootAfterOff = readFileSync(rootCfg, "utf8");
+  expect(rootAfterOff).toContain("# Global Hermes configuration");
+  expect(rootAfterOff).toContain("model: claude-3-7-sonnet # keep model intact");
+  expect(rootAfterOff).toContain("other-plugin:\n      enabled: true");
+  expect(rootAfterOff).toContain("enabled: false # toggle comment preserved");
+
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
+  expect(service.capabilities(hermesScope)).toMatchObject({
+    state: "adapter_disabled",
+    hide: false,
+    summarize: false,
+    unhide: true,
+  });
+
+  // Re-enable Hermes globally across all 3 profiles
+  const enabledHermes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(enabledHermes.ok).toBe(true);
+  expect(enabledHermes.hermes).toMatchObject({
+    installed: true,
+    enabled: true,
+    profileCount: 3,
+  });
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
+  expect(service.capabilities(hermesScope).state).toBe("ready");
+  expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: true");
+
+  // Disable OMP via toggle and confirm capability state transitions cleanly
+  const disabledOmp = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "omp",
+    enabled: false,
+  });
+  expect(disabledOmp.ok).toBe(true);
+  expect(disabledOmp.omp.enabled).toBe(false);
+  expect(store.getAdapterControl("omp")?.enabled).toBe(false);
+  expect(service.capabilities(scope).state).toBe("adapter_disabled");
+
+  // Symlink defense: replacing a profile config with an external symlink must be rejected without touching target
+  const externalTarget = join(home, "outside-secret.yaml");
+  writeFileSync(externalTarget, "untouched: true\n", "utf8");
+  rmSync(tycheCfg);
+  symlinkSync(externalTarget, tycheCfg);
+
+  const symlinkResult = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(symlinkResult.ok).toBe(false);
+  expect(symlinkResult.error).toBe("unsafe_hermes_config_path");
+  expect(readFileSync(externalTarget, "utf8")).toBe("untouched: true\n");
 });

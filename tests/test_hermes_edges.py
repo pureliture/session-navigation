@@ -221,30 +221,138 @@ def test_session_expiry_forgets_quiet_scopes():
 
 
 
-def test_disable_returns_to_original_and_reenable_applies():
+def test_disable_protects_existing_hidden_items_and_allows_unhide_then_reenable():
     ctx = FakeCtx(config={"enabled": True})
     state = plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
     compact = ctx.tools["hide_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
+    unhide = ctx.tools["unhide_context"]["handler"]
     body = _long_body()
     kwargs = dict(session_id="sess-toggle", api_mode="codex_responses")
 
     mw(request=_codex_request(body), **kwargs)
-    assert json.loads(compact({"tool_call_id": "call_1"},
-                            session_id="sess-toggle"))["ok"] is True
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-toggle"))
+    assert compacted["ok"] is True
     applied = mw(request=_codex_request(body), **kwargs)
     assert applied["request"]["input"][1]["output"] != body
 
     ctx.config["enabled"] = False
-    assert mw(request=_codex_request(body), **kwargs) is None
     untouched = _codex_request(body)
     snapshot = copy.deepcopy(untouched)
-    assert mw(request=untouched, **kwargs) is None
+    protected = mw(request=untouched, **kwargs)
     assert untouched == snapshot
+    assert protected is not None
+    assert protected["reason"].startswith("protection_only")
+    assert protected["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in protected["request"]["input"][1]["output"]
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-toggle")) == {
+        "ok": False, "error": "disabled",
+    }
+    listed = json.loads(list_items({}, session_id="sess-toggle"))
+    assert listed["ok"] is True and listed["compacted_count"] == 1
+    assert json.loads(unhide({"item_id": compacted["item_id"]}, session_id="sess-toggle"))["ok"] is True
+    assert mw(request=_codex_request(body), **kwargs) is None
 
     ctx.config["enabled"] = True
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-toggle"))["ok"] is True
     again = mw(request=_codex_request(body), **kwargs)
     assert again["request"]["input"][1]["output"] != body
+
+
+def test_adapter_control_off_enters_protection_only_without_recording_pending_or_reminders(tmp_path):
+    import hashlib
+    from dataclasses import replace
+
+    ctx = FakeCtx(config={"enabled": True})
+    state = plugin.register(ctx)
+    state.count_middlewares = lambda: 0
+    command_mod = _adapter.command
+    mw = ctx.middlewares["llm_request"][0]
+    compact = ctx.tools["hide_context"]["handler"]
+    summarize = ctx.tools["summarize_context"]["handler"]
+    manage = ctx.tools["manage_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
+    unhide = ctx.tools["unhide_context"]["handler"]
+
+    body = _long_body()
+    big_unhidden = "\n".join(f"Large unhidden line {i:04d} padding " + "x" * 120 for i in range(400))
+    req = {
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "secret prompt"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": json.dumps({"path": "results/output.json"})},
+            {"type": "function_call_output", "call_id": "call_1", "output": body},
+            {"type": "function_call", "call_id": "call_2", "name": "read_file", "arguments": json.dumps({"path": "results/big.txt"})},
+            {"type": "function_call_output", "call_id": "call_2", "output": big_unhidden},
+        ]
+    }
+    kwargs = dict(session_id="sess-ctrl-off", api_mode="codex_responses")
+    mw(request=req, **kwargs)
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-ctrl-off"))
+    assert compacted["ok"] is True
+
+    scope = plugin.scope_for(state, "sess-ctrl-off")
+    assert scope is not None
+    # Seed a hidden user message AND mark call_1 as summarize_pending to confirm pending execution stops when Off.
+    stored = state.engine.store.get(scope, compacted["item_id"])
+    assert stored is not None
+    state.engine.store.put(
+        scope,
+        replace(stored, compaction_source="summarize_pending", version=stored.version + 1),
+        expected_version=stored.version,
+    )
+    msg_key, role, _idx, msg_text = _adapter.payload.message_keys("codex_responses", req)[0]
+    assert state.engine.store.set_message_visibility(
+        scope,
+        msg_key,
+        kind=role,
+        content_sha256=hashlib.sha256(msg_text.encode("utf-8")).hexdigest(),
+        char_count=len(msg_text),
+        visibility="hidden",
+    )["ok"] is True
+
+    class FailIfCalledSummarizer:
+        async def summarize(self, *args, **kwargs):
+            raise AssertionError("summarizer must not run while adapter_control is Off")
+
+    state.summarizer = FailIfCalledSummarizer()
+    state.reminders.note = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reminders must not run while Off"))
+
+    # Turn Hermes Off via shared adapter_control table (even while ctx.config["enabled"] stays True!).
+    state.engine.store.set_adapter_control("hermes", False)
+    state.store._sessions.clear()
+
+    out = mw(request=req, **kwargs)
+    assert out is not None
+    assert out["reason"] == "protection_only (applied 1)"
+    assert all(item.get("role") != "user" for item in out["request"]["input"])
+    assert out["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in out["request"]["input"][1]["output"]
+    assert out["request"]["input"][3]["output"] == big_unhidden
+    # No new candidates recorded while Off
+    assert state.store.entries(scope.scope_key()) == []
+    # Pending summary was NOT executed
+    assert state.engine.store.get(scope, compacted["item_id"]).compaction_source == "summarize_pending"
+    assert state.engine.store.adapter_session(scope)["enabled"] is False
+
+    # Mutating tools and mutating /nav commands are blocked while Off
+    assert json.loads(compact({"tool_call_id": "call_2"}, session_id="sess-ctrl-off")) == {"ok": False, "error": "disabled"}
+    assert json.loads(summarize({"tool_call_id": "call_2"}, session_id="sess-ctrl-off")) == {"ok": False, "error": "disabled"}
+    assert json.loads(manage({"tool_call_ids": ["call_2"], "action": "hide"}, session_id="sess-ctrl-off")) == {"ok": False, "error": "disabled"}
+    assert "disabled" in command_mod.nav_command(state=state, raw_args="hide call_2", session_id="sess-ctrl-off").lower()
+    assert "disabled" in command_mod.nav_command(state=state, raw_args="hide-msg 1", session_id="sess-ctrl-off").lower()
+
+    # Read & recovery paths (/nav status, /nav list, /nav unhide, /nav unhide-msg, list_context_items, unhide_context) work while Off
+    status_out = command_mod.nav_command(state=state, raw_args="status", session_id="sess-ctrl-off")
+    assert "protection_only" in status_out and compacted["item_id"] in status_out
+    listed = json.loads(list_items({}, session_id="sess-ctrl-off"))
+    assert listed["ok"] is True and listed["compacted_count"] == 1
+    assert json.loads(list_items({"view": "candidates"}, session_id="sess-ctrl-off")) == {"ok": True, "items": []}
+
+    assert command_mod.nav_command(state=state, raw_args="unhide 1", session_id="sess-ctrl-off").startswith("Unhidden")
+    assert command_mod.nav_command(state=state, raw_args="unhide-msg 1", session_id="sess-ctrl-off").startswith("Unhidden")
+    assert mw(request=req, **kwargs) is None
+    assert json.loads(unhide({"item_id": compacted["item_id"]}, session_id="sess-ctrl-off"))["ok"] is True
 
 
 def test_first_version_is_rule_only_no_external_call():

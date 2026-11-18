@@ -77,6 +77,7 @@ def snapshot(store):
         "calls",
         "adapter_sessions",
         "adapter_targets",
+        "adapter_control",
     ):
         rows = []
         for row in store.connection.execute(f"SELECT * FROM {table} ORDER BY 1,2"):
@@ -257,6 +258,7 @@ async def vectors():
                 "calls",
                 "adapter_sessions",
                 "adapter_targets",
+                "adapter_control",
             )
         }
         shared = dict(

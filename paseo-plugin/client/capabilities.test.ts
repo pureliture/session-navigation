@@ -53,4 +53,13 @@ test("UI capability gates retain display and offline Unhide, and distinguish ada
     "Adapter not detected",
   );
   expect(capabilityNotice("db_error", undefined, { provider: "claude", rowCount: 0 })).toContain("Database error");
+  expect(
+    capabilityNotice(undefined, {
+      display: true,
+      hide: false,
+      summarize: false,
+      unhide: true,
+      state: "adapter_disabled",
+    }),
+  ).toBe("Context management paused in settings — existing hidden items stay protected.");
 });

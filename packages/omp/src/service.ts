@@ -79,9 +79,14 @@ export class OmpService {
     this.engine = new Engine(store);
   }
 
+  private isAdapterEnabled(): boolean {
+    return this.store.getAdapterControl("omp")?.enabled ?? true;
+  }
+
   async handle(method: string, params: unknown): Promise<Reply> {
     try {
       if (method === "ping") return { ok: true, protocol: 1 };
+      if (method === "adapter_status") return { ok: true, enabled: this.isAdapterEnabled() };
       if (!object(params)) return { ok: false, error: "invalid_params" };
       if (method === "fork_scope") return this.fork(params);
       const session = params.session_id;
@@ -130,13 +135,20 @@ export class OmpService {
           ),
         );
       }
-      if (method === "apply_summary" || method === "summary_failed")
+      if (method === "apply_summary" || method === "summary_failed") {
+        if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
         return this.finishSummary(scope, method, params);
+      }
       if (method === "list_items") return this.listItems(scope, session, params);
       if (method === "list_candidates") return this.listCandidates(scope, session, params);
-      if (method === "manage") return this.manage(scope, session, params);
-      if (method === "compact" || method === "summarize" || method === "summary_state")
+      if (method === "manage") {
+        if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
+        return this.manage(scope, session, params);
+      }
+      if (method === "compact" || method === "summarize" || method === "summary_state") {
+        if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
         return this.compact(scope, session, method, params);
+      }
       return { ok: false, error: "unknown_method" };
     } catch (error) {
       if (error instanceof EngineError)
@@ -241,11 +253,11 @@ export class OmpService {
     };
   }
 
-  private register(scope: string, params: Record<string, unknown>): void {
+  private register(scope: string, params: Record<string, unknown>, enabled = this.isAdapterEnabled()): void {
     this.store.register(scope, {
       adapter_id: "omp", adapter_protocol: 1,
       capabilities: { hide: true, summarize: true, unhide: true },
-      enabled: true, instance_id: this.instanceId,
+      enabled, instance_id: this.instanceId,
       parent_scope: params.parent_scope as string | undefined,
       tool_call_id: params.tool_call_id as string | undefined,
       subagent_id: params.subagent_id as string | undefined,
@@ -276,22 +288,25 @@ export class OmpService {
       if (totalBytes > MAX_CHUNK_BYTES) return { ok: false, error: "snapshot_too_large" };
       selected.set(record.call_id, record);
     }
+    const enabled = this.isAdapterEnabled();
     this.adoptLegacySession(scope, session);
-    this.register(scope, params);
-    if (this.store.registration(scope)?.parent_scope)
-      this.store.publishTargets(scope, [...selected.values()]
-        .filter((record) => !refusalReason(record) &&
-          !isDestructive(record.invocation.tool_name, record.invocation.arguments) &&
-          !this.identityError(scope, record))
-        .map((record) => ({ record })));
-    for (const record of selected.values()) {
-      this.store.upsertUnit(scope, {
-        unit_id: pairUnitId(scope, record.call_id, record.content_sha256),
-        kind: "tool_result",
-        tool_call_id: record.call_id,
-        content_sha256: record.content_sha256,
-        char_count: length(record.content),
-      });
+    this.register(scope, params, enabled);
+    if (enabled) {
+      if (this.store.registration(scope)?.parent_scope)
+        this.store.publishTargets(scope, [...selected.values()]
+          .filter((record) => !refusalReason(record) &&
+            !isDestructive(record.invocation.tool_name, record.invocation.arguments) &&
+            !this.identityError(scope, record))
+          .map((record) => ({ record })));
+      for (const record of selected.values()) {
+        this.store.upsertUnit(scope, {
+          unit_id: pairUnitId(scope, record.call_id, record.content_sha256),
+          kind: "tool_result",
+          tool_call_id: record.call_id,
+          content_sha256: record.content_sha256,
+          char_count: length(record.content),
+        });
+      }
     }
     for (const [callId, record] of selected) previous.set(callId, record);
     this.snapshots.set(session, { token, records: previous });
@@ -311,7 +326,7 @@ export class OmpService {
         sha256: record.content_sha256,
         text: item.compacted,
       });
-      if (item.compaction_source === "summarize_pending")
+      if (enabled && item.compaction_source === "summarize_pending")
         pending.push({
           item_id: item.item_id,
           call_id: record.call_id,
@@ -319,7 +334,7 @@ export class OmpService {
           content: record.content,
         });
     }
-    const candidates = this.store.registration(scope)?.parent_scope
+    const candidates = !enabled || this.store.registration(scope)?.parent_scope
       ? { total: 0, total_bytes: 0, candidate_ids: [] as string[], items: [] }
       : this.candidateSnapshot(scope, previous.values(), previous.size);
     return {
@@ -327,6 +342,7 @@ export class OmpService {
       patches,
       hidden_messages: this.store.hiddenMessages(scope),
       pending_summaries: pending,
+      ...(!enabled ? { adapter_enabled: false } : {}),
       ...(candidates.total
         ? {
             eligible_count: candidates.total,
@@ -381,27 +397,32 @@ export class OmpService {
       bytes_size: bytes(item.original),
       tokens_display: "—",
     }));
-    const recorded = new Set(this.engine.listItems(scope).map((item) => item.tool_call_id));
-    for (const record of this.confirmed(session, params.snapshot_id)?.records.values() ?? []) {
-      if (!recorded.has(record.call_id))
-        rows.push({
-          item_id: null,
-          call_id: record.call_id,
-          tool_call_id: record.call_id,
-          content_sha256: record.content_sha256,
-          visibility: "unhidden",
-          status: "unhidden",
-          version: 1,
-          source: "unrecorded",
-          bytes_size: bytes(record.content),
-          tool_name: record.invocation.tool_name,
-          tokens_display: "—",
-        });
+    if (this.isAdapterEnabled()) {
+      const recorded = new Set(this.engine.listItems(scope).map((item) => item.tool_call_id));
+      for (const record of this.confirmed(session, params.snapshot_id)?.records.values() ?? []) {
+        if (!recorded.has(record.call_id))
+          rows.push({
+            item_id: null,
+            call_id: record.call_id,
+            tool_call_id: record.call_id,
+            content_sha256: record.content_sha256,
+            visibility: "unhidden",
+            status: "unhidden",
+            version: 1,
+            source: "unrecorded",
+            bytes_size: bytes(record.content),
+            tool_name: record.invocation.tool_name,
+            tokens_display: "—",
+          });
+      }
     }
     return { ok: true, items: rows };
   }
 
   private listCandidates(scope: string, session: string, params: Record<string, unknown>): Reply {
+    if (!this.isAdapterEnabled()) {
+      return { ok: true, total: 0, total_bytes: 0, candidate_ids: [], items: [] };
+    }
     const snapshot = this.confirmed(session, params.snapshot_id);
     if (!snapshot) return { ok: false, error: "unconfirmed_snapshot" };
     const limit = params.limit ?? 30;

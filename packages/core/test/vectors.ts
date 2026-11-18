@@ -113,7 +113,7 @@ export function record(content: string, itemIdentity = "call"): RecordInput {
 }
 export function snapshot(store: Store): unknown {
   return Object.fromEntries(
-    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets"].map(
+    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets", "adapter_control"].map(
       (table) => [
         table,
         store.driver.all(`SELECT * FROM ${table} ORDER BY 1,2`).map((row) => {
@@ -247,7 +247,7 @@ async function sharedStoreVectors(): Promise<{ shared: unknown; pending: unknown
   ];
   store.recordCall(scope, "usage", 10, 20, 30, 0.25, 100);
   const schemaInfo = Object.fromEntries(
-    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets"].map(
+    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets", "adapter_control"].map(
       (table) => [table, store.driver.all(`PRAGMA table_info(${table})`)],
     ),
   );

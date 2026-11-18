@@ -54,7 +54,7 @@ export function capabilityNotice(
   if (error)
     return `Engine/runtime error: ${error}. Refresh the outline before retrying.`;
   if (capabilities?.state === "adapter_disabled")
-    return "The session adapter is disabled. Enable it in the session host to hide or summarize.";
+    return "Context management paused in settings — existing hidden items stay protected.";
   if (!capabilities || capabilities.state === "adapter_not_detected") {
     if (!isManagedAdapterProvider(options?.provider, options?.scopeKey)) return null;
     if (options?.rowCount === 0 && (!options?.scopeKey || !capabilities || capabilities.state === "adapter_not_detected")) {
