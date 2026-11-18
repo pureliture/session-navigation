@@ -843,3 +843,428 @@ db.close();
 """
     proc = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_hermes_registers_protection_markers_and_fails_closed_on_control_lookup_error(monkeypatch):
+    ctx = FakeCtx(config={"enabled": True})
+    state = plugin.register(ctx)
+    mw = ctx.middlewares["llm_request"][0]
+    compact = ctx.tools["hide_context"]["handler"]
+    body = _long_body()
+    kwargs = dict(session_id="sess-markers", api_mode="codex_responses")
+
+    mw(request=_codex_request(body), **kwargs)
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-markers"))
+    assert compacted["ok"] is True
+
+    scope = plugin.scope_for(state, "sess-markers")
+    assert scope is not None
+    reg_on = state.engine.store.adapter_session(scope)
+    assert reg_on is not None
+    assert reg_on["enabled"] is True
+    assert reg_on["capabilities"]["protection_only"] is True
+    assert reg_on["capabilities"]["bundle_fingerprint"] == _adapter.factories.RUNTIME_BUNDLE_FINGERPRINT
+
+    # Simulate an error reading adapter_control: _is_effectively_enabled must fail closed (False),
+    # keeping hidden items protected in protection_only mode and blocking new mutations.
+    monkeypatch.setattr(
+        state.engine.store,
+        "get_adapter_control",
+        lambda _aid: (_ for _ in ()).throw(RuntimeError("control_table_locked")),
+    )
+    assert _adapter.factories._is_effectively_enabled(state) is False
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-markers")) == {
+        "ok": False, "error": "disabled",
+    }
+    protected = mw(request=_codex_request(body), **kwargs)
+    assert protected is not None
+    assert protected["reason"] == "protection_only (applied 1)"
+    assert protected["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in protected["request"]["input"][1]["output"]
+
+    reg_off = state.engine.store.adapter_session(scope)
+    assert reg_off is not None
+    assert reg_off["enabled"] is False
+    assert reg_off["capabilities"]["protection_only"] is True
+    assert reg_off["capabilities"]["bundle_fingerprint"] == _adapter.factories.RUNTIME_BUNDLE_FINGERPRINT
+
+
+def test_protection_only_and_enabled_modes_enforce_branch_alias_and_invocation_identity_fences():
+    import hashlib
+    from session_navigation.model import ContextItem, compute_invocation_digest
+
+    body = _long_body()
+    content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    inv = {"tool_name": "read_file", "arguments": {"path": "results/output.json"}}
+    digest = compute_invocation_digest(inv)
+    for cfg_enabled in (False, True):
+        sess_id = f"sess-alias-{int(cfg_enabled)}"
+        alias_scope = Scope(
+            adapter_id="hermes",
+            host_profile="default",
+            session_id=sess_id,
+            branch_scope="default",
+        )
+        alias_item_id = _adapter.factories._item_id(
+            alias_scope.scope_key(), "call_1", content_sha, digest, 0,
+        )
+        ctx = FakeCtx(config={"enabled": cfg_enabled})
+        state = plugin.register(ctx)
+        mw = ctx.middlewares["llm_request"][0]
+
+        state.engine.store.put(
+            alias_scope,
+            ContextItem(
+                item_id=alias_item_id,
+                tool_call_id="call_1",
+                content_sha256=content_sha,
+                invocation_digest=digest,
+                original=body,
+                compacted=f"[hidden:{alias_item_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv,
+                result_position=0,
+            ),
+        )
+
+        # 1. Exact 5-tuple branch-alias match + hidden user message applies alias compacted summary
+        req_exact = {
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "secret prompt"}]},
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "results/output.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": body},
+            ]
+        }
+        msg_key, role, _idx, msg_text = _adapter.payload.message_keys("codex_responses", req_exact)[0]
+        assert state.engine.store.set_message_visibility(
+            alias_scope,
+            msg_key,
+            kind=role,
+            content_sha256=hashlib.sha256(msg_text.encode("utf-8")).hexdigest(),
+            char_count=len(msg_text),
+            visibility="hidden",
+        )["ok"] is True
+
+        out_exact = mw(request=req_exact, session_id=sess_id, api_mode="codex_responses")
+        assert out_exact is not None
+        if not cfg_enabled:
+            assert out_exact["reason"] == "protection_only (applied 1)"
+        outputs_exact = [item for item in out_exact["request"]["input"] if item.get("type") == "function_call_output"]
+        assert len(outputs_exact) == 1
+        assert outputs_exact[0]["output"] == f"[hidden:{alias_item_id}]"
+        assert all(item.get("role") != "user" for item in out_exact["request"]["input"])
+        assert body not in json.dumps(out_exact["request"])
+
+        # 2. Orphan tool output (missing function_call) MUST withhold both summary and raw body
+        req_orphan = {
+            "input": [
+                {"type": "function_call_output", "call_id": "call_1", "output": body},
+            ]
+        }
+        out_orphan = mw(request=req_orphan, session_id=sess_id, api_mode="codex_responses")
+        assert out_orphan is not None
+        assert out_orphan["request"]["input"][0]["output"] == (
+            f"[hidden:{alias_item_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert f"[hidden:{alias_item_id}]" != out_orphan["request"]["input"][0]["output"]
+        assert body not in json.dumps(out_orphan["request"])
+
+        # 3. Modified arguments with same call_id + sha256 MUST withhold both mismatched summary and raw body
+        req_mutated = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "results/other.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": body},
+            ]
+        }
+        out_mutated = mw(request=req_mutated, session_id=sess_id, api_mode="codex_responses")
+        assert out_mutated is not None
+        outputs_mutated = [item for item in out_mutated["request"]["input"] if item.get("type") == "function_call_output"]
+        assert outputs_mutated[0]["output"] == (
+            f"[hidden:{alias_item_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_mutated["request"])
+
+        # 4. unknown vs default alias conflict (visible in unknown while hidden in default) withholds safely
+        primary_scope = Scope(
+            adapter_id="hermes",
+            host_profile="default",
+            session_id=sess_id,
+            branch_scope="unknown",
+        )
+        primary_item_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_1", content_sha, digest, 0,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=primary_item_id,
+                tool_call_id="call_1",
+                content_sha256=content_sha,
+                invocation_digest=digest,
+                original=body,
+                compacted=f"[hidden:{primary_item_id}]",
+                excerpt_lines=(),
+                visibility="visible",
+                version=2,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv,
+                result_position=0,
+            ),
+        )
+        out_conflict = mw(request=req_exact, session_id=sess_id, api_mode="codex_responses")
+        assert out_conflict is not None
+        outputs_conflict = [item for item in out_conflict["request"]["input"] if item.get("type") == "function_call_output"]
+        assert outputs_conflict[0]["output"] == (
+            f"[hidden:{alias_item_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_conflict["request"])
+
+
+def test_shifted_position_withheld_and_exact_visible_identity_not_overmasked():
+    import hashlib
+    from session_navigation.model import ContextItem, compute_invocation_digest
+
+    body = _long_body()
+    content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    inv_hidden = {"tool_name": "read_file", "arguments": {"path": "secret.json"}}
+    digest_hidden = compute_invocation_digest(inv_hidden)
+    inv_visible = {"tool_name": "read_file", "arguments": {"path": "public.json"}}
+    digest_visible = compute_invocation_digest(inv_visible)
+    inv_third = {"tool_name": "read_file", "arguments": {"path": "third.json"}}
+
+    for cfg_enabled in (False, True):
+        sess_id = f"sess-pos-vis-{int(cfg_enabled)}"
+        primary_scope = Scope(
+            adapter_id="hermes",
+            host_profile="default",
+            session_id=sess_id,
+            branch_scope="unknown",
+        )
+        ctx = FakeCtx(config={"enabled": cfg_enabled})
+        state = plugin.register(ctx)
+        mw = ctx.middlewares["llm_request"][0]
+
+        # Finding (1): Hidden at position 0, later shifted to position 1 by an earlier output for same call_id
+        shift_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_shift", content_sha, digest_hidden, 0,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=shift_id,
+                tool_call_id="call_shift",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{shift_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=0,
+            ),
+        )
+        req_shifted = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_shift",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "secret.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_shift", "output": "unrelated pre-existing output"},
+                {"type": "function_call_output", "call_id": "call_shift", "output": body},
+            ]
+        }
+        out_shifted = mw(request=req_shifted, session_id=sess_id, api_mode="codex_responses")
+        assert out_shifted is not None
+        shifted_outputs = [item for item in out_shifted["request"]["input"] if item.get("type") == "function_call_output"]
+        assert shifted_outputs[0]["output"] == "unrelated pre-existing output"
+        assert shifted_outputs[1]["output"] == (
+            f"[hidden:{shift_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_shifted["request"])
+
+        # Finding (4): Same (call_id, pos=0, content_sha) has both hidden (secret.json) and visible (public.json)
+        vis_hidden_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_vis", content_sha, digest_hidden, 0,
+        )
+        vis_visible_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_vis", content_sha, digest_visible, 0,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=vis_hidden_id,
+                tool_call_id="call_vis",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{vis_hidden_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=0,
+            ),
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=vis_visible_id,
+                tool_call_id="call_vis",
+                content_sha256=content_sha,
+                invocation_digest=digest_visible,
+                original=body,
+                compacted=f"[hidden:{vis_visible_id}]",
+                excerpt_lines=(),
+                visibility="visible",
+                version=2,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_visible,
+                result_position=0,
+            ),
+        )
+
+        def _req_for(inv_payload):
+            return {
+                "input": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_vis",
+                        "name": inv_payload["tool_name"],
+                        "arguments": json.dumps(inv_payload["arguments"]),
+                    },
+                    {"type": "function_call_output", "call_id": "call_vis", "output": body},
+                ]
+            }
+
+        out_vis = mw(request=_req_for(inv_visible), session_id=sess_id, api_mode="codex_responses")
+        if out_vis is not None:
+            vis_outputs = [item for item in out_vis["request"]["input"] if item.get("type") == "function_call_output"]
+            assert vis_outputs[0]["output"] == body
+
+        # Duplicate call_id with both visible (A) and hidden (B) invocations MUST be treated
+        # as ambiguous and withheld instead of binding the first (visible A) invocation.
+        req_dup_call = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_vis",
+                    "name": inv_visible["tool_name"],
+                    "arguments": json.dumps(inv_visible["arguments"]),
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_vis",
+                    "name": inv_hidden["tool_name"],
+                    "arguments": json.dumps(inv_hidden["arguments"]),
+                },
+                {"type": "function_call_output", "call_id": "call_vis", "output": body},
+            ]
+        }
+        out_dup_call = mw(request=req_dup_call, session_id=sess_id, api_mode="codex_responses")
+        assert out_dup_call is not None
+        dup_call_outputs = [item for item in out_dup_call["request"]["input"] if item.get("type") == "function_call_output"]
+        assert dup_call_outputs[0]["output"] == (
+            f"[hidden:{vis_hidden_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_dup_call["request"])
+
+        out_hid = mw(request=_req_for(inv_hidden), session_id=sess_id, api_mode="codex_responses")
+        assert out_hid is not None
+        hid_outputs = [item for item in out_hid["request"]["input"] if item.get("type") == "function_call_output"]
+        assert hid_outputs[0]["output"] == f"[hidden:{vis_hidden_id}]"
+
+        out_third = mw(request=_req_for(inv_third), session_id=sess_id, api_mode="codex_responses")
+        assert out_third is not None
+        third_outputs = [item for item in out_third["request"]["input"] if item.get("type") == "function_call_output"]
+        assert third_outputs[0]["output"] == (
+            f"[hidden:{vis_hidden_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_third["request"])
+
+        # Same (call_id, content_sha, invocation_digest) has pos=0 hidden and pos=1 visible:
+        # inserting a new output before it shifts pos=0 hidden onto pos=1, which MUST withhold pos=1.
+        dup_pos0_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_dup_pos", content_sha, digest_hidden, 0,
+        )
+        dup_pos1_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_dup_pos", content_sha, digest_hidden, 1,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=dup_pos0_id,
+                tool_call_id="call_dup_pos",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{dup_pos0_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=0,
+            ),
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=dup_pos1_id,
+                tool_call_id="call_dup_pos",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{dup_pos1_id}]",
+                excerpt_lines=(),
+                visibility="visible",
+                version=2,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=1,
+            ),
+        )
+        req_dup_pos = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_dup_pos",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "secret.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_dup_pos", "output": "inserted earlier output"},
+                {"type": "function_call_output", "call_id": "call_dup_pos", "output": body},
+            ]
+        }
+        out_dup_pos = mw(request=req_dup_pos, session_id=sess_id, api_mode="codex_responses")
+        assert out_dup_pos is not None
+        dup_outputs = [item for item in out_dup_pos["request"]["input"] if item.get("type") == "function_call_output"]
+        assert dup_outputs[0]["output"] == "inserted earlier output"
+        assert dup_outputs[1]["output"] == (
+            f"[hidden:{dup_pos0_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_dup_pos["request"])

@@ -62,4 +62,31 @@ test("UI capability gates retain display and offline Unhide, and distinguish ada
       state: "adapter_disabled",
     }),
   ).toBe("Context management paused in settings — existing hidden items stay protected.");
+  expect(
+    capabilityNotice(
+      undefined,
+      {
+        display: true,
+        hide: false,
+        summarize: false,
+        unhide: true,
+        state: "adapter_disabled",
+      },
+      { scopeKey: "hermes:default:s1:unknown" },
+    ),
+  ).toContain("D9");
+  expect(
+    capabilityNotice(
+      undefined,
+      {
+        display: true,
+        hide: false,
+        summarize: false,
+        unhide: true,
+        state: "adapter_disabled",
+        hint: "Custom paused hint",
+      },
+      { scopeKey: "hermes:default:s1:unknown" },
+    ),
+  ).toBe("Custom paused hint");
 });

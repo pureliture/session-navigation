@@ -53,6 +53,8 @@ export interface Registration {
     hide: boolean;
     summarize: boolean;
     unhide: boolean;
+    protection_only?: boolean;
+    bundle_fingerprint?: string;
   };
   enabled: boolean;
   instance_id: string;
@@ -418,11 +420,18 @@ export class Store {
     if (adapterRegistration.parent_scope === key ||
       (adapterRegistration.parent_scope && adapterRegistration.parent_scope.split(":").length !== 4))
       throw new EngineError("invalid_adapter_registration");
-    const capabilitiesBase = {
+    const capabilitiesBase: { [key: string]: Json } = {
       hide: adapterRegistration.capabilities.hide === true,
       summarize: adapterRegistration.capabilities.summarize === true,
       unhide: adapterRegistration.capabilities.unhide === true,
     };
+    if (adapterRegistration.capabilities.protection_only === true) {
+      capabilitiesBase.protection_only = true;
+    }
+    const bundleFp = adapterRegistration.capabilities.bundle_fingerprint;
+    if (typeof bundleFp === "string" && bundleFp && bundleFp.length <= 128) {
+      capabilitiesBase.bundle_fingerprint = bundleFp;
+    }
     return this.transaction(() => {
       const previousRegistration = this.driver.get(
         "SELECT * FROM adapter_sessions WHERE scope_key=?",
@@ -897,10 +906,11 @@ export class Store {
            updated_at=excluded.updated_at`,
         [id, Number(flag), revision, now],
       );
-      this.driver.run("UPDATE adapter_sessions SET enabled=? WHERE adapter_id=?", [
-        Number(flag),
-        id,
-      ]);
+      const escapedId = id.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      this.driver.run(
+        "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=? OR scope_key LIKE ? ESCAPE '\\'",
+        [Number(flag), id, `${escapedId}:%`],
+      );
       return {
         adapter_id: id,
         enabled: flag,

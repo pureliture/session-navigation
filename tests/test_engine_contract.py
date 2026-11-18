@@ -176,3 +176,40 @@ def test_adapter_control_persists_revisions_and_syncs_sessions(tmp_path):
     reopened = SQLiteContextStore(path)
     assert reopened.get_adapter_control("hermes") == second
     reopened.close()
+
+
+def test_register_adapter_preserves_optional_protection_markers(tmp_path):
+    store = SQLiteContextStore(tmp_path / "markers.db")
+    plain_scope = "hermes:default:plain:unknown"
+    marked_scope = "hermes:default:marked:unknown"
+    store.register_adapter(
+        plain_scope,
+        adapter_id="hermes",
+        instance_id="inst-plain",
+        capabilities={"hide": True, "summarize": False, "unhide": True},
+    )
+    store.register_adapter(
+        marked_scope,
+        adapter_id="hermes",
+        instance_id="inst-marked",
+        capabilities={
+            "hide": True,
+            "summarize": False,
+            "unhide": True,
+            "protection_only": True,
+            "bundle_fingerprint": "fp-1234",
+        },
+        enabled=False,
+    )
+    plain_row = store.adapter_session(plain_scope)
+    marked_row = store.adapter_session(marked_scope)
+    assert plain_row is not None and plain_row["capabilities"] == {"hide": True, "summarize": False, "unhide": True}
+    assert marked_row is not None and marked_row["capabilities"] == {
+        "hide": True,
+        "summarize": False,
+        "unhide": True,
+        "protection_only": True,
+        "bundle_fingerprint": "fp-1234",
+    }
+    assert marked_row["enabled"] is False
+    store.close()

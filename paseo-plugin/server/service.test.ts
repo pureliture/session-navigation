@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { acquireHermesToggleLock, inspectHermesPluginInstall, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
 import {
   Store,
   EngineError,
@@ -1808,7 +1809,17 @@ test("list RPC supports limit + before_index cursor pagination, preserves contig
   expect(searchRes.has_older).toBe(false);
 });
 
-test("session-nav adapter toggles inspect, update multi-profile Hermes YAML atomically, sync capabilities, and reject symlinks", async () => {
+function installRepoHermesPlugin(home: string): string {
+  const targetVendor = join(home, ".hermes/plugins/session-navigation/vendor");
+  mkdirSync(join(home, ".hermes/plugins/session-navigation"), { recursive: true });
+  cpSync(resolve(import.meta.dir, "../../hermes-plugin/vendor"), targetVendor, { recursive: true });
+  const check = inspectHermesPluginInstall(home);
+  expect(check.protectionSupportedOnDisk).toBe(true);
+  expect(typeof check.bundleFingerprint).toBe("string");
+  return check.bundleFingerprint!;
+}
+
+test("session-nav adapter toggles inspect, require verified protection before disabling, update multi-profile Hermes YAML with rollback, sync capabilities, and reject symlinks", async () => {
   const { home, store, service, register } = fixture([], true);
 
   // Default state before .hermes exists
@@ -1883,33 +1894,29 @@ test("session-nav adapter toggles inspect, update multi-profile Hermes YAML atom
     enabled: true,
     mixed: true,
     profileCount: 3,
+    canDisable: true,
+    protectionVerified: false,
   });
 
-  // Disable Hermes globally across all 3 profiles
-  const disabledHermes = await service.handle("session-nav.set-adapter-toggle", {
+  // Pausing Hermes via Settings updates shared SQLite adapter_control only while leaving config.yaml
+  // intact so older/frozen Hermes processes never disable middleware protection.
+  const pausedBeforeInstall = await service.handle("session-nav.set-adapter-toggle", {
     adapter: "hermes",
     enabled: false,
   });
-  expect(disabledHermes.ok).toBe(true);
-  expect(disabledHermes.hermes).toMatchObject({
+  expect(pausedBeforeInstall.ok).toBe(true);
+  expect(pausedBeforeInstall.hermes).toMatchObject({
     installed: true,
     enabled: false,
+    mixed: true,
     profileCount: 3,
+    canDisable: true,
+    protectionVerified: false,
+    pluginInstalled: false,
   });
-  expect(disabledHermes.hermes.mixed).toBeUndefined();
-
-  for (const cfgPath of [rootCfg, atlasCfg, tycheCfg]) {
-    const content = readFileSync(cfgPath, "utf8");
-    expect(content).toContain("# ");
-    expect(content).toContain("model:");
-    expect(content).toContain("enabled: false");
-  }
-  const rootAfterOff = readFileSync(rootCfg, "utf8");
-  expect(rootAfterOff).toContain("# Global Hermes configuration");
-  expect(rootAfterOff).toContain("model: claude-3-7-sonnet # keep model intact");
-  expect(rootAfterOff).toContain("other-plugin:\n      enabled: true");
-  expect(rootAfterOff).toContain("enabled: false # toggle comment preserved");
-
+  expect(pausedBeforeInstall.hermes.warning).toContain("Hermes plugin is not installed");
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # toggle comment preserved");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: false");
   expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
   expect(service.capabilities(hermesScope)).toMatchObject({
     state: "adapter_disabled",
@@ -1917,8 +1924,9 @@ test("session-nav adapter toggles inspect, update multi-profile Hermes YAML atom
     summarize: false,
     unhide: true,
   });
+  expect(service.capabilities(hermesScope).hint).toContain("D9");
 
-  // Re-enable Hermes globally across all 3 profiles
+  // Re-enable Hermes globally across all 3 profiles (writes config.yaml + clears mixed state)
   const enabledHermes = await service.handle("session-nav.set-adapter-toggle", {
     adapter: "hermes",
     enabled: true,
@@ -1928,10 +1936,60 @@ test("session-nav adapter toggles inspect, update multi-profile Hermes YAML atom
     installed: true,
     enabled: true,
     profileCount: 3,
+    protectionVerified: false,
+    canDisable: true,
   });
+  expect(enabledHermes.hermes.mixed).toBeUndefined();
+
+  for (const cfgPath of [rootCfg, atlasCfg, tycheCfg]) {
+    const content = readFileSync(cfgPath, "utf8");
+    expect(content).toContain("# ");
+    expect(content).toContain("model:");
+    expect(content).toContain("enabled: true");
+  }
+  const rootAfterOn = readFileSync(rootCfg, "utf8");
+  expect(rootAfterOn).toContain("# Global Hermes configuration");
+  expect(rootAfterOn).toContain("model: claude-3-7-sonnet # keep model intact");
+  expect(rootAfterOn).toContain("other-plugin:\n      enabled: true");
+  expect(rootAfterOn).toContain("enabled: true # toggle comment preserved");
   expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
   expect(service.capabilities(hermesScope).state).toBe("ready");
+
+  // Install current Hermes plugin and register protection_only + bundle_fingerprint;
+  // Pausing Off still stays DB-control-only and keeps protectionVerified=false (live process proof impossible via SQLite).
+  const bundleFingerprint = installRepoHermesPlugin(home);
+  const verifiedCaps = {
+    hide: true,
+    summarize: true,
+    unhide: true,
+    protection_only: true,
+    bundle_fingerprint: bundleFingerprint,
+  };
+  register(hermesScope, verifiedCaps);
+  register("hermes:default:sid-default:unknown", verifiedCaps);
+  register("hermes:tyche:sid-tyche:unknown", verifiedCaps);
+
+  const disabledHermes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(disabledHermes.ok).toBe(true);
+  expect(disabledHermes.hermes).toMatchObject({
+    installed: true,
+    enabled: false,
+    profileCount: 3,
+    protectionSupportedOnDisk: true,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  expect(disabledHermes.hermes.mixed).toBeUndefined();
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # toggle comment preserved");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: true");
   expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: true");
+  expect(disabledHermes.hermes.statusText).toContain("Paused via DB control");
+  expect(disabledHermes.hermes.warning).toContain("Older Hermes sessions may keep running");
+  expect(disabledHermes.hermes.warning).toContain("DB failures may send original content");
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
 
   // Disable OMP via toggle and confirm capability state transitions cleanly
   const disabledOmp = await service.handle("session-nav.set-adapter-toggle", {
@@ -1956,4 +2014,585 @@ test("session-nav adapter toggles inspect, update multi-profile Hermes YAML atom
   expect(symlinkResult.ok).toBe(false);
   expect(symlinkResult.error).toBe("unsafe_hermes_config_path");
   expect(readFileSync(externalTarget, "utf8")).toBe("untouched: true\n");
+});
+
+test("Hermes Off pauses via DB control only, preserves config.yaml for legacy processes, and never claims live-process verification", async () => {
+  const { home, store, service, register } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  mkdirSync(atlasDir, { recursive: true });
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const enabledYaml = "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n";
+  writeFileSync(rootCfg, enabledYaml, "utf8");
+  writeFileSync(atlasCfg, enabledYaml, "utf8");
+
+  // 1. Legacy installed plugin (disabled middleware returns None) keeps config.yaml enabled when paused
+  const legacyCore = join(hermesRoot, "plugins/session-navigation/vendor/session_navigation");
+  const legacyAdapter = join(hermesRoot, "plugins/session-navigation/vendor/session_navigation_hermes");
+  mkdirSync(legacyCore, { recursive: true });
+  mkdirSync(legacyAdapter, { recursive: true });
+  writeFileSync(join(legacyCore, "__init__.py"), "", "utf8");
+  writeFileSync(join(legacyCore, "adapter_registry.py"), "class AdapterRegistryMixin:\n    pass\n", "utf8");
+  writeFileSync(join(legacyAdapter, "__init__.py"), "", "utf8");
+  writeFileSync(
+    join(legacyAdapter, "factories.py"),
+    "def make_middleware(state):\n    def on_llm_request(**kwargs):\n        return None\n    return on_llm_request\n",
+    "utf8",
+  );
+
+  const legacyScope = "hermes:default:legacy-s1:unknown";
+  register(legacyScope);
+  const legacyInspect = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(legacyInspect.hermes).toMatchObject({
+    pluginInstalled: true,
+    protectionSupportedOnDisk: false,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  const legacyOff = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(legacyOff.ok).toBe(true);
+  expect(legacyOff.hermes.enabled).toBe(false);
+  expect(legacyOff.hermes.protectionVerified).toBe(false);
+  expect(legacyOff.hermes.warning).toContain("keeps config.yaml enabled");
+  expect(readFileSync(rootCfg, "utf8")).toBe(enabledYaml);
+  expect(readFileSync(atlasCfg, "utf8")).toBe(enabledYaml);
+
+  // 2. Even after upgrading disk plugin AND registering current bundle_fingerprint,
+  //    durable adapter_sessions rows never justify protectionVerified=true or editing config.yaml to false.
+  rmSync(join(hermesRoot, "plugins"), { recursive: true, force: true });
+  const bundleFingerprint = installRepoHermesPlugin(home);
+
+  const atlasStaleScope = "hermes:atlas:stale-s2:unknown";
+  store.register(legacyScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: false, unhide: true, protection_only: true, bundle_fingerprint: "stale-old-fp" },
+    enabled: true,
+    instance_id: "old-proc-1",
+  }, 100);
+  store.register(atlasStaleScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: false, unhide: true },
+    enabled: true,
+    instance_id: "old-proc-2",
+  }, 100);
+  const hiddenItem = seed(store, "item_hermes_hidden_1", atlasStaleScope);
+  expect(
+    store.put(atlasStaleScope, { ...hiddenItem, visibility: "hidden", version: 2 }, 1).ok,
+  ).toBe(true);
+
+  const staleInspect = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(staleInspect.hermes).toMatchObject({
+    pluginInstalled: true,
+    protectionSupportedOnDisk: true,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  expect(staleInspect.hermes.unverifiedScopes).toContain(legacyScope);
+  expect(staleInspect.hermes.unverifiedScopes).toContain(atlasStaleScope);
+
+  // 3. Even after all known scopes register current capabilities, protectionVerified stays false
+  //    and unhide recovery remains available while paused via DB control.
+  const verifiedCaps = {
+    hide: true,
+    summarize: true,
+    unhide: true,
+    protection_only: true,
+    bundle_fingerprint: bundleFingerprint,
+  };
+  store.register(legacyScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: verifiedCaps,
+    enabled: true,
+    instance_id: "new-proc-1",
+  }, 1000);
+  store.register(atlasStaleScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: verifiedCaps,
+    enabled: true,
+    instance_id: "new-proc-2",
+  }, 1000);
+
+  const originalNow = store.clock;
+  (store as any).clock = () => 1500;
+  try {
+    const postUpdateInspect = await service.handle("session-nav.get-adapter-toggles", {});
+    expect(postUpdateInspect.hermes).toMatchObject({
+      enabled: false,
+      protectionVerified: false,
+      canDisable: true,
+    });
+    expect(postUpdateInspect.hermes.warning).toContain("Older Hermes sessions may keep running");
+    expect(postUpdateInspect.hermes.warning).toContain("DB failures may send original content");
+    expect(readFileSync(rootCfg, "utf8")).toBe(enabledYaml);
+    expect(readFileSync(atlasCfg, "utf8")).toBe(enabledYaml);
+
+    const unhidden = await service.handle("unhide", {
+      scope_key: atlasStaleScope,
+      item_id: hiddenItem.item_id,
+    });
+    expect(unhidden.ok).toBe(true);
+  } finally {
+    (store as any).clock = originalNow;
+  }
+});
+
+test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-validates YAML, rolls back cleanly, surfaces partial updates, and rolls back on single-tx SQLite failure", async () => {
+  const { home, store, service, register } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  const tycheDir = join(hermesRoot, "profiles", "tyche");
+  mkdirSync(atlasDir, { recursive: true });
+  mkdirSync(tycheDir, { recursive: true });
+
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const tycheCfg = join(tycheDir, "config.yaml");
+
+  const makeCfg = (label: string, enabled: boolean) =>
+    `# ${label} header\nplugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: ${enabled} # keep comment\n`;
+
+  writeFileSync(rootCfg, makeCfg("default", true), "utf8");
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, 'plugins: "scalar-invalid"\n', "utf8");
+
+  const bundleFingerprint = installRepoHermesPlugin(home);
+  const verifiedCaps = {
+    hide: true,
+    summarize: true,
+    unhide: true,
+    protection_only: true,
+    bundle_fingerprint: bundleFingerprint,
+  };
+  register("hermes:default:s1:unknown", verifiedCaps);
+  register("hermes:atlas:s2:unknown", verifiedCaps);
+  register("hermes:tyche:s3:unknown", verifiedCaps);
+
+  // 1. Pre-validation rejects malformed YAML in 3rd profile BEFORE writing any file
+  const invalidYamlRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(invalidYamlRes.ok).toBe(false);
+  expect(invalidYamlRes.error).toBe("hermes_invalid_config_yaml");
+  expect(invalidYamlRes.hermes).toMatchObject({ rolledBack: false, partialUpdate: false });
+  expect(readFileSync(rootCfg, "utf8")).toBe(makeCfg("default", true));
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
+
+  // Fix tyche config for lock, commit, rollback, and SQLite transaction tests
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+
+  // 2. Cooperative toggle lock fails closed even for aged locks (no time-based auto-unlink race),
+  //    blocks BOTH On and Off concurrent toggle writers, and exposes manual crash recovery guidance.
+  const lockPath = join(hermesRoot, ".session-navigation-toggle.lock");
+  const agedLockContent = JSON.stringify({
+    pid: 999999,
+    startedAt: Date.now() - 300_000,
+    nonce: "other-long-running",
+  });
+  writeFileSync(lockPath, agedLockContent, "utf8");
+  const pastTime = new Date(Date.now() - 300_000);
+  utimesSync(lockPath, pastTime, pastTime);
+
+  const lockedOnRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(lockedOnRes.ok).toBe(false);
+  expect(lockedOnRes.error).toBe("hermes_toggle_locked");
+  expect(lockedOnRes.hermes.error).toContain(".session-navigation-toggle.lock");
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
+  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+
+  const lockedOffRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(lockedOffRes.ok).toBe(false);
+  expect(lockedOffRes.error).toBe("hermes_toggle_locked");
+  expect(lockedOffRes.hermes.error).toContain(".session-navigation-toggle.lock");
+  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+  expect(store.getAdapterControl("hermes")).toBeNull();
+  rmSync(lockPath);
+
+  // Release ownership guard: stale lock handle A MUST NOT unlink contender B's lock after manual replacement
+  const lockA = acquireHermesToggleLock(home);
+  expect(lockA.ok).toBe(true);
+  if (lockA.ok) {
+    rmSync(lockPath);
+    const lockB = acquireHermesToggleLock(home);
+    expect(lockB.ok).toBe(true);
+    lockA.release();
+    expect(existsSync(lockPath)).toBe(true);
+    const blockedByB = acquireHermesToggleLock(home);
+    expect(blockedByB).toEqual({ ok: false, error: "hermes_toggle_locked" });
+    if (lockB.ok) {
+      lockB.release();
+    }
+    expect(existsSync(lockPath)).toBe(false);
+  }
+
+  // Also verify lock stays held across YAML commit through SQLite setAdapterControl and journal cleanup
+  let lockHeldDuringDbCommit = false;
+  const origSetCtrlSpy = store.setAdapterControl.bind(store);
+  store.setAdapterControl = ((adapterId: string, flag: boolean, now?: number) => {
+    if (adapterId === "hermes") {
+      lockHeldDuringDbCommit = existsSync(lockPath);
+    }
+    return origSetCtrlSpy(adapterId, flag, now);
+  }) as typeof store.setAdapterControl;
+  try {
+    const spyOnRes = await service.handle("session-nav.set-adapter-toggle", {
+      adapter: "hermes",
+      enabled: true,
+    });
+    expect(spyOnRes.ok).toBe(true);
+    expect(lockHeldDuringDbCommit).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
+  } finally {
+    store.setAdapterControl = origSetCtrlSpy;
+  }
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+  store.driver.run("DELETE FROM adapter_control WHERE adapter_id='hermes'");
+  store.driver.run("UPDATE adapter_sessions SET enabled=1 WHERE adapter_id='hermes' OR scope_key LIKE 'hermes:%'");
+
+  // 3. Commit failure on 3rd profile rolls back 1st and 2nd profiles cleanly and removes resolved journal
+  const journalPath = join(hermesRoot, ".session-navigation-toggle.journal.json");
+  service.hermesWriteOptions = {
+    onBeforeCommitFile: (filePath) => {
+      if (filePath === tycheCfg) throw new Error("injected_rename_fail");
+    },
+  };
+  const rolledBackRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(rolledBackRes.ok).toBe(false);
+  expect(rolledBackRes.error).toBe("injected_rename_fail");
+  expect(rolledBackRes.hermes).toMatchObject({
+    rolledBack: true,
+    partialUpdate: false,
+    updatedFiles: [],
+    rollbackFailedFiles: [],
+  });
+  expect(rolledBackRes.hermes.rolledBackFiles).toEqual([atlasCfg, rootCfg]);
+  expect(readFileSync(rootCfg, "utf8")).toBe(makeCfg("default", true));
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
+  expect(readFileSync(tycheCfg, "utf8")).toBe(makeCfg("tyche", false));
+  expect(existsSync(journalPath)).toBe(false);
+  expect(store.getAdapterControl("hermes")).toBeNull();
+
+  // 4. Commit failure on 3rd profile + rollback failure on 2nd profile surfaces partial update,
+  //    per-profile state, and persists recovery journal across subsequent getAdapterToggles calls.
+  service.hermesWriteOptions = {
+    onBeforeCommitFile: (filePath) => {
+      if (filePath === tycheCfg) throw new Error("disk_io_fail");
+    },
+    onBeforeRollbackFile: (filePath) => {
+      if (filePath === atlasCfg) throw new Error("rollback_eacces");
+    },
+  };
+  const partialRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(partialRes.ok).toBe(false);
+  expect(partialRes.error).toBe("hermes_partial_update:disk_io_fail");
+  expect(partialRes.hermes).toMatchObject({
+    rolledBack: false,
+    partialUpdate: true,
+    mixed: true,
+    rolledBackFiles: [rootCfg],
+    rollbackFailedFiles: [atlasCfg],
+  });
+  expect(partialRes.hermes.profiles).toEqual([
+    { profile: "default", configPath: rootCfg, enabled: true },
+    { profile: "atlas", configPath: atlasCfg, enabled: true },
+    { profile: "tyche", configPath: tycheCfg, enabled: false },
+  ]);
+  expect(partialRes.hermes.error).toContain("Partial config update");
+  expect(partialRes.hermes.error).toContain(atlasCfg);
+  expect(existsSync(journalPath)).toBe(true);
+
+  const inspectedAfterPartial = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(inspectedAfterPartial.hermes).toMatchObject({
+    partialUpdate: true,
+    mixed: true,
+    rollbackFailedFiles: [atlasCfg],
+  });
+  expect(inspectedAfterPartial.hermes.warning).toContain("journal");
+
+  // Reconcile all profiles back to enabled=true, clearing the journal while preserving inline comments
+  service.hermesWriteOptions = undefined;
+  const reconciled = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(reconciled.ok).toBe(true);
+  expect(reconciled.hermes.enabled).toBe(true);
+  expect(reconciled.hermes.mixed).toBeUndefined();
+  expect(existsSync(journalPath)).toBe(false);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: true # keep comment");
+
+  // 5. Concurrent external writer modification before commit fails closed, rolls back earlier profiles,
+  //    and preserves inline comments even when rootCfg was already enabled: true!
+  const externalContent = "# external writer\nmodel: custom-external\n";
+  service.hermesWriteOptions = {
+    onBeforeCommitFile: (filePath) => {
+      if (filePath === rootCfg) {
+        writeFileSync(atlasCfg, externalContent, "utf8");
+      }
+    },
+  };
+  const concurrentRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(concurrentRes.ok).toBe(false);
+  expect(concurrentRes.error).toBe("hermes_concurrent_modification");
+  expect(concurrentRes.hermes.rolledBack).toBe(true);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(atlasCfg, "utf8")).toBe(externalContent);
+
+  // 6. Single-transaction SQLite failure (injected on UPDATE adapter_sessions inside setAdapterControl)
+  //    rolls back both adapter_control AND committed config files so DB and disk never diverge!
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+  store.setAdapterControl("hermes", false, 500);
+  service.hermesWriteOptions = undefined;
+  const origDriverRun = store.driver.run.bind(store.driver);
+  store.driver.run = ((sql: string, params?: unknown[]) => {
+    if (sql.includes("UPDATE adapter_sessions")) {
+      throw new EngineError("db_full");
+    }
+    return origDriverRun(sql, params);
+  }) as typeof store.driver.run;
+  try {
+    const dbFailRes = await service.handle("session-nav.set-adapter-toggle", {
+      adapter: "hermes",
+      enabled: true,
+    });
+    expect(dbFailRes.ok).toBe(false);
+    expect(dbFailRes.error).toBe("db_full");
+    expect(dbFailRes.hermes.rolledBack).toBe(true);
+    expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
+    expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+    expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: false # keep comment");
+    expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: false # keep comment");
+    expect(existsSync(journalPath)).toBe(false);
+  } finally {
+    store.driver.run = origDriverRun;
+  }
+
+  // 7. Post-DB-commit journal cleanup failure MUST NOT roll back already-committed YAML files;
+  //    surfaces hermes_journal_cleanup_failed + residual journal while keeping SQLite and YAML enabled=true.
+  service.hermesWriteOptions = {
+    onBeforeClearJournal: () => {
+      throw new Error("eperm_unlink_journal");
+    },
+  };
+  const cleanupFailRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(cleanupFailRes.ok).toBe(false);
+  expect(cleanupFailRes.error).toBe("hermes_journal_cleanup_failed:eperm_unlink_journal");
+  expect(cleanupFailRes.hermes).toMatchObject({
+    enabled: true,
+    rolledBack: false,
+    partialUpdate: true,
+    mixed: true,
+  });
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(existsSync(journalPath)).toBe(true);
+
+  service.hermesWriteOptions = undefined;
+  const cleanedUpRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(cleanedUpRes.ok).toBe(true);
+  expect(cleanedUpRes.hermes.mixed).toBeUndefined();
+  expect(cleanedUpRes.hermes.partialUpdate).toBeUndefined();
+  expect(existsSync(journalPath)).toBe(false);
+});
+
+test("Hermes YAML patching uses Document AST to preserve flow strings, block scalars, doc-end markers, user settings, and fail closed on ambiguous YAML", async () => {
+  const { parse } = await import("yaml");
+
+  // 1. String literal containing "enabled: false" inside flow map must NOT be mutated
+  const flowInput = [
+    "# user header",
+    "model: claude-sonnet-4 # keep comment",
+    "plugins:",
+    "  entries:",
+    "    session-navigation:",
+    '      settings: {note: "hello, enabled: false", other: x}',
+    "",
+  ].join("\n");
+  const flowPatched = patchHermesConfigYaml(flowInput, true);
+  expect(flowPatched).toContain("# user header");
+  expect(flowPatched).toContain("model: claude-sonnet-4 # keep comment");
+  expect(readHermesPluginEnabled(flowPatched)).toBe(true);
+  expect(parse(flowPatched)).toEqual({
+    model: "claude-sonnet-4",
+    plugins: {
+      entries: {
+        "session-navigation": {
+          settings: {
+            note: "hello, enabled: false",
+            other: "x",
+            enabled: true,
+          },
+        },
+      },
+    },
+  });
+
+  // 2. Unrelated multiline block scalar containing `enabled: false` must stay intact while boolean `enabled` patches cleanly
+  const blockScalarInput = [
+    "model: gpt-5",
+    "plugins:",
+    "  entries:",
+    "    session_navigation:",
+    "      settings:",
+    "        note: |",
+    "          enabled: false",
+    "          second line",
+    "        enabled: false # keep inline",
+    "        keep_lines_limit: 5",
+    "",
+  ].join("\n");
+  const blockPatched = patchHermesConfigYaml(blockScalarInput, true);
+  expect(readHermesPluginEnabled(blockPatched)).toBe(true);
+  expect(blockPatched).toContain("# keep inline");
+  expect(parse(blockPatched)).toEqual({
+    model: "gpt-5",
+    plugins: {
+      entries: {
+        session_navigation: {
+          settings: {
+            note: "enabled: false\nsecond line\n",
+            enabled: true,
+            keep_lines_limit: 5,
+          },
+        },
+      },
+    },
+  });
+
+  // 3. Explicit YAML document-end marker `...` must keep added mappings inside the document before `...`
+  const docEndInput = [
+    "---",
+    "model: gpt-5",
+    "...",
+    "",
+  ].join("\n");
+  const docEndPatched = patchHermesConfigYaml(docEndInput, true);
+  expect(readHermesPluginEnabled(docEndPatched)).toBe(true);
+  expect(docEndPatched.indexOf("plugins:")).toBeGreaterThan(-1);
+  expect(docEndPatched.indexOf("plugins:")).toBeLessThan(docEndPatched.lastIndexOf("..."));
+  expect(parse(docEndPatched)).toEqual({
+    model: "gpt-5",
+    plugins: {
+      entries: {
+        "session-navigation": {
+          settings: {
+            enabled: true,
+          },
+        },
+      },
+    },
+  });
+
+  // 4. Unrelated anchors/aliases are preserved safely in syntax & semantics, while
+  //    invalid/unsupported YAML (duplicates, multi-doc, target-spine alias, non-boolean enabled including "false"/"true"/block scalar strings)
+  //    surfaces unknown status + error in getAdapterToggles and blocks both On and Off toggles.
+  const unrelatedAliasInput = [
+    "default_provider: &prov",
+    "  timeout: 30",
+    "fallback_provider: *prov",
+    "model: gpt-5",
+    "",
+  ].join("\n");
+  const unrelatedAliasPatched = patchHermesConfigYaml(unrelatedAliasInput, true);
+  expect(unrelatedAliasPatched).toContain("&prov");
+  expect(unrelatedAliasPatched).toContain("*prov");
+  expect(readHermesPluginEnabled(unrelatedAliasPatched)).toBe(true);
+  expect(parse(unrelatedAliasPatched)).toEqual({
+    default_provider: { timeout: 30 },
+    fallback_provider: { timeout: 30 },
+    model: "gpt-5",
+    plugins: {
+      entries: {
+        "session-navigation": {
+          settings: {
+            enabled: true,
+          },
+        },
+      },
+    },
+  });
+
+  const { home, store, service } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  mkdirSync(atlasDir, { recursive: true });
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const validRoot =
+    "# root intact\nmodel: claude-3-7\nplugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n";
+  writeFileSync(rootCfg, validRoot, "utf8");
+  store.setAdapterControl("hermes", true, 100);
+
+  for (const invalidContent of [
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: false\n        enabled: true\n",
+    "model: first\n---\nmodel: second\n",
+    "defaults: &shared\n  enabled: true\nplugins:\n  entries:\n    session-navigation:\n      settings: *shared\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: \"false\"\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: \"true\"\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: 'false'\n",
+    "plugins:\n  entries:\n    session_navigation:\n      settings:\n        enabled: |\n          false\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: \"maybe\"\n",
+  ]) {
+    expect(() => readHermesPluginEnabled(invalidContent)).toThrow("hermes_invalid_config_yaml");
+    expect(() => patchHermesConfigYaml(invalidContent, true)).toThrow("hermes_invalid_config_yaml");
+    expect(() => patchHermesConfigYaml(invalidContent, false)).toThrow("hermes_invalid_config_yaml");
+
+    writeFileSync(atlasCfg, invalidContent, "utf8");
+    const inspectedInvalid = await service.handle("session-nav.get-adapter-toggles", {});
+    expect(inspectedInvalid.ok).toBe(true);
+    expect(inspectedInvalid.hermes).toMatchObject({
+      enabled: false,
+      stateUnknown: true,
+      error: "hermes_invalid_config_yaml",
+      canDisable: false,
+      statusText: "Config YAML error (state unknown).",
+    });
+    expect(inspectedInvalid.hermes.warning).toContain("invalid or unsupported YAML");
+
+    for (const targetEnabled of [true, false]) {
+      const res = await service.handle("session-nav.set-adapter-toggle", {
+        adapter: "hermes",
+        enabled: targetEnabled,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error).toBe("hermes_invalid_config_yaml");
+      expect(readFileSync(rootCfg, "utf8")).toBe(validRoot);
+      expect(readFileSync(atlasCfg, "utf8")).toBe(invalidContent);
+      expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
+    }
+  }
 });

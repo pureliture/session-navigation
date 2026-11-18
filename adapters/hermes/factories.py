@@ -61,7 +61,9 @@ from typing import Any, Callable
 from .handlers import compact as _engine_compact
 from .handlers import middleware_step as _engine_step
 from .handlers import list_records as _engine_list
+from .handlers import resolve_plan_dicts as _resolve_plan_dicts
 from .handlers import restore as _engine_restore
+from .handlers import scope_candidates as _scope_candidates
 from .handlers import summarize as _engine_summarize
 from .payload import (
     SUPPORTED_API_MODES,
@@ -72,7 +74,7 @@ from .payload import (
     message_keys,
 )
 from .presentation import PresentationRegistry, decorate_items
-from .session import SessionTranscriptStore, _extract_invocations
+from .session import SessionTranscriptStore, _extract_invocations, _extract_invocations_and_duplicates
 from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
 from session_navigation.policy import refusal_reason, is_destructive_command
@@ -83,6 +85,18 @@ from session_navigation.transport import Summarizer, SummarizerError
 from .llm import CtxLlmSummarizer
 from .schemas import ADAPTER_ID, BRANCH_SCOPE, SOURCE, TOOL_SCHEMAS, SUPERVISION_SECTION_TEXT
 logger = logging.getLogger(__name__)
+
+
+def _compute_runtime_bundle_fingerprint() -> str:
+    """Compute the bundle fingerprint of the currently imported Python modules."""
+    import session_navigation as _core_pkg
+
+    core_fp = getattr(_core_pkg, "__bundle_fingerprint__", None) or _core_pkg._source_fingerprint(_core_pkg.__file__)
+    adapter_fp = _core_pkg._source_fingerprint(__file__)
+    return hashlib.sha256(f"{core_fp}:{adapter_fp}".encode("utf-8")).hexdigest()
+
+
+RUNTIME_BUNDLE_FINGERPRINT = _compute_runtime_bundle_fingerprint()
 
 def _default_count_llm_middlewares() -> int:
     """Count the OTHER registered `llm_request` middleware callbacks.
@@ -156,14 +170,16 @@ def scope_for(state: PluginState, session_id: Any) -> Scope | None:
 def _is_effectively_enabled(state: PluginState) -> bool:
     if not state.is_enabled():
         return False
-    try:
-        get_ctrl = getattr(state.engine.store, "get_adapter_control", None)
-        if callable(get_ctrl):
+    get_ctrl = getattr(state.engine.store, "get_adapter_control", None)
+    if callable(get_ctrl):
+        try:
             ctrl = get_ctrl(ADAPTER_ID)
-            if isinstance(ctrl, dict) and ctrl.get("enabled") is False:
-                return False
-    except Exception:
-        pass
+        except Exception:
+            # Fail closed on adapter_control lookup error so protection-only mode
+            # preserves hidden items and blocks new mutations.
+            return False
+        if isinstance(ctrl, dict) and ctrl.get("enabled") is False:
+            return False
     return True
 
 
@@ -231,6 +247,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             if matches and _cleanup_error(state, scope, matches[0]) is None:
                 ok_fb, err_fb, fb_item_id, _ = _apply_hide_for_manage(state, scope, matches[0])
                 if ok_fb and fb_item_id is not None:
+                    _register_adapter(state, scope, True)
                     stored_fb = state.engine.store.get(scope, fb_item_id)
                     return _dump({
                         "ok": True,
@@ -244,6 +261,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             if err == "db_error":
                 return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
             return _dump({"ok": False, "error": err})
+        _register_adapter(state, scope, True)
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
@@ -280,6 +298,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
             if err == "db_error":
                 return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
             return _dump({"ok": False, "error": err})
+        _register_adapter(state, scope, True)
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
@@ -389,6 +408,8 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_li
     from session_navigation.model import ToolResultRecord, compute_invocation_digest
     from .allowlist import AdapterRejected, filter_invocation
 
+    if getattr(entry, "duplicate_call_id", False):
+        return False, "ambiguous", None, {}
     if entry.arguments_parse_error or not entry.tool_name:
         return False, "invalid_invocation", None, {}
     try:
@@ -481,6 +502,8 @@ def _apply_sequence_summary_for_manage(
     from session_navigation.summary import has_summary_injection
     from .allowlist import AdapterRejected, filter_invocation
 
+    if getattr(entry, "duplicate_call_id", False):
+        return False, "ambiguous", None
     if entry.arguments_parse_error or not entry.tool_name:
         return False, "invalid_invocation", None
     try:
@@ -558,7 +581,7 @@ def _apply_sequence_summary_for_manage(
     return True, None, item_id
 
 def _cleanup_error(state: PluginState, scope: Scope, entry: Any) -> str | None:
-    if len(state.store.lookup(scope.scope_key(), entry.call_id)) != 1:
+    if getattr(entry, "duplicate_call_id", False) or len(state.store.lookup(scope.scope_key(), entry.call_id)) != 1:
         return "ambiguous"
     if entry.arguments_parse_error or not entry.tool_name:
         return "invalid_invocation"
@@ -752,6 +775,8 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
             results.append(row)
         applied_rows = [r for r in results if r["ok"]]
         applied = len(applied_rows)
+        if applied > 0:
+            _register_adapter(state, scope, True)
         failed = len(results) - applied
         total_post = sum(int(r.get("compacted_bytes", 0)) for r in applied_rows)
         total_pre = sum(int(r.get("original_bytes", 0)) for r in applied_rows)
@@ -802,6 +827,7 @@ def _protection_only_rewrite(
     request: dict[str, Any],
     hidden_items: list[Any],
     hidden_messages: set[str],
+    hidden_scopes: list[Scope] | None = None,
 ) -> dict[str, Any]:
     if api_mode not in SUPPORTED_API_MODES:
         return {
@@ -813,43 +839,42 @@ def _protection_only_rewrite(
     applied: list[str] = []
     if hidden_items:
         found, _skipped, _err = find_tool_results(api_mode, request_out)
-        invocations = _extract_invocations(api_mode, request_out)
+        invocations, duplicate_ids = _extract_invocations_and_duplicates(api_mode, request_out)
         positions: dict[str, int] = {}
-        records: list[ToolResultRecord] = []
+        observed_entries: list[tuple[str, int, str, dict[str, Any], ToolResultRecord | None]] = []
         for entry in found:
             pos = positions.get(entry.call_id, 0)
             positions[entry.call_id] = pos + 1
+            entry_sha = hashlib.sha256(entry.content.encode("utf-8")).hexdigest()
             tool_name, raw_args, parse_error = invocations.get(entry.call_id, ("", {}, True))
-            if parse_error or not tool_name:
-                continue
-            try:
-                invocation, omitted = filter_invocation(tool_name, raw_args)
-            except AdapterRejected:
-                continue
-            records.append(
-                ToolResultRecord(
-                    call_id=entry.call_id,
-                    result_position=pos,
-                    content=entry.content,
-                    content_sha256=hashlib.sha256(entry.content.encode("utf-8")).hexdigest(),
-                    invocation=invocation,
-                    invocation_digest=compute_invocation_digest(
-                        invocation, omitted if omitted else None
-                    ),
-                    status="ok",
-                    host_handle=entry.host_handle,
-                )
+            record: ToolResultRecord | None = None
+            if entry.call_id not in duplicate_ids and not parse_error and tool_name:
+                try:
+                    invocation, omitted = filter_invocation(tool_name, raw_args)
+                except AdapterRejected:
+                    invocation = None
+                else:
+                    record = ToolResultRecord(
+                        call_id=entry.call_id,
+                        result_position=pos,
+                        content=entry.content,
+                        content_sha256=entry_sha,
+                        invocation=invocation,
+                        invocation_digest=compute_invocation_digest(
+                            invocation, omitted if omitted else None
+                        ),
+                        status="ok",
+                        host_handle=entry.host_handle,
+                    )
+            observed_entries.append(
+                (entry.call_id, pos, entry_sha, entry.host_handle, record)
             )
-        plans = state.engine.project(scope, records)
-        plan_dicts = [
-            {
-                "item_id": plan.item_id,
-                "host_handle": plan.host_handle,
-                "expected_content_sha256": plan.expected_content_sha256,
-                "replacement_text": plan.replacement_text,
-            }
-            for plan in plans
-        ]
+        plan_dicts = _resolve_plan_dicts(
+            state.engine,
+            scope,
+            observed_entries,
+            extra_items=hidden_items,
+        )
         request_out, applied, _ = apply_replacements(api_mode, request_out, plan_dicts)
     if hidden_messages:
         request_out = drop_messages(api_mode, request_out, hidden_messages)
@@ -868,16 +893,20 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             if not _is_effectively_enabled(state):
                 scope = scope_for(state, kwargs.get("session_id", ""))
                 registration = state.engine.store.adapter_session(scope) if scope is not None else None
-                hidden_items = (
-                    [item for item in state.engine.store.items(scope) if item.visibility == "hidden"]
-                    if scope is not None
-                    else []
-                )
-                hidden_messages = (
-                    set(state.engine.store.hidden_message_keys(scope))
-                    if scope is not None
-                    else set()
-                )
+                candidates = _scope_candidates(scope) if scope is not None else []
+                hidden_items: list[Any] = []
+                hidden_scopes: list[Scope] = []
+                seen_item_ids: set[str] = set()
+                hidden_messages: set[str] = set()
+                for cand in candidates:
+                    cand_items = [item for item in state.engine.store.items(cand) if item.visibility == "hidden"]
+                    if cand_items:
+                        hidden_scopes.append(cand)
+                        for item in cand_items:
+                            if item.item_id not in seen_item_ids:
+                                seen_item_ids.add(item.item_id)
+                                hidden_items.append(item)
+                    hidden_messages.update(state.engine.store.hidden_message_keys(cand))
                 if scope is not None and (registration is not None or hidden_items or hidden_messages):
                     _register_adapter(state, scope, False)
                 request = kwargs.get("request")
@@ -896,6 +925,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                         request,
                         hidden_items,
                         hidden_messages,
+                        hidden_scopes=hidden_scopes,
                     )
                 if child and isinstance(request, dict):
                     return {"request": request, "source": SOURCE}
@@ -956,7 +986,9 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 store.ensure_message_units(scope, [
                     (key, role, hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text))
                     for key, role, _index, text in found])
-                hidden = set(store.hidden_message_keys(scope))
+                hidden: set[str] = set()
+                for cand in _scope_candidates(scope):
+                    hidden.update(store.hidden_message_keys(cand))
                 if hidden:
                     request_out = drop_messages(api_mode, request_out, hidden)
                 users = [(index, text) for _key, role, index, text in message_keys(api_mode, request) if role == "user"]
@@ -1041,7 +1073,20 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
 
 
 def _register_adapter(state: PluginState, scope: Scope, projecting: bool) -> None:
-    state.engine.store.register_adapter(scope, adapter_id=ADAPTER_ID, instance_id=state.instance_id,
-        capabilities={"hide": projecting, "summarize": projecting and state.summarizer is not None,
-                      "unhide": projecting}, enabled=projecting,
-        **state.child_links.get(scope.session_id, {}))
+    register_fn = getattr(state.engine.store, "register_adapter", None)
+    if not callable(register_fn):
+        return
+    register_fn(
+        scope,
+        adapter_id=ADAPTER_ID,
+        instance_id=state.instance_id,
+        capabilities={
+            "hide": projecting,
+            "summarize": projecting and state.summarizer is not None,
+            "unhide": projecting,
+            "protection_only": True,
+            "bundle_fingerprint": RUNTIME_BUNDLE_FINGERPRINT,
+        },
+        enabled=projecting,
+        **state.child_links.get(scope.session_id, {}),
+    )

@@ -508,4 +508,57 @@ test("adapter_control stores toggle revisions and synchronizes adapter_sessions.
     } finally {
       reopened.close();
     }
+
+    // Failure during adapter_sessions update must roll back adapter_control in the same transaction
+    const driver = (store as any).driver;
+    const origRun = driver.run.bind(driver);
+    driver.run = (sql: string, params?: unknown[]) => {
+      if (sql.includes("UPDATE adapter_sessions")) {
+        throw new Error("injected_session_update_failure");
+      }
+      return origRun(sql, params);
+    };
+    try {
+      assert.throws(() => store.setAdapterControl("omp", false, 300), /injected_session_update_failure/);
+      assert.deepEqual(store.getAdapterControl("omp"), second);
+      assert.equal(store.registration("omp:default:s1:default")?.enabled, true);
+    } finally {
+      driver.run = origRun;
+    }
+  }));
+
+test("register preserves optional protection_only and bundle_fingerprint capability markers", () =>
+  database((store) => {
+    store.register("hermes:default:plain:unknown", {
+      adapter_id: "hermes",
+      adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true },
+      enabled: true,
+      instance_id: "inst-plain",
+    });
+    store.register("hermes:default:marked:unknown", {
+      adapter_id: "hermes",
+      adapter_protocol: 1,
+      capabilities: {
+        hide: true,
+        summarize: false,
+        unhide: true,
+        protection_only: true,
+        bundle_fingerprint: "fp-ts-1234",
+      },
+      enabled: false,
+      instance_id: "inst-marked",
+    });
+    assert.deepEqual(store.registration("hermes:default:plain:unknown")?.capabilities, {
+      hide: true,
+      summarize: false,
+      unhide: true,
+    });
+    assert.deepEqual(store.registration("hermes:default:marked:unknown")?.capabilities, {
+      hide: true,
+      summarize: false,
+      unhide: true,
+      protection_only: true,
+      bundle_fingerprint: "fp-ts-1234",
+    });
   }));

@@ -20,7 +20,14 @@ import {
   type Result,
 } from "../../packages/core/src/index.ts";
 import { bindAgents } from "./mapping.ts";
-import { inspectHermesToggle, setHermesToggleAcrossProfiles } from "./adapterToggles.ts";
+import {
+  acquireHermesToggleLock,
+  inspectHermesToggle,
+  setHermesToggleAcrossProfiles,
+  type HermesRuntimeInspectionContext,
+  type HermesRuntimeSessionInfo,
+  type HermesWriteOptions,
+} from "./adapterToggles.ts";
 import {
   loadTimeline,
   measuredTokens,
@@ -91,6 +98,7 @@ function effectiveRowBytesServer(row: Message): number {
 export class PaseoService {
   readonly engine: Engine;
   private readonly decisions = new Map<string, string>();
+  hermesWriteOptions?: HermesWriteOptions;
   constructor(
     readonly store: Store,
     readonly home = homedir(),
@@ -131,7 +139,71 @@ export class PaseoService {
               ? "Install and enable the Session Navigation Hermes adapter."
               : "Install and enable @pureliture/session-navigation-omp in the session host.",
           }
-        : {}),
+        : state === "adapter_disabled" && scope.startsWith("hermes:")
+          ? {
+              hint: "Context management paused via DB control — updated protection-only sessions protect hidden items while older/frozen Hermes processes stay active until restarted (SQLite DB errors fail open per D9).",
+            }
+          : {}),
+    };
+  }
+
+  private hermesRuntimeContext(): HermesRuntimeInspectionContext {
+    const control = this.store.getAdapterControl("hermes");
+    const hiddenScopeRows = this.store.driver.all(
+      `SELECT DISTINCT scope_key FROM items WHERE scope_key LIKE 'hermes:%' AND visibility='hidden'
+       UNION
+       SELECT DISTINCT scope_key FROM units WHERE scope_key LIKE 'hermes:%' AND kind IN ('user', 'assistant') AND visibility='hidden'`,
+    );
+    const hiddenScopes = hiddenScopeRows.map((row) => String(row.scope_key));
+    const regRows = this.store.driver.all(
+      "SELECT * FROM adapter_sessions WHERE adapter_id='hermes' OR scope_key LIKE 'hermes:%' ORDER BY scope_key",
+    );
+    const registeredSessions: HermesRuntimeSessionInfo[] = regRows.map((row) => {
+      let capabilities: Record<string, any> = {};
+      try {
+        const parsed = JSON.parse(String(row.capabilities ?? "{}"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          capabilities = parsed as Record<string, any>;
+        }
+      } catch {
+        capabilities = {};
+      }
+      return {
+        scope_key: String(row.scope_key),
+        adapter_protocol: Number(row.adapter_protocol),
+        capabilities,
+        enabled: Boolean(row.enabled),
+        last_seen: Number(row.last_seen),
+      };
+    });
+
+    const knownKeys = new Set<string>([
+      ...hiddenScopes,
+      ...registeredSessions.map((r) => r.scope_key),
+    ]);
+    const initialBound: Array<{
+      scope_key: string;
+      items: number;
+      capabilities: { state: string; unhide: boolean };
+      agent_id?: string;
+    }> = [...knownKeys].map((scopeKey) => ({
+      scope_key: scopeKey,
+      items: 0,
+      capabilities: { state: "ready", unhide: false },
+    }));
+    const bound = bindAgents(this.home, initialBound, undefined, (scopeKey) =>
+      this.capabilities(scopeKey),
+    );
+    const boundScopes = bound
+      .filter((entry) => entry.scope_key.startsWith("hermes:") && Boolean(entry.agent_id))
+      .map((entry) => entry.scope_key);
+
+    return {
+      control,
+      hiddenScopes,
+      registeredSessions,
+      boundScopes,
+      now: this.store.clock(),
     };
   }
 
@@ -143,7 +215,11 @@ export class PaseoService {
       statusText: ompEnabled ? "Active" : "Paused (existing hidden items protected)",
     };
     const hermesCtrl = this.store.getAdapterControl("hermes");
-    const hermes = inspectHermesToggle(this.home, hermesCtrl?.enabled);
+    const hermes = inspectHermesToggle(
+      this.home,
+      hermesCtrl?.enabled,
+      this.hermesRuntimeContext(),
+    );
     return { ok: true, omp, hermes };
   }
 
@@ -154,32 +230,152 @@ export class PaseoService {
       return { ...this.getAdapterToggles(), ok: false, error: "invalid_params" };
     }
     if (adapter === "omp") {
-      this.store.setAdapterControl("omp", enabled);
-      this.store.driver.run(
-        "UPDATE adapter_sessions SET enabled=? WHERE adapter_id='omp' OR scope_key LIKE 'omp:%'",
-        [Number(enabled)],
-      );
-      return this.getAdapterToggles();
+      try {
+        this.store.setAdapterControl("omp", enabled);
+        return this.getAdapterToggles();
+      } catch (err) {
+        const dbCode = err instanceof EngineError ? err.code : "db_error";
+        return { ...this.getAdapterToggles(), ok: false, error: dbCode };
+      }
     }
-    const writeRes = setHermesToggleAcrossProfiles(this.home, enabled);
-    if (!writeRes.ok) {
+    const lockRes = acquireHermesToggleLock(this.home);
+    if (!lockRes.ok) {
       const current = this.getAdapterToggles();
+      const lockErrorDetail =
+        lockRes.error === "hermes_toggle_locked"
+          ? "Hermes toggle is locked (~/.hermes/.session-navigation-toggle.lock). Wait for active toggles to finish, or if a previous process crashed, verify no toggle is running and remove ~/.hermes/.session-navigation-toggle.lock."
+          : lockRes.error;
       return {
         ...current,
         ok: false,
-        error: writeRes.error ?? "hermes_toggle_failed",
-        hermes: {
-          ...current.hermes,
-          error: writeRes.error ?? "Failed to update Hermes config",
-        },
+        error: lockRes.error,
+        ...(lockRes.error === "hermes_not_installed"
+          ? {}
+          : { hermes: { ...current.hermes, error: lockErrorDetail } }),
       };
     }
-    this.store.setAdapterControl("hermes", enabled);
-    this.store.driver.run(
-      "UPDATE adapter_sessions SET enabled=? WHERE adapter_id='hermes' OR scope_key LIKE 'hermes:%'",
-      [Number(enabled)],
-    );
-    return this.getAdapterToggles();
+    try {
+      const hermesCtrl = this.store.getAdapterControl("hermes");
+      const preCheck = inspectHermesToggle(
+        this.home,
+        hermesCtrl?.enabled,
+        this.hermesRuntimeContext(),
+      );
+      if (!preCheck.installed) {
+        return {
+          ...this.getAdapterToggles(),
+          ok: false,
+          error: preCheck.error ?? "hermes_not_installed",
+          ...(preCheck.error ? { hermes: { ...preCheck, error: preCheck.error } } : {}),
+        };
+      }
+      if (preCheck.error) {
+        return {
+          ...this.getAdapterToggles(),
+          ok: false,
+          error: preCheck.error,
+          hermes: {
+            ...preCheck,
+            error: preCheck.error,
+          },
+        };
+      }
+      // Pausing Hermes updates shared SQLite adapter_control only while leaving config.yaml intact
+      // (enabled) so legacy/duplicate/frozen Hermes processes never disable middleware protection.
+      if (!enabled) {
+        try {
+          this.store.setAdapterControl("hermes", false);
+          return this.getAdapterToggles();
+        } catch (err) {
+          const dbCode = err instanceof EngineError ? err.code : "db_error";
+          return { ...this.getAdapterToggles(), ok: false, error: dbCode };
+        }
+      }
+      const writeRes = setHermesToggleAcrossProfiles(this.home, true, {
+        ...this.hermesWriteOptions,
+        deferJournalClear: true,
+        lockAlreadyHeld: true,
+      });
+      if (!writeRes.ok) {
+        const current = this.getAdapterToggles();
+        const detailError = writeRes.partialUpdate
+          ? `Partial config update (${writeRes.error ?? "write_failed"}): rollback failed for ${writeRes.rollbackFailedFiles.join(", ")}. Reconcile profiles before retrying.`
+          : writeRes.rolledBack
+            ? `Update failed (${writeRes.error ?? "write_failed"}); rolled back ${writeRes.rolledBackFiles.length} modified file(s).`
+            : (writeRes.error ?? "Failed to update Hermes config");
+        return {
+          ...current,
+          ok: false,
+          error: writeRes.partialUpdate
+            ? `hermes_partial_update:${writeRes.error ?? "write_failed"}`
+            : (writeRes.error ?? "hermes_toggle_failed"),
+          hermes: {
+            ...current.hermes,
+            ...(writeRes.profiles.length > 0 ? { profiles: writeRes.profiles } : {}),
+            rolledBack: writeRes.rolledBack,
+            partialUpdate: writeRes.partialUpdate,
+            updatedFiles: writeRes.updatedFiles,
+            rolledBackFiles: writeRes.rolledBackFiles,
+            rollbackFailedFiles: writeRes.rollbackFailedFiles,
+            ...(writeRes.partialUpdate ? { mixed: true } : {}),
+            error: detailError,
+          },
+        };
+      }
+      try {
+        this.store.setAdapterControl("hermes", true);
+      } catch (err) {
+        const dbCode = err instanceof EngineError ? err.code : "db_error";
+        const rb = writeRes.rollbackSnapshot?.();
+        const rbOk = rb ? rb.ok : false;
+        const current = this.getAdapterToggles();
+        return {
+          ...current,
+          ok: false,
+          error: rbOk ? dbCode : `hermes_partial_update:${dbCode}`,
+          hermes: {
+            ...current.hermes,
+            ...(rb
+              ? {
+                  profiles: rb.profiles,
+                  rolledBackFiles: rb.rolledBackFiles,
+                  rollbackFailedFiles: rb.rollbackFailedFiles,
+                }
+              : {}),
+            rolledBack: rbOk,
+            partialUpdate: rb ? !rb.ok : true,
+            ...(!rbOk ? { mixed: true } : {}),
+            error: rbOk
+              ? `SQLite update failed (${dbCode}); rolled back Hermes config files.`
+              : `SQLite update failed (${dbCode}) and config rollback failed for: ${rb?.rollbackFailedFiles.join(", ") ?? "unknown"}.`,
+          },
+        };
+      }
+      // Post-commit journal cleanup failure must NOT roll back already-committed config.yaml files,
+      // because SQLite adapter_control is already committed. Surface residual journal state honestly.
+      try {
+        writeRes.clearJournal?.();
+      } catch (cleanupErr) {
+        const cleanupReason = cleanupErr instanceof Error ? cleanupErr.message : "journal_cleanup_failed";
+        const current = this.getAdapterToggles();
+        return {
+          ...current,
+          ok: false,
+          error: `hermes_journal_cleanup_failed:${cleanupReason}`,
+          hermes: {
+            ...current.hermes,
+            updatedFiles: writeRes.updatedFiles,
+            rolledBack: false,
+            partialUpdate: true,
+            mixed: true,
+            error: `Hermes config files and SQLite adapter_control were committed, but journal cleanup failed (${cleanupReason}); residual journal remains until reconciled.`,
+          },
+        };
+      }
+      return this.getAdapterToggles();
+    } finally {
+      lockRes.release();
+    }
   }
 
   async handle(method: string, input: Record<string, any>): Promise<Reply> {

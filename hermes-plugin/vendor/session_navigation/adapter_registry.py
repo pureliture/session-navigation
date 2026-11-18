@@ -77,6 +77,11 @@ class AdapterRegistryMixin:
         if not instance_id or key.split(":", 1)[0] != adapter_id:
             raise ValueError("invalid_adapter_registration")
         packed = {name: capabilities.get(name) is True for name in ("hide", "summarize", "unhide")}
+        if capabilities.get("protection_only") is True:
+            packed["protection_only"] = True
+        bundle_fp = capabilities.get("bundle_fingerprint")
+        if isinstance(bundle_fp, str) and bundle_fp and len(bundle_fp) <= 128:
+            packed["bundle_fingerprint"] = bundle_fp
         if any(value is not None and (not isinstance(value, str) or not value or len(value) > 1024)
                for value in (parent_scope, tool_call_id, subagent_id)):
             raise ValueError("invalid_adapter_registration")
@@ -194,9 +199,10 @@ class AdapterRegistryMixin:
                      updated_at=excluded.updated_at""",
                 (aid, int(flag), revision, stamp),
             )
+            escaped_aid = aid.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             self.connection.execute(
-                "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=?",
-                (int(flag), aid),
+                "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=? OR scope_key LIKE ? ESCAPE '\\'",
+                (int(flag), aid, f"{escaped_aid}:%"),
             )
             return {
                 "adapter_id": aid,

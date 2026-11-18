@@ -275,12 +275,33 @@ export const OmpAdapterToggleSchema = z.object({
   error: z.string().optional(),
 });
 
+export const HermesProfileToggleStateSchema = z.object({
+  profile: z.string(),
+  configPath: z.string(),
+  enabled: z.boolean(),
+});
+
 export const HermesAdapterToggleSchema = z.object({
   installed: z.boolean(),
   enabled: z.boolean(),
   profileCount: z.number().int().nonnegative(),
+  enabledProfileCount: z.number().int().nonnegative().optional(),
   mixed: z.boolean().optional(),
+  stateUnknown: z.boolean().optional(),
+  canDisable: z.boolean().optional(),
+  protectionVerified: z.boolean().optional(),
+  pluginInstalled: z.boolean().optional(),
+  protectionSupportedOnDisk: z.boolean().optional(),
+  unverifiedScopes: z.array(z.string()).optional(),
+  profiles: z.array(HermesProfileToggleStateSchema).optional(),
+  rolledBack: z.boolean().optional(),
+  partialUpdate: z.boolean().optional(),
+  updatedFiles: z.array(z.string()).optional(),
+  rolledBackFiles: z.array(z.string()).optional(),
+  rollbackFailedFiles: z.array(z.string()).optional(),
   statusText: z.string().optional(),
+  warning: z.string().optional(),
+  remediation: z.string().optional(),
   error: z.string().optional(),
 });
 

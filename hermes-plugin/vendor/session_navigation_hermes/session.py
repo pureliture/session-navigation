@@ -33,6 +33,7 @@ class StoredResult:
     api_mode: str
     result_position: int
     recorded_at: float
+    duplicate_call_id: bool = False
 
 
 @dataclass
@@ -88,12 +89,13 @@ class SessionTranscriptStore:
         results, skipped, error = find_tool_results(api_mode, payload)
         if error is not None:
             return [], [], error
-        invocations = _extract_invocations(api_mode, payload)
+        invocations, duplicate_ids = _extract_invocations_and_duplicates(api_mode, payload)
         stored: list[StoredResult] = []
         positions: dict[str, int] = {}
         for found in results:
             position = positions.get(found.call_id, 0)
             positions[found.call_id] = position + 1
+            is_duplicate = found.call_id in duplicate_ids
             tool_name, raw_args, parse_error = invocations.get(
                 found.call_id, ("", {}, True))
             stored.append(
@@ -108,6 +110,7 @@ class SessionTranscriptStore:
                     api_mode=api_mode,
                     result_position=position,
                     recorded_at=self._now(),
+                    duplicate_call_id=is_duplicate,
                 )
             )
         skipped_dicts = [
@@ -137,23 +140,43 @@ class SessionTranscriptStore:
         return list(entry.results) if entry is not None else []
 
 
-def _extract_invocations(
+def _record_invocation(
+    out: dict[str, tuple[str, dict[str, Any], bool]],
+    seen: set[str],
+    duplicates: set[str],
+    call_id: str,
+    name: str,
+    args: dict[str, Any],
+    failed: bool,
+) -> None:
+    if call_id in seen:
+        duplicates.add(call_id)
+        out[call_id] = ("", {}, True)
+        return
+    seen.add(call_id)
+    out[call_id] = (name, args, failed)
+
+
+def _extract_invocations_and_duplicates(
     api_mode: str, payload: dict[str, Any]
-) -> dict[str, tuple[str, dict[str, Any], bool]]:
-    """Map call ID to (tool name, raw arguments, parse error).
+) -> tuple[dict[str, tuple[str, dict[str, Any], bool]], set[str]]:
+    """Map call ID to (tool name, raw arguments, parse error) and report duplicate call IDs.
 
     codex_responses reads `function_call` items (name + arguments).
     chat_completions reads `assistant.tool_calls` entries (function name +
-    arguments). Missing or unparsable arguments are reported with
-    parse_error True and decided later by the allowlist filter.
+    arguments). When multiple invocations share the same call ID, the call ID
+    is marked duplicate and mapped to a parse-error sentinel so downstream
+    identity checks fail closed instead of binding the first invocation.
     """
     out: dict[str, tuple[str, dict[str, Any], bool]] = {}
+    seen: set[str] = set()
+    duplicates: set[str] = set()
     if not isinstance(payload, dict):
-        return out
+        return out, duplicates
     if api_mode == "codex_responses":
         items = payload.get("input")
         if not isinstance(items, list):
-            return out
+            return out, duplicates
         for item in items:
             if not isinstance(item, dict) or item.get("type") != "function_call":
                 continue
@@ -164,11 +187,11 @@ def _extract_invocations(
             name = raw_name if isinstance(raw_name, str) else ""
             raw = item.get("arguments", {})
             args, failed = _coerce_args(raw)
-            out.setdefault(call_id.strip(), (name, args, failed))
+            _record_invocation(out, seen, duplicates, call_id.strip(), name, args, failed)
     elif api_mode == "chat_completions":
         messages = payload.get("messages")
         if not isinstance(messages, list):
-            return out
+            return out, duplicates
         for msg in messages:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
@@ -187,7 +210,15 @@ def _extract_invocations(
                 name = name_raw if isinstance(name_raw, str) else ""
                 raw = fn.get("arguments", {})
                 args, failed = _coerce_args(raw)
-                out.setdefault(raw_id.strip(), (name, args, failed))
+                _record_invocation(out, seen, duplicates, raw_id.strip(), name, args, failed)
+    return out, duplicates
+
+
+def _extract_invocations(
+    api_mode: str, payload: dict[str, Any]
+) -> dict[str, tuple[str, dict[str, Any], bool]]:
+    """Map call ID to (tool name, raw arguments, parse error)."""
+    out, _duplicates = _extract_invocations_and_duplicates(api_mode, payload)
     return out
 
 

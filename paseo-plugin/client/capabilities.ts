@@ -54,7 +54,12 @@ export function capabilityNotice(
   if (error)
     return `Engine/runtime error: ${error}. Refresh the outline before retrying.`;
   if (capabilities?.state === "adapter_disabled")
-    return "Context management paused in settings — existing hidden items stay protected.";
+    return (
+      capabilities.hint ??
+      (options?.scopeKey?.startsWith("hermes:")
+        ? "Context management paused via DB control — updated protection-only sessions protect hidden items while older/frozen Hermes processes stay active until restarted (SQLite DB errors fail open per D9)."
+        : "Context management paused in settings — existing hidden items stay protected.")
+    );
   if (!capabilities || capabilities.state === "adapter_not_detected") {
     if (!isManagedAdapterProvider(options?.provider, options?.scopeKey)) return null;
     if (options?.rowCount === 0 && (!options?.scopeKey || !capabilities || capabilities.state === "adapter_not_detected")) {

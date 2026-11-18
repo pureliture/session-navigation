@@ -32,6 +32,7 @@ let currentToggleData: AdapterTogglesResult = {
 };
 const invalidatedKeys: any[] = [];
 const setQueryDataCalls: Array<{ key: any; data: any }> = [];
+let nextToggleResultOverride: AdapterTogglesResult | null = null;
 
 mock.module("react-native", () => ({
   View: "View",
@@ -58,6 +59,11 @@ mock.module("@getpaseo/plugin/client", () => ({
       return currentToggleData;
     }
     if (def.name === setAdapterToggleRpc.name) {
+      if (nextToggleResultOverride) {
+        const override = nextToggleResultOverride;
+        nextToggleResultOverride = null;
+        return override;
+      }
       const next: AdapterTogglesResult = {
         ...currentToggleData,
         ok: true,
@@ -161,6 +167,7 @@ afterEach(() => {
   rpcCalls.length = 0;
   invalidatedKeys.length = 0;
   setQueryDataCalls.length = 0;
+  nextToggleResultOverride = null;
   currentToggleData = {
     ok: true,
     omp: { installed: true, enabled: true, statusText: "Active" },
@@ -329,5 +336,159 @@ describe("Outline settings & Session Navigation SettingsScreen", () => {
     expect(resetButtons).toHaveLength(1);
     resetButtons[0].props.onPress();
     expect(resetCalls).toBe(1);
+  });
+
+  test("SettingsScreen displays unverified warning/remediation, preserves fail-closed or partial-update responses via setQueryData, and offers profile reconciliation", async () => {
+    const { SettingsScreen } = await import("./settingsScreen");
+    setUseOutlineSettingsOverride(() => ({
+      status: "ready",
+      revision: "rev-1",
+      values: { followVisibleSession: true, openPreviewOnRowClick: false },
+      saving: false,
+      saveError: null,
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+
+    currentToggleData = {
+      ok: true,
+      omp: { installed: true, enabled: true, statusText: "Active" },
+      hermes: {
+        installed: true,
+        enabled: true,
+        profileCount: 2,
+        mixed: true,
+        protectionVerified: false,
+        canDisable: false,
+        profiles: [
+          { profile: "default", configPath: "/tmp/.hermes/config.yaml", enabled: true },
+          { profile: "atlas", configPath: "/tmp/.hermes/profiles/atlas/config.yaml", enabled: false },
+        ],
+        partialUpdate: true,
+        rollbackFailedFiles: ["/tmp/.hermes/profiles/atlas/config.yaml"],
+        statusText: "1/2 profiles enabled (mixed) — protection unverified (D9: DB errors fail open)",
+        warning: "Protection-only mode cannot be confirmed for active/running or hidden scopes.",
+        remediation: "Restart Hermes and its gateway completely and run a turn in each enabled/active profile.",
+        error: "Partial config update (disk_io_fail): rollback failed for /tmp/.hermes/profiles/atlas/config.yaml.",
+      },
+    };
+
+    const tree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    const joined = collectText(tree).join("\n");
+    expect(joined).toContain("Manage tool results and cleanup hints across Hermes profiles.");
+    expect(joined).toContain("Protection-only mode cannot be confirmed");
+    expect(joined).toContain("Restart Hermes and its gateway completely");
+    expect(joined).toContain("Profiles: default=on, atlas=off.");
+    expect(joined).toContain("Partial update: rollback failed for /tmp/.hermes/profiles/atlas/config.yaml.");
+    expect(joined).toContain("Partial config update (disk_io_fail)");
+
+    // Failed fail-closed / partial-update RPC reply is retained via setQueryData instead of being invalidated away
+    const hermesSwitch = findAll(
+      tree,
+      (el) => el.type === "Switch" && el.props?.accessibilityLabel === "Hermes",
+    )[0];
+    nextToggleResultOverride = {
+      ok: false,
+      error: "hermes_protection_unverified",
+      omp: currentToggleData.omp,
+      hermes: {
+        ...currentToggleData.hermes,
+        error: "Restart Hermes and its gateway before pausing.",
+      },
+    };
+    hermesSwitch.props.onValueChange(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(setQueryDataCalls).toHaveLength(1);
+    expect(setQueryDataCalls[0].key).toEqual(["session-nav", "adapter-toggles"]);
+    expect(setQueryDataCalls[0].data.ok).toBe(false);
+    expect(setQueryDataCalls[0].data.hermes.error).toBe("Restart Hermes and its gateway before pausing.");
+    expect(invalidatedKeys).not.toContainEqual(["session-nav", "adapter-toggles"]);
+
+    // Reconcile action renders for mixed/partial states and enables all profiles
+    const reconcileButtons = findAll(
+      tree,
+      (el) => el.type === "Pressable" && el.props?.accessibilityLabel === "Enable all profiles",
+    );
+    expect(reconcileButtons).toHaveLength(1);
+    reconcileButtons[0].props.onPress();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(rpcCalls.at(-1)).toEqual({
+      name: "session-nav.set-adapter-toggle",
+      input: { adapter: "hermes", enabled: true },
+    });
+  });
+
+  test("SettingsScreen disables Hermes switch with false value when state is unknown, while keeping recoverable actions enabled", async () => {
+    const { SettingsScreen } = await import("./settingsScreen");
+    setUseOutlineSettingsOverride(() => ({
+      status: "ready",
+      revision: "rev-1",
+      values: { followVisibleSession: true, openPreviewOnRowClick: false },
+      saving: false,
+      saveError: null,
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+
+    // Even if enabled were erroneously true on the wire, stateUnknown MUST force value=false and disabled=true
+    currentToggleData = {
+      ok: true,
+      omp: { installed: true, enabled: true, statusText: "Active" },
+      hermes: {
+        installed: true,
+        enabled: true,
+        stateUnknown: true,
+        canDisable: false,
+        profileCount: 2,
+        statusText: "Config YAML error (state unknown).",
+        warning: "One or more Hermes config.yaml files contain invalid or unsupported YAML; state cannot be determined.",
+        error: "hermes_invalid_config_yaml",
+      },
+    };
+
+    const yamlErrTree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    const yamlSwitch = findAll(
+      yamlErrTree,
+      (el) => el.type === "Switch" && el.props?.accessibilityLabel === "Hermes",
+    )[0];
+    expect(yamlSwitch.props.value).toBe(false);
+    expect(yamlSwitch.props.disabled).toBe(true);
+    expect(collectText(yamlErrTree).join("\n")).toContain("state unknown");
+    expect(
+      findAll(yamlErrTree, (el) => el.type === "Pressable" && el.props?.accessibilityLabel === "Enable all profiles"),
+    ).toHaveLength(0);
+
+    // Recoverable journal error keeps the switch disabled+false while leaving Reconcile action clickable
+    currentToggleData = {
+      ok: true,
+      omp: { installed: true, enabled: true, statusText: "Active" },
+      hermes: {
+        installed: true,
+        enabled: false,
+        stateUnknown: true,
+        canDisable: false,
+        partialUpdate: true,
+        mixed: true,
+        profileCount: 2,
+        statusText: "Journal error (state unknown).",
+        error: "hermes_corrupt_toggle_journal",
+      },
+    };
+    const journalErrTree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    const journalSwitch = findAll(
+      journalErrTree,
+      (el) => el.type === "Switch" && el.props?.accessibilityLabel === "Hermes",
+    )[0];
+    expect(journalSwitch.props.value).toBe(false);
+    expect(journalSwitch.props.disabled).toBe(true);
+    expect(collectText(journalErrTree).join("\n")).toContain("state unknown");
+    const recoverButtons = findAll(
+      journalErrTree,
+      (el) => el.type === "Pressable" && el.props?.accessibilityLabel === "Enable all profiles",
+    );
+    expect(recoverButtons).toHaveLength(1);
+    expect(recoverButtons[0].props.disabled).toBe(false);
   });
 });

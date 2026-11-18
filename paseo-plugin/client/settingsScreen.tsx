@@ -74,7 +74,7 @@ const Loading = UiLoading ?? FallbackLoading;
 const OMP_HINT =
   "Manage tool results and cleanup hints in OMP sessions. Turning off stops new compaction while keeping existing hidden items protected.";
 const HERMES_BASE_HINT =
-  "Manage tool results and cleanup hints across all Hermes profiles on this host. Turning off stops new compaction while keeping existing hidden items protected.";
+  "Manage tool results and cleanup hints across Hermes profiles.";
 
 export function SettingsScreen({ theme }: PluginSurfaceProps) {
   const queryClient = useQueryClient();
@@ -94,7 +94,7 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
   const toggleMutation = useMutation({
     mutationFn: (vars: { adapter: "omp" | "hermes"; enabled: boolean }) => setToggleRpc(vars),
     onSuccess: (data) => {
-      if (data?.ok) {
+      if (data && typeof data === "object" && "omp" in data && "hermes" in data) {
         queryClient.setQueryData<AdapterTogglesResult>(["session-nav", "adapter-toggles"], data);
       } else {
         void queryClient.invalidateQueries({ queryKey: ["session-nav", "adapter-toggles"] });
@@ -110,14 +110,54 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
 
   const values = resolveOutlineSettingsValues(settings);
   const toggles = togglesQuery.data;
-  const omp = toggles?.omp ?? { installed: true, enabled: true };
-  const hermes = toggles?.hermes ?? { installed: false, enabled: false, profileCount: 0 };
+  const omp: AdapterTogglesResult["omp"] = toggles?.omp ?? { installed: true, enabled: true };
+  const hermes: AdapterTogglesResult["hermes"] = toggles?.hermes ?? {
+    installed: false,
+    enabled: false,
+    profileCount: 0,
+  };
 
-  const hermesHint = !toggles && togglesQuery.isPending
-    ? HERMES_BASE_HINT
-    : !hermes.installed
-      ? `${HERMES_BASE_HINT} Not installed on this host.`
-      : `${HERMES_BASE_HINT} (${hermes.profileCount} ${hermes.profileCount === 1 ? "profile" : "profiles"}${hermes.mixed ? ", mixed state" : ""})`;
+  const hermesStateUnknown = Boolean(
+    hermes.stateUnknown ||
+      (hermes.error && hermes.canDisable === false && !hermes.partialUpdate && !hermes.rolledBack),
+  );
+
+  const hermesHintParts: string[] = [HERMES_BASE_HINT];
+  if (toggles || !togglesQuery.isPending) {
+    if (!hermes.installed) {
+      hermesHintParts.push("Not installed on this host.");
+    } else {
+      if (hermes.statusText) {
+        hermesHintParts.push(hermes.statusText);
+      } else {
+        hermesHintParts.push(
+          `(${hermes.profileCount} ${hermes.profileCount === 1 ? "profile" : "profiles"}${hermes.mixed ? ", mixed state" : ""})`,
+        );
+      }
+      if (hermesStateUnknown && !hermes.statusText?.toLowerCase().includes("unknown")) {
+        hermesHintParts.push("State unknown — resolve the configuration error before toggling.");
+      }
+      if (hermes.profiles && hermes.profiles.length > 0 && (hermes.mixed || hermes.partialUpdate)) {
+        hermesHintParts.push(
+          `Profiles: ${hermes.profiles.map((p) => `${p.profile}=${p.enabled ? "on" : "off"}`).join(", ")}.`,
+        );
+      }
+      if (hermes.partialUpdate && hermes.rollbackFailedFiles && hermes.rollbackFailedFiles.length > 0) {
+        hermesHintParts.push(
+          `Partial update: rollback failed for ${hermes.rollbackFailedFiles.join(", ")}.`,
+        );
+      } else if (hermes.rolledBack && hermes.rolledBackFiles && hermes.rolledBackFiles.length > 0) {
+        hermesHintParts.push(`Rolled back ${hermes.rolledBackFiles.length} config file(s).`);
+      }
+      if (hermes.warning && (hermesStateUnknown || !hermes.protectionVerified || hermes.mixed || hermes.partialUpdate)) {
+        hermesHintParts.push(hermes.warning);
+      }
+      if (hermes.remediation && (hermes.partialUpdate || hermes.mixed || !hermes.warning)) {
+        hermesHintParts.push(hermes.remediation);
+      }
+    }
+  }
+  const hermesHint = hermesHintParts.join(" ");
 
   const toggleError =
     togglesQuery.error instanceof Error
@@ -129,6 +169,14 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
           : toggleMutation.data && !toggleMutation.data.ok
             ? toggleMutation.data.error ?? null
             : null;
+
+  const hermesError =
+    hermes.error ??
+    (toggleMutation.data && !toggleMutation.data.ok && toggleMutation.variables?.adapter === "hermes"
+      ? toggleMutation.data.hermes?.error ?? toggleMutation.data.error ?? null
+      : toggleMutation.variables?.adapter === "hermes"
+        ? toggleError
+        : null);
 
   const isModified =
     values.followVisibleSession !== DEFAULT_OUTLINE_SETTINGS.followVisibleSession ||
@@ -157,11 +205,24 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
           <SettingsSwitch
             label="Hermes"
             hint={hermesHint}
-            value={hermes.enabled}
-            disabled={togglesQuery.isPending || !hermes.installed || toggleMutation.isPending}
-            error={hermes.error ?? (toggleMutation.variables?.adapter === "hermes" ? toggleError : null)}
+            value={hermesStateUnknown ? false : hermes.enabled}
+            disabled={togglesQuery.isPending || !hermes.installed || toggleMutation.isPending || hermesStateUnknown}
+            error={hermesError}
             onValueChange={(enabled) => toggleMutation.mutate({ adapter: "hermes", enabled })}
           />
+          {hermes.installed && (hermes.mixed || hermes.partialUpdate) ? (
+            <SettingsAction
+              label="Reconcile Hermes profiles"
+              hint={
+                hermes.rollbackFailedFiles?.length
+                  ? `Rollback failed for ${hermes.rollbackFailedFiles.join(", ")}. Enable all profiles to align Hermes config.yaml files and SQLite state.`
+                  : "Align all Hermes profile config.yaml files and SQLite adapter_control to enabled."
+              }
+              actionLabel="Enable all profiles"
+              disabled={togglesQuery.isPending || toggleMutation.isPending}
+              onPress={() => toggleMutation.mutate({ adapter: "hermes", enabled: true })}
+            />
+          ) : null}
         </SettingsCard>
       </SettingsSection>
 
