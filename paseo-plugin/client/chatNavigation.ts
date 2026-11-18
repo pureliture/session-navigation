@@ -97,11 +97,17 @@ function rowIdentityIds(row: Row): string[] {
 }
 
 export function identityMatches(value: string, id: string): boolean {
+  if (!value || !id) return false;
+  const decoded = (() => { try { return decodeURIComponent(value); } catch { return value; } })();
+  // Rendered chats nest the raw id: `agent_tool_turn:<turn>/<callId>`,
+  // `beautiful-chat/<mid>/<seq>`, `paseo-agent-message:<uuid>`.
+  const segments = decoded.split("/").flatMap((part) => part.split(":"));
+  if (segments.includes(id)) return true;
   if (value === id || value === `agent_tool_${id}` || value === `paseo-agent-message:${id}` ||
     value.endsWith(`/${encodeURIComponent(id)}`) ||
     value === `message-${id}` || value === `call-${id}` || value === `turn-${id}` ||
     value === `tool-${id}` || value === `tool_call_${id}`) return true;
-  return id.length >= 6 && (value.endsWith(`_${id}`) || value.endsWith(`:${id}`));
+  return id.length >= 6 && (value.endsWith(`_${id}`) || value.endsWith(`:${id}`) || decoded.endsWith(`:${id}`) || decoded.endsWith(`/${id}`));
 }
 
 function textNeedles(hints: (string | undefined)[]): string[] {
@@ -557,14 +563,23 @@ function findRowMessageNode(
     }
   }
 
-  const boundedMatches = allMatches.filter(
+  // Rendered chats nest ROW elements (parent + child share textContent). Dedupe
+  // nested matches first so a single logical row is treated as unique.
+  const deduped = allMatches.filter((node) =>
+    !allMatches.some((other) => other !== node && typeof other.contains === "function" && other.contains(node)),
+  );
+  const boundedMatches = deduped.filter(
     (node) =>
       (!lowerNode || rowComparisonOrder(domRows, node, lowerNode, "after")) &&
       (!upperNode || rowComparisonOrder(domRows, node, upperNode, "before")),
   );
+  // Anchors are heuristic (text-boundary guesses). A unique text match is stronger
+  // evidence than possibly-misplaced anchors: never discard the only candidate.
+  if (deduped.length === 1) return deduped[0];
   if (boundedMatches.length === 0) return null;
   if (boundedMatches.length === 1) return boundedMatches[0];
 
+  const candidates = boundedMatches.length > 0 ? boundedMatches : deduped;
   const primaryNeedle = needles[0];
   const peerIndices: number[] = [];
   for (let k = lowerIdx + 1; k < upperIdx; k++) {
@@ -578,32 +593,32 @@ function findRowMessageNode(
   const ordFromStart = peerIndices.indexOf(targetIdx);
   if (ordFromStart < 0) {
     return targetIdx >= rows.length / 2
-      ? boundedMatches[boundedMatches.length - 1]
-      : boundedMatches[0];
+      ? candidates[candidates.length - 1]
+      : candidates[0];
   }
   const ordFromEnd = peerIndices.length - 1 - ordFromStart;
-  if (boundedMatches.length === peerIndices.length) {
-    return boundedMatches[ordFromStart];
+  if (candidates.length === peerIndices.length) {
+    return candidates[ordFromStart];
   }
   if (lowerNode && !upperNode) {
-    return boundedMatches[Math.min(ordFromStart, boundedMatches.length - 1)];
+    return candidates[Math.min(ordFromStart, candidates.length - 1)];
   }
   if (upperNode && !lowerNode) {
-    return boundedMatches[Math.max(0, boundedMatches.length - 1 - ordFromEnd)];
+    return candidates[Math.max(0, candidates.length - 1 - ordFromEnd)];
   }
   if (!lowerNode && !upperNode && mountedIndices && mountedIndices.length > 0) {
     const minMounted = Math.min(...mountedIndices);
     const maxMounted = Math.max(...mountedIndices);
     if (minMounted > 0 && maxMounted >= rows.length - 3) {
-      return boundedMatches[Math.max(0, boundedMatches.length - 1 - ordFromEnd)];
+      return candidates[Math.max(0, candidates.length - 1 - ordFromEnd)];
     }
     if (maxMounted < rows.length - 1 && minMounted <= 2) {
-      return boundedMatches[Math.min(ordFromStart, boundedMatches.length - 1)];
+      return candidates[Math.min(ordFromStart, candidates.length - 1)];
     }
   }
   return targetIdx < rows.length / 2
-    ? boundedMatches[Math.min(ordFromStart, boundedMatches.length - 1)]
-    : boundedMatches[Math.max(0, boundedMatches.length - 1 - ordFromEnd)];
+    ? candidates[Math.min(ordFromStart, candidates.length - 1)]
+    : candidates[Math.max(0, candidates.length - 1 - ordFromEnd)];
 }
 
 // Paseo folds finished turns behind a "turn-summary" badge rendered after the user message.
@@ -779,7 +794,10 @@ function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual
       if (candidate.kind === "tool" || paseoSystemMessageId(candidate)) return;
       const needles = textNeedles(messageHints(candidate));
       const needle = needles.filter((value) => matchesNeedle(raw, value)).sort((x, y) => y.length - x.length)[0];
-      if (needle) {
+      // Short (<=8 char) needles like "수정 결과" false-match unrelated chats and
+      // poison seek direction (older target misread as newer). Only long needles
+      // may establish the mounted window; ID matches above are unaffected.
+      if (needle && needle.length > 8) {
         if (needle.length > longest) {
           longest = needle.length;
           matched = [candidateIndex];
@@ -847,13 +865,24 @@ function seekMountedWindow(
       older = targetOrder < (minMountedOrder + maxMountedOrder) / 2;
     }
   } else if (position >= extent - 4) {
+    // At the bottom with nothing recognizable mounted, the target is older.
+    // Never mark the down edge "tried" here: sweeping down from the bottom is a
+    // no-op ("atNewerEdge") and must not let a later top-edge visit flip the
+    // sweep downward (that strands pre-compression seeks at Not loaded).
     older = true;
     bounds.sweepDirection = "up";
-    bounds.triedDownEdge = true;
   } else if (position <= 4) {
-    older = false;
-    bounds.sweepDirection = "down";
-    bounds.triedUpEdge = true;
+    // At the top with nothing recognizable mounted: older history may still be
+    // pageable (virtualizer + relay). Keep sweeping up so seekMountedWindow
+    // returns needOlder; only flip down when the paginator proves the top edge
+    // is exhausted (position stays 0 AND no spinner/progress follows).
+    if (!bounds.sweepDirection) bounds.sweepDirection = "up";
+    if (bounds.sweepDirection === "down" && bounds.triedUpEdge) {
+      older = false;
+    } else {
+      older = true;
+      bounds.sweepDirection = "up";
+    }
   } else {
     if (!bounds.sweepDirection) bounds.sweepDirection = "up";
     older = bounds.sweepDirection !== "down";
@@ -866,17 +895,10 @@ function seekMountedWindow(
     if (mountedOrders.length === 0) {
       if (!bounds.triedUpEdge) {
         bounds.triedUpEdge = true;
-        return "needOlder";
       }
-      if (!bounds.triedDownEdge) {
-        bounds.sweepDirection = "down";
-        older = false;
-      } else {
-        return "needOlder";
-      }
-    } else {
       return "needOlder";
     }
+    return "needOlder";
   }
   if (!older && position >= extent - 1) return "atNewerEdge";
   if (!mounted.length) {
@@ -1064,24 +1086,52 @@ async function navigate(
   const signature = () => JSON.stringify((Array.from(root.querySelectorAll(ROW)) as any[]).map((node) =>
     [node.getAttribute("data-history-row-id"), node.getAttribute("data-message-id"), node.getAttribute("data-index")]));
   let previousSignature = signature(), lastProgress = now();
+  let lastRowCount = Array.from(root.querySelectorAll(ROW)).length;
+  let lastScrollHeight = 0;
+  try {
+    lastScrollHeight = chatScroller(root)?.scrollHeight ?? 0;
+  } catch {
+    lastScrollHeight = 0;
+  }
   const noProgressCutoff = history?.complete
     ? 4000
     : (options.getHistory === undefined && targetIdx >= 0) || options.noProgressTimeoutMs !== undefined
       ? (options.noProgressTimeoutMs ?? 2500)
       : null;
+  // Older-history pagination is slow (relay + virtualizer settle take seconds per
+  // page). Only extend the cutoff while pagination is visibly in flight: spinner
+  // mounted, row count growing, or scroll extent growing. A bare repeated
+  // "needOlder" with a frozen DOM is a stall, not progress.
+  const paginationCutoff = noProgressCutoff === null ? null : Math.max(noProgressCutoff, 15000);
+  let lastOutcome: SeekOutcome | null = null;
+  let pagingInFlight = false;
   while (version === navigationVersion) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
     if (version !== navigationVersion) return false;
     if (now() >= deadline) break;
     const currentSignature = signature();
     if (currentSignature !== previousSignature) { previousSignature = currentSignature; lastProgress = now(); }
+    const rowCount = Array.from(root.querySelectorAll(ROW)).length;
+    if (rowCount !== lastRowCount) { lastRowCount = rowCount; lastProgress = now(); pagingInFlight = true; }
+    let scrollHeight = lastScrollHeight;
+    try {
+      scrollHeight = chatScroller(root)?.scrollHeight ?? lastScrollHeight;
+    } catch {
+      scrollHeight = lastScrollHeight;
+    }
+    if (scrollHeight !== lastScrollHeight) { lastScrollHeight = scrollHeight; lastProgress = now(); pagingInFlight = true; }
+    if (root.querySelector('[data-testid="load-older-history-spinner"]')) pagingInFlight = true;
+    else if (lastOutcome !== "needOlder" && lastOutcome !== "moved") pagingInFlight = false;
+    const cutoff = pagingInFlight ? paginationCutoff : noProgressCutoff;
     if (
-      noProgressCutoff !== null &&
-      now() - lastProgress >= noProgressCutoff &&
+      cutoff !== null &&
+      now() - lastProgress >= cutoff &&
       !root.querySelector('[data-testid="load-older-history-spinner"]')
     ) break;
+    lastOutcome = null;
     if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 100) {
       const outcome = seekMountedWindow(root, doc, rows, row, bounds);
+      lastOutcome = outcome;
       if (outcome === "moved" || outcome === "atNewerEdge") {
         lastAttempt = now();
       } else if (outcome === "needOlder" && now() - lastAttempt >= 250) {
