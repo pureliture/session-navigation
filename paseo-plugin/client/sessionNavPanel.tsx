@@ -15,7 +15,7 @@ import {
   unhideItemRpc,
   type Row,
 } from "../shared/sessionNav";
-import { cancelChatNavigation, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { cancelChatNavigation, parseRgb, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
@@ -1533,6 +1533,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     };
   }, [theme, layout.compact]);
 
+  const surfaceRgb = parseRgb(theme.colors.surface0);
+  const isDark = surfaceRgb
+    ? 0.299 * surfaceRgb.r + 0.587 * surfaceRgb.g + 0.114 * surfaceRgb.b < 128
+    : false;
+
   const handleRowPress = async (row: Row) => {
     const rowKey = row.item_id ?? row.tool_call_id;
     setSelectedId(rowKey);
@@ -1547,7 +1552,12 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         openParent: () => navigation?.openAgent({ agentId }),
       });
       if (!opened) { setNotice("Could not open subagent tab. Inline outline remains available."); return; }
-      void scrollToMessageInChat(row, rawRows, { visibleOnly: true, onNotFound: () => setNotice("Not loaded in chat") });
+      void scrollToMessageInChat(row, rawRows, {
+        visibleOnly: true,
+        accentColor: theme.colors.accent,
+        isDark,
+        onNotFound: () => setNotice("Not loaded in chat"),
+      });
       return;
     }
     if (displayOnly && !navigation) {
@@ -1556,6 +1566,8 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     }
     void scrollToMessageInChat(row, rawRows, {
       openAgent: displayOnly && navigation ? { agentId, open: () => navigation.openAgent({ agentId }) } : undefined,
+      accentColor: theme.colors.accent,
+      isDark,
       onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
       onNotFound: () => setNotice("Not loaded in chat"),
     });

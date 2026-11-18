@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { QueryClient, onlineManager } from "@tanstack/react-query";
 import type { Row } from "../shared/sessionNav";
-import { cancelChatNavigation, historyContainsRow, identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { cancelChatNavigation, historyContainsRow, identityMatches, parseRgb, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { readTimelineHistory } from "./timelineHistory";
 
 class Element {
@@ -703,25 +703,78 @@ test("child navigation never selects a hidden parent chat or guesses between vis
   expect(child.scrolled).toBe(false);
 });
 
-test("double-clicking the same row within 1200ms never locks highlight background permanently blue, and switching rows clears previous highlight", async () => {
+test("modern highlight adapts to theme accentColor/isDark, separates message bar vs badge ring, preserves original styles on double-click/switch, and fades in 2 phases", async () => {
+  expect(parseRgb("#1a2")).toEqual({ r: 17, g: 170, b: 34 });
+  expect(parseRgb("#3b82f6")).toEqual({ r: 59, g: 130, b: 246 });
+  expect(parseRgb("#3b82f680")).toEqual({ r: 59, g: 130, b: 246 });
+  expect(parseRgb("rgb(94, 138, 117)")).toEqual({ r: 94, g: 138, b: 117 });
+  expect(parseRgb("rgba(16, 185, 129, 0.9)")).toEqual({ r: 16, g: 185, b: 129 });
+  expect(parseRgb("not-a-color")).toBeNull();
+
   const root = new Element({ "data-testid": "agent-chat-scroll" });
   const first = new Element({ "data-message-id": "m1" }, "first row");
   const second = new Element({ "data-message-id": "m2" }, "second row");
+  const badge = new Element({ "data-testid": "tool-call-badge", "data-tool-call-id": "call-b1" }, "bash");
   first.style.backgroundColor = "transparent";
-  root.add(first, second);
+  first.style.boxShadow = "none";
+  first.style.borderRadius = "";
+  first.style.transition = "opacity 100ms linear";
+  badge.style.borderRadius = "999px";
+  root.add(first, second, badge);
   const doc = new Element().add(root);
   const r1 = row("m1", "user");
   const r2 = row("m2", "user");
-  await scrollToMessageInChat(r1, [r1, r2], { document: doc });
-  // Second click while already highlighted blue must NOT capture rgba(59, 130, 246, 0.22) as original!
-  await scrollToMessageInChat(r1, [r1, r2], { document: doc });
-  expect(first.style.backgroundColor).toBe("rgba(59, 130, 246, 0.22)");
-  // Clicking another row immediately restores the first row's original background!
-  await scrollToMessageInChat(r2, [r1, r2], { document: doc });
+  const rBadge = row("call-b1", "tool");
+
+  // 1. Default sage accent in light mode on message row
+  await scrollToMessageInChat(r1, [r1, r2, rBadge], { document: doc });
+  expect(first.style.backgroundColor).toBe("rgba(94, 138, 117, 0.075)");
+  expect(first.style.boxShadow).toBe(
+    "inset 3px 0 0 0 rgba(94, 138, 117, 0.85), inset 0 0 0 1px rgba(94, 138, 117, 0.20)",
+  );
+  expect(first.style.borderRadius).toBe("10px");
+  expect(first.style.transition).toBe(
+    "background-color 180ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+  );
+
+  // 2. Double-clicking the same row must NOT capture highlight style as original!
+  await scrollToMessageInChat(r1, [r1, r2, rBadge], { document: doc, accentColor: "#10b981", isDark: true });
+  expect(first.style.backgroundColor).toBe("rgba(16, 185, 129, 0.13)");
+
+  // 3. Clicking a tool badge immediately restores first row's original styles at 0ms and applies ring + halo preserving existing borderRadius
+  await scrollToMessageInChat(rBadge, [r1, r2, rBadge], { document: doc, accentColor: "#10b981", isDark: true });
   expect(first.style.backgroundColor).toBe("transparent");
-  expect(second.style.backgroundColor).toBe("rgba(59, 130, 246, 0.22)");
-  await new Promise((resolve) => setTimeout(resolve, 1250));
+  expect(first.style.boxShadow).toBe("none");
+  expect(first.style.borderRadius).toBe("");
+  expect(first.style.transition).toBe("opacity 100ms linear");
+
+  expect(badge.style.backgroundColor).toBe("rgba(16, 185, 129, 0.16)");
+  expect(badge.style.boxShadow).toBe(
+    "inset 0 0 0 1.5px rgba(16, 185, 129, 0.65), 0 0 0 3px rgba(16, 185, 129, 0.12)",
+  );
+  expect(badge.style.borderRadius).toBe("999px");
+
+  // 4. Switching to second row (light theme custom rgba) -> two-phase fadeout:
+  //    850ms starts 420ms exit transition on bg/boxShadow; 1300ms restores transition/borderRadius completely.
+  await scrollToMessageInChat(r2, [r1, r2, rBadge], { document: doc, accentColor: "rgba(34, 197, 94, 1)", isDark: false });
+  expect(badge.style.backgroundColor).toBe("");
+  expect(badge.style.boxShadow).toBe("");
+  expect(badge.style.borderRadius).toBe("999px");
+
+  await new Promise((resolve) => setTimeout(resolve, 920));
+  expect(second.style.backgroundColor).toBe("rgba(34, 197, 94, 0)");
+  expect(second.style.boxShadow).toBe(
+    "inset 3px 0 0 0 rgba(34, 197, 94, 0), inset 0 0 0 1px rgba(34, 197, 94, 0)",
+  );
+  expect(second.style.transition).toBe(
+    "background-color 420ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 420ms cubic-bezier(0.4, 0, 0.2, 1)",
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 450));
   expect(second.style.backgroundColor).toBe("");
+  expect(second.style.boxShadow).toBe("");
+  expect(second.style.transition).toBe("");
+  expect(second.style.borderRadius).toBe("");
 });
 
 test("jumping from an old virtualized slice back to the newest row scrolls down with positive wheel delta and never calls loadOlder", async () => {

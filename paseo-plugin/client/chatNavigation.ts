@@ -259,22 +259,78 @@ export function historyContainsRow(history: TimelineHistory, row: Row): boolean 
   });
 }
 
-const HIGHLIGHT_BG = "rgba(59, 130, 246, 0.22)";
+const DEFAULT_ACCENT_RGB = { r: 94, g: 138, b: 117 };
+const HIGHLIGHT_ENTER_TRANSITION =
+  "background-color 180ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1)";
+const HIGHLIGHT_EXIT_TRANSITION =
+  "background-color 420ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 420ms cubic-bezier(0.4, 0, 0.2, 1)";
+
 type HighlightTimer = Parameters<typeof clearTimeout>[0];
-const highlightStates = new WeakMap<
-  any,
-  { bg: string; transition: string; timer: HighlightTimer }
->();
+type HighlightState = {
+  bg: string;
+  boxShadow: string;
+  borderRadius: string;
+  transition: string;
+  fadeTimer: HighlightTimer;
+  cleanupTimer?: HighlightTimer;
+};
+const highlightStates = new WeakMap<any, HighlightState>();
 let activeHighlightedNode: any = null;
+
+export function parseRgb(color?: string): { r: number; g: number; b: number } | null {
+  if (typeof color !== "string") return null;
+  const trimmed = color.trim();
+  if (!trimmed) return null;
+  const hexMatch = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu.exec(trimmed);
+  if (hexMatch) {
+    const hex = hexMatch[1];
+    if (hex.length === 3 || hex.length === 4) {
+      return {
+        r: Number.parseInt(hex[0] + hex[0], 16),
+        g: Number.parseInt(hex[1] + hex[1], 16),
+        b: Number.parseInt(hex[2] + hex[2], 16),
+      };
+    }
+    return {
+      r: Number.parseInt(hex.slice(0, 2), 16),
+      g: Number.parseInt(hex.slice(2, 4), 16),
+      b: Number.parseInt(hex.slice(4, 6), 16),
+    };
+  }
+  const rgbMatch =
+    /^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})(?:\s*[,/]\s*[\d.]+%?)?\s*\)$/iu.exec(
+      trimmed,
+    );
+  if (rgbMatch) {
+    const clamp = (v: string) => Math.max(0, Math.min(255, Number.parseInt(v, 10)));
+    return {
+      r: clamp(rgbMatch[1]),
+      g: clamp(rgbMatch[2]),
+      b: clamp(rgbMatch[3]),
+    };
+  }
+  return null;
+}
+
+function parseAccentRgb(color?: string): { r: number; g: number; b: number } {
+  return parseRgb(color) ?? DEFAULT_ACCENT_RGB;
+}
+
+function isInlineBadgeNode(node: any): boolean {
+  return Boolean(node?.matches?.(`${BADGE}, ${GROUP}, [data-tool-call-id]`));
+}
 
 function clearHighlightNode(node: any): void {
   const state = node ? highlightStates.get(node) : undefined;
   if (!state) return;
-  clearTimeout(state.timer);
+  clearTimeout(state.fadeTimer);
+  if (state.cleanupTimer !== undefined) clearTimeout(state.cleanupTimer);
   highlightStates.delete(node);
   if (activeHighlightedNode === node) activeHighlightedNode = null;
-  if (node.style && node.style.backgroundColor === HIGHLIGHT_BG) {
+  if (node.style) {
     node.style.backgroundColor = state.bg;
+    node.style.boxShadow = state.boxShadow;
+    node.style.borderRadius = state.borderRadius;
     node.style.transition = state.transition;
   }
 }
@@ -285,7 +341,14 @@ export function clearChatHighlight(): void {
 
 function highlightAndScroll(
   node: any,
-  opts?: { tail?: boolean; releaseFollow?: boolean; root?: any; doc?: any },
+  opts?: {
+    tail?: boolean;
+    releaseFollow?: boolean;
+    root?: any;
+    doc?: any;
+    accentColor?: string;
+    isDark?: boolean;
+  },
 ): boolean {
   if (!node) return false;
   if (activeHighlightedNode && activeHighlightedNode !== node) {
@@ -324,16 +387,66 @@ function highlightAndScroll(
   }
   if (node.style) {
     const existing = highlightStates.get(node);
-    if (existing) clearTimeout(existing.timer);
-    const bg = existing ? existing.bg : (node.style.backgroundColor === HIGHLIGHT_BG ? "" : (node.style.backgroundColor ?? ""));
+    if (existing) {
+      clearTimeout(existing.fadeTimer);
+      if (existing.cleanupTimer !== undefined) clearTimeout(existing.cleanupTimer);
+    }
+    const bg = existing ? existing.bg : (node.style.backgroundColor ?? "");
+    const boxShadow = existing ? existing.boxShadow : (node.style.boxShadow ?? "");
+    const borderRadius = existing ? existing.borderRadius : (node.style.borderRadius ?? "");
     const transition = existing ? existing.transition : (node.style.transition ?? "");
-    node.style.transition = "background-color 0.3s ease";
-    node.style.backgroundColor = HIGHLIGHT_BG;
+
+    const { r, g, b } = parseAccentRgb(opts?.accentColor);
+    const isDark = Boolean(opts?.isDark);
+    const isBadge = isInlineBadgeNode(node);
+
+    let computedRadius = "";
+    try {
+      computedRadius = opts?.doc?.defaultView?.getComputedStyle?.(node)?.borderRadius ?? "";
+    } catch {
+      // Ignore mock DOMs without getComputedStyle.
+    }
+    const effectiveRadius = (borderRadius || computedRadius || "").trim();
+    const hasRadius =
+      effectiveRadius !== "" &&
+      effectiveRadius !== "0" &&
+      effectiveRadius !== "0px" &&
+      !/^(?:0(?:px)?\s+)*0(?:px)?$/u.test(effectiveRadius);
+    node.style.borderRadius = hasRadius ? borderRadius : (isBadge ? "8px" : "10px");
+
+    node.style.transition = HIGHLIGHT_ENTER_TRANSITION;
+    node.style.backgroundColor = isBadge
+      ? `rgba(${r}, ${g}, ${b}, ${isDark ? "0.16" : "0.10"})`
+      : `rgba(${r}, ${g}, ${b}, ${isDark ? "0.13" : "0.075"})`;
+    node.style.boxShadow = isBadge
+      ? `inset 0 0 0 1.5px rgba(${r}, ${g}, ${b}, 0.65), 0 0 0 3px rgba(${r}, ${g}, ${b}, 0.12)`
+      : `inset 3px 0 0 0 rgba(${r}, ${g}, ${b}, 0.85), inset 0 0 0 1px rgba(${r}, ${g}, ${b}, 0.20)`;
+
     activeHighlightedNode = node;
-    const timer = setTimeout(() => {
+    const state: HighlightState = {
+      bg,
+      boxShadow,
+      borderRadius,
+      transition,
+      fadeTimer: undefined as unknown as HighlightTimer,
+    };
+    state.fadeTimer = setTimeout(() => {
+      if (highlightStates.get(node) !== state) return;
+      if (node.style) {
+        node.style.transition = HIGHLIGHT_EXIT_TRANSITION;
+        node.style.backgroundColor = state.bg || `rgba(${r}, ${g}, ${b}, 0)`;
+        node.style.boxShadow =
+          state.boxShadow ||
+          (isBadge
+            ? `inset 0 0 0 1.5px rgba(${r}, ${g}, ${b}, 0), 0 0 0 3px rgba(${r}, ${g}, ${b}, 0)`
+            : `inset 3px 0 0 0 rgba(${r}, ${g}, ${b}, 0), inset 0 0 0 1px rgba(${r}, ${g}, ${b}, 0)`);
+      }
+    }, 850);
+    state.cleanupTimer = setTimeout(() => {
+      if (highlightStates.get(node) !== state) return;
       clearHighlightNode(node);
-    }, 1200);
-    highlightStates.set(node, { bg, transition, timer });
+    }, 1300);
+    highlightStates.set(node, state);
   }
   return true;
 }
@@ -597,6 +710,8 @@ type NavigationOptions = {
   noProgressTimeoutMs?: number;
   timeoutMs?: number;
   turnExpanded?: boolean;
+  accentColor?: string;
+  isDark?: boolean;
 };
 
 function chatScroller(root: any): any {
@@ -985,7 +1100,14 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   const targetIdx = rowPositionIndex(rows, row);
   const preferLast = targetIdx >= 0 && targetIdx >= rows.length / 2;
   const isTail = rows.length > 1 && targetIdx >= rows.length - 1;
-  const hlOpts = { tail: isTail, releaseFollow: rows.length > 1 && !isTail, root, doc };
+  const hlOpts = {
+    tail: isTail,
+    releaseFollow: rows.length > 1 && !isTail,
+    root,
+    doc,
+    accentColor: options.accentColor,
+    isDark: options.isDark,
+  };
   const direct = findIdentity(root, row);
   const sysMsgId = paseoSystemMessageId(row);
   const isToolTarget = row.kind === "tool" || Boolean(sysMsgId);
@@ -1043,7 +1165,14 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   let end = index + 1;
   while (end < rows.length && isToolLikeRow(rows[end])) end++;
   const isTailGroup = rows.length > 1 && end >= rows.length;
-  const groupHlOpts = { tail: isTail || isTailGroup, releaseFollow: rows.length > 1 && !(isTail || isTailGroup), root, doc };
+  const groupHlOpts = {
+    tail: isTail || isTailGroup,
+    releaseFollow: rows.length > 1 && !(isTail || isTailGroup),
+    root,
+    doc,
+    accentColor: options.accentColor,
+    isDark: options.isDark,
+  };
   const members = index < 0 ? [row] : rows.slice(start, end);
   let group = directGroup;
   if (!group && direct?.querySelector(BADGE)) return highlightAndScroll(direct.querySelector(BADGE), groupHlOpts);
