@@ -17,7 +17,6 @@ import {
 } from "../shared/sessionNav";
 import { cancelChatNavigation, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { PreviewDrawer } from "./PreviewDrawer";
-import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { childrenForCall, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
@@ -31,7 +30,7 @@ import {
   groupMutationItems,
   type OutlineRow,
 } from "./outlineGrouping";
-import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows } from "./fallbackTimeline";
+import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
 import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
 import { OutlineScrollDriver } from "./outlineScroll";
 
@@ -46,6 +45,14 @@ const DEFAULT_TAB_STATE: PanelTabState = {
 };
 
 const SUMMARY_QUEUED_NOTICE = "Summary queued — runs on next prompt";
+const OUTLINE_PAGE_SIZE = 150;
+const OUTLINE_PREPEND_THRESHOLD_PX = 160;
+
+type FallbackTimelineCursor = NonNullable<
+  Awaited<
+    ReturnType<ReturnType<ReturnType<typeof usePaseo>["agents"]["ref"]>["timeline"]["refetch"]>
+  >["startCursor"]
+>;
 
 const ScrollView = UiScrollView ?? RnScrollView;
 const TextInput = UiTextInput ?? RnTextInput;
@@ -375,10 +382,51 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
 
   const scopeKey = resolvedScopeKey ?? "";
   const query = tabState.query;
+  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
+  const sessionViewKeyRef = useRef(sessionViewKey);
+  sessionViewKeyRef.current = sessionViewKey;
+
+  const [olderServerState, setOlderServerState] = useState<{
+    sessionKey: string;
+    rows: Row[];
+    hasOlder: boolean;
+    nextBeforeIndex: number | null;
+  } | null>(null);
+  const [olderFallbackState, setOlderFallbackState] = useState<{
+    sessionKey: string;
+    rows: Row[];
+    hasOlder: boolean;
+    startCursor: FallbackTimelineCursor | null;
+  } | null>(null);
+  const [isLoadingOlderServer, setIsLoadingOlderServer] = useState(false);
+  const [isLoadingOlderFallback, setIsLoadingOlderFallback] = useState(false);
+  const loadingOlderKeyRef = useRef<string | null>(null);
+  const refreshOlderRef = useRef<(() => Promise<void>) | null>(null);
+
+  const patchOlderServerRows = useCallback(
+    (updates: Map<string, Partial<Row>>) => {
+      if (updates.size === 0) return;
+      const capturedKey = sessionViewKeyRef.current;
+      setOlderServerState((prev) => {
+        if (!prev || prev.sessionKey !== capturedKey) return prev;
+        let changed = false;
+        const nextRows = prev.rows.map((row) => {
+          if (!row.item_id) return row;
+          const patch = updates.get(row.item_id);
+          if (!patch) return row;
+          changed = true;
+          return { ...row, ...patch };
+        });
+        return changed ? { ...prev, rows: nextRows } : prev;
+      });
+    },
+    [],
+  );
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "scopes"] });
+    void refreshOlderRef.current?.();
   };
 
   const onMutationError = (result: { ok: boolean; error?: string }) => {
@@ -451,6 +499,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       if (!onMutationError(r)) {
         setNotice(mode === "summarize" ? SUMMARY_QUEUED_NOTICE : null);
         if (row.status !== "hidden") notePending([row], -1);
+        if (r.ok && row.item_id) {
+          const patch: Partial<Row> = r.item ?? {
+            status: r.status ?? "hidden",
+            visibility: r.visibility ?? "hidden",
+            ...(typeof r.version === "number" ? { version: r.version } : {}),
+            ...(mode === "summarize" ? { summary_pending: true } : {}),
+          };
+          patchOlderServerRows(new Map([[row.item_id, patch]]));
+        }
       }
     },
     onError: (err, _vars, context) => {
@@ -481,6 +538,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       if (!onMutationError(r)) {
         setNotice(null);
         notePending([row], 1);
+        if (r.ok && row.item_id) {
+          const patch: Partial<Row> = r.item ?? {
+            status: r.status ?? "unhidden",
+            visibility: r.visibility ?? "visible",
+            ...(typeof r.version === "number" ? { version: r.version } : {}),
+            summary_pending: false,
+          };
+          patchOlderServerRows(new Map([[row.item_id, patch]]));
+        }
       }
     },
     onError: (err) => {
@@ -581,6 +647,21 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         if (failedIds.size > 0) rollbackItems(failedIds);
       }
       const applied = new Set(resultItems.filter((item) => item.ok).map((item) => item.item_id));
+      const olderPatches = new Map<string, Partial<Row>>();
+      for (const resItem of resultItems) {
+        if (!resItem.ok || !resItem.item_id) continue;
+        olderPatches.set(resItem.item_id, {
+          ...(resItem.status ? { status: resItem.status } : {}),
+          ...(resItem.visibility ? { visibility: resItem.visibility } : {}),
+          ...(typeof resItem.version === "number" ? { version: resItem.version } : {}),
+          ...(action === "unhide"
+            ? { summary_pending: false }
+            : action === "summarize"
+              ? { summary_pending: true }
+              : {}),
+        });
+      }
+      patchOlderServerRows(olderPatches);
       notePending(
         rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
         action === "unhide" ? 1 : -1,
@@ -620,15 +701,37 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) return { items: [], context: undefined, capabilities: undefined, server_timeline: false, records_capped: false };
-      const result = await listRpc({ scope_key: scopeKey, query: query || undefined });
+      if (!resolvedScopeKey) {
+        return {
+          items: [] as Row[],
+          context: undefined,
+          capabilities: undefined,
+          server_timeline: false,
+          records_capped: false,
+          has_older: false,
+          next_before_index: null as number | null,
+          totals: undefined,
+        };
+      }
+      const result = await listRpc({
+        scope_key: scopeKey,
+        query: query || undefined,
+        ...(query ? {} : { limit: OUTLINE_PAGE_SIZE }),
+      });
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
       }
-      return { items: result.items, context: result.context, capabilities: result.capabilities,
+      return {
+        items: result.items,
+        context: result.context,
+        capabilities: result.capabilities,
         server_timeline: Boolean(result.server_timeline),
-        records_capped: Boolean((result as Record<string, unknown>).records_capped) };
+        records_capped: Boolean((result as Record<string, unknown>).records_capped),
+        has_older: Boolean(result.has_older),
+        next_before_index: typeof result.next_before_index === "number" ? result.next_before_index : null,
+        totals: result.totals,
+      };
     },
     enabled: !!resolvedScopeKey,
     placeholderData: (previousData, previousQuery) =>
@@ -649,24 +752,29 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     refetchInterval: 5000,
   });
 
-  const historyQueryOptions = {
-    queryKey: ["paseo-agent-timeline-history", agentId],
-    queryFn: () => readTimelineHistory(paseo.agents.ref(agentId).timeline),
-    staleTime: 5000,
-  };
-
   const isHermesScope = Boolean(resolvedScopeKey?.startsWith("hermes:"));
   const needsLinkedTimeline = !activeChild && !!resolvedScopeKey && scopes.some((scope) => scope.parent_scope === resolvedScopeKey &&
     scope.tool_call_id && !listQuery.data?.items.some((row) => row.tool_call_id === scope.tool_call_id));
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
-      if (!agentId || !paseo?.agents) return [];
+      if (!agentId || !paseo?.agents) {
+        return { rows: [] as Row[], hasOlder: false, startCursor: null as FallbackTimelineCursor | null };
+      }
       try {
-        const { entries } = await queryClient.fetchQuery(historyQueryOptions);
-        return buildFallbackTimelineRows(entries);
+        const page = await paseo.agents.ref(agentId).timeline.refetch({
+          direction: "tail",
+          limit: OUTLINE_PAGE_SIZE,
+          projection: "canonical",
+        });
+        if (page.error) throw new Error(page.error);
+        return {
+          rows: buildFallbackTimelineRows(page.entries),
+          hasOlder: Boolean(page.hasOlder && page.startCursor),
+          startCursor: page.startCursor ?? null,
+        };
       } catch {
-        return [];
+        return { rows: [] as Row[], hasOlder: false, startCursor: null as FallbackTimelineCursor | null };
       }
     },
     enabled:
@@ -685,21 +793,34 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const hasServerTimeline = Boolean(listQuery.data?.server_timeline);
   const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
 
+  const activeOlderServer = olderServerState?.sessionKey === sessionViewKey ? olderServerState : null;
+  const activeOlderFallback = olderFallbackState?.sessionKey === sessionViewKey ? olderFallbackState : null;
+  const serverTailRows = listQuery.data?.items ?? [];
+  const serverRows = useMemo(
+    () => (!query && activeOlderServer ? mergePagedRows(activeOlderServer.rows, serverTailRows) : serverTailRows),
+    [query, activeOlderServer, serverTailRows],
+  );
+  const fallbackTailRows = fallbackTimelineQuery.data?.rows ?? [];
+  const fallbackRows = useMemo(
+    () => (activeOlderFallback ? mergePagedRows(activeOlderFallback.rows, fallbackTailRows) : fallbackTailRows),
+    [activeOlderFallback, fallbackTailRows],
+  );
+
   const rawRows = useMemo(
     () =>
       resolvedScopeKey
         ? activeChild
-          ? listQuery.data?.items ?? []
+          ? serverRows
           : needsHermesFallbackMerge
-            ? mergeHermesTimelineRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
-            : mergeLinkedParentRows(listQuery.data?.items ?? [], fallbackTimelineQuery.data ?? [], scopes, resolvedScopeKey)
-        : fallbackTimelineQuery.data ?? [],
+            ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
+            : mergeLinkedParentRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
+        : fallbackRows,
     [
       resolvedScopeKey,
       activeChild,
-      listQuery.data?.items,
+      serverRows,
       needsHermesFallbackMerge,
-      fallbackTimelineQuery.data,
+      fallbackRows,
       scopes,
     ],
   );
@@ -721,18 +842,26 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     [rows, expandedGroups, lastActionByItem],
   );
 
-  const hiddenCount = rows.filter((r) => r.status === "hidden").length;
-
-  const savedBytes = useMemo(
+  const localHiddenCount = rows.filter((r) => r.status === "hidden").length;
+  const localSavedBytes = useMemo(
     () =>
       rows
         .filter((r) => r.status === "hidden")
         .reduce((sum, r) => sum + Math.max(0, (r.bytes_size ?? 0) - effectiveRowBytes(r)), 0),
     [rows],
   );
+  const serverTotals = !query ? listQuery.data?.totals : undefined;
+  const hiddenCount = serverTotals ? serverTotals.hidden_count : localHiddenCount;
+  const savedBytes = serverTotals ? serverTotals.saved_bytes : localSavedBytes;
+  const entryCount =
+    serverTotals && !needsHermesFallbackMerge && !needsLinkedTimeline
+      ? serverTotals.total_rows
+      : rows.length;
   const hiddenRows = rows.filter((r) => r.status === "hidden");
   const savedTokens =
-    hiddenRows.length > 0 && hiddenRows.every((r) => typeof r.tokens === "number")
+    hiddenRows.length > 0 &&
+    hiddenRows.length === hiddenCount &&
+    hiddenRows.every((r) => typeof r.tokens === "number")
       ? hiddenRows.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
       : null;
   const sessionContext = useMemo(() => {
@@ -761,10 +890,199 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   }
   const hermesSettledKeyRef = useRef<string | null>(null);
 
-  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
   const isSessionHiddenFromView = !childScope && (followVisible || subagentFallback) && !inView;
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
   scrollDriverRef.current.syncSession(sessionViewKey, isOutlineListMounted);
+
+  refreshOlderRef.current = async () => {
+    const capturedKey = sessionViewKeyRef.current;
+    if (!resolvedScopeKey || !olderServerState || olderServerState.sessionKey !== capturedKey || olderServerState.rows.length === 0) {
+      return;
+    }
+    const minIdx = olderServerState.rows.reduce(
+      (min, r) => (typeof r.timeline_index === "number" ? Math.min(min, r.timeline_index) : min),
+      Infinity,
+    );
+    const maxIdx = olderServerState.rows.reduce(
+      (max, r) => (typeof r.timeline_index === "number" ? Math.max(max, r.timeline_index) : max),
+      -1,
+    );
+    if (!Number.isFinite(minIdx) || maxIdx < minIdx) return;
+    const collected: Row[] = [];
+    let cursor = maxIdx + 1;
+    let hasOlderFlag = olderServerState.hasOlder;
+    let nextBefore: number | null = olderServerState.nextBeforeIndex;
+    while (cursor > minIdx) {
+      const span = Math.min(2000, Math.max(OUTLINE_PAGE_SIZE, cursor - minIdx));
+      const res = await listRpc({
+        scope_key: resolvedScopeKey,
+        limit: span,
+        before_index: cursor,
+      });
+      if (sessionViewKeyRef.current !== capturedKey || !res.ok || res.items.length === 0) return;
+      collected.unshift(...res.items);
+      const firstIdx = res.items[0]?.timeline_index;
+      if (typeof firstIdx !== "number" || firstIdx <= minIdx || !res.has_older || res.next_before_index == null) {
+        hasOlderFlag = Boolean(res.has_older && res.next_before_index != null);
+        nextBefore = typeof res.next_before_index === "number" ? res.next_before_index : null;
+        break;
+      }
+      cursor = res.next_before_index;
+    }
+    if (sessionViewKeyRef.current !== capturedKey || collected.length === 0) return;
+    setOlderServerState((prev) => {
+      if (!prev || prev.sessionKey !== capturedKey) return prev;
+      return {
+        sessionKey: capturedKey,
+        rows: mergePagedRows(collected, []),
+        hasOlder: hasOlderFlag,
+        nextBeforeIndex: nextBefore,
+      };
+    });
+  };
+
+  const isLoadingOlder = isLoadingOlderServer || isLoadingOlderFallback;
+  const canLoadOlderServer =
+    !query &&
+    !!resolvedScopeKey &&
+    (activeOlderServer
+      ? activeOlderServer.hasOlder && activeOlderServer.nextBeforeIndex !== null
+      : Boolean(listQuery.data?.has_older && listQuery.data?.next_before_index != null));
+  const canLoadOlderFallback =
+    !query &&
+    !activeChild &&
+    !!agentId &&
+    (!resolvedScopeKey || needsHermesFallbackMerge || needsLinkedTimeline) &&
+    (activeOlderFallback
+      ? activeOlderFallback.hasOlder && activeOlderFallback.startCursor !== null
+      : Boolean(fallbackTimelineQuery.data?.hasOlder && fallbackTimelineQuery.data?.startCursor));
+  const hasOlderItems = canLoadOlderServer || canLoadOlderFallback;
+
+  const loadOlderOutlinePage = useCallback(async () => {
+    if (query || isLoadingOlder) return;
+    const capturedKey = sessionViewKeyRef.current;
+    if (canLoadOlderServer && resolvedScopeKey) {
+      const beforeIdx = activeOlderServer
+        ? activeOlderServer.nextBeforeIndex
+        : (listQuery.data?.next_before_index ?? null);
+      if (beforeIdx === null || beforeIdx <= 0) return;
+      const dedupeKey = `srv:${capturedKey}:${beforeIdx}`;
+      if (loadingOlderKeyRef.current === dedupeKey) return;
+      loadingOlderKeyRef.current = dedupeKey;
+      setIsLoadingOlderServer(true);
+      try {
+        const result = await listRpc({
+          scope_key: resolvedScopeKey,
+          limit: OUTLINE_PAGE_SIZE,
+          before_index: beforeIdx,
+        });
+        if (sessionViewKeyRef.current !== capturedKey) return;
+        if (!result.ok) {
+          setNotice(result.error ?? "Failed to load older items");
+          return;
+        }
+        if (result.items.length > 0) {
+          scrollDriverRef.current?.preparePrepend(listRef.current);
+        }
+        setOlderServerState((prev) => {
+          const baseRows = prev?.sessionKey === capturedKey ? prev.rows : [];
+          return {
+            sessionKey: capturedKey,
+            rows: mergePagedRows(result.items, baseRows),
+            hasOlder: Boolean(result.has_older && result.next_before_index != null),
+            nextBeforeIndex:
+              typeof result.next_before_index === "number" ? result.next_before_index : null,
+          };
+        });
+      } catch (err) {
+        if (sessionViewKeyRef.current === capturedKey) {
+          setNotice(err instanceof Error && err.message ? err.message : "Failed to load older items");
+        }
+      } finally {
+        if (loadingOlderKeyRef.current === dedupeKey) loadingOlderKeyRef.current = null;
+        setIsLoadingOlderServer(false);
+      }
+      return;
+    }
+    if (canLoadOlderFallback && agentId && paseo?.agents) {
+      const cursor = activeOlderFallback
+        ? activeOlderFallback.startCursor
+        : (fallbackTimelineQuery.data?.startCursor ?? null);
+      if (!cursor) return;
+      const dedupeKey = `fb:${capturedKey}:${cursor.epoch}:${cursor.seq}`;
+      if (loadingOlderKeyRef.current === dedupeKey) return;
+      loadingOlderKeyRef.current = dedupeKey;
+      setIsLoadingOlderFallback(true);
+      try {
+        const page = await paseo.agents.ref(agentId).timeline.refetch({
+          direction: "before",
+          cursor,
+          limit: OUTLINE_PAGE_SIZE,
+          projection: "canonical",
+        });
+        if (sessionViewKeyRef.current !== capturedKey) return;
+        if (page.error) {
+          setNotice(page.error);
+          return;
+        }
+        const stalled =
+          !page.entries.length ||
+          (page.startCursor &&
+            page.startCursor.epoch === cursor.epoch &&
+            page.startCursor.seq >= cursor.seq);
+        const olderRows = buildFallbackTimelineRows(page.entries);
+        if (olderRows.length > 0) {
+          scrollDriverRef.current?.preparePrepend(listRef.current);
+        }
+        setOlderFallbackState((prev) => {
+          const baseRows = prev?.sessionKey === capturedKey ? prev.rows : [];
+          return {
+            sessionKey: capturedKey,
+            rows: mergePagedRows(olderRows, baseRows),
+            hasOlder: !stalled && Boolean(page.hasOlder && page.startCursor),
+            startCursor: stalled ? null : (page.startCursor ?? null),
+          };
+        });
+      } catch (err) {
+        if (sessionViewKeyRef.current === capturedKey) {
+          setNotice(err instanceof Error && err.message ? err.message : "Failed to load older items");
+        }
+      } finally {
+        if (loadingOlderKeyRef.current === dedupeKey) loadingOlderKeyRef.current = null;
+        setIsLoadingOlderFallback(false);
+      }
+    }
+  }, [
+    query,
+    isLoadingOlder,
+    canLoadOlderServer,
+    canLoadOlderFallback,
+    resolvedScopeKey,
+    activeOlderServer,
+    listQuery.data?.next_before_index,
+    listRpc,
+    agentId,
+    paseo,
+    activeOlderFallback,
+    fallbackTimelineQuery.data?.startCursor,
+  ]);
+
+  const handleOutlineScroll = (ev: any) => {
+    const prevTop = scrollDriverRef.current?.scroller.getLastScrollTop() ?? 0;
+    scrollDriverRef.current?.handleScrollEvent(ev);
+    const top = ev?.nativeEvent?.contentOffset?.y;
+    const scroller = scrollDriverRef.current?.scroller;
+    if (
+      typeof top === "number" &&
+      top <= OUTLINE_PREPEND_THRESHOLD_PX &&
+      hasOlderItems &&
+      !isLoadingOlder &&
+      !query &&
+      (!scroller?.isStuckToBottom() || scroller?.isUserScrolledUp() || prevTop > OUTLINE_PREPEND_THRESHOLD_PX)
+    ) {
+      void loadOlderOutlinePage();
+    }
+  };
 
   if (needsHermesFallbackMerge && !fallbackTimelineQuery.isFetching && fallbackTimelineQuery.data !== undefined) {
     hermesSettledKeyRef.current = sessionViewKey;
@@ -818,6 +1136,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
+    setOlderServerState(null);
+    setOlderFallbackState(null);
+    setIsLoadingOlderServer(false);
+    setIsLoadingOlderFallback(false);
+    loadingOlderKeyRef.current = null;
     scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
@@ -930,9 +1253,27 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       list: {
         flex: 1,
         minHeight: 0,
+        position: "relative" as const,
       },
       listContent: {
         flexGrow: 1,
+      },
+      loadingOlderPill: {
+        position: "absolute" as const,
+        top: 6,
+        alignSelf: "center" as const,
+        zIndex: 5,
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface1,
+      },
+      loadingOlderText: {
+        color: theme.colors.foregroundMuted,
+        fontSize: 10,
+        fontWeight: "600" as const,
       },
       emptyContainer: {
         flex: 1,
@@ -1217,7 +1558,6 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       openAgent: displayOnly && navigation ? { agentId, open: () => navigation.openAgent({ agentId }) } : undefined,
       onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
       onNotFound: () => setNotice("Not loaded in chat"),
-      getHistory: () => queryClient.fetchQuery({ ...historyQueryOptions, staleTime: 0 }),
     });
   };
 
@@ -1468,6 +1808,11 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             onWheel: (ev: any) => scrollDriverRef.current?.handleWheel(ev),
           } as Record<string, unknown>)}
         >
+          {isLoadingOlder ? (
+            <View pointerEvents="none" style={styles.loadingOlderPill}>
+              <Text style={styles.loadingOlderText}>Loading older items…</Text>
+            </View>
+          ) : null}
           <ScrollView
             ref={listRef}
             key={sessionViewKey || "outline-list"}
@@ -1476,9 +1821,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
             nestedScrollEnabled={true}
             scrollEventThrottle={16}
             onScrollBeginDrag={() => scrollDriverRef.current?.handleDragStart()}
-            onScroll={(ev: any) => scrollDriverRef.current?.handleScrollEvent(ev)}
-            onScrollEndDrag={(ev: any) => scrollDriverRef.current?.handleScrollEvent(ev)}
-            onMomentumScrollEnd={(ev: any) => scrollDriverRef.current?.handleScrollEvent(ev)}
+            onScroll={handleOutlineScroll}
+            onScrollEndDrag={handleOutlineScroll}
+            onMomentumScrollEnd={handleOutlineScroll}
             onLayout={(ev: any) => scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState)}
             onContentSizeChange={(_w: number, h: number) =>
               scrollDriverRef.current?.handleContentSizeChange(listRef.current, h, scrollState)
@@ -1568,7 +1913,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
               : "context — tokens"}
           </Text>
           <Text style={[styles.usageLabel, { textAlign: "right" }]} numberOfLines={1}>
-            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : `${rows.length} entries`}
+            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : `${entryCount} entries`}
           </Text>
         </View>
       </View>

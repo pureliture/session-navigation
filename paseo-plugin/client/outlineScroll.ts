@@ -243,6 +243,7 @@ export class OutlineScrollDriver {
   readonly scroller: OutlineAutoScroller;
   private metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
   private pendingExpand: { prevScrollHeight: number; scrollTop: number } | null = null;
+  private pendingPrepend: { prevScrollHeight: number; scrollTop: number; sessionKey: string } | null = null;
   private pendingDrawer: {
     prevClientHeight: number;
     scrollTop: number;
@@ -274,6 +275,7 @@ export class OutlineScrollDriver {
     this.latestList = null;
     this.currentSessionKey = "";
     this.pendingExpand = null;
+    this.pendingPrepend = null;
     this.pendingDrawer = null;
     this.suppressNextBottomPin = null;
   }
@@ -285,6 +287,7 @@ export class OutlineScrollDriver {
       this.cancelPendingAsync();
       this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
       this.pendingExpand = null;
+      this.pendingPrepend = null;
       this.pendingDrawer = null;
       this.suppressNextBottomPin = null;
     }
@@ -295,6 +298,7 @@ export class OutlineScrollDriver {
     this.cancelPendingAsync();
     this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
     this.pendingExpand = null;
+    this.pendingPrepend = null;
     this.pendingDrawer = null;
     this.suppressNextBottomPin = null;
   }
@@ -367,6 +371,7 @@ export class OutlineScrollDriver {
     if (!currentlyExpanded) {
       this.cancelPendingAsync();
       this.pendingDrawer = null;
+      this.pendingPrepend = null;
       const m = this.readMetrics(list);
       if (m.scrollHeight > 0) {
         this.pendingExpand = { prevScrollHeight: m.scrollHeight, scrollTop: m.scrollTop };
@@ -376,11 +381,34 @@ export class OutlineScrollDriver {
     }
   }
 
+  preparePrepend(list: OutlineScrollListHandle | null | undefined): void {
+    this.latestList = list;
+    this.cancelPendingAsync();
+    this.pendingDrawer = null;
+    this.pendingExpand = null;
+    this.scroller.recordWheel(-1);
+    const m = this.readMetrics(list);
+    if (m.scrollHeight > 0) {
+      this.pendingPrepend = {
+        prevScrollHeight: m.scrollHeight,
+        scrollTop: m.scrollTop,
+        sessionKey: this.currentSessionKey,
+      };
+    } else {
+      this.pendingPrepend = null;
+    }
+  }
+
+  cancelPendingPrepend(): void {
+    this.pendingPrepend = null;
+  }
+
   prepareDrawerToggle(list: OutlineScrollListHandle | null | undefined, willOpen: boolean): void {
     this.latestList = list;
     if (willOpen) {
       this.cancelPendingAsync();
       this.pendingExpand = null;
+      this.pendingPrepend = null;
       const m = this.readMetrics(list);
       if (m.clientHeight > 0) {
         this.pendingDrawer = {
@@ -459,6 +487,21 @@ export class OutlineScrollDriver {
         }
       } catch {
         // Ignore mock environments.
+      }
+      return;
+    }
+    if (this.pendingPrepend !== null) {
+      const prependSnap = this.pendingPrepend;
+      const m = this.readMetrics(list);
+      if (
+        prependSnap.sessionKey === state.sessionKey &&
+        m.scrollHeight > prependSnap.prevScrollHeight
+      ) {
+        this.pendingPrepend = null;
+        const delta = m.scrollHeight - prependSnap.prevScrollHeight;
+        this.scroller.noteObservedSize(state.rowCount, m.scrollHeight);
+        this.suppressNextBottomPin = { rowCount: state.rowCount, sessionKey: state.sessionKey };
+        this.scrollToOffset(list, prependSnap.scrollTop + delta, opts?.now);
       }
       return;
     }
@@ -552,6 +595,17 @@ export class OutlineScrollDriver {
     this.latestList = list;
     if (typeof h === "number" && h >= 0) {
       this.metrics.scrollHeight = h;
+    }
+    const prependSnap = this.pendingPrepend;
+    if (prependSnap) {
+      this.pendingPrepend = null;
+      if (prependSnap.sessionKey === state.sessionKey && h > prependSnap.prevScrollHeight) {
+        const delta = h - prependSnap.prevScrollHeight;
+        this.scroller.noteObservedSize(state.rowCount, h);
+        this.suppressNextBottomPin = { rowCount: state.rowCount, sessionKey: state.sessionKey };
+        this.scrollToOffset(list, prependSnap.scrollTop + delta, now);
+        return;
+      }
     }
     const expandSnap = this.pendingExpand;
     if (expandSnap) {

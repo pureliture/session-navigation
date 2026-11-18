@@ -963,3 +963,205 @@ test("narrow viewport (<600px) does not click collapsed tool-call-group toggle t
   expect(f.group.scrolled).toBe(true);
   expect(f.group.style.backgroundColor).toContain("rgba");
 });
+
+test("Scenario 1 (A-1 & A-3): 0ms immediate jump to overscan row without getHistory, and missing row restores initialScrollTop promptly", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 30_000;
+  root.clientHeight = 500;
+  root.scrollTop = 18_240;
+  (root as any).getBoundingClientRect = () => ({ top: 500, bottom: 1000 });
+  const doc = new Element().add(root);
+
+  const rows: Row[] = Array.from({ length: 1850 }, (_, idx) => ({
+    ...row(`msg-${idx}`, idx % 2 === 0 ? "user" : "assistant"),
+    timeline_index: idx,
+    summary_line: `Turn message ${idx}`,
+    message_text: `Turn message ${idx}`,
+  }));
+
+  // Mount overscan 1816..1828 where 1816..1823 are outside viewport pixels and 1824..1828 are inside viewport.
+  const domNodes = new Map<number, Element>();
+  for (let i = 1816; i <= 1828; i++) {
+    const node = new Element(
+      { "data-history-row-id": `native-${i}`, "data-index": String(i - 1800) },
+      `Turn message ${i}`,
+    );
+    (node as any).getBoundingClientRect = () =>
+      i < 1824 ? { top: -200, bottom: -50 } : { top: 520, bottom: 980 };
+    root.add(node);
+    domNodes.set(i, node);
+  }
+
+  let waits = 0;
+  const foundOverscan = await scrollToMessageInChat(rows[1819], rows, {
+    document: doc,
+    afterLoad: async () => {
+      waits++;
+    },
+  });
+  expect(foundOverscan).toBe(true);
+  expect(waits).toBe(0);
+  expect(domNodes.get(1819)?.scrolled).toBe(true);
+
+  // Missing older row without getHistory cuts off via noProgressTimeoutMs (not 60s) and restores initialScrollTop
+  root.scrollTop = 18_240;
+  let clock = 0;
+  let notFound = 0;
+  const missingTarget: Row = {
+    ...row("missing-old", "user"),
+    timeline_index: 5,
+    summary_line: "Archived prompt 5",
+    message_text: "Archived prompt 5",
+  };
+  const foundMissing = await scrollToMessageInChat(missingTarget, [missingTarget, ...rows], {
+    document: doc,
+    now: () => clock,
+    afterLoad: async () => {
+      clock += 500;
+    },
+    onNotFound: () => {
+      notFound++;
+    },
+  });
+  expect(foundMissing).toBe(false);
+  expect(notFound).toBe(1);
+  expect(clock).toBeLessThan(10_000);
+  expect(root.scrollTop).toBe(18_240);
+});
+
+test("Scenario 2 (A-2): <paseo-system> message-id matches paseo-agent-message badge inside collapsed group and findTurn skips unmounted <paseo-system> for following Agent reply", async () => {
+  const msgId = "74c63d4c-1111-2222-3333-444455556666";
+  const sysXml = `<paseo-system version="1" kind="agent-notification" source-agent-id="sub-1" source-agent-title="Worker" message-id="${msgId}"><agent-response>Checked all files</agent-response></paseo-system>`;
+  const uPrev: Row = { ...row("u-prev", "user"), timeline_index: 1775, summary_line: "Inspect the logs", message_text: "Inspect the logs" };
+  const sysRow: Row = { ...row("u-sys", "user"), timeline_index: 1778, summary_line: "[Subagent notification] Worker", message_text: sysXml };
+  const agentReply: Row = { ...row("ast-1779", "assistant"), timeline_index: 1779, summary_line: "Final diagnosis complete", message_text: "Final diagnosis complete" };
+  const rows = [uPrev, sysRow, agentReply];
+
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "tool_call", callId: `paseo-agent-message:${msgId}` } }] }, sysRow)).toBe(true);
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "command", callId: `paseo-agent-message:${msgId}` } }] }, sysRow)).toBe(true);
+
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc: any = new Element().add(root);
+  doc.defaultView = { innerWidth: 1200 };
+
+  const userNode = new Element({ "data-history-row-id": "native-u-prev" }, "Inspect the logs");
+  const group = new Element({ "data-testid": "tool-call-group" }, "1 subagent message");
+  const toggle = new Element({ role: "button", "aria-expanded": "false" });
+  group.add(toggle);
+  const msgBadge = new Element({ "data-tool-call-id": `paseo-agent-message:${msgId}` }, "Agent notification");
+  let groupClicks = 0;
+  toggle.onClick = () => {
+    groupClicks++;
+    toggle.attrs["aria-expanded"] = "true";
+    group.add(msgBadge);
+  };
+
+  const turnSummary = new Element({ "data-testid": "turn-summary", "aria-expanded": "false" }, "Completed turn");
+  const replyNode = new Element({ "data-history-row-id": "native-ast-1779" }, "Final diagnosis complete");
+  let turnClicks = 0;
+  turnSummary.onClick = () => {
+    turnClicks++;
+    turnSummary.attrs["aria-expanded"] = "true";
+    root.add(replyNode);
+  };
+
+  root.add(userNode, group, turnSummary);
+
+  // 1. Clicking <paseo-system> row expands tool-call-group and highlights paseo-agent-message:<id> badge
+  expect(await scrollToMessageInChat(sysRow, rows, { document: doc, afterExpand: async () => {} })).toBe(true);
+  expect(groupClicks).toBe(1);
+  expect(msgBadge.scrolled).toBe(true);
+
+  // 2. Narrow viewport (<600px) highlights group without expanding modal sheet
+  msgBadge.scrolled = false;
+  toggle.attrs["aria-expanded"] = "false";
+  group.children = [toggle];
+  doc.defaultView.innerWidth = 390;
+  expect(await scrollToMessageInChat(sysRow, rows, { document: doc, afterExpand: async () => {} })).toBe(true);
+  expect(groupClicks).toBe(1);
+  expect(group.scrolled).toBe(true);
+
+  // 3. Clicking following Agent reply (row[1779]) skips unmounted <paseo-system> in findTurn, anchors on uPrev, expands turnSummary, and jumps to replyNode
+  group.children = [toggle];
+  expect(await scrollToMessageInChat(agentReply, rows, { document: doc, afterExpand: async () => {} })).toBe(true);
+  expect(turnClicks).toBe(1);
+  expect(replyNode.scrolled).toBe(true);
+});
+
+test("Scenario 3 (A-3 & A-4): duplicate tools (75x get_agent_activity/wait) and Compacted context ratio distortion never reverse scroll direction", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 100_000;
+  root.clientHeight = 800;
+  // Scroll position is 0.40 of extent even though mounted content is at row 1650 (compacted context distortion)
+  root.scrollTop = 40_000;
+  const wheelDeltas: number[] = [];
+  root.onEvent = (ev) => {
+    if (ev.type === "wheel" && typeof ev.deltaY === "number") wheelDeltas.push(ev.deltaY);
+  };
+  const doc: any = {
+    defaultView: {
+      WheelEvent: class {
+        type: string;
+        deltaY?: number;
+        constructor(type: string, init?: { deltaY?: number }) {
+          this.type = type;
+          this.deltaY = init?.deltaY;
+        }
+      },
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    },
+    querySelectorAll: (sel: string) => (sel.includes("agent-chat-scroll") ? [root] : root.querySelectorAll(sel)),
+  };
+
+  // Build 1861-row session with 75 repeated get_agent_activity & wait tools spanning 61..1851
+  const rows: Row[] = Array.from({ length: 1861 }, (_, idx) => {
+    if (idx % 24 === 13 && idx >= 61 && idx <= 1851) {
+      return {
+        ...row(`call_dup_${idx}`, "tool"),
+        timeline_index: idx,
+        tool_name: idx % 48 === 13 ? "get_agent_activity" : "wait",
+        summary_line: idx % 48 === 13 ? "get_agent_activity" : "wait",
+      };
+    }
+    return {
+      ...row(`msg_${idx}`, idx % 2 === 0 ? "user" : "assistant"),
+      timeline_index: idx,
+      summary_line: idx === 1779 ? "Target summary ready" : `Unique turn content ${idx}`,
+      message_text: idx === 1779 ? "Target summary ready" : `Unique turn content ${idx}`,
+    };
+  });
+
+  // Currently mounted at scrollTop=40000: row 1650 + repeated duplicate tools + accidental partial mention of target phrase
+  const compactBanner = new Element({ "data-testid": "compaction-banner" }, "Compacted context");
+  const node1650 = new Element({ "data-history-row-id": "dom-1650", "data-index": "10" }, "Unique turn content 1650");
+  const dupBadge = new Element({ "data-testid": "tool-call-badge" }, "get_agent_activity");
+  const dupWait = new Element({ "data-testid": "tool-call-badge" }, "wait");
+  const falsePremature = new Element({ "data-history-row-id": "dom-1651", "data-index": "11" }, "Unique turn content 1651 (Target summary ready)");
+  const targetNode = new Element({ "data-history-row-id": "dom-1779", "data-index": "35" }, "Target summary ready");
+  root.add(compactBanner, node1650, dupBadge, dupWait, falsePremature);
+
+  const observedScrollTops: number[] = [];
+  let clock = 0;
+  const found = await scrollToMessageInChat(rows[1779], rows, {
+    document: doc,
+    now: () => (clock += 120),
+    afterLoad: async () => {
+      observedScrollTops.push(root.scrollTop);
+      if (root.scrollTop > 40_000 && !root.children.includes(targetNode)) {
+        root.children = [targetNode];
+        targetNode.parent = root;
+      }
+    },
+  });
+
+  expect(found).toBe(true);
+  expect(falsePremature.scrolled).toBe(false);
+  expect(targetNode.scrolled).toBe(true);
+  // Must have scrolled DOWNWARD (> 40_000), never upward!
+  expect(observedScrollTops.every((top) => top > 40_000)).toBe(true);
+});

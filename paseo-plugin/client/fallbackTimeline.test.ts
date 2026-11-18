@@ -4,6 +4,7 @@ import {
   buildFallbackTimelineRows,
   mergeHermesTimelineRows,
   mergeLinkedParentRows,
+  mergePagedRows,
 } from "./fallbackTimeline";
 
 describe("fallbackTimeline", () => {
@@ -183,6 +184,26 @@ describe("fallbackTimeline", () => {
       { ...timeline[0], item_id: null, manageable: false },
       managed,
       { ...timeline[2], item_id: null, manageable: false, tool_name: "delegate_task" },
+    ]);
+  });
+
+  test("mergePagedRows deduplicates overlapping timeline_index boundaries and preserves newer row freshness", () => {
+    const older: Row[] = [
+      { item_id: "r0", tool_call_id: "", kind: "user", status: "visible", version: 1, tokens_display: "—", timeline_index: 0 },
+      { item_id: "r1", tool_call_id: "c1", kind: "tool", status: "visible", version: 1, tokens_display: "—", timeline_index: 1 },
+      { item_id: "r2", tool_call_id: "c2", kind: "tool", status: "visible", version: 1, tokens_display: "—", timeline_index: 2 },
+    ];
+    const newer: Row[] = [
+      { item_id: "r1", tool_call_id: "c1", kind: "tool", status: "hidden", version: 2, tokens_display: "—", timeline_index: 1 },
+      { item_id: "r2", tool_call_id: "c2", kind: "tool", status: "visible", version: 1, tokens_display: "—", timeline_index: 2 },
+      { item_id: "r3", tool_call_id: "", kind: "assistant", status: "visible", version: 1, tokens_display: "—", timeline_index: 3 },
+    ];
+    const merged = mergePagedRows(older, newer);
+    expect(merged.map((r) => [r.timeline_index, r.status])).toEqual([
+      [0, "visible"],
+      [1, "hidden"],
+      [2, "visible"],
+      [3, "visible"],
     ]);
   });
 });

@@ -1708,3 +1708,102 @@ test("shared host_identity.json v1 contract matches OMP context, history.ts, and
     hdb.close();
   }
 });
+
+test("list RPC supports limit + before_index cursor pagination, preserves contiguous tool groups across page boundaries, and keeps full-session totals", async () => {
+  const messages: Message[] = [
+    { role: "user", timestamp: 100, content: "First prompt" },
+    {
+      role: "assistant",
+      timestamp: 200,
+      content: [
+        { type: "toolCall", id: "t_old_hidden", name: "read", arguments: { path: "old.txt" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      timestamp: 210,
+      toolCallId: "t_old_hidden",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "old output ".repeat(120) }],
+    },
+    { role: "user", timestamp: 300, content: "Second prompt" },
+    {
+      role: "assistant",
+      timestamp: 400,
+      content: [
+        { type: "toolCall", id: "t_grp_1", name: "bash", arguments: { command: "echo 1" } },
+        { type: "toolCall", id: "t_grp_2", name: "bash", arguments: { command: "echo 2" } },
+        { type: "toolCall", id: "t_grp_3", name: "bash", arguments: { command: "echo 3" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      timestamp: 410,
+      toolCallId: "t_grp_1",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "g1" }],
+    },
+    {
+      role: "toolResult",
+      timestamp: 420,
+      toolCallId: "t_grp_2",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "g2" }],
+    },
+    {
+      role: "toolResult",
+      timestamp: 430,
+      toolCallId: "t_grp_3",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "g3" }],
+    },
+    { role: "assistant", timestamp: 500, content: [{ type: "text", text: "Latest reply" }] },
+  ];
+
+  const { call } = fixture(messages);
+  const full = await call("list");
+  expect(full.items).toHaveLength(7); // u0, t_old_hidden, u1, t_grp_1, t_grp_2, t_grp_3, ast_latest
+  expect(full.items.map((r: any) => r.timeline_index)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  expect(full.has_older).toBe(false);
+  expect(full.next_before_index).toBeNull();
+
+  // Hide the older tool call (timeline_index = 1) so it sits outside the tail slice
+  const oldTool = full.items[1];
+  const hidden = await call("hide", { item_id: oldTool.item_id, expected_version: oldTool.version });
+  expect(hidden.ok).toBe(true);
+
+  // Request latest 3 rows -> index 4, 5, 6 starts inside the contiguous tool group [3, 4, 5]!
+  // Server must expand startIndex backward to 3 so the tool group is NEVER split across pages.
+  const tailPage = await call("list", { limit: 3 });
+  expect(tailPage.items.map((r: any) => r.timeline_index)).toEqual([3, 4, 5, 6]);
+  expect(tailPage.has_older).toBe(true);
+  expect(tailPage.next_before_index).toBe(3);
+  expect(tailPage.totals).toEqual({
+    total_rows: 7,
+    manageable_count: 7,
+    hidden_count: 1,
+    saved_bytes: Math.max(0, hidden.item.bytes_size - hidden.item.compacted_bytes_size),
+  });
+
+  // Request older page using next_before_index=3 with limit=2 -> gets [1, 2], has_older=true, next_before_index=1
+  const olderPage = await call("list", { limit: 2, before_index: tailPage.next_before_index });
+  expect(olderPage.items.map((r: any) => r.timeline_index)).toEqual([1, 2]);
+  expect(olderPage.items[0].status).toBe("hidden");
+  expect(olderPage.has_older).toBe(true);
+  expect(olderPage.next_before_index).toBe(1);
+
+  // Final older page
+  const firstPage = await call("list", { limit: 5, before_index: olderPage.next_before_index });
+  expect(firstPage.items.map((r: any) => r.timeline_index)).toEqual([0]);
+  expect(firstPage.has_older).toBe(false);
+  expect(firstPage.next_before_index).toBeNull();
+
+  // Search query returns matching older rows across the entire session without paging slice
+  const searchRes = await call("list", { query: "First prompt", limit: 2 });
+  expect(searchRes.items.map((r: any) => r.timeline_index)).toEqual([0]);
+  expect(searchRes.has_older).toBe(false);
+});

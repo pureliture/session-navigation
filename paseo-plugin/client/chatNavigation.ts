@@ -41,10 +41,64 @@ function matchesNeedle(rawText: string, needle: string): boolean {
   return cleaned.split(/\r?\n/u).some((line) => normalized(line) === needle);
 }
 
-const IDENTITY_ATTRIBUTES = ["data-message-id", "data-history-row-id", "data-call-id", "data-item-id", "data-turn-id", "id"];
+const IDENTITY_ATTRIBUTES = [
+  "data-message-id",
+  "data-history-row-id",
+  "data-tool-call-id",
+  "data-call-id",
+  "data-item-id",
+  "data-turn-id",
+  "id",
+];
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&quot;/gu, '"')
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&apos;/gu, "'")
+    .replace(/&amp;/gu, "&");
+}
+
+function paseoSystemMessageId(row: Row): string | null {
+  if (!row.message_text) return null;
+  const decoded = decodeXmlEntities(stripSystemBlocks(row.message_text));
+  if (!decoded.includes("<paseo-system")) return null;
+  const tagMatch = /<paseo-system\b([^>]*)>/u.exec(decoded);
+  const tagScope = tagMatch ? tagMatch[1] : decoded.slice(decoded.indexOf("<paseo-system"));
+  return /\bmessage-id=["']([^"']+)["']/u.exec(tagScope)?.[1] ?? null;
+}
+
+function isPaseoSystemRow(row: Row): boolean {
+  if (row.message_text) {
+    const decoded = decodeXmlEntities(stripSystemBlocks(row.message_text));
+    if (decoded.includes("<paseo-system")) return true;
+  }
+  return Boolean(
+    row.summary_line?.startsWith("[Subagent ") ||
+    row.summary_line?.startsWith("[Agent message"),
+  );
+}
+
+function isToolLikeRow(row: Row): boolean {
+  return row.kind === "tool" || Boolean(paseoSystemMessageId(row));
+}
+
+function rowIdentityIds(row: Row): string[] {
+  const sysMsgId = paseoSystemMessageId(row);
+  return [
+    row.tool_call_id,
+    row.item_id,
+    row.item_id?.startsWith("user-") ? row.item_id.slice(5) : undefined,
+    row.item_id?.startsWith("ast-") ? row.item_id.slice(4) : undefined,
+    sysMsgId ? `paseo-agent-message:${sysMsgId}` : undefined,
+    sysMsgId ?? undefined,
+  ].filter((v): v is string => Boolean(v));
+}
 
 export function identityMatches(value: string, id: string): boolean {
-  if (value === id || value === `agent_tool_${id}` || value.endsWith(`/${encodeURIComponent(id)}`) ||
+  if (value === id || value === `agent_tool_${id}` || value === `paseo-agent-message:${id}` ||
+    value.endsWith(`/${encodeURIComponent(id)}`) ||
     value === `message-${id}` || value === `call-${id}` || value === `turn-${id}` ||
     value === `tool-${id}` || value === `tool_call_${id}`) return true;
   return id.length >= 6 && (value.endsWith(`_${id}`) || value.endsWith(`:${id}`));
@@ -84,8 +138,7 @@ function messageHints(row: Row): string[] {
   }
   if (!row.message_text) return longHints.length > 0 ? longHints : shortHints;
   const raw = stripSystemBlocks(row.message_text).trim();
-  const decoded = raw.replace(/&quot;/gu, '"').replace(/&lt;/gu, "<").replace(/&gt;/gu, ">")
-    .replace(/&apos;/gu, "'").replace(/&amp;/gu, "&");
+  const decoded = decodeXmlEntities(raw);
   if (!decoded.startsWith("<paseo-system")) {
     for (const line of decoded.split(/\r?\n/u)) {
       const clean = line.replace(/<[^>]+>/gu, " ").trim();
@@ -117,10 +170,8 @@ export function visibleChatValues(doc: any): string[] | null {
 }
 
 function findIdentity(root: any, row: Row): any {
-  const ids = [row.tool_call_id, row.item_id,
-    row.item_id?.startsWith("user-") ? row.item_id.slice(5) : undefined,
-    row.item_id?.startsWith("ast-") ? row.item_id.slice(4) : undefined,
-  ].filter(Boolean) as string[];
+  const ids = rowIdentityIds(row);
+  if (ids.length === 0) return null;
   for (const node of Array.from(root.querySelectorAll(IDENTITY_ATTRIBUTES.map((attr) => `[${attr}]`).join(", "))) as any[]) {
     if (IDENTITY_ATTRIBUTES.some((attr) => {
       const value = node.getAttribute(attr);
@@ -154,6 +205,11 @@ function rowPositionIndex(rows: Row[], target: Row): number {
   );
 }
 
+function rowOrder(rows: Row[], idx: number): number {
+  const candidate = rows[idx];
+  return typeof candidate?.timeline_index === "number" ? candidate.timeline_index : idx;
+}
+
 function toolHint(row: Pick<Row, "tool_input">): string | undefined {
   try {
     const input = JSON.parse(row.tool_input ?? "null");
@@ -168,15 +224,13 @@ function toolHint(row: Pick<Row, "tool_input">): string | undefined {
 
 export function historyContainsRow(history: TimelineHistory, row: Row): boolean {
   const kind = row.kind ?? "tool";
-  const isSystemNotice = Boolean(
-    row.message_text?.trimStart().startsWith("<paseo-system") ||
-    row.summary_line?.startsWith("[Subagent "),
-  );
+  const isSystemNotice = isPaseoSystemRow(row);
+  const rowIds = rowIdentityIds(row);
   return history.entries.some(({ item }) => {
     if (!item) return false;
     const type = String(item.type ?? "");
     if (kind === "user") {
-      if (type !== "user_message" && !(isSystemNotice && ["plugin", "notification", "tool_call"].includes(type))) {
+      if (type !== "user_message" && !(isSystemNotice && ["plugin", "notification", "tool_call", "command"].includes(type))) {
         return false;
       }
     } else if (kind === "assistant" || kind === "agent") {
@@ -189,7 +243,7 @@ export function historyContainsRow(history: TimelineHistory, row: Row): boolean 
       ? item.detail as Record<string, unknown> : {};
     const ids = [item.messageId, item.clientMessageId, item.id, item.callId, detail.call_id];
     if (ids.some((value) => typeof value === "string" &&
-      [row.item_id, row.tool_call_id].some((id) => id && identityMatches(value, id)))) return true;
+      rowIds.some((id) => identityMatches(value, id)))) return true;
     const preview = fallbackToolPreview(item, detail);
     const todoText = Array.isArray(item.items)
       ? item.items.map((entry: any) => (typeof entry?.text === "string" ? entry.text : "")).join(" ")
@@ -318,6 +372,7 @@ function rowNeedles(candidate: Row): string[] {
 function findUniqueRowAnchor(root: any, candidate: Row): any {
   const direct = findIdentity(root, candidate);
   if (direct) return direct;
+  if (paseoSystemMessageId(candidate)) return null;
   const matches = findTextMatches(root, messageHints(candidate), ROW);
   return matches.length === 1 ? matches[0] : null;
 }
@@ -328,6 +383,7 @@ function findRowMessageNode(
   targetIdx: number,
   row: Row,
   mountedIndices?: number[],
+  edges?: { atOlderEdge: boolean; atNewerEdge: boolean },
 ): any {
   const needles = rowNeedles(row);
   if (needles.length === 0) return null;
@@ -337,16 +393,33 @@ function findRowMessageNode(
     return needles.some((needle) => matchesNeedle(raw, needle));
   });
   if (allMatches.length === 0) return null;
-  if (allMatches.length === 1 || targetIdx < 0 || rows.length === 0) {
+  if (mountedIndices && mountedIndices.length > 0 && targetIdx >= 0) {
+    const targetOrder = rowOrder(rows, targetIdx);
+    const mountedOrders = mountedIndices.map((idx) => rowOrder(rows, idx));
+    const minOrder = Math.min(...mountedOrders);
+    const maxOrder = Math.max(...mountedOrders);
+    if (
+      (targetOrder < minOrder - 3 && !edges?.atOlderEdge) ||
+      (targetOrder > maxOrder + 3 && !edges?.atNewerEdge)
+    ) {
+      return null;
+    }
+  }
+  if (targetIdx < 0 || rows.length === 0) {
     return allMatches[0];
   }
 
   let lowerIdx = -1;
   let lowerNode: any = null;
   for (let i = targetIdx - 1; i >= 0; i--) {
-    if (rows[i].kind === "tool") continue;
-    const anchor = findUniqueRowAnchor(root, rows[i]);
-    if (anchor) {
+    if (isToolLikeRow(rows[i])) continue;
+    const directAnchor = findIdentity(root, rows[i]);
+    const rawAnchor = directAnchor ?? findUniqueRowAnchor(root, rows[i]);
+    const anchor = rawAnchor && !domRows.includes(rawAnchor) ? (rawAnchor.closest?.(ROW) ?? rawAnchor) : rawAnchor;
+    if (
+      anchor &&
+      (allMatches.length > 1 || (domRows.includes(anchor) && (Boolean(directAnchor) || !allMatches.includes(anchor))))
+    ) {
       lowerIdx = i;
       lowerNode = anchor;
       break;
@@ -356,9 +429,15 @@ function findRowMessageNode(
   let upperIdx = rows.length;
   let upperNode: any = null;
   for (let j = targetIdx + 1; j < rows.length; j++) {
-    if (rows[j].kind === "tool") continue;
-    const anchor = findUniqueRowAnchor(root, rows[j]);
-    if (anchor && (!lowerNode || rowComparisonOrder(domRows, anchor, lowerNode, "after"))) {
+    if (isToolLikeRow(rows[j])) continue;
+    const directAnchor = findIdentity(root, rows[j]);
+    const rawAnchor = directAnchor ?? findUniqueRowAnchor(root, rows[j]);
+    const anchor = rawAnchor && !domRows.includes(rawAnchor) ? (rawAnchor.closest?.(ROW) ?? rawAnchor) : rawAnchor;
+    if (
+      anchor &&
+      (allMatches.length > 1 || (domRows.includes(anchor) && (Boolean(directAnchor) || !allMatches.includes(anchor)))) &&
+      (!lowerNode || rowComparisonOrder(domRows, anchor, lowerNode, "after"))
+    ) {
       upperIdx = j;
       upperNode = anchor;
       break;
@@ -422,12 +501,32 @@ function findTurn(root: any, rows: Row[], start: number, end: number): Turn | nu
   let anchor: any = null;
   for (let i = start - 1; i >= 0 && !anchor; i--) {
     if (rows[i].kind !== "user") continue;
+    if (isPaseoSystemRow(rows[i])) {
+      const badge = findIdentity(root, rows[i]);
+      if (badge) {
+        anchor = badge;
+        break;
+      }
+      continue;
+    }
     anchor = anchorOf(root, rows[i]);
     if (!anchor) return null;
   }
   if (!anchor) return null;
-  const nextUser = rows.slice(end).find((candidate) => candidate.kind === "user");
-  const userBoundary = nextUser ? anchorOf(root, nextUser, anchor) : null;
+  let userBoundary: any = null;
+  for (let j = end; j < rows.length; j++) {
+    if (rows[j].kind !== "user") continue;
+    if (isPaseoSystemRow(rows[j])) {
+      const badge = findIdentity(root, rows[j]);
+      if (badge && after(badge, anchor)) {
+        userBoundary = badge;
+        break;
+      }
+      continue;
+    }
+    userBoundary = anchorOf(root, rows[j], anchor);
+    break;
+  }
   const summary = summaries.find((candidate) => after(candidate, anchor));
   if (!summary || !before(summary, userBoundary)) return null;
   const nextSummary = summaries.find((candidate) => after(candidate, summary));
@@ -495,6 +594,7 @@ type NavigationOptions = {
   onNotFound?: () => void;
   getHistory?: () => Promise<TimelineHistory>;
   historyTimeoutMs?: number;
+  noProgressTimeoutMs?: number;
   timeoutMs?: number;
   turnExpanded?: boolean;
 };
@@ -509,36 +609,60 @@ function emitScroll(scrollable: any, doc: any, type: "scroll" | "wheel", deltaY 
   if (Constructor) scrollable.dispatchEvent?.(new Constructor(type, { bubbles: true, deltaY }));
 }
 
-type SearchBounds = { low?: number; high?: number; extent?: number };
+type SearchBounds = {
+  low?: number;
+  high?: number;
+  extent?: number;
+  sweepDirection?: "up" | "down";
+  triedUpEdge?: boolean;
+  triedDownEdge?: boolean;
+};
 type SeekOutcome = "moved" | "needOlder" | "atNewerEdge" | "unknown";
 
 function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual: any[] } {
   const virtual = Array.from(root.querySelectorAll("[data-history-row-id][data-index]")) as any[];
-  let nodes = virtual.length ? virtual : (Array.from(root.querySelectorAll(ROW)) as any[]);
-  const viewport = root.getBoundingClientRect?.();
-  if (viewport) {
-    const nearby = nodes.filter((node) => {
-      const rect = node.getBoundingClientRect?.();
-      return rect && rect.bottom >= viewport.top && rect.top <= viewport.bottom;
-    });
-    if (nearby.length) nodes = nearby;
-  }
-  const indices = nodes.flatMap((node) => {
-    const values = IDENTITY_ATTRIBUTES.map((attr) => node.getAttribute(attr)).filter(Boolean) as string[];
-    const idIndex = rows.findIndex((candidate) =>
-      values.some((value) =>
-        [candidate.item_id, candidate.tool_call_id].some((id) => id && identityMatches(value, id)),
-      ),
-    );
-    if (idIndex >= 0) return [idIndex];
+  const nodes = virtual.length ? virtual : (Array.from(root.querySelectorAll(ROW)) as any[]);
+  const collected = new Set<number>();
+
+  const collectUniqueIdMatch = (value: string): boolean => {
+    const idMatches: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rowIdentityIds(rows[i]).some((id) => identityMatches(value, id))) {
+        idMatches.push(i);
+        if (idMatches.length > 1) return false;
+      }
+    }
+    if (idMatches.length === 1) {
+      collected.add(idMatches[0]);
+      return true;
+    }
+    return false;
+  };
+
+  for (const node of nodes) {
+    const ownValues = IDENTITY_ATTRIBUTES.map((attr) => node.getAttribute(attr)).filter(Boolean) as string[];
+    let matchedById = false;
+    for (const value of ownValues) {
+      if (collectUniqueIdMatch(value)) matchedById = true;
+    }
+    if (!matchedById && typeof node.querySelectorAll === "function") {
+      const descAttrs = ["data-tool-call-id", "data-call-id", "data-item-id"];
+      for (const desc of Array.from(node.querySelectorAll(descAttrs.map((a) => `[${a}]`).join(", "))) as any[]) {
+        for (const attr of descAttrs) {
+          const val = desc.getAttribute?.(attr);
+          if (val && collectUniqueIdMatch(val)) matchedById = true;
+        }
+      }
+    }
+    if (matchedById) continue;
+    if (node.matches?.(`${BADGE}, ${GROUP}`) || node.querySelector?.(GROUP)) continue;
     // Never treat Paseo's 40-item virtualizer `data-index` as an index into Outline `rows`.
     const raw = node.textContent ?? "";
     let longest = 0;
     let matched: number[] = [];
     rows.forEach((candidate, candidateIndex) => {
-      const needles = textNeedles(
-        candidate.kind === "tool" ? [toolHint(candidate), candidate.summary_line] : messageHints(candidate),
-      );
+      if (candidate.kind === "tool" || paseoSystemMessageId(candidate)) return;
+      const needles = textNeedles(messageHints(candidate));
       const needle = needles.filter((value) => matchesNeedle(raw, value)).sort((x, y) => y.length - x.length)[0];
       if (needle) {
         if (needle.length > longest) {
@@ -549,9 +673,19 @@ function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual
         }
       }
     });
-    return matched;
-  });
-  return { indices, virtual };
+    if (matched.length === 1) {
+      collected.add(matched[0]);
+    }
+  }
+
+  if (virtual.length === 0 && typeof root.querySelectorAll === "function") {
+    for (const toolNode of Array.from(root.querySelectorAll("[data-tool-call-id]")) as any[]) {
+      const val = toolNode.getAttribute?.("data-tool-call-id");
+      if (val) collectUniqueIdMatch(val);
+    }
+  }
+
+  return { indices: [...collected], virtual };
 }
 
 function seekMountedWindow(
@@ -563,6 +697,7 @@ function seekMountedWindow(
 ): SeekOutcome {
   const targetIndex = rowPositionIndex(rows, target);
   if (targetIndex < 0) return "needOlder";
+  const targetOrder = rowOrder(rows, targetIndex);
   const { indices: mounted, virtual } = mountedRowIndices(root, rows);
   const scrollable = chatScroller(root);
   const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
@@ -578,26 +713,64 @@ function seekMountedWindow(
     : inverted
       ? extent - scrollable.scrollTop
       : scrollable.scrollTop;
-  const older =
-    mounted.length > 0
-      ? targetIndex < (Math.min(...mounted) + Math.max(...mounted)) / 2
-      : position >= extent - 2
-        ? true
-        : (targetIndex / Math.max(1, rows.length - 1)) <= (position / extent);
   if (bounds.extent !== extent) {
     bounds.low = undefined;
     bounds.high = undefined;
     bounds.extent = extent;
   }
+
+  const mountedOrders = mounted.map((idx) => rowOrder(rows, idx));
+  let older: boolean;
+  if (mountedOrders.length > 0) {
+    const minMountedOrder = Math.min(...mountedOrders);
+    const maxMountedOrder = Math.max(...mountedOrders);
+    if (targetOrder < minMountedOrder) {
+      older = true;
+    } else if (targetOrder > maxMountedOrder) {
+      older = false;
+    } else {
+      older = targetOrder < (minMountedOrder + maxMountedOrder) / 2;
+    }
+  } else if (position >= extent - 4) {
+    older = true;
+    bounds.sweepDirection = "up";
+    bounds.triedDownEdge = true;
+  } else if (position <= 4) {
+    older = false;
+    bounds.sweepDirection = "down";
+    bounds.triedUpEdge = true;
+  } else {
+    if (!bounds.sweepDirection) bounds.sweepDirection = "up";
+    older = bounds.sweepDirection !== "down";
+  }
+
   if (older && position <= 1) {
     if (virtual.length > 0 && !virtual.some((node) => node.getAttribute("data-index") === "0")) {
       return "moved";
     }
-    return "needOlder";
+    if (mountedOrders.length === 0) {
+      if (!bounds.triedUpEdge) {
+        bounds.triedUpEdge = true;
+        return "needOlder";
+      }
+      if (!bounds.triedDownEdge) {
+        bounds.sweepDirection = "down";
+        older = false;
+      } else {
+        return "needOlder";
+      }
+    } else {
+      return "needOlder";
+    }
   }
   if (!older && position >= extent - 1) return "atNewerEdge";
   if (!mounted.length) {
-    const next = older ? Math.max(0, position - scrollable.clientHeight * 2) : extent;
+    const step = Math.max(100, (scrollable.clientHeight || 400) * 2);
+    const next = older
+      ? Math.max(0, position - step)
+      : targetIndex >= rows.length - 2
+        ? extent
+        : Math.min(extent, position + step);
     const top = negative ? next - extent : inverted ? extent - next : next;
     emitScroll(scrollable, doc, "wheel", older ? -1 : 1);
     if (typeof scrollable.scrollTo === "function") scrollable.scrollTo({ top, behavior: "instant" });
@@ -605,13 +778,20 @@ function seekMountedWindow(
     emitScroll(scrollable, doc, "scroll", older ? -1 : 1);
     return "moved";
   }
-  const first = Math.min(...mounted);
-  const last = Math.max(...mounted);
+  const minMountedOrder = Math.min(...mountedOrders);
+  const maxMountedOrder = Math.max(...mountedOrders);
   if (older) bounds.high = position;
   else bounds.low = position;
-  const gap = older ? first - targetIndex : targetIndex - last;
+  if (bounds.low !== undefined && bounds.high !== undefined && bounds.low >= bounds.high) {
+    bounds.low = undefined;
+    bounds.high = undefined;
+  }
+  const gap = older
+    ? Math.max(1, minMountedOrder - targetOrder)
+    : Math.max(1, targetOrder - maxMountedOrder);
+  const span = Math.max(1, maxMountedOrder - minMountedOrder + 1);
   const step =
-    scrollable.clientHeight * Math.max(0.8, Math.min(8, gap / Math.max(1, last - first + 1)));
+    Math.max(1, scrollable.clientHeight || 400) * Math.max(0.8, Math.min(8, gap / span));
   const next =
     !older && targetIndex >= rows.length - 2
       ? extent
@@ -660,14 +840,16 @@ export async function scrollToMessageInChat(
 ): Promise<boolean> {
   const version = ++navigationVersion;
   let found = false;
+  const restoreRef: { fn?: () => void } = {};
   try {
     options.onStart?.();
-    found = await withTimeout(navigate(row, rows, version, options), options.timeoutMs ?? 60000);
+    found = await withTimeout(navigate(row, rows, version, options, restoreRef), options.timeoutMs ?? 60000);
     return found;
   } catch {
     return false;
   } finally {
     if (!found && version === navigationVersion) {
+      restoreRef.fn?.();
       navigationVersion++;
       options.onNotFound?.();
     }
@@ -685,7 +867,13 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
   }
 }
 
-async function navigate(row: Row, rows: Row[], version: number, options: NavigationOptions): Promise<boolean> {
+async function navigate(
+  row: Row,
+  rows: Row[],
+  version: number,
+  options: NavigationOptions,
+  restoreRef?: { fn?: () => void },
+): Promise<boolean> {
   const doc = options.document ?? (globalThis as unknown as { document?: any }).document;
   if (!doc || typeof doc.querySelectorAll !== "function") return false;
   if (options.openAgent) {
@@ -700,16 +888,52 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
   }
   const root = pickChatRoot(doc, rows.length > 0 ? rows : [row], row, options.visibleOnly);
   if (!root) return false;
+  const initialScroller = chatScroller(root);
+  const initialScrollTop =
+    typeof initialScroller?.scrollTop === "number" ? initialScroller.scrollTop : undefined;
+  const restoreInitialScroll = () => {
+    if (
+      version === navigationVersion &&
+      initialScrollTop !== undefined &&
+      (rows.length > 0 || initialScrollTop >= 0)
+    ) {
+      const currentScroller = chatScroller(root);
+      if (
+        typeof currentScroller?.scrollTop === "number" &&
+        currentScroller.scrollTop !== initialScrollTop
+      ) {
+        if (typeof currentScroller.scrollTo === "function") {
+          currentScroller.scrollTo({ top: initialScrollTop, behavior: "instant" });
+        } else {
+          currentScroller.scrollTop = initialScrollTop;
+        }
+      }
+    }
+  };
+  if (restoreRef) restoreRef.fn = restoreInitialScroll;
+
   const targetIdx = rowPositionIndex(rows, row);
+  const targetOrder = targetIdx >= 0 ? rowOrder(rows, targetIdx) : -1;
   if (findIdentity(root, row)) {
+    if (await navigateLoaded(row, rows, root, version, options)) return true;
+  } else if (paseoSystemMessageId(row)) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
   } else {
     const { indices: mounted } = mountedRowIndices(root, rows);
-    if (findRowMessageNode(root, rows, targetIdx, row, mounted)) {
+    const extent = Math.max(0, (initialScroller?.scrollHeight ?? 0) - (initialScroller?.clientHeight ?? 0));
+    const edges = {
+      atOlderEdge: (initialScroller?.scrollTop ?? 0) <= 2,
+      atNewerEdge: extent <= 0 || (initialScroller?.scrollTop ?? 0) >= extent - 2,
+    };
+    if (findRowMessageNode(root, rows, targetIdx, row, mounted, edges)) {
+      const mountedOrders = mounted.map((idx) => rowOrder(rows, idx));
       const windowCoversTarget =
-        mounted.length === 0 ||
+        mountedOrders.length === 0 ||
         targetIdx < 0 ||
-        (targetIdx >= Math.min(...mounted) - 2 && targetIdx <= Math.max(...mounted) + 2);
+        (targetOrder >= Math.min(...mountedOrders) - 3 &&
+          targetOrder <= Math.max(...mountedOrders) + 3) ||
+        (edges.atOlderEdge && targetOrder < Math.min(...mountedOrders)) ||
+        (edges.atNewerEdge && targetOrder > Math.max(...mountedOrders));
       if (windowCoversTarget && (await navigateLoaded(row, rows, root, version, options))) return true;
     }
   }
@@ -725,14 +949,22 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
   const signature = () => JSON.stringify((Array.from(root.querySelectorAll(ROW)) as any[]).map((node) =>
     [node.getAttribute("data-history-row-id"), node.getAttribute("data-message-id"), node.getAttribute("data-index")]));
   let previousSignature = signature(), lastProgress = now();
+  const noProgressCutoff = history?.complete
+    ? 4000
+    : (options.getHistory === undefined && targetIdx >= 0) || options.noProgressTimeoutMs !== undefined
+      ? (options.noProgressTimeoutMs ?? 2500)
+      : null;
   while (version === navigationVersion) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
     if (version !== navigationVersion) return false;
     if (now() >= deadline) break;
     const currentSignature = signature();
     if (currentSignature !== previousSignature) { previousSignature = currentSignature; lastProgress = now(); }
-    if (history?.complete && now() - lastProgress >= 4000 &&
-      !root.querySelector('[data-testid="load-older-history-spinner"]')) break;
+    if (
+      noProgressCutoff !== null &&
+      now() - lastProgress >= noProgressCutoff &&
+      !root.querySelector('[data-testid="load-older-history-spinner"]')
+    ) break;
     if (!root.querySelector('[data-testid="load-older-history-spinner"]') && now() - lastAttempt >= 100) {
       const outcome = seekMountedWindow(root, doc, rows, row, bounds);
       if (outcome === "moved" || outcome === "atNewerEdge") {
@@ -744,6 +976,7 @@ async function navigate(row: Row, rows: Row[], version: number, options: Navigat
     }
     await wait();
   }
+  restoreInitialScroll();
   return false;
 }
 
@@ -754,33 +987,65 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
   const isTail = rows.length > 1 && targetIdx >= rows.length - 1;
   const hlOpts = { tail: isTail, releaseFollow: rows.length > 1 && !isTail, root, doc };
   const direct = findIdentity(root, row);
-  if (row.kind !== "tool") {
+  const sysMsgId = paseoSystemMessageId(row);
+  const isToolTarget = row.kind === "tool" || Boolean(sysMsgId);
+  if (!isToolTarget) {
     if (direct) return highlightAndScroll(direct, hlOpts);
     const { indices: mounted } = mountedRowIndices(root, rows);
     const scrollable = chatScroller(root);
     const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
-    const atNewerEdge = extent <= 0 || scrollable.scrollTop >= extent - 2;
-    const atOlderEdge = scrollable.scrollTop <= 2;
+    const edges = {
+      atOlderEdge: (scrollable.scrollTop ?? 0) <= 2,
+      atNewerEdge: extent <= 0 || (scrollable.scrollTop ?? 0) >= extent - 2,
+    };
+    const targetOrder = targetIdx >= 0 ? rowOrder(rows, targetIdx) : -1;
+    const mountedOrders = mounted.map((idx) => rowOrder(rows, idx));
     if (
-      mounted.length > 0 &&
+      mountedOrders.length > 0 &&
       targetIdx >= 0 &&
-      ((targetIdx < Math.min(...mounted) - 3 && !atOlderEdge) ||
-        (targetIdx > Math.max(...mounted) + 3 && !atNewerEdge))
+      ((targetOrder < Math.min(...mountedOrders) - 3 && !edges.atOlderEdge) ||
+        (targetOrder > Math.max(...mountedOrders) + 3 && !edges.atNewerEdge))
     ) {
       return false;
     }
-    return highlightAndScroll(findRowMessageNode(root, rows, targetIdx, row, mounted), hlOpts);
+    const matchedNode = findRowMessageNode(root, rows, targetIdx, row, mounted, edges);
+    if (matchedNode) return highlightAndScroll(matchedNode, hlOpts);
+    if ((row.kind === "assistant" || row.kind === "agent") && targetIdx >= 0 && !options.turnExpanded) {
+      const turn = findTurn(root, rows, targetIdx, targetIdx + 1);
+      if (turn) {
+        const { summary } = turn;
+        if (turnCollapsed(root, turn)) {
+          const button = summary.querySelector?.('button, [role="button"]') ?? summary;
+          try { button.click(); } catch { return highlightAndScroll(summary, hlOpts); }
+          const wait = options.afterExpand ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+          for (let attempt = 0; attempt < 4; attempt++) {
+            await wait();
+            if (version !== navigationVersion) return false;
+            if (!turnCollapsed(root, turn)) break;
+          }
+          return navigateLoaded(row, rows, root, version, { ...options, turnExpanded: true });
+        }
+      }
+    }
+    return false;
+  }
+
+  const directGroup = direct?.closest?.(GROUP) ?? direct?.querySelector?.(GROUP);
+  const directGroupCollapsed =
+    directGroup?.querySelector?.('[role="button"][aria-expanded]')?.getAttribute("aria-expanded") === "false";
+  if (sysMsgId && direct && !direct.querySelector?.(GROUP) && !directGroupCollapsed) {
+    return highlightAndScroll(direct, hlOpts);
   }
 
   const index = targetIdx;
   let start = index;
-  while (start > 0 && rows[start - 1].kind === "tool") start--;
+  while (start > 0 && isToolLikeRow(rows[start - 1])) start--;
   let end = index + 1;
-  while (end < rows.length && rows[end].kind === "tool") end++;
+  while (end < rows.length && isToolLikeRow(rows[end])) end++;
   const isTailGroup = rows.length > 1 && end >= rows.length;
   const groupHlOpts = { tail: isTail || isTailGroup, releaseFollow: rows.length > 1 && !(isTail || isTailGroup), root, doc };
   const members = index < 0 ? [row] : rows.slice(start, end);
-  let group = direct?.closest(GROUP) ?? direct?.querySelector(GROUP);
+  let group = directGroup;
   if (!group && direct?.querySelector(BADGE)) return highlightAndScroll(direct.querySelector(BADGE), groupHlOpts);
   if (!group) {
     for (const member of members) {
@@ -790,11 +1055,23 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     }
   }
   if (!group && start > 0) {
-    const previous = rows[start - 1];
-    const anchor = findIdentity(root, previous) ?? findRowMessageNode(root, rows, start - 1, previous);
-    const nextMsg = end < rows.length ? rows[end] : undefined;
-    const nextAnchor = nextMsg && anchor ? anchorOf(root, nextMsg, anchor) : null;
+    let anchor: any = null;
+    for (let i = start - 1; i >= 0; i--) {
+      if (isToolLikeRow(rows[i])) continue;
+      anchor = findIdentity(root, rows[i]) ?? findRowMessageNode(root, rows, i, rows[i]);
+      if (anchor || !isPaseoSystemRow(rows[i])) break;
+    }
+    let nextAnchor: any = null;
     if (anchor) {
+      for (let j = end; j < rows.length; j++) {
+        if (isToolLikeRow(rows[j])) continue;
+        const candidateAnchor = anchorOf(root, rows[j], anchor);
+        if (candidateAnchor) {
+          nextAnchor = candidateAnchor;
+          break;
+        }
+        if (!isPaseoSystemRow(rows[j])) break;
+      }
       group = (Array.from(root.querySelectorAll(GROUP)) as any[]).find(
         (candidate) => after(candidate, anchor) && before(candidate, nextAnchor),
       );
@@ -850,13 +1127,30 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
       if (nested.length > 0) {
         return navigateLoaded(row, rows, root, version, { ...options, turnExpanded: true });
       }
+      const expandedDirect = findIdentity(root, row);
+      if (expandedDirect && !expandedDirect.querySelector?.(GROUP)) {
+        return highlightAndScroll(expandedDirect, groupHlOpts);
+      }
       const badges = turnNodes(root, turn, BADGE);
       const matched = pickMemberBadge(badges);
       if (matched) return highlightAndScroll(matched, groupHlOpts);
       return highlightAndScroll(summary, groupHlOpts);
     }
   }
-  if (!group) return highlightAndScroll(direct ?? findRowMessageNode(root, rows, targetIdx, row), groupHlOpts);
+  if (!group) {
+    if (sysMsgId) return highlightAndScroll(direct, groupHlOpts);
+    const { indices: mounted } = mountedRowIndices(root, rows);
+    const scrollable = chatScroller(root);
+    const extent = Math.max(0, (scrollable.scrollHeight ?? 0) - (scrollable.clientHeight ?? 0));
+    const edges = {
+      atOlderEdge: (scrollable.scrollTop ?? 0) <= 2,
+      atNewerEdge: extent <= 0 || (scrollable.scrollTop ?? 0) >= extent - 2,
+    };
+    return highlightAndScroll(
+      direct ?? findRowMessageNode(root, rows, targetIdx, row, mounted, edges),
+      groupHlOpts,
+    );
+  }
 
   const toggle = group.querySelector('[role="button"][aria-expanded]');
   const collapsed = toggle?.getAttribute("aria-expanded") === "false";
@@ -872,8 +1166,16 @@ async function navigateLoaded(row: Row, rows: Row[], root: any, version: number,
     if (collapsed) await afterExpand();
     if (version !== navigationVersion) return false;
     const target = findIdentity(root, row);
-    const targetBadge = target?.matches?.(BADGE) ? target : target?.querySelector(BADGE);
-    if (targetBadge && !target.querySelector(GROUP)) return highlightAndScroll(targetBadge, groupHlOpts);
+    if (target && !target.querySelector?.(GROUP)) {
+      const targetBadge = target.matches?.(BADGE) ? target : target.querySelector?.(BADGE);
+      if (targetBadge) return highlightAndScroll(targetBadge, groupHlOpts);
+      if (
+        (target.getAttribute?.("data-tool-call-id") || target.getAttribute?.("data-call-id")) &&
+        target.closest?.(GROUP) === group
+      ) {
+        return highlightAndScroll(target, groupHlOpts);
+      }
+    }
     // Paseo 0.15.3 only puts row IDs on the group's host, not its child badges.
     const badges = Array.from(group.querySelectorAll(BADGE)) as any[];
     const matched = pickMemberBadge(badges);

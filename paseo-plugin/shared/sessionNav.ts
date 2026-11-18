@@ -38,6 +38,7 @@ export const RowSchema = z.object({
   message_text: z.string().optional(),
   replacement_text: z.string().optional(),
   summary_pending: z.boolean().optional(),
+  timeline_index: z.number().int().nonnegative().optional(),
 });
 
 export const DbErrorChoicesSchema = z.array(
@@ -83,6 +84,13 @@ export const ManageResultSchema = z.object({
   choices: z.array(z.string()).optional(),
 });
 
+export const ListTotalsSchema = z.object({
+  total_rows: z.number().int(),
+  manageable_count: z.number().int(),
+  hidden_count: z.number().int(),
+  saved_bytes: z.number(),
+});
+
 export const ListResultSchema = z.object({
   ok: z.boolean(),
   items: z.array(RowSchema),
@@ -97,6 +105,9 @@ export const ListResultSchema = z.object({
   server_timeline: z.boolean().optional(),
   records_capped: z.boolean().optional(),
   timeline_read_error: z.string().optional(),
+  has_older: z.boolean().optional(),
+  next_before_index: z.number().int().nonnegative().nullable().optional(),
+  totals: ListTotalsSchema.optional(),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });
@@ -140,6 +151,8 @@ export const listItemsRpc = defineRpc({
     scope_key: z.string(),
     query: z.string().optional(),
     snapshot_id: z.string().optional(),
+    limit: z.number().int().min(1).max(2000).optional(),
+    before_index: z.number().int().nonnegative().optional(),
   }),
   output: ListResultSchema,
 });

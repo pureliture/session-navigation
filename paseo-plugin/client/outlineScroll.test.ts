@@ -216,4 +216,69 @@ describe("OutlineAutoScroller", () => {
     expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 800, isLoading: false, now: 4000 })).toBe(false);
     expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 920, isLoading: false, now: 4500 })).toBe(true);
   });
+
+  test("preparePrepend preserves exact scrollTop by delta = nextScrollHeight - prevScrollHeight via both handleContentSizeChange and synchronous maybeSync", () => {
+    // 1. Async / React Native onContentSizeChange path
+    const driver = new OutlineScrollDriver(1500);
+    let endCalls = 0;
+    const offsets: number[] = [];
+    const list = {
+      scrollToEnd: () => {
+        endCalls++;
+      },
+      scrollToOffset: ({ offset }: { offset: number }) => {
+        offsets.push(offset);
+      },
+    };
+    const state = {
+      sessionKey: "sess-prepend",
+      mounted: true,
+      rowCount: 150,
+      isLoading: false,
+      hasSearchQuery: false,
+    };
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 600 } } }, state, 1000);
+    driver.handleContentSizeChange(list, 3000, state, 1010);
+    // User scrolls near top to scrollTop = 120
+    driver.handleWheel({ deltaY: -40 });
+    driver.handleScrollEvent(
+      { nativeEvent: { contentOffset: { y: 120 }, contentSize: { height: 3000 }, layoutMeasurement: { height: 600 } } },
+      2000,
+    );
+    endCalls = 0;
+    offsets.length = 0;
+
+    // Prepend 150 older rows -> scrollHeight grows 3000 -> 5850 (delta = 2850)
+    driver.preparePrepend(list);
+    driver.maybeSync(list, { ...state, rowCount: 300 }, { now: 2050, scheduleFrame: () => {} });
+    expect(endCalls).toBe(0);
+    expect(offsets).toEqual([]);
+    driver.handleContentSizeChange(list, 5850, { ...state, rowCount: 300 }, 2060);
+    expect(offsets).toEqual([120 + 2850]);
+    expect(endCalls).toBe(0);
+    driver.dispose();
+
+    // 2. Synchronous Web DOM useLayoutEffect path (scrollHeight updated before maybeSync)
+    const domDriver = new OutlineScrollDriver(1500);
+    const domNode = { scrollTop: 120, scrollHeight: 3000, clientHeight: 600 };
+    const domList = {
+      getScrollableNode: () => domNode,
+      scrollToEnd: () => {
+        endCalls++;
+      },
+      scrollToOffset: ({ offset }: { offset: number }) => {
+        domNode.scrollTop = offset;
+      },
+    };
+    domDriver.syncSession("sess-web", true);
+    domDriver.maybeSync(domList, { ...state, sessionKey: "sess-web" }, { now: 1000, scheduleFrame: () => {} });
+    domNode.scrollTop = 90;
+    domDriver.preparePrepend(domList);
+    domNode.scrollHeight = 4500; // Grew synchronously by 1500px
+    endCalls = 0;
+    domDriver.maybeSync(domList, { ...state, sessionKey: "sess-web", rowCount: 250 }, { now: 2000, scheduleFrame: () => {} });
+    expect(domNode.scrollTop).toBe(90 + 1500);
+    expect(endCalls).toBe(0);
+    domDriver.dispose();
+  });
 });

@@ -52,6 +52,41 @@ type VerifiedTargetRecord = RecordInput & {
   options_omitted: boolean;
 };
 
+function isToolTimelineRow(row: Message): boolean {
+  const kind =
+    row.kind ??
+    (row.tool_name === "user"
+      ? "user"
+      : row.tool_name === "assistant"
+        ? "assistant"
+        : "tool");
+  return kind === "tool";
+}
+
+function effectiveRowBytesServer(row: Message): number {
+  if (row.status === "hidden") {
+    let post: number | undefined;
+    if (typeof row.compacted_bytes_size === "number") {
+      post = row.compacted_bytes_size;
+    } else if (typeof row.replacement_text === "string") {
+      post = bytes(row.replacement_text);
+    } else if (
+      row.kind === "user" ||
+      row.kind === "assistant" ||
+      row.kind === "agent"
+    ) {
+      post = 0;
+    }
+    if (post !== undefined) {
+      const clamped = Math.max(0, post);
+      return typeof row.bytes_size === "number"
+        ? Math.min(Math.max(0, row.bytes_size), clamped)
+        : clamped;
+    }
+  }
+  return typeof row.bytes_size === "number" ? row.bytes_size : 0;
+}
+
 export class PaseoService {
   readonly engine: Engine;
   private readonly decisions = new Map<string, string>();
@@ -107,7 +142,13 @@ export class PaseoService {
         return { ok: true };
       }
       if (method === "list") {
-        const result = this.list(scope, input.query);
+        const result = this.list(scope, input.query, {
+          limit: typeof input.limit === "number" ? input.limit : undefined,
+          before_index:
+            typeof input.before_index === "number"
+              ? input.before_index
+              : undefined,
+        });
         if (this.decisions.get(scope) === "send_original")
           this.decisions.set(scope, "abort_request");
         else this.decisions.delete(scope);
@@ -340,7 +381,11 @@ export class PaseoService {
     };
   }
 
-  private list(scope: string, query = ""): Reply {
+  private list(
+    scope: string,
+    query = "",
+    paging?: { limit?: number; before_index?: number },
+  ): Reply {
     const items = this.store.items(scope);
     const rawUnits = this.store.listUnits(scope);
     const timeline = this.timeline(scope, items, rawUnits);
@@ -433,30 +478,82 @@ export class PaseoService {
         }
       }
     }
-    const filtered = rows
-      .filter(
-        (row) =>
-          !query ||
-          [
-            row.item_id,
-            row.tool_call_id,
-            row.tool_name,
-            row.summary_line,
-            row.tool_input,
-            stored.get(row.item_id)?.compacted,
-          ].some(
-            (value) =>
-              typeof value === "string" &&
-              value.toLowerCase().includes(query.toLowerCase()),
+    const indexedRows: Message[] = rows.map((row, idx) => ({
+      tokens_display: "—",
+      ...row,
+      timeline_index: idx,
+    }));
+    const hiddenRows = indexedRows.filter((row) => row.status === "hidden");
+    const totals = {
+      total_rows: indexedRows.length,
+      manageable_count: indexedRows.filter(
+        (row) => Boolean(row.item_id) && row.manageable !== false,
+      ).length,
+      hidden_count: hiddenRows.length,
+      saved_bytes: hiddenRows.reduce(
+        (sum, row) =>
+          sum +
+          Math.max(
+            0,
+            (typeof row.bytes_size === "number" ? row.bytes_size : 0) -
+              effectiveRowBytesServer(row),
           ),
-      )
-      .map((row) => ({ tokens_display: "—", ...row }));
+        0,
+      ),
+    };
+    const hasQuery = typeof query === "string" && query.length > 0;
+    let pageItems: Message[];
+    let hasOlder = false;
+    let nextBeforeIndex: number | null = null;
+    if (hasQuery) {
+      const q = query.toLowerCase();
+      pageItems = indexedRows.filter((row) =>
+        [
+          row.item_id,
+          row.tool_call_id,
+          row.tool_name,
+          row.summary_line,
+          row.tool_input,
+          stored.get(row.item_id)?.compacted,
+        ].some(
+          (value) =>
+            typeof value === "string" && value.toLowerCase().includes(q),
+        ),
+      );
+    } else if (
+      typeof paging?.limit === "number" &&
+      Number.isFinite(paging.limit) &&
+      paging.limit > 0
+    ) {
+      const limit = Math.min(2000, Math.max(1, Math.trunc(paging.limit)));
+      const endIndex =
+        typeof paging.before_index === "number" &&
+        Number.isFinite(paging.before_index)
+          ? Math.max(0, Math.min(indexedRows.length, Math.trunc(paging.before_index)))
+          : indexedRows.length;
+      let startIndex = Math.max(0, endIndex - limit);
+      while (
+        startIndex > 0 &&
+        isToolTimelineRow(indexedRows[startIndex]) &&
+        isToolTimelineRow(indexedRows[startIndex - 1])
+      ) {
+        startIndex--;
+      }
+      pageItems = indexedRows.slice(startIndex, endIndex);
+      hasOlder = startIndex > 0;
+      nextBeforeIndex = startIndex > 0 ? startIndex : null;
+    } else {
+      pageItems = indexedRows;
+    }
     return {
       ok: true,
       scope_key: scope,
-      items: filtered,
+      items: pageItems,
       capabilities: this.capabilities(scope),
       server_timeline: timeline.rows.length > 0,
+      has_older: hasOlder,
+      next_before_index: nextBeforeIndex,
+      totals,
       ...(timeline.history.recordsCapped ? { records_capped: true } : {}),
       ...(timeline.history.readError
         ? { timeline_read_error: timeline.history.readError }

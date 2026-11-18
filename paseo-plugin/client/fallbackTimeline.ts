@@ -3,6 +3,11 @@ import { messageSummarySnippet, truncateString, utf8ByteLength } from "./outline
 import { childrenForCall, type ChildScope } from "./subagents";
 import { fallbackToolPreview } from "./toolPreview";
 
+function entryTimelineIndex(entry: any): number | undefined {
+  const seq = entry?.seqStart;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 ? seq : undefined;
+}
+
 function resolveRawMessageId(item: Record<string, any>): string | null {
   if (typeof item.messageId === "string" && item.messageId.length > 0) return item.messageId;
   if (typeof item.clientMessageId === "string" && item.clientMessageId.length > 0) {
@@ -166,6 +171,7 @@ function buildToolCallFallbackRow(entry: any, item: Record<string, any>, index: 
         ? detail.call_id
         : `tool-${entry?.seqStart ?? index}`;
 
+  const timelineIndex = entryTimelineIndex(entry);
   return {
     item_id: callId,
     tool_call_id: callId,
@@ -176,6 +182,7 @@ function buildToolCallFallbackRow(entry: any, item: Record<string, any>, index: 
     tokens_display: "—",
     bytes_size: totalBytes,
     summary_line: summary,
+    ...(timelineIndex !== undefined ? { timeline_index: timelineIndex } : {}),
     ...fallbackToolPreview(item, detail),
   };
 }
@@ -187,6 +194,7 @@ function buildAgentEventFallbackRow(
   rawMsgId: string | null,
   index: number,
 ): Row | null {
+  const timelineIndex = entryTimelineIndex(entry);
   if (itemType === "todo") {
     const todoItems = Array.isArray(item.items) ? item.items : [];
     const itemLines = todoItems
@@ -231,6 +239,7 @@ function buildAgentEventFallbackRow(
       bytes_size: utf8ByteLength(fullText),
       summary_line: messageSummarySnippet(headline) || "[Todo]",
       message_text: fullText,
+      ...(timelineIndex !== undefined ? { timeline_index: timelineIndex } : {}),
     };
   }
 
@@ -261,6 +270,7 @@ function buildAgentEventFallbackRow(
       bytes_size: utf8ByteLength(errText),
       summary_line: messageSummarySnippet(`[Error] ${errText}`) || "[Error]",
       message_text: errText,
+      ...(timelineIndex !== undefined ? { timeline_index: timelineIndex } : {}),
     };
   }
 
@@ -287,6 +297,7 @@ function buildAgentEventFallbackRow(
       bytes_size: utf8ByteLength(compactText),
       summary_line: messageSummarySnippet(`[Compaction] ${compactText}`) || "[Compaction]",
       message_text: compactText,
+      ...(timelineIndex !== undefined ? { timeline_index: timelineIndex } : {}),
     };
   }
 
@@ -336,6 +347,7 @@ function buildAgentEventFallbackRow(
       bytes_size: utf8ByteLength(fullText),
       summary_line: messageSummarySnippet(headline) || "[Plugin]",
       message_text: fullText,
+      ...(timelineIndex !== undefined ? { timeline_index: timelineIndex } : {}),
     };
   }
 
@@ -354,6 +366,7 @@ export function buildFallbackTimelineRows(entries: readonly any[]): Row[] {
     if (itemType === "user_message" || itemType === "assistant_message") {
       const isUser = itemType === "user_message";
       const text = typeof item.text === "string" ? item.text : "";
+      const timelineIndex = entryTimelineIndex(entry);
       result.push({
         item_id: rawMsgId ?? `${isUser ? "user" : "ast"}-${entry?.seqStart ?? i}`,
         tool_call_id: rawMsgId ?? "",
@@ -365,6 +378,7 @@ export function buildFallbackTimelineRows(entries: readonly any[]): Row[] {
         bytes_size: utf8ByteLength(text),
         summary_line: messageSummarySnippet(text),
         message_text: text,
+        ...(timelineIndex !== undefined ? { timeline_index: timelineIndex } : {}),
       });
     } else if (
       itemType === "tool_call" ||
@@ -444,6 +458,66 @@ export function mergeHermesTimelineRows(
     if (!row.tool_call_id || !consumed.has(row.tool_call_id)) {
       merged.push(row);
     }
+  }
+  return merged;
+}
+
+function rowMergeKey(row: Row): string | null {
+  if (typeof row.timeline_index === "number") return `idx:${row.timeline_index}`;
+  if (row.item_id) return `item:${row.item_id}`;
+  if (row.tool_call_id) return `call:${row.tool_call_id}`;
+  return null;
+}
+
+export function mergePagedRows(
+  olderRows: readonly Row[],
+  newerRows: readonly Row[],
+): Row[] {
+  if (olderRows.length === 0) return [...newerRows];
+  if (newerRows.length === 0) return [...olderRows];
+  const newerByKey = new Map<string, Row>();
+  const newerItemIds = new Set<string>();
+  const newerCallIds = new Set<string>();
+  let minNewerTimelineIndex = Infinity;
+  for (const row of newerRows) {
+    const key = rowMergeKey(row);
+    if (key) newerByKey.set(key, row);
+    if (row.item_id) newerItemIds.add(row.item_id);
+    if (row.tool_call_id) newerCallIds.add(row.tool_call_id);
+    if (typeof row.timeline_index === "number" && row.timeline_index < minNewerTimelineIndex) {
+      minNewerTimelineIndex = row.timeline_index;
+    }
+  }
+  const seenKeys = new Set<string>();
+  const merged: Row[] = [];
+  for (const row of olderRows) {
+    if (
+      typeof row.timeline_index === "number" &&
+      Number.isFinite(minNewerTimelineIndex) &&
+      row.timeline_index >= minNewerTimelineIndex
+    ) {
+      continue;
+    }
+    const key = rowMergeKey(row);
+    if (key && newerByKey.has(key)) continue;
+    if (row.item_id && newerItemIds.has(row.item_id)) continue;
+    if (!row.item_id && row.tool_call_id && newerCallIds.has(row.tool_call_id)) continue;
+    if (key) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    merged.push(row);
+  }
+  for (const row of newerRows) {
+    const key = rowMergeKey(row);
+    if (key) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    merged.push(row);
+  }
+  if (merged.every((r) => typeof r.timeline_index === "number")) {
+    merged.sort((a, b) => (a.timeline_index ?? 0) - (b.timeline_index ?? 0));
   }
   return merged;
 }
