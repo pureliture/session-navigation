@@ -32,6 +32,9 @@ from session_navigation.pending_summary import settle_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = json.loads((ROOT / "contracts/fixtures/core.json").read_text())
+HOST_IDENTITY_FIXTURES = json.loads(
+    (ROOT / "contracts/fixtures/host_identity.json").read_text()
+)
 
 
 def body(vector):
@@ -316,9 +319,68 @@ async def vectors():
                 "operations": operations,
                 "shared": shared,
                 "pending": pending,
+                "host_identity": host_identity_vectors(),
             }
         )
     )
+
+
+def host_identity_vectors():
+    assert HOST_IDENTITY_FIXTURES["version"] == 1
+    omp_scope = HOST_IDENTITY_FIXTURES["omp"]["scope"]
+    omp_tools = []
+    for case in HOST_IDENTITY_FIXTURES["omp"]["tools"]:
+        invocation = json.loads(case["expected_invocation_json"])
+        content_sha = compute_sha256(case["expected_text"])
+        digest = compute_invocation_digest(invocation)
+        item_id = _item_id(omp_scope, case["call_id"], content_sha, digest, 0)
+        assert content_sha == case["expected_content_sha256"], case["name"]
+        assert digest == case["expected_invocation_digest"], case["name"]
+        assert item_id == case["expected_item_id"], case["name"]
+        omp_tools.append(
+            {
+                "name": case["name"],
+                "canonical_invocation": canonical(invocation),
+                "content_sha256": content_sha,
+                "invocation_digest": digest,
+                "item_id": item_id,
+            }
+        )
+    hermes_invocations = []
+    for case in HOST_IDENTITY_FIXTURES["hermes"]["invocations"]:
+        invocation = json.loads(case["expected_invocation_json"])
+        omitted = json.loads(case["expected_omitted_json"])
+        digest = compute_invocation_digest(invocation, omitted or None)
+        assert digest == case["expected_invocation_digest"], case["name"]
+        hermes_invocations.append(
+            {
+                "name": case["name"],
+                "canonical_invocation": canonical(invocation),
+                "canonical_omitted": canonical(omitted),
+                "invocation_digest": digest,
+            }
+        )
+    multi = HOST_IDENTITY_FIXTURES["hermes"]["multi_result"]
+    multi_inv = {"tool_name": "read_file", "arguments": {"path": "multi.txt"}}
+    multi_digest = compute_invocation_digest(multi_inv)
+    assert multi_digest == multi["expected_invocation_digest"]
+    multi_items = []
+    for res in multi["expected_results"]:
+        item_id = _item_id(
+            multi["scope"],
+            multi["call_id"],
+            compute_sha256(res["content"]),
+            multi_digest,
+            res["result_position"],
+        )
+        assert item_id == res["expected_item_id"]
+        multi_items.append({"result_position": res["result_position"], "item_id": item_id})
+    return {
+        "version": HOST_IDENTITY_FIXTURES["version"],
+        "omp_tools": omp_tools,
+        "hermes_invocations": hermes_invocations,
+        "hermes_multi_result": multi_items,
+    }
 
 
 def differences(expected, actual, path="root"):

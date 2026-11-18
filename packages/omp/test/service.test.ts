@@ -2,8 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store } from "../../core/src/index.ts";
+import { Store, canonical, invocationDigest } from "../../core/src/index.ts";
 import { BunDriver } from "../../core/src/drivers/bun.ts";
+import { ompInvocationArgs } from "../src/context.ts";
 import { OmpService, MAX_CHUNK_BYTES, sessionScope } from "../src/service.ts";
 
 const stores: Store[] = [];
@@ -442,4 +443,44 @@ test("git diff --stat outputs with >8 (14) and >20 (30) evidence lines compact c
   expect(h30.ok).toBe(true);
   const cands = await call(adapter, "list_candidates", { snapshot_id: "snap-ev" });
   expect(cands.total).toBe(0);
+});
+
+test("ompInvocationArgs and OmpService preserve __proto__, constructor and toString keys without prototype mutation", async () => {
+  const rawArgs = JSON.parse(
+    '{"__proto__":{"admin":true},"constructor":{"bad":1},"toString":"custom","nested":{"__proto__":42,"a":1}}',
+  ) as Record<string, unknown>;
+  const filtered = ompInvocationArgs("mcp_read_status", rawArgs);
+  expect(filtered).not.toBeNull();
+  expect(Object.getPrototypeOf(filtered)).toBe(Object.prototype);
+  expect(Object.hasOwn(filtered!, "__proto__")).toBe(true);
+  expect(JSON.stringify(filtered)).toBe(
+    '{"__proto__":{"admin":true},"constructor":{"bad":1},"nested":{"__proto__":42,"a":1},"toString":"custom"}',
+  );
+  const invocation = { tool_name: "mcp_read_status", arguments: filtered as any };
+  expect(canonical(invocation)).toBe(
+    '{"arguments":{"__proto__":{"admin":true},"constructor":{"bad":1},"nested":{"__proto__":42,"a":1},"toString":"custom"},"tool_name":"mcp_read_status"}',
+  );
+
+  const adapter = service();
+  const content = Array.from({ length: 80 }, (_, i) => `row ${i}: ok`).join("\n");
+  const prepared = await call(adapter, "prepare", {
+    snapshot_id: "proto-snap",
+    records: [
+      {
+        call_id: "call-proto",
+        tool_name: "mcp_read_status",
+        arguments: rawArgs,
+        status: "ok",
+        content,
+      },
+    ],
+  });
+  expect(prepared.ok).toBe(true);
+  const compacted = await call(adapter, "compact", {
+    snapshot_id: "proto-snap",
+    tool_call_id: "call-proto",
+  });
+  expect(compacted.ok).toBe(true);
+  const stored = adapter.store.get(sessionScope("a"), String(compacted.item_id));
+  expect(stored?.invocation_digest).toBe(invocationDigest(invocation));
 });

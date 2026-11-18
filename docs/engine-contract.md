@@ -81,6 +81,15 @@ Item IDs and identity references are recomputed for the destination scope; origi
 legacy rows are preserved. Registrations/target caches are not imported. Subsequent
 mutations use only the `omp:` scope: this is not an alias or live synchronization.
 Discovery must prefer the registered OMP scope over a legacy history-only scope.
+
+Legacy `pi:*` retention and retirement criteria: read and restore (`unhide`)
+compatibility for stored `pi:default:<session>:default` items (including Paseo
+scope lookup and `unhide` routing) MUST remain intact so users can inspect and
+restore previously hidden items. New hides and adapter registrations under `pi:*`
+remain disallowed (`adapter_not_detected`). This `pi:*` compatibility mapping MUST
+NOT be removed until either a dedicated migration tool moves all remaining `pi:*`
+rows into `omp:` scopes or legacy SQLite databases containing `pi:*` scopes are
+formally retired.
 Hermes's canonical branch remains **unknown**:
 `hermes:<profile>:<session>:unknown`. Keeping this suffix preserves existing
 item hashes and hidden state. A compression-created session ID is a new scope;
@@ -200,8 +209,28 @@ per scope. Skip individual oversized targets; prune oldest insertions until both
 bounds hold, in the same transaction as publication. This cache is not history:
 eviction never deletes items/originals already hidden. Empty batches create no
 items. **Never seed items with empty replacements.** A remote surface must resolve
-the scope, require capability, read the verified target and apply normal policy,
-identity fencing and CAS; it must not reconstruct host invocations from previews.
+the scope, require capability, prefer a verified `adapter_targets` entry when
+available (using its verified `original`, `content_sha256`, `invocation_digest`
+and `options_omitted`), and fall back only to the complete host original history
+(`.jsonl` / `state.db`) rather than reconstructing host invocations from
+truncated UI previews.
+
+### Policy boundary: agent tool calls vs. Paseo manual hides
+
+* **Agent tool calls** (`manage_context`, `hide_context`, `summarize_context`):
+  enforce every engine and adapter refusal gate (`not_long`,
+  `protected_error`, `sensitive_invocation`, `invocation_too_large`,
+  `destructive_command`, `content_tampered`, `invalid_invocation_order`,
+  `invocation_conflict`) without override.
+* **Paseo direct user manual hides** (`explicit_user_hide` and manual
+  `summarize_pending` requests from the Paseo UI): because the user explicitly
+  selects a target backed by verified `adapter_targets` or the complete host
+  original history (never a UI preview), the service allows manual override of
+  advisory policy gates (`not_long`, `protected_error`, `sensitive_invocation`,
+  `invocation_too_large`). Integrity, safety and concurrency fences
+  (`destructive_command`, `content_tampered`, `invalid_invocation_order`,
+  identity fencing `invocation_conflict`, and optimistic version CAS) remain
+  strictly enforced and are never bypassed.
 
 ## Mutations, summaries and batches
 

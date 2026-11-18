@@ -1,8 +1,8 @@
 import type { PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { useAgent, usePaseo, useRpc, useTabState } from "@getpaseo/plugin/client";
-import { Icon, ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
+import { ScrollView as UiScrollView, TextInput as UiTextInput } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView as RnScrollView, Text, TextInput as RnTextInput, View } from "react-native";
 import { z } from "zod";
 import {
@@ -16,12 +16,11 @@ import {
   type Row,
 } from "../shared/sessionNav";
 import { cancelChatNavigation, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
-import { fallbackToolPreview } from "./toolPreview";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { readTimelineHistory } from "./timelineHistory";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
-import { childrenForCall, mergeHermesTimelineRows, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
+import { childrenForCall, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import {
   buildGroupedRows,
@@ -29,20 +28,11 @@ import {
   fmtBytes,
   fmtTokenCount,
   fmtTokens,
-  groupBadgeText,
-  groupEyeAction,
-  groupMetric,
   groupMutationItems,
-  groupRestoreIconKind,
-  groupSubtitleText,
-  hiddenRowSnippet,
-  isSummarizedRow,
-  messageSummarySnippet,
-  rowMetric,
-  truncateString,
-  utf8ByteLength,
   type OutlineRow,
 } from "./outlineGrouping";
+import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows } from "./fallbackTimeline";
+import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
 import { OutlineScrollDriver } from "./outlineScroll";
 
 const panelTabStateSchema = z.object({
@@ -55,637 +45,10 @@ const DEFAULT_TAB_STATE: PanelTabState = {
   query: "",
 };
 
-// AI FDE stroke icons (24x24 viewBox, 1.8px stroke, diagonal slash when active/hidden)
-const EYE_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>';
-
-const EYE_SLASHED_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>';
-
-// Vertical compression arrows squeezing a summary bar + 4-point AI star (✦)
-const SUMMARIZE_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5v5.2"/><path d="m5.7 5.2 2.8 2.8 2.8-2.8"/><path d="M3 12h11.5"/><path d="M8.5 21.5v-5.2"/><path d="m5.7 18.8 2.8-2.8 2.8 2.8"/><path d="M18.5 2.5 19.6 5.4 22.5 6.5 19.6 7.6 18.5 10.5 17.4 7.6 14.5 6.5 17.4 5.4Z"/></svg>';
-
-const SUMMARIZE_SLASHED_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5v5.2"/><path d="m5.7 5.2 2.8 2.8 2.8-2.8"/><path d="M3 12h11.5"/><path d="M8.5 21.5v-5.2"/><path d="m5.7 18.8 2.8-2.8 2.8 2.8"/><path d="M18.5 2.5 19.6 5.4 22.5 6.5 19.6 7.6 18.5 10.5 17.4 7.6 14.5 6.5 17.4 5.4Z"/><path d="m2 2 20 20"/></svg>';
-
 const SUMMARY_QUEUED_NOTICE = "Summary queued — runs on next prompt";
-
-function ActionSvgIcon({
-  kind,
-  slashed,
-  size,
-  color,
-}: {
-  kind: "hide" | "summarize";
-  slashed: boolean;
-  size: number;
-  color: string;
-}) {
-  const svg =
-    kind === "hide"
-      ? slashed
-        ? EYE_SLASHED_SVG
-        : EYE_SVG
-      : slashed
-        ? SUMMARIZE_SLASHED_SVG
-        : SUMMARIZE_SVG;
-
-  if (typeof Icon === "function") {
-    return <Icon icon={{ svg }} size={size} color={color} />;
-  }
-
-  // Fallback geometric rendering for test environments where host UI Icon is mocked/empty
-  return (
-    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      <Text style={{ fontSize: size - 2, color, lineHeight: size }}>
-        {kind === "hide" ? "◉" : "▤"}
-      </Text>
-      {slashed ? (
-        <View
-          style={{
-            position: "absolute",
-            width: size + 2,
-            height: 1.8,
-            backgroundColor: color,
-            transform: [{ rotate: "45deg" }],
-          }}
-        />
-      ) : null}
-    </View>
-  );
-}
 
 const ScrollView = UiScrollView ?? RnScrollView;
 const TextInput = UiTextInput ?? RnTextInput;
-const EMPTY_LINKED_CHILDREN: readonly ChildScope[] = [];
-
-type MemoRowProps = {
-  item: OutlineRow;
-  isSelected: boolean;
-  isExpanded: boolean;
-  isPending: boolean;
-  displayOnly: boolean;
-  resolvedScopeKey: string | null;
-  capabilities: Capabilities | undefined;
-  lastActionMode: "hide" | "summarize" | undefined;
-  compact: boolean;
-  hasDocument: boolean;
-  theme: PluginAgentPanelProps["theme"];
-  styles: any;
-  linkedChildren: readonly ChildScope[];
-  onPressRow: (row: Row) => void;
-  onToggleGroup: (groupId: string, currentlyExpanded: boolean) => void;
-  onHideRow: (row: Row, mode: "hide" | "summarize") => void;
-  onUnhideRow: (row: Row) => void;
-  onGroupBatch: (group: OutlineRow & { type: "group" }, action: "hide" | "summarize" | "unhide") => void;
-  renderLinkedChildren?: (children: readonly ChildScope[]) => any;
-};
-
-const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
-  item,
-  isSelected,
-  isExpanded,
-  isPending,
-  displayOnly,
-  resolvedScopeKey,
-  capabilities,
-  lastActionMode,
-  compact,
-  hasDocument,
-  theme,
-  styles,
-  linkedChildren,
-  onPressRow,
-  onToggleGroup,
-  onHideRow,
-  onUnhideRow,
-  onGroupBatch,
-  renderLinkedChildren,
-}: MemoRowProps) {
-  const renderMessageHideToggle = (row: Row) => {
-    if (displayOnly || !resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
-    const hidden = row.status === "hidden";
-    const iconSize = compact ? 13 : 14;
-    return (
-      <View style={styles.actionsContainer}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={hidden ? "Unhide message" : "Hide message"}
-          disabled={!actionAllowed(row, capabilities, hidden ? "unhide" : "hide")}
-          style={hidden ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
-          onPress={(e) => {
-            e.stopPropagation();
-            if (hidden) onUnhideRow(row);
-            else onHideRow(row, "hide");
-          }}
-        >
-          <ActionSvgIcon kind="hide" slashed={hidden} size={iconSize} color={theme.colors.foregroundMuted} />
-        </Pressable>
-      </View>
-    );
-  };
-
-  const renderMessageSnippet = (row: Row, empty: string) => {
-    const normalized = messageSummarySnippet(row.summary_line ?? row.message_text);
-    return row.status === "hidden" ? (
-      <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-        {hiddenRowSnippet(row, false, normalized.split("\n")[0] || "tap icon to restore")}
-      </Text>
-    ) : (
-      <Text style={styles.summarySnippet} numberOfLines={2}>
-        {normalized || empty}
-      </Text>
-    );
-  };
-
-  if (item.type === "group") {
-    const group = item;
-    const eyeAction = groupEyeAction(group);
-    const noRemainingManageableVisible = group.allHidden || group.allManageableHidden;
-    const restoreIconKind = groupRestoreIconKind(group);
-    const badgeText = groupBadgeText(group);
-    const subtitleText = groupSubtitleText(group);
-    const iconSize = compact ? 13 : 14;
-
-    return (
-      <View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Tool group: ${group.title}`}
-          style={[
-            styles.rowItem,
-            styles.groupRowItem,
-            isSelected ? styles.rowItemSelected : null,
-            group.allHidden ? styles.rowItemHidden : null,
-          ]}
-          onPress={() => {
-            if (isExpanded) {
-              onToggleGroup(group.groupId, true);
-              return;
-            }
-            onToggleGroup(group.groupId, false);
-            if (hasDocument && group.children.length > 0) {
-              onPressRow(group.children[0]);
-            }
-          }}
-        >
-          <View style={styles.rowMainLine}>
-            <View style={styles.rowLeftWrap}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={isExpanded ? "Collapse group" : "Expand group"}
-                style={styles.expandToggleBtn}
-                hitSlop={8}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  onToggleGroup(group.groupId, isExpanded);
-                }}
-              >
-                <Text style={styles.expandToggleText}>{isExpanded ? "▾" : "▸"}</Text>
-              </Pressable>
-
-              <Text style={[styles.itemIcon, group.allHidden ? { color: theme.colors.foregroundMuted } : null]}>
-                {group.allHidden ? "⊘" : "⚡"}
-              </Text>
-
-              <Text
-                style={[
-                  styles.toolNameText,
-                  group.allHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
-                ]}
-                numberOfLines={1}
-              >
-                {group.title}
-              </Text>
-
-              {badgeText ? (
-                <View style={styles.mixedBadge}>
-                  <Text style={styles.mixedBadgeText}>
-                    {badgeText}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-
-            {/* Right inline slot: [Group Hide/Summarize Action Icons] + [Total Bytes] */}
-            <View style={styles.rowRightWrap}>
-              {!displayOnly && resolvedScopeKey && group.children.some((row) => actionAllowed(row, capabilities, row.status === "hidden" ? "unhide" : "hide") || actionAllowed(row, capabilities, "summarize")) ? (
-                <View style={[styles.actionsContainer, isPending ? { opacity: 0.5 } : null]}>
-                  {noRemainingManageableVisible ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Unhide all in ${group.groupId}`}
-                      style={styles.inlineIconBtnSlashed}
-                      disabled={isPending}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        onGroupBatch(group, "unhide");
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind={restoreIconKind}
-                        slashed={true}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                  ) : (
-                    <>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`${eyeAction === "unhide" ? "Unhide hidden" : "Hide all"} in ${group.groupId}`}
-                        style={eyeAction === "unhide" ? styles.inlineIconBtnSlashed : styles.inlineIconBtn}
-                        disabled={isPending || (eyeAction !== "unhide" && !capabilities?.hide)}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onGroupBatch(group, eyeAction);
-                        }}
-                      >
-                        <ActionSvgIcon
-                          kind={eyeAction === "unhide" ? restoreIconKind : "hide"}
-                          slashed={eyeAction === "unhide"}
-                          size={iconSize}
-                          color={theme.colors.foregroundMuted}
-                        />
-                      </Pressable>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Summarize all in ${group.groupId}`}
-                        style={styles.inlineIconBtn}
-                        disabled={isPending || !capabilities?.summarize}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onGroupBatch(group, "summarize");
-                        }}
-                      >
-                        <ActionSvgIcon
-                          kind="summarize"
-                          slashed={false}
-                          size={iconSize}
-                          color={theme.colors.foregroundMuted}
-                        />
-                      </Pressable>
-                    </>
-                  )}
-                </View>
-              ) : null}
-
-              <Text style={[styles.rightMetricsText, group.allHidden ? styles.rightMetricsHidden : null]}>
-                {groupMetric(group)}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.treeLineContainer}>
-            <Text style={noRemainingManageableVisible ? styles.summaryHiddenSnippet : styles.summarySnippet} numberOfLines={1}>
-              {subtitleText}
-            </Text>
-          </View>
-        </Pressable>
-        {!isExpanded && linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
-      </View>
-    );
-  }
-
-  if (item.type === "child") {
-    const row = item.row;
-    const isHidden = row.status === "hidden";
-    const shortCallId =
-      row.tool_call_id.length > 12
-        ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
-        : row.tool_call_id;
-    const metricText = rowMetric(row);
-    const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
-    const summarized = isSummarizedRow(row, lastActionMode);
-    const iconSize = compact ? 12 : 13;
-
-    return (
-      <View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Select tool ${row.tool_call_id}`}
-          style={[
-            styles.rowItem,
-            styles.childRowItem,
-            isSelected ? styles.rowItemSelected : null,
-            isHidden ? styles.rowItemHidden : null,
-          ]}
-          onPress={() => onPressRow(row)}
-        >
-          <View style={styles.rowMainLine}>
-            <View style={styles.rowLeftWrap}>
-              <Text
-                style={[
-                  styles.itemIcon,
-                  isHidden ? { color: theme.colors.foregroundMuted } : null,
-                  { fontSize: 9 },
-                ]}
-              >
-                {isHidden ? "⊘" : "↳"}
-              </Text>
-              <Text
-                style={[
-                  styles.toolNameText,
-                  { fontSize: compact ? 10 : 11 },
-                  isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
-                ]}
-                numberOfLines={1}
-              >
-                {row.tool_name ?? "tool"}
-              </Text>
-              {shortCallId ? (
-                <Text style={styles.callIdText} numberOfLines={1}>
-                  {shortCallId}
-                </Text>
-              ) : null}
-            </View>
-
-            <View style={styles.rowRightWrap}>
-              {!displayOnly && resolvedScopeKey && row.manageable !== false ? (
-                <View style={styles.actionsContainer}>
-                  {isHidden ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Unhide ${row.tool_call_id}`}
-                      style={styles.inlineIconBtnSlashed}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        onUnhideRow(row);
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind={summarized ? "summarize" : "hide"}
-                        slashed={true}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                  ) : (
-                    <>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Hide ${row.tool_call_id}`}
-                        disabled={!actionAllowed(row, capabilities, "hide")}
-                        style={styles.inlineIconBtn}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onHideRow(row, "hide");
-                        }}
-                      >
-                        <ActionSvgIcon
-                          kind="hide"
-                          slashed={false}
-                          size={iconSize}
-                          color={theme.colors.foregroundMuted}
-                        />
-                      </Pressable>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={`Summarize ${row.tool_call_id}`}
-                        disabled={!actionAllowed(row, capabilities, "summarize")}
-                        style={styles.inlineIconBtn}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onHideRow(row, "summarize");
-                        }}
-                      >
-                        <ActionSvgIcon
-                          kind="summarize"
-                          slashed={false}
-                          size={iconSize}
-                          color={theme.colors.foregroundMuted}
-                        />
-                      </Pressable>
-                    </>
-                  )}
-                </View>
-              ) : null}
-              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
-                {metricText}
-              </Text>
-            </View>
-          </View>
-
-          <View style={[styles.treeLineContainer, { marginLeft: compact ? 8 : 12 }]}>
-            {isHidden ? (
-              <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-                {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap icon to restore")}
-              </Text>
-            ) : (
-              <Text style={styles.summarySnippet} numberOfLines={1}>
-                {firstSummaryLine || "(no summary)"}
-              </Text>
-            )}
-          </View>
-        </Pressable>
-        {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
-      </View>
-    );
-  }
-
-  const row = item.row;
-  const isHidden = row.status === "hidden";
-  const kind =
-    row.kind ?? (row.tool_name === "user" ? "user" : row.tool_name === "assistant" ? "assistant" : "tool");
-
-  if (kind === "user") {
-    return (
-      <View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="User prompt"
-          style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
-          onPress={() => onPressRow(row)}
-        >
-          <View style={styles.rowMainLine}>
-            <View style={styles.rowLeftWrap}>
-              <Text style={{ fontSize: 13, lineHeight: 15, color: theme.colors.accent, flexShrink: 0 }}>◈</Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
-                User
-              </Text>
-            </View>
-            <View style={styles.rowRightWrap}>
-              {renderMessageHideToggle(row)}
-              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
-            </View>
-          </View>
-          <View style={styles.treeLineContainer}>
-            {renderMessageSnippet(row, "(empty prompt)")}
-          </View>
-        </Pressable>
-        {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
-      </View>
-    );
-  }
-
-  if (kind === "assistant" || kind === "agent") {
-    const agentLabel =
-      kind === "agent" && row.tool_name && row.tool_name !== "assistant"
-        ? `Agent · ${row.tool_name}`
-        : "Agent";
-    return (
-      <View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Agent response"
-          style={[styles.rowItem, isSelected ? styles.rowItemSelected : null]}
-          onPress={() => onPressRow(row)}
-        >
-          <View style={styles.rowMainLine}>
-            <View style={styles.rowLeftWrap}>
-              <Text
-                style={{
-                  fontSize: 12,
-                  lineHeight: 15,
-                  color: /^#[c-fC-F]/.test(theme.colors.surface0) ? "#2563eb" : "#3b82f6",
-                  flexShrink: 0,
-                }}
-              >
-                ✦
-              </Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: theme.colors.foreground, flexShrink: 0 }}>
-                {agentLabel}
-              </Text>
-            </View>
-            <View style={styles.rowRightWrap}>
-              {renderMessageHideToggle(row)}
-              <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>{rowMetric(row)}</Text>
-            </View>
-          </View>
-          <View style={styles.treeLineContainer}>
-            {renderMessageSnippet(row, "(empty response)")}
-          </View>
-        </Pressable>
-        {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
-      </View>
-    );
-  }
-
-  const shortCallId =
-    row.tool_call_id.length > 12
-      ? `${row.tool_call_id.slice(0, 4)}…${row.tool_call_id.slice(-4)}`
-      : row.tool_call_id;
-  const metricText = rowMetric(row);
-  const firstSummaryLine = (row.summary_line || "").split("\n")[0] || "";
-  const summarized = isSummarizedRow(row, lastActionMode);
-  const iconSize = compact ? 13 : 14;
-
-  return (
-    <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Select row ${row.tool_call_id}`}
-        style={[
-          styles.rowItem,
-          isSelected ? styles.rowItemSelected : null,
-          isHidden ? styles.rowItemHidden : null,
-        ]}
-        onPress={() => onPressRow(row)}
-      >
-        <View style={styles.rowMainLine}>
-          <View style={styles.rowLeftWrap}>
-            <Text style={[styles.itemIcon, isHidden ? { color: theme.colors.foregroundMuted } : null]}>
-              {isHidden ? "⊘" : "◇"}
-            </Text>
-            <Text
-              style={[
-                styles.toolNameText,
-                isHidden ? { textDecorationLine: "line-through", color: theme.colors.foregroundMuted } : null,
-              ]}
-              numberOfLines={1}
-            >
-              {row.tool_name ?? "tool"}
-            </Text>
-            {shortCallId ? (
-              <Text style={styles.callIdText} numberOfLines={1}>
-                {shortCallId}
-              </Text>
-            ) : null}
-          </View>
-
-          <View style={styles.rowRightWrap}>
-            {!displayOnly && resolvedScopeKey && row.manageable !== false ? (
-              <View style={styles.actionsContainer}>
-                {isHidden ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Unhide ${row.tool_call_id}`}
-                    style={styles.inlineIconBtnSlashed}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      onUnhideRow(row);
-                    }}
-                  >
-                    <ActionSvgIcon
-                      kind={summarized ? "summarize" : "hide"}
-                      slashed={true}
-                      size={iconSize}
-                      color={theme.colors.foregroundMuted}
-                    />
-                  </Pressable>
-                ) : (
-                  <>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Hide ${row.tool_call_id}`}
-                      disabled={!actionAllowed(row, capabilities, "hide")}
-                      style={styles.inlineIconBtn}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        onHideRow(row, "hide");
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="hide"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Summarize ${row.tool_call_id}`}
-                      disabled={!actionAllowed(row, capabilities, "summarize")}
-                      style={styles.inlineIconBtn}
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        onHideRow(row, "summarize");
-                      }}
-                    >
-                      <ActionSvgIcon
-                        kind="summarize"
-                        slashed={false}
-                        size={iconSize}
-                        color={theme.colors.foregroundMuted}
-                      />
-                    </Pressable>
-                  </>
-                )}
-              </View>
-            ) : null}
-            <Text style={[styles.rightMetricsText, isHidden ? styles.rightMetricsHidden : null]}>
-              {metricText}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.treeLineContainer}>
-          {isHidden ? (
-            <Text style={styles.summaryHiddenSnippet} numberOfLines={1}>
-              {hiddenRowSnippet(row, summarized, firstSummaryLine || "tap slashed icon to restore")}
-            </Text>
-          ) : (
-            <Text style={styles.summarySnippet} numberOfLines={1}>
-              {firstSummaryLine || "(no summary)"}
-            </Text>
-          )}
-        </View>
-      </Pressable>
-      {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
-    </View>
-  );
-});
 
 export function SessionNavPanel({ theme, layout, params, navigation, tab, followVisible = true, candidateAgentIds, childScope, ancestry = [], ...panelProps }: PluginAgentPanelProps & {
   followVisible?: boolean;
@@ -1013,10 +376,15 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
   const scopeKey = resolvedScopeKey ?? "";
   const query = tabState.query;
 
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
+    void queryClient.invalidateQueries({ queryKey: ["session-nav", "scopes"] });
+  };
+
   const onMutationError = (result: { ok: boolean; error?: string }) => {
     if (!result.ok && result.error === "version_conflict") {
       setNotice("Stale row — list refreshed.");
-      void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
+      invalidate();
       return true;
     }
     if (!result.ok && (result.error === "db_error" || result.error === "db_full")) {
@@ -1027,14 +395,17 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       setNotice("No session model — summarizer unavailable.");
       return true;
     }
+    if (!result.ok && result.error === "engine_error") {
+      setNotice("Request timed out or worker restarted (engine_error) — list refreshed to sync changes.");
+      invalidate();
+      return true;
+    }
     if (!result.ok) {
       setNotice(result.error ?? "failed");
       return true;
     }
     return false;
   };
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
   // The host meter only moves after the next model request; until then show the expected change.
   const [pendingEstimate, setPendingEstimate] = useState<{ used: number; tokens: number } | null>(null);
   const notePending = (changed: Row[], sign: 1 | -1) => {
@@ -1080,10 +451,9 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       if (!onMutationError(r)) {
         setNotice(mode === "summarize" ? SUMMARY_QUEUED_NOTICE : null);
         if (row.status !== "hidden") notePending([row], -1);
-        void invalidate();
       }
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
       if (context?.changed) {
         const { rowKey, prevActionMode } = context;
         setLastActionByItem((prev) => {
@@ -1093,6 +463,14 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
           return next;
         });
       }
+      setNotice(
+        err instanceof Error && err.message
+          ? `${err.message} — list refreshed.`
+          : "Hide failed — list refreshed.",
+      );
+    },
+    onSettled: () => {
+      invalidate();
     },
   });
 
@@ -1103,12 +481,53 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       if (!onMutationError(r)) {
         setNotice(null);
         notePending([row], 1);
-        void invalidate();
       }
+    },
+    onError: (err) => {
+      setNotice(
+        err instanceof Error && err.message
+          ? `${err.message} — list refreshed.`
+          : "Unhide failed — list refreshed.",
+      );
+    },
+    onSettled: () => {
+      invalidate();
     },
   });
 
-  const isMutating = hideMutation.isPending || unhideMutation.isPending || !!pendingGroupId;
+  const hideBatchMutation = useMutation({
+    mutationFn: (vars: {
+      scope_key: string;
+      mode: "hide" | "summarize";
+      items: { item_id: string; expected_version?: number }[];
+    }) => hideBatch(vars),
+    onError: () => {
+      invalidate();
+    },
+    onSettled: () => {
+      invalidate();
+    },
+  });
+
+  const unhideBatchMutation = useMutation({
+    mutationFn: (vars: {
+      scope_key: string;
+      items: { item_id: string; expected_version?: number }[];
+    }) => unhideBatch(vars),
+    onError: () => {
+      invalidate();
+    },
+    onSettled: () => {
+      invalidate();
+    },
+  });
+
+  const isMutating =
+    hideMutation.isPending ||
+    unhideMutation.isPending ||
+    hideBatchMutation.isPending ||
+    unhideBatchMutation.isPending ||
+    !!pendingGroupId;
 
   const runGroupBatch = async (
     group: OutlineRow & { type: "group" },
@@ -1145,9 +564,10 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
     try {
       const result =
         action === "unhide"
-          ? await unhideBatch({ scope_key: scopeKey, items })
-          : await hideBatch({ scope_key: scopeKey, mode: action, items });
-      const failures = result.items.filter((item) => !item.ok);
+          ? await unhideBatchMutation.mutateAsync({ scope_key: scopeKey, items })
+          : await hideBatchMutation.mutateAsync({ scope_key: scopeKey, mode: action, items });
+      const resultItems = Array.isArray(result.items) ? result.items : [];
+      const failures = resultItems.filter((item) => !item.ok);
       if (failures.length > 0 || !result.ok) {
         const failedIds = new Set<string>();
         for (const failed of failures) {
@@ -1160,23 +580,38 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
         }
         if (failedIds.size > 0) rollbackItems(failedIds);
       }
-      const applied = new Set(result.items.filter((item) => item.ok).map((item) => item.item_id));
-      notePending(rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
-        action === "unhide" ? 1 : -1);
+      const applied = new Set(resultItems.filter((item) => item.ok).map((item) => item.item_id));
+      notePending(
+        rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
+        action === "unhide" ? 1 : -1,
+      );
       if (result.error) onMutationError(result);
       for (const item of failures) onMutationError(item);
       if (failures.length) {
         const reasons = [...new Set(failures.map((item) => item.error ?? "failed"))].join(", ");
-        setNotice(`${result.applied} applied, ${result.failed} failed — ${reasons}. List refreshed.`);
-      } else if (result.ok) {
+        setNotice(`${result.applied ?? applied.size} applied, ${result.failed ?? failures.length} failed — ${reasons}. List refreshed.`);
+      } else if (!result.ok) {
+        if (result.error !== "db_error" && result.error !== "db_full") {
+          setNotice(
+            result.error === "engine_error"
+              ? "Batch timed out or worker restarted (engine_error) — list refreshed to sync partial changes."
+              : `Batch ${result.error ?? "failed"} — list refreshed to sync partial changes.`,
+          );
+        }
+      } else {
         setNotice(action === "summarize" ? SUMMARY_QUEUED_NOTICE : null);
       }
-    } catch {
+    } catch (err) {
       rollbackItems(items.map((item) => item.item_id));
       onMutationError({ ok: false, error: "db_error" });
+      setNotice(
+        err instanceof Error && err.message
+          ? `Batch failed (${err.message}) — list refreshed to sync partial changes.`
+          : "Batch failed — list refreshed to sync partial changes.",
+      );
     } finally {
       setPendingGroupId(null);
-      void invalidate();
+      invalidate();
     }
   };
 
@@ -1229,363 +664,7 @@ export function SessionNavPanel({ theme, layout, params, navigation, tab, follow
       if (!agentId || !paseo?.agents) return [];
       try {
         const { entries } = await queryClient.fetchQuery(historyQueryOptions);
-        const result: Row[] = [];
-
-        for (let i = 0; i < entries.length; i++) {
-          const entry = entries[i];
-          const item = entry?.item;
-          if (!item) continue;
-          const itemType = typeof item.type === "string" ? item.type : "";
-          const rawMsgId =
-            typeof item.messageId === "string" && item.messageId.length > 0
-              ? item.messageId
-              : typeof item.clientMessageId === "string" && item.clientMessageId.length > 0
-                ? item.clientMessageId
-                : typeof item.id === "string" && item.id.length > 0
-                  ? item.id
-                  : null;
-
-          if (itemType === "user_message") {
-            const text = typeof item.text === "string" ? item.text : "";
-            result.push({
-              item_id: rawMsgId ?? `user-${entry?.seqStart ?? i}`,
-              tool_call_id: rawMsgId ?? "",
-              kind: "user",
-              tool_name: "user",
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              bytes_size: utf8ByteLength(text),
-              summary_line: messageSummarySnippet(text),
-              message_text: text,
-            });
-          } else if (itemType === "assistant_message") {
-            const text = typeof item.text === "string" ? item.text : "";
-            result.push({
-              item_id: rawMsgId ?? `ast-${entry?.seqStart ?? i}`,
-              tool_call_id: rawMsgId ?? "",
-              kind: "assistant",
-              tool_name: "assistant",
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              bytes_size: utf8ByteLength(text),
-              summary_line: messageSummarySnippet(text),
-              message_text: text,
-            });
-          } else if (
-            itemType === "tool_call" ||
-            itemType === "command" ||
-            itemType === "terminal" ||
-            itemType === "bash" ||
-            itemType === "shell"
-          ) {
-            // Issue 7 & 8: Comprehensive command / tool call extraction with full Paseo ToolCallDetail union
-            const detail =
-              typeof item.detail === "object" && item.detail !== null
-                ? (item.detail as Record<string, unknown>)
-                : {};
-
-            const argsObj =
-              typeof item.args === "object" && item.args !== null
-                ? (item.args as Record<string, unknown>)
-                : typeof detail.args === "object" && detail.args !== null
-                  ? (detail.args as Record<string, unknown>)
-                  : typeof detail.input === "object" && detail.input !== null
-                    ? (detail.input as Record<string, unknown>)
-                    : null;
-
-            const detailType = typeof detail.type === "string" ? detail.type : "";
-            const cmdStr =
-              typeof detail.command === "string"
-                ? detail.command
-                : typeof detail.cmd === "string"
-                  ? detail.cmd
-                  : typeof argsObj?.CommandLine === "string"
-                    ? (argsObj.CommandLine as string)
-                    : typeof argsObj?.command === "string"
-                      ? (argsObj.command as string)
-                      : typeof argsObj?.keys === "string"
-                        ? (argsObj.keys as string)
-                        : "";
-
-            // Tool name resolution
-            let toolName = "tool";
-            if (typeof item.name === "string" && item.name.length > 0) {
-              toolName = item.name;
-            } else if (typeof detail.name === "string" && detail.name.length > 0) {
-              toolName = detail.name;
-            } else if (typeof detail.command_name === "string" && detail.command_name.length > 0) {
-              toolName = detail.command_name;
-            } else if (
-              detailType === "shell" ||
-              itemType === "command" ||
-              itemType === "terminal" ||
-              itemType === "bash" ||
-              itemType === "shell" ||
-              cmdStr
-            ) {
-              toolName = "run_command";
-            } else if (detailType) {
-              toolName = detailType;
-            }
-            if (toolName === "tool" || toolName === "other" || toolName === "tool_call" || toolName === "unknown") {
-              const hintTitle = typeof detail.title === "string" ? detail.title : typeof detail.label === "string" ? detail.label : "";
-              const navMatch = /\b(manage_context|hide_context|summarize_context|unhide_context|list_context_items)\b/.exec(hintTitle);
-              if (navMatch) {
-                toolName = navMatch[1];
-              } else if (argsObj && Array.isArray(argsObj.tool_call_ids)) {
-                toolName = "manage_context";
-              }
-            }
-            // Summary resolution with rich I/O
-            let summary = "";
-            if (cmdStr) {
-              summary = `$ ${cmdStr}`;
-            } else if (detailType === "sub_agent") {
-              const actions = Array.isArray(detail.actions) ? detail.actions : [];
-              const actionSuffix = actions.length > 0 ? ` (${actions.length} actions)` : "";
-              if (typeof detail.description === "string" && detail.description.length > 0) {
-                summary = `${detail.description}${actionSuffix}`;
-              } else if (typeof detail.subAgentType === "string") {
-                summary = `subagent: ${detail.subAgentType}${actionSuffix}`;
-              } else {
-                summary = `Subagent invocation${actionSuffix}`;
-              }
-            } else if (detailType === "read" || detailType === "write" || detailType === "edit") {
-              if (typeof detail.filePath === "string") {
-                summary = detail.filePath;
-              }
-            } else if (detailType === "search") {
-              if (typeof detail.query === "string") {
-                summary = `query: ${detail.query}`;
-              }
-            } else if (detailType === "fetch") {
-              if (typeof detail.url === "string") {
-                summary = detail.url;
-              }
-            } else if (detailType === "worktree_setup") {
-              if (typeof detail.branchName === "string") {
-                summary = `branch: ${detail.branchName}`;
-              } else if (typeof detail.worktreePath === "string") {
-                summary = detail.worktreePath;
-              }
-            }
-
-            if (!summary) {
-              if (typeof detail.text === "string" && detail.text.length > 0) {
-                summary = detail.text;
-              } else if (typeof detail.label === "string" && detail.label.length > 0) {
-                summary = detail.label;
-              } else if (argsObj) {
-                if (typeof argsObj.Path === "string") {
-                  summary = `${argsObj.Path}`;
-                } else if (typeof argsObj.Prompt === "string") {
-                  summary = truncateString(argsObj.Prompt, 100);
-                } else if (typeof argsObj.query === "string") {
-                  summary = `query: ${argsObj.query}`;
-                } else {
-                  try {
-                    summary = JSON.stringify(argsObj);
-                  } catch {
-                    summary = `Tool call: ${toolName}`;
-                  }
-                }
-              } else {
-                summary = `Tool call: ${toolName}`;
-              }
-            }
-
-            // Comprehensive output / result payload size calculation
-            let resultLen = 0;
-            const outCandidates = [
-              item.result,
-              detail.result,
-              detail.output,
-              detail.content,
-              detail.unifiedDiff,
-              detail.log,
-            ];
-            for (const c of outCandidates) {
-              if (typeof c === "string" && c.length > 0) {
-                resultLen += c.length;
-                break;
-              } else if (c && typeof c === "object") {
-                try {
-                  resultLen += JSON.stringify(c).length;
-                  break;
-                } catch {
-                  // ignore
-                }
-              }
-            }
-
-            const totalBytes = summary.length + (resultLen > 0 ? resultLen : 0);
-            const callId =
-              typeof item.callId === "string" && item.callId.length > 0
-                ? item.callId
-                : typeof detail.call_id === "string"
-                  ? detail.call_id
-                  : `tool-${entry?.seqStart ?? i}`;
-
-            result.push({
-              item_id: callId,
-              tool_call_id: callId,
-              kind: "tool",
-              tool_name: toolName,
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              bytes_size: totalBytes,
-              summary_line: summary,
-              ...fallbackToolPreview(item, detail),
-            });
-          } else if (itemType === "todo") {
-            const todoItems = Array.isArray(item.items) ? item.items : [];
-            const itemLines = todoItems
-              .map((todo: any) => {
-                const label =
-                  typeof todo?.text === "string"
-                    ? todo.text
-                    : typeof todo?.title === "string"
-                      ? todo.title
-                      : typeof todo?.content === "string"
-                        ? todo.content
-                        : "";
-                if (!label) return "";
-                const done = Boolean(
-                  todo?.completed || todo?.done || todo?.status === "completed" || todo?.status === "done",
-                );
-                return `${done ? "[x]" : "[ ]"} ${label}`;
-              })
-              .filter(Boolean);
-            const doneCount = todoItems.filter((todo: any) =>
-              Boolean(todo?.completed || todo?.done || todo?.status === "completed" || todo?.status === "done"),
-            ).length;
-            const fullText =
-              itemLines.length > 0
-                ? itemLines.join("\n")
-                : typeof item.text === "string" && item.text
-                  ? item.text
-                  : "Todo list updated";
-            const headline =
-              todoItems.length > 0
-                ? `[Todo ${doneCount}/${todoItems.length}] ${itemLines[0] ?? ""}`.trim()
-                : `[Todo] ${messageSummarySnippet(fullText)}`;
-            result.push({
-              item_id: rawMsgId ?? `todo-${entry?.seqStart ?? i}`,
-              tool_call_id: rawMsgId ?? "",
-              kind: "agent",
-              tool_name: "todo",
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              manageable: false,
-              bytes_size: utf8ByteLength(fullText),
-              summary_line: messageSummarySnippet(headline) || "[Todo]",
-              message_text: fullText,
-            });
-          } else if (itemType === "error") {
-            const detailObj =
-              typeof item.detail === "object" && item.detail !== null
-                ? (item.detail as Record<string, unknown>)
-                : null;
-            const errText =
-              typeof item.message === "string" && item.message
-                ? item.message
-                : typeof item.text === "string" && item.text
-                  ? item.text
-                  : typeof item.error === "string" && item.error
-                    ? item.error
-                    : typeof detailObj?.message === "string" && detailObj.message
-                      ? detailObj.message
-                      : "Unknown error";
-            result.push({
-              item_id: rawMsgId ?? `error-${entry?.seqStart ?? i}`,
-              tool_call_id: rawMsgId ?? "",
-              kind: "agent",
-              tool_name: "error",
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              manageable: false,
-              bytes_size: utf8ByteLength(errText),
-              summary_line: messageSummarySnippet(`[Error] ${errText}`) || "[Error]",
-              message_text: errText,
-            });
-          } else if (itemType === "compaction") {
-            const compactText =
-              typeof item.summary === "string" && item.summary
-                ? item.summary
-                : typeof item.text === "string" && item.text
-                  ? item.text
-                  : typeof item.message === "string" && item.message
-                    ? item.message
-                    : typeof item.reason === "string" && item.reason
-                      ? item.reason
-                      : "Context compacted";
-            result.push({
-              item_id: rawMsgId ?? `compaction-${entry?.seqStart ?? i}`,
-              tool_call_id: rawMsgId ?? "",
-              kind: "agent",
-              tool_name: "compaction",
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              manageable: false,
-              bytes_size: utf8ByteLength(compactText),
-              summary_line: messageSummarySnippet(`[Compaction] ${compactText}`) || "[Compaction]",
-              message_text: compactText,
-            });
-          } else if (itemType === "plugin") {
-            const dataObj =
-              typeof item.data === "object" && item.data !== null
-                ? (item.data as Record<string, unknown>)
-                : null;
-            const pluginTitle =
-              typeof item.title === "string" && item.title
-                ? item.title
-                : typeof dataObj?.title === "string" && dataObj.title
-                  ? dataObj.title
-                  : typeof item.pluginId === "string" && item.pluginId
-                    ? item.pluginId
-                    : "";
-            const pluginBody =
-              typeof item.text === "string" && item.text
-                ? item.text
-                : typeof item.message === "string" && item.message
-                  ? item.message
-                  : typeof dataObj?.text === "string" && dataObj.text
-                    ? dataObj.text
-                    : typeof dataObj?.message === "string" && dataObj.message
-                      ? dataObj.message
-                      : typeof dataObj?.summary === "string" && dataObj.summary
-                        ? dataObj.summary
-                        : item.data !== undefined
-                          ? JSON.stringify(item.data)
-                          : "";
-            const fullText = [pluginTitle, pluginBody].filter(Boolean).join("\n") || "Plugin notice";
-            const headline = pluginTitle && pluginBody
-              ? `[Plugin · ${pluginTitle}] ${pluginBody}`
-              : pluginTitle
-                ? `[Plugin] ${pluginTitle}`
-                : `[Plugin] ${pluginBody || "event"}`;
-            result.push({
-              item_id: rawMsgId ?? `plugin-${entry?.seqStart ?? i}`,
-              tool_call_id: rawMsgId ?? "",
-              kind: "agent",
-              tool_name: "plugin",
-              status: "visible",
-              version: 1,
-              tokens_display: "—",
-              manageable: false,
-              bytes_size: utf8ByteLength(fullText),
-              summary_line: messageSummarySnippet(headline) || "[Plugin]",
-              message_text: fullText,
-            });
-          }
-        }
-        return result;
+        return buildFallbackTimelineRows(entries);
       } catch {
         return [];
       }

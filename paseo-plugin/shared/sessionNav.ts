@@ -96,6 +96,7 @@ export const ListResultSchema = z.object({
     .optional(),
   server_timeline: z.boolean().optional(),
   records_capped: z.boolean().optional(),
+  timeline_read_error: z.string().optional(),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });

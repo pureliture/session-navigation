@@ -1,5 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   bytes,
@@ -10,7 +10,7 @@ import {
   type Json,
   type RecordInput,
 } from "../../packages/core/src/index.ts";
-import { formatToolSummary, preview, summaryLine, type History, type Timeline } from "./history.ts";
+import { cloneTimeline, formatToolSummary, preview, summaryLine, type History, type Timeline } from "./history.ts";
 
 export type HermesExtendedRecord = RecordInput & { options_omitted?: boolean };
 
@@ -99,6 +99,72 @@ const INT_OR_STR_ID_KEYS: Record<string, true> = {
 };
 const MAX_HERMES_RECORD_BYTES = 32 * 1024 * 1024;
 const MAX_HERMES_RECORDS = 5000;
+const MAX_HERMES_TIMELINE_CACHE = 32;
+
+const hermesTimelineCache = new Map<string, { snapshot: string; timeline: Timeline }>();
+
+function fileChangeToken(filePath: string, isDb: boolean): string {
+  let st;
+  try {
+    st = statSync(filePath);
+  } catch {
+    return "missing";
+  }
+  let extra = "";
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, "r");
+    if (isDb) {
+      const hdr = Buffer.alloc(100);
+      const n = readSync(fd, hdr, 0, 100, 0);
+      if (n >= 96) {
+        extra = `:${hdr.readUInt32BE(24)}:${hdr.readUInt32BE(92)}`;
+      }
+    } else if (st.size > 0) {
+      const hdrLen = Math.min(32, st.size);
+      const hdr = Buffer.alloc(hdrLen);
+      readSync(fd, hdr, 0, hdrLen, 0);
+      const tailLen = Math.min(24, st.size);
+      const tail = Buffer.alloc(tailLen);
+      readSync(fd, tail, 0, tailLen, Math.max(0, st.size - tailLen));
+      extra = `:${hdr.toString("hex")}:${tail.toString("hex")}`;
+    }
+  } catch {
+    extra = ":unreadable";
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore close errors.
+      }
+    }
+  }
+  return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}${extra}`;
+}
+
+function candidateDbSnapshotKey(
+  candidates: readonly string[],
+  storedItems: readonly Item[],
+  storedUnits: readonly StoredUnitRow[],
+): string {
+  const dbPart = candidates
+    .map((p) => `${resolve(p)}=${fileChangeToken(p, true)}|${fileChangeToken(`${p}-wal`, false)}`)
+    .join(";");
+  const itemsPart = storedItems
+    .map(
+      (i) =>
+        `${i.item_id}:${i.tool_call_id}:${i.result_position}:${i.visibility}:${i.version}:${i.compaction_source}`,
+    )
+    .join(",");
+  const unitsPart = storedUnits
+    .map(
+      (u) =>
+        `${String(u.unit_id ?? "")}:${String(u.visibility ?? "")}:${String(u.version ?? "")}:${String(u.updated_at ?? "")}`,
+    )
+    .join(",");
+  return `${dbPart}##${itemsPart}##${unitsPart}`;
+}
 
 function unicodeCompare(left: string, right: string): number {
   const leftChars = [...left];
@@ -126,6 +192,15 @@ function isValidJson(value: unknown): value is Json {
   return false;
 }
 
+function setOwnProp(target: Record<string, Json>, key: string, value: Json): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 function canonicalizeJson(value: Json): Json {
   if (Array.isArray(value)) {
     return value.map(canonicalizeJson);
@@ -134,7 +209,8 @@ function canonicalizeJson(value: Json): Json {
     const obj = value as Record<string, Json>;
     const out: Record<string, Json> = {};
     for (const key of Object.keys(obj).sort(unicodeCompare)) {
-      out[key] = canonicalizeJson(obj[key]);
+      const entry = Object.getOwnPropertyDescriptor(obj, key)?.value as Json;
+      setOwnProp(out, key, canonicalizeJson(entry));
     }
     return out;
   }
@@ -154,8 +230,8 @@ function pythonSortedJson(value: unknown): string {
   if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
     return `{${Object.keys(obj)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}: ${pythonSortedJson(obj[k])}`)
+      .sort(unicodeCompare)
+      .map((k) => `${JSON.stringify(k)}: ${pythonSortedJson(Object.getOwnPropertyDescriptor(obj, k)?.value)}`)
       .join(", ")}}`;
   }
   return JSON.stringify(value ?? null);
@@ -230,12 +306,12 @@ export function hermesFilterInvocation(
   const filtered: Record<string, Json> = {};
   const omitted: Record<string, Json> = {};
   for (const key of Object.keys(args).sort(unicodeCompare)) {
-    const val = args[key];
+    const val = Object.getOwnPropertyDescriptor(args, key)?.value;
     if (val === null || val === undefined) continue;
     if (fieldSet.has(key)) {
       if (name === "read_file" && (key === "offset" || key === "limit")) {
         if (typeof val !== "number" || !Number.isSafeInteger(val) || val < 1) return null;
-        filtered[key] = val;
+        setOwnProp(filtered, key, val);
       } else if (name === "web_extract" && key === "urls") {
         if (
           !Array.isArray(val) ||
@@ -244,27 +320,27 @@ export function hermesFilterInvocation(
         ) {
           return null;
         }
-        filtered[key] = [...val];
+        setOwnProp(filtered, key, [...val]);
       } else if (name === "tool_describe" && (key === "name" || key === "names")) {
         if (typeof val === "string") {
-          filtered[key] = val;
+          setOwnProp(filtered, key, val);
         } else if (Array.isArray(val) && val.every((item) => typeof item === "string")) {
-          filtered[key] = [...val];
+          setOwnProp(filtered, key, [...val]);
         } else {
           return null;
         }
       } else if (Object.hasOwn(INT_OR_STR_ID_KEYS, key) && typeof val === "number" && Number.isSafeInteger(val)) {
-        filtered[key] = val;
+        setOwnProp(filtered, key, val);
       } else {
         if (typeof val !== "string") return null;
-        filtered[key] = val;
+        setOwnProp(filtered, key, val);
       }
     } else {
       if (Object.hasOwn(defaults, key)) {
         const def = defaults[key];
         if (typeof val === typeof def && val === def) continue;
       }
-      omitted[key] = canonicalizeJson(val as Json);
+      setOwnProp(omitted, key, canonicalizeJson(val as Json));
     }
   }
 
@@ -298,10 +374,6 @@ function candidateHermesDbs(home: string, profile: string): string[] {
     }
   }
   return candidates;
-}
-
-function formatMessageSummaryLine(text: string): string {
-  return summaryLine(text);
 }
 
 export function hasHermesSession(home: string, profile: string, sessionId: string): boolean {
@@ -351,19 +423,44 @@ export function loadHermesTimeline(
   const sessionId = parts[2] ?? "";
   if (!sessionId) return null;
 
-  for (const dbPath of candidateHermesDbs(home, profile)) {
+  const candidates = candidateHermesDbs(home, profile);
+  if (candidates.length === 0) return null;
+
+  const cacheKey = `${resolve(home)}\0${scope}`;
+  const snapshot = candidateDbSnapshotKey(candidates, storedItems, storedUnits);
+  const cached = hermesTimelineCache.get(cacheKey);
+  if (cached && cached.snapshot === snapshot) {
+    hermesTimelineCache.delete(cacheKey);
+    hermesTimelineCache.set(cacheKey, cached);
+    return cloneTimeline(cached.timeline);
+  }
+
+  let matchedReadError: { dbPath: string; error: string } | null = null;
+  for (const dbPath of candidates) {
     let db: DatabaseSync | undefined;
+    let matchedInThisDb = false;
     try {
       db = new DatabaseSync(dbPath, { readOnly: true });
-      const sessionRow = db
-        .prepare("SELECT id, model_config FROM sessions WHERE id = ?")
-        .get(sessionId) as { id?: string; model_config?: string | null } | undefined;
-      const hasSession = sessionRow?.id
-        ? true
-        : Boolean(
+      let sessionRow: { id?: string; model_config?: string | null } | undefined;
+      try {
+        sessionRow = db
+          .prepare("SELECT id, model_config FROM sessions WHERE id = ?")
+          .get(sessionId) as { id?: string; model_config?: string | null } | undefined;
+      } catch {
+        // Fall through to messages probe when sessions table is absent/unreadable.
+      }
+      let hasSession = Boolean(sessionRow?.id);
+      if (!hasSession) {
+        try {
+          hasSession = Boolean(
             db.prepare("SELECT 1 FROM messages WHERE session_id = ? AND active = 1 LIMIT 1").get(sessionId),
           );
+        } catch {
+          // Session not matched in unreadable messages table; try next candidate.
+        }
+      }
       if (!hasSession) continue;
+      matchedInThisDb = true;
 
       let apiMode = "chat_completions";
       let usedTokens: number | undefined;
@@ -552,7 +649,7 @@ export function loadHermesTimeline(
               tool_call_id: "",
               kind: "user",
               tool_name: "user",
-              summary_line: formatMessageSummaryLine(displayText),
+              summary_line: summaryLine(displayText),
               message_text: preview(displayText),
               bytes_size: bytes(displayText),
               manageable: isUncompacted,
@@ -713,8 +810,20 @@ export function loadHermesTimeline(
       if (recordsCapped) {
         (history as any).recordsCapped = true;
       }
-      return { rows, records, history };
-    } catch {
+      const built: Timeline = { rows, records, history };
+      hermesTimelineCache.delete(cacheKey);
+      hermesTimelineCache.set(cacheKey, { snapshot, timeline: built });
+      while (hermesTimelineCache.size > MAX_HERMES_TIMELINE_CACHE) {
+        hermesTimelineCache.delete(hermesTimelineCache.keys().next().value!);
+      }
+      return cloneTimeline(built);
+    } catch (err) {
+      if (matchedInThisDb && !matchedReadError) {
+        matchedReadError = {
+          dbPath,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
       // Ignore unreadable or busy candidate DBs and try next candidate.
     } finally {
       try {
@@ -723,6 +832,19 @@ export function loadHermesTimeline(
         // Ignore close errors.
       }
     }
+  }
+  if (matchedReadError) {
+    return {
+      rows: [],
+      records: new Map(),
+      history: {
+        messages: [],
+        boundaries: [],
+        injected: [],
+        readError: matchedReadError.error,
+        readErrorDb: matchedReadError.dbPath,
+      },
+    };
   }
   return null;
 }

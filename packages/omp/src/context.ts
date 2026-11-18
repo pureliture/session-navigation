@@ -211,6 +211,15 @@ function codepointCompare(left: string, right: string): number {
   return l.length - r.length;
 }
 
+function setOwnProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 function canonicalJsonObject(value: unknown): unknown {
   if (value === null || typeof value === "boolean" || typeof value === "string") return value;
   if (typeof value === "number") {
@@ -226,8 +235,9 @@ function canonicalJsonObject(value: unknown): unknown {
     const obj = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(obj).sort(codepointCompare)) {
-      if (obj[key] === undefined) continue;
-      out[key] = canonicalJsonObject(obj[key]);
+      const entry = Object.getOwnPropertyDescriptor(obj, key)?.value;
+      if (entry === undefined) continue;
+      setOwnProperty(out, key, canonicalJsonObject(entry));
     }
     return out;
   }

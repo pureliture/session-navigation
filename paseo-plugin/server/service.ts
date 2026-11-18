@@ -14,6 +14,7 @@ import {
   evaluateCompaction,
   refusalReason,
   invocationDigest,
+  isDestructive,
   type Item,
   type RecordInput,
   type Result,
@@ -45,6 +46,11 @@ export interface Reply {
   error?: string;
   [key: string]: any;
 }
+
+type VerifiedTargetRecord = RecordInput & {
+  item_id: string;
+  options_omitted: boolean;
+};
 
 export class PaseoService {
   readonly engine: Engine;
@@ -226,6 +232,50 @@ export class PaseoService {
     };
   }
 
+  private verifiedTargetRecord(
+    scope: string,
+    target: Record<string, unknown>,
+  ): VerifiedTargetRecord | null {
+    let invocation: Record<string, any>;
+    try {
+      const parsed = JSON.parse(String(target.invocation_snapshot));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return null;
+      }
+      invocation = parsed as Record<string, any>;
+    } catch {
+      return null;
+    }
+    const callId = String(target.tool_call_id ?? "");
+    const content = String(target.original ?? "");
+    const contentSha = String(target.content_sha256 ?? "");
+    const digest = String(target.invocation_digest ?? "");
+    const resultPosition = Number(target.result_position);
+    const optionsOmitted = Boolean(target.options_omitted);
+    if (
+      !callId ||
+      !Number.isSafeInteger(resultPosition) ||
+      resultPosition < 0 ||
+      sha256(content) !== contentSha ||
+      (!optionsOmitted && invocationDigest(invocation) !== digest) ||
+      itemId(scope, callId, contentSha, digest, resultPosition) !==
+        String(target.item_id ?? "")
+    ) {
+      return null;
+    }
+    return {
+      item_id: String(target.item_id),
+      call_id: callId,
+      content,
+      content_sha256: contentSha,
+      invocation,
+      invocation_digest: digest,
+      result_position: resultPosition,
+      status: "ok",
+      options_omitted: optionsOmitted,
+    };
+  }
+
   private timeline(
     scope: string,
     storedItems: readonly Item[] = this.store.items(scope),
@@ -234,39 +284,18 @@ export class PaseoService {
     const timeline = loadTimeline(this.home, scope, storedItems, storedUnits);
     if (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope) return timeline;
     for (const target of this.store.targets(scope)) {
-      if (timeline.records.has(String(target.tool_call_id))) continue;
-      const invocation = JSON.parse(String(target.invocation_snapshot));
-      const record: RecordInput = {
-        call_id: String(target.tool_call_id),
-        content: String(target.original),
-        content_sha256: String(target.content_sha256),
-        invocation,
-        invocation_digest: String(target.invocation_digest),
-        result_position: Number(target.result_position),
-        status: "ok",
-      };
-      if (
-        sha256(record.content) !== record.content_sha256 ||
-        (!target.options_omitted &&
-          invocationDigest(invocation) !== record.invocation_digest) ||
-        itemId(
-          scope,
-          record.call_id,
-          record.content_sha256,
-          record.invocation_digest,
-          record.result_position,
-        ) !== target.item_id
-      )
-        continue;
+      const verified = this.verifiedTargetRecord(scope, target);
+      if (!verified || timeline.records.has(verified.call_id)) continue;
+      const { item_id: verifiedItemId, ...record } = verified;
       timeline.records.set(record.call_id, record);
       timeline.rows.push({
-        item_id: String(target.item_id),
+        item_id: verifiedItemId,
         tool_call_id: record.call_id,
         tool_name: target.tool_name,
         kind: "tool",
         manageable: true,
         summary_line: summaryLine(record.content),
-        tool_input: preview(invocation.arguments),
+        tool_input: preview(record.invocation.arguments),
         tool_output: preview(record.content),
         bytes_size: bytes(record.content),
       });
@@ -429,6 +458,9 @@ export class PaseoService {
       capabilities: this.capabilities(scope),
       server_timeline: timeline.rows.length > 0,
       ...(timeline.history.recordsCapped ? { records_capped: true } : {}),
+      ...(timeline.history.readError
+        ? { timeline_read_error: timeline.history.readError }
+        : {}),
       ...(measured.context ? { context: measured.context } : {}),
     };
   }
@@ -502,20 +534,57 @@ export class PaseoService {
       return this.result(item.visibility === "hidden" ? { ok: true, item } :
         this.store.put(scope, { ...item, visibility: "hidden", version: item.version + 1 }, item.version));
     if (!item) {
-      const record = [...this.timeline(scope).records.values()].find(
-        (record) =>
-          record.call_id === id ||
-          itemId(
-            scope,
-            record.call_id,
-            record.content_sha256,
-            record.invocation_digest,
-            record.result_position,
-          ) === id,
-      );
+      const verifiedTargets = this.store
+        .targets(scope)
+        .map((target) => this.verifiedTargetRecord(scope, target))
+        .filter((target): target is VerifiedTargetRecord => target !== null);
+      let matchedTarget =
+        verifiedTargets.find((target) => target.item_id === id) ??
+        verifiedTargets.find((target) => target.call_id === id);
+      const timelineRecord = !matchedTarget
+        ? [...this.timeline(scope).records.values()].find(
+            (candidate) =>
+              candidate.call_id === id ||
+              itemId(
+                scope,
+                candidate.call_id,
+                candidate.content_sha256,
+                candidate.invocation_digest,
+                candidate.result_position,
+              ) === id,
+          )
+        : undefined;
+      if (!matchedTarget && timelineRecord) {
+        matchedTarget = verifiedTargets.find(
+          (target) =>
+            target.call_id === timelineRecord.call_id &&
+            target.result_position === timelineRecord.result_position,
+        );
+      }
+      const record: (RecordInput & { options_omitted?: boolean }) | undefined =
+        matchedTarget ?? timelineRecord;
       if (!record) return { ok: false, error: "not_found" };
       if (expected !== undefined && expected !== 1)
         return { ok: false, error: "version_conflict" };
+      if (isDestructive(record.invocation.tool_name, record.invocation.arguments))
+        return { ok: false, error: "destructive_command" };
+      const digests = this.store.driver.all(
+        "SELECT invocation_digest FROM identities WHERE scope_key=? AND tool_call_id=? AND content_sha256=? AND result_position=?",
+        [
+          scope,
+          record.call_id,
+          record.content_sha256,
+          record.result_position,
+        ],
+      );
+      if (
+        digests.length &&
+        !digests.some(
+          (row) => row.invocation_digest === record.invocation_digest,
+        )
+      ) {
+        return { ok: false, error: "invocation_conflict" };
+      }
       const refusal = refusalReason(record, this.engine.config);
       if (
         refusal &&
@@ -527,24 +596,31 @@ export class PaseoService {
         ].includes(refusal)
       )
         return { ok: false, error: refusal };
+      const fallbackId =
+        matchedTarget?.item_id ??
+        itemId(
+          scope,
+          record.call_id,
+          record.content_sha256,
+          record.invocation_digest,
+          record.result_position,
+        );
+      const optionsOmitted = Boolean(
+        matchedTarget?.options_omitted ??
+          (record as { options_omitted?: boolean }).options_omitted,
+      );
       const baseline = refusal
         ? null
         : selectRule(selectableText(record.content), [], this.engine.config);
       const evaluated = baseline
         ? evaluateCompaction(
             record.content,
-            itemId(
-              scope,
-              record.call_id,
-              record.content_sha256,
-              record.invocation_digest,
-              record.result_position,
-            ),
+            fallbackId,
             selectableText(record.content),
             baseline,
             undefined,
             record.invocation,
-            Boolean((record as { options_omitted?: boolean }).options_omitted),
+            optionsOmitted,
             true,
           )
         : undefined;
@@ -557,20 +633,6 @@ export class PaseoService {
           ...(tail.length ? ["..."] : []),
           ...tail,
         ].join("\n");
-        const fallbackId = itemId(
-          scope,
-          record.call_id,
-          record.content_sha256,
-          record.invocation_digest,
-          record.result_position,
-        );
-        const matchedTarget = this.store
-          .targets(scope)
-          .find(
-            (t) =>
-              String(t.tool_call_id) === record.call_id &&
-              String(t.item_id) === fallbackId,
-          );
         const defaultCompacted =
           evaluated?.rendered ??
           `[hidden: ${record.invocation.tool_name} ${record.call_id}]\n${excerpt}`;
@@ -593,10 +655,7 @@ export class PaseoService {
           compaction_source: source,
           invocation_snapshot: record.invocation,
           context_hint: null,
-          invocation_options_omitted: Boolean(
-            (record as { options_omitted?: boolean }).options_omitted ||
-              matchedTarget?.options_omitted,
-          ),
+          invocation_options_omitted: optionsOmitted,
           created_at: 0,
           updated_at: 0,
         };
@@ -605,6 +664,18 @@ export class PaseoService {
       }
     }
     if (!item) return { ok: false, error: "not_found" };
+    if (
+      item.invocation_snapshot &&
+      typeof item.invocation_snapshot === "object" &&
+      !Array.isArray(item.invocation_snapshot) &&
+      "tool_name" in item.invocation_snapshot &&
+      isDestructive(
+        item.invocation_snapshot.tool_name,
+        (item.invocation_snapshot as Record<string, unknown>).arguments,
+      )
+    ) {
+      return { ok: false, error: "destructive_command" };
+    }
     if (item.visibility === "hidden" && item.compaction_source === source)
       return this.result({ ok: true, item });
     return this.result(

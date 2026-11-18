@@ -1,16 +1,22 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   Store,
   EngineError,
+  canonical,
   sha256,
   invocationDigest,
   itemId,
   type Item,
 } from "../../packages/core/src/index.ts";
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
+import {
+  messageKey as ompMessageKey,
+  ompInvocationArgs,
+  toolResultText,
+} from "../../packages/omp/src/context.ts";
 import { OmpService } from "../../packages/omp/src/service.ts";
 import { PaseoService } from "./service.ts";
 import {
@@ -20,6 +26,7 @@ import {
   preview,
   type Message,
 } from "./history.ts";
+import { hermesFilterInvocation, loadHermesTimeline } from "./hermesHistory.ts";
 import { bindAgents } from "./mapping.ts";
 import { MutationResultSchema } from "../shared/sessionNav.ts";
 
@@ -1244,4 +1251,460 @@ test("hermesHistory normalizes trimmed call_id and increments result_position pe
   expect(tl).not.toBeNull();
   const toolRows = tl!.rows.filter((r) => r.kind === "tool");
   expect(toolRows.map((r) => r.item_id)).toEqual([item0.item_id, item1.item_id]);
+});
+
+test("explicit_user_hide prioritizes verified adapter_targets while strictly enforcing destructive_command and identity fencing", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, store, service, register } = fixture([], false);
+  const hScope = "hermes:atlas:target-prio:unknown";
+  register(hScope);
+
+  // Publish a verified target with options_omitted = 1 AND also put a Hermes state.db row
+  const targetContent = Array.from({ length: 40 }, (_, i) => `line ${i}: ok`).join("\n");
+  const targetInv = { tool_name: "terminal", arguments: { command: "echo hi" } };
+  const targetOmitted = { timeout: 45 };
+  const targetDigest = invocationDigest(targetInv, targetOmitted);
+  const targetSha = sha256(targetContent);
+  const targetItemId = itemId(hScope, "call_prio", targetSha, targetDigest, 0);
+  store.publishTargets(hScope, [
+    {
+      record: {
+        call_id: "call_prio",
+        content: targetContent,
+        content_sha256: targetSha,
+        invocation: targetInv,
+        invocation_digest: targetDigest,
+        result_position: 0,
+        status: "ok",
+      },
+      omitted: targetOmitted,
+    },
+  ]);
+
+  const profileDir = join(home, ".hermes/profiles/atlas");
+  mkdirSync(profileDir, { recursive: true });
+  const hdb = new DatabaseSync(join(profileDir, "state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    hdb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("target-prio", "{}");
+    const ins = hdb.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+    // State.db has no omitted timeout, whereas adapter_targets has verified omitted timeout!
+    ins.run("target-prio", "assistant", "", null, JSON.stringify([{ id: "call_prio", type: "function", function: { name: "terminal", arguments: '{"command":"echo hi"}' } }]), null);
+    ins.run("target-prio", "tool", targetContent, "call_prio", null, "terminal");
+    // Also add a destructive command row to verify explicit_user_hide strictly refuses destructive_command!
+    ins.run("target-prio", "assistant", "", null, JSON.stringify([{ id: "call_rm", type: "function", function: { name: "terminal", arguments: '{"command":"rm -rf /tmp/evil"}' } }]), null);
+    ins.run("target-prio", "tool", "deleted", "call_rm", null, "terminal");
+  } finally {
+    hdb.close();
+  }
+
+  // Hiding by tool_call_id should prioritize matchedTarget's verified invocation_digest and options_omitted
+  const hidePrio = await service.handle("hide", { scope_key: hScope, item_id: "call_prio" });
+  expect(hidePrio.ok).toBe(true);
+  expect(hidePrio.item_id).toBe(targetItemId);
+  expect(store.get(hScope, targetItemId)?.invocation_options_omitted).toBe(true);
+  expect(store.get(hScope, targetItemId)?.invocation_digest).toBe(targetDigest);
+
+  // Destructive commands MUST still be refused even for explicit_user_hide
+  const hideRm = await service.handle("hide", { scope_key: hScope, item_id: "call_rm" });
+  expect(hideRm.ok).toBe(false);
+  expect(hideRm.error).toBe("destructive_command");
+
+  // Identity fencing: different invocation_digest for the same (call_id, content_sha256, result_position) -> invocation_conflict
+  const altDigest = invocationDigest({ tool_name: "terminal", arguments: { command: "echo alt" } });
+  const altItemId = itemId(hScope, "call_prio", targetSha, altDigest, 0);
+  store.publishTargets(hScope, [
+    {
+      record: {
+        call_id: "call_prio",
+        content: targetContent,
+        content_sha256: targetSha,
+        invocation: { tool_name: "terminal", arguments: { command: "echo alt" } },
+        invocation_digest: altDigest,
+        result_position: 0,
+        status: "ok",
+      },
+    },
+  ]);
+  const fenceFail = await service.handle("hide", { scope_key: hScope, item_id: altItemId });
+  expect(fenceFail.ok).toBe(false);
+  expect(fenceFail.error).toBe("invocation_conflict");
+
+  // Tampered adapter_targets row fails integrity verification and cannot bypass content_tampered
+  const tamperedId = itemId(hScope, "call_tampered", sha256("real"), targetDigest, 0);
+  store.driver.run(
+    "INSERT INTO adapter_targets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      hScope,
+      tamperedId,
+      "call_tampered",
+      0,
+      targetDigest,
+      JSON.stringify(targetInv),
+      "tampered body",
+      sha256("real"),
+      "terminal",
+      0,
+      0,
+      999,
+    ],
+  );
+  expect((await service.handle("hide", { scope_key: hScope, item_id: "call_tampered" })).error).toBe(
+    "not_found",
+  );
+});
+
+test("OMP JSONL timeline cache isolates caller mutations and invalidates immediately on file change", () => {
+  const { home } = fixture(toolMessages("alpha"));
+  const filePath = join(home, ".omp/agent/sessions/project/2026_sid.jsonl");
+
+  const t1 = loadTimeline(home, scope);
+  expect(t1.rows.length).toBeGreaterThan(0);
+  const originalToolCount = t1.rows.length;
+  const originalRecordSize = t1.records.size;
+
+  // Mutate returned rows and records; cached entry must stay completely isolated
+  t1.rows[0].summary_line = "MUTATED_SUMMARY";
+  t1.rows.push({ item_id: "injected", kind: "user" });
+  t1.records.clear();
+
+  const t2 = loadTimeline(home, scope);
+  expect(t2.rows).toHaveLength(originalToolCount);
+  expect(t2.rows[0].summary_line).not.toBe("MUTATED_SUMMARY");
+  expect(t2.records.size).toBe(originalRecordSize);
+
+  // Update JSONL file (size + mtime change) -> cache invalidates immediately
+  writeFileSync(
+    filePath,
+    toolMessages("beta updated output")
+      .map((m) => JSON.stringify({ type: "message", message: m }))
+      .join("\n"),
+  );
+  const t3 = loadTimeline(home, scope);
+  expect(t3.records.get("c1")?.content).toBe("beta updated output");
+
+  // Explicit mtime change with identical size also invalidates
+  const bumped = new Date(Date.now() + 10_000);
+  utimesSync(filePath, bumped, bumped);
+  const t4 = loadTimeline(home, scope);
+  expect(t4.records.get("c1")?.content).toBe("beta updated output");
+});
+
+test("Hermes state.db timeline cache invalidates within the same ms and distinguishes absent session from matched DB read error", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home } = fixture([]);
+  const hermesDir = join(home, ".hermes");
+  mkdirSync(hermesDir, { recursive: true });
+  const dbPath = join(hermesDir, "state.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_call_id TEXT,
+      tool_calls TEXT,
+      tool_name TEXT,
+      codex_message_items TEXT,
+      api_content TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      compacted INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("cache-sid", "{}");
+  db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+    "cache-sid",
+    "user",
+    "prompt 1",
+  );
+
+  const scopeKey = "hermes:default:cache-sid:unknown";
+  const tl1 = loadHermesTimeline(home, scopeKey);
+  expect(tl1).not.toBeNull();
+  expect(tl1!.rows.map((r) => r.summary_line)).toEqual(["prompt 1"]);
+  // Mutate returned rows to verify shallow-clone isolation
+  tl1!.rows[0].summary_line = "MUTATED";
+  const tl2 = loadHermesTimeline(home, scopeKey);
+  expect(tl2!.rows.map((r) => r.summary_line)).toEqual(["prompt 1"]);
+
+  // Modify DB inside the same ms (UPDATE with same byte length!) -> change counter detects immediately
+  db.prepare("UPDATE messages SET content = ? WHERE session_id = ?").run("prompt 2", "cache-sid");
+  const tl3 = loadHermesTimeline(home, scopeKey);
+  expect(tl3!.rows.map((r) => r.summary_line)).toEqual(["prompt 2"]);
+
+  // Absent session returns null
+  expect(loadHermesTimeline(home, "hermes:default:nonexistent-sid:unknown")).toBeNull();
+
+  // Matched session whose DB fails while reading messages distinguishes readError from null
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("broken-sid", "{}");
+  db.exec("DROP TABLE messages");
+  db.close();
+
+  const broken = loadHermesTimeline(home, "hermes:default:broken-sid:unknown");
+  expect(broken).not.toBeNull();
+  expect(broken!.rows).toEqual([]);
+  expect(typeof broken!.history.readError).toBe("string");
+  expect(broken!.history.readErrorDb).toBe(dbPath);
+
+  // If a secondary candidate DB holds a healthy copy, fallback succeeds cleanly without readError
+  const fallbackDir = join(hermesDir, "profiles/backup");
+  mkdirSync(fallbackDir, { recursive: true });
+  const fbDb = new DatabaseSync(join(fallbackDir, "state.db"));
+  try {
+    fbDb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    fbDb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("broken-sid", "{}");
+    fbDb.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+      "broken-sid",
+      "user",
+      "recovered prompt",
+    );
+  } finally {
+    fbDb.close();
+  }
+  const recovered = loadHermesTimeline(home, "hermes:default:broken-sid:unknown");
+  expect(recovered).not.toBeNull();
+  expect(recovered!.history.readError).toBeUndefined();
+  expect(recovered!.rows.map((r) => r.summary_line)).toEqual(["recovered prompt"]);
+
+  // WAL mode same-ms write invalidation check + service list surfacing timeline_read_error
+  const walDir = join(hermesDir, "profiles/walprof");
+  mkdirSync(walDir, { recursive: true });
+  const wdb = new DatabaseSync(join(walDir, "state.db"));
+  try {
+    wdb.exec("PRAGMA journal_mode=WAL");
+    wdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    wdb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("wal-sid", "{}");
+    wdb.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+      "wal-sid",
+      "user",
+      "wal initial",
+    );
+    expect(loadHermesTimeline(home, "hermes:walprof:wal-sid:unknown")!.rows.map((r) => r.summary_line)).toEqual([
+      "wal initial",
+    ]);
+    wdb.prepare("UPDATE messages SET content = ? WHERE session_id = ?").run("wal updated", "wal-sid");
+    expect(loadHermesTimeline(home, "hermes:walprof:wal-sid:unknown")!.rows.map((r) => r.summary_line)).toEqual([
+      "wal updated",
+    ]);
+  } finally {
+    wdb.close();
+  }
+
+  const { home: errHome, service } = fixture([]);
+  const errHermesDir = join(errHome, ".hermes/profiles/onlybroken");
+  mkdirSync(errHermesDir, { recursive: true });
+  const errDb = new DatabaseSync(join(errHermesDir, "state.db"));
+  errDb.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT)");
+  errDb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("only-broken", "{}");
+  errDb.close();
+  const brokenList = await service.handle("list", {
+    scope_key: "hermes:onlybroken:only-broken:unknown",
+  });
+  expect(brokenList.ok).toBe(true);
+  expect(brokenList.server_timeline).toBe(false);
+  expect(typeof brokenList.timeline_read_error).toBe("string");
+});
+
+test("shared host_identity.json v1 contract matches OMP context, history.ts, and hermesHistory.ts", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const fixturePath = resolve(import.meta.dir, "../../contracts/fixtures/host_identity.json");
+  const hostFix = JSON.parse(readFileSync(fixturePath, "utf8"));
+  expect(hostFix.version).toBe(1);
+
+  const { home } = fixture([]);
+  const ompDir = join(home, ".omp/agent/sessions/contract");
+  mkdirSync(ompDir, { recursive: true });
+
+  const ompEntries: Message[] = [];
+  for (const m of hostFix.omp.messages) {
+    expect(ompMessageKey(m.message)).toBe(m.expected_key);
+    expect(messageKey(0, m.message)).toBe(m.expected_key);
+    ompEntries.push(m.message);
+  }
+  for (const t of hostFix.omp.tools) {
+    const rawArgs = JSON.parse(t.raw_arguments_json);
+    const filteredArgs = ompInvocationArgs(t.tool_name, rawArgs);
+    expect(filteredArgs).not.toBeNull();
+    const inv = { tool_name: t.tool_name, arguments: filteredArgs as any };
+    expect(canonical(inv)).toBe(t.expected_invocation_json);
+    expect(invocationDigest(inv)).toBe(t.expected_invocation_digest);
+    const toolResultMsg = {
+      role: "toolResult",
+      toolCallId: t.call_id,
+      toolName: t.tool_name,
+      isError: false,
+      content: t.result_content,
+    };
+    expect(toolResultText(toolResultMsg)).toBe(t.expected_text);
+    ompEntries.push(
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: t.call_id, name: t.tool_name, arguments: rawArgs }],
+      },
+      toolResultMsg,
+    );
+  }
+  writeFileSync(
+    join(ompDir, "2026_fixture-omp-sid.jsonl"),
+    ompEntries.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
+  );
+  const ompTl = loadTimeline(home, hostFix.omp.scope);
+  for (const m of hostFix.omp.messages) {
+    const row = ompTl.rows.find((r) => r.item_id === m.expected_key);
+    expect(row?.summary_line).toBe(m.expected_summary_line);
+  }
+  for (const t of hostFix.omp.tools) {
+    const rec = ompTl.records.get(t.call_id);
+    const row = ompTl.rows.find((r) => r.tool_call_id === t.call_id);
+    expect(rec?.content).toBe(t.expected_text);
+    expect(rec?.content_sha256).toBe(t.expected_content_sha256);
+    expect(rec?.invocation_digest).toBe(t.expected_invocation_digest);
+    expect(row?.item_id).toBe(t.expected_item_id);
+  }
+
+  for (const invCase of hostFix.hermes.invocations) {
+    const res = hermesFilterInvocation(invCase.tool_name, invCase.raw_arguments_json);
+    expect(res).not.toBeNull();
+    expect(canonical(res!.invocation)).toBe(invCase.expected_invocation_json);
+    expect(canonical(res!.omitted ?? {})).toBe(invCase.expected_omitted_json);
+    expect(invocationDigest(res!.invocation, res!.omitted)).toBe(invCase.expected_invocation_digest);
+  }
+
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const hdb = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const insS = hdb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)");
+    const insM = hdb.prepare(
+      "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, codex_message_items, api_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const mode of ["chat_completions", "codex_responses"] as const) {
+      const sec = hostFix.hermes[mode];
+      insS.run(sec.session_id, JSON.stringify({ gateway_runtime: { api_mode: mode } }));
+      for (const r of sec.db_rows) {
+        insM.run(
+          sec.session_id,
+          r.role,
+          r.content ?? null,
+          r.tool_call_id ?? null,
+          r.tool_calls ? JSON.stringify(r.tool_calls) : null,
+          r.tool_name ?? null,
+          r.codex_message_items ? JSON.stringify(r.codex_message_items) : null,
+          r.api_content ?? null,
+        );
+      }
+      const tl = loadHermesTimeline(home, sec.scope);
+      expect(tl).not.toBeNull();
+      expect(
+        tl!.rows.filter((r) => r.kind === "user" || r.kind === "assistant").map((r) => r.item_id),
+      ).toEqual(sec.expected_message_keys);
+      const tRow = tl!.rows.find((r) => r.tool_call_id === sec.expected_tool.call_id);
+      const tRec = tl!.records.get(sec.expected_tool.call_id);
+      expect(tRec?.invocation_digest).toBe(sec.expected_tool.invocation_digest);
+      expect(tRow?.item_id).toBe(sec.expected_tool.expected_item_id);
+    }
+
+    const multi = hostFix.hermes.multi_result;
+    insS.run(multi.session_id, JSON.stringify({ gateway_runtime: { api_mode: "codex_responses" } }));
+    for (const r of multi.db_rows) {
+      insM.run(
+        multi.session_id,
+        r.role,
+        r.content ?? null,
+        r.tool_call_id ?? null,
+        r.tool_calls ? JSON.stringify(r.tool_calls) : null,
+        r.tool_name ?? null,
+        null,
+        null,
+      );
+    }
+    const storedMulti: Item[] = multi.expected_results.map((er: any) => ({
+      item_id: er.expected_item_id,
+      tool_call_id: multi.call_id,
+      result_position: er.result_position,
+      content_sha256: sha256(er.content),
+      invocation_digest: multi.expected_invocation_digest,
+      original: er.content,
+      compacted: "[hidden]",
+      excerpt_lines: [],
+      visibility: "hidden",
+      version: 2,
+      tool_name: "read_file",
+      compaction_source: "explicit_user_hide",
+      invocation_snapshot: { tool_name: "read_file", arguments: { path: "multi.txt" } },
+      context_hint: null,
+      invocation_options_omitted: false,
+      created_at: 0,
+      updated_at: 0,
+    }));
+    const tlMulti = loadHermesTimeline(home, multi.scope, storedMulti);
+    expect(tlMulti).not.toBeNull();
+    expect(tlMulti!.rows.filter((r) => r.kind === "tool").map((r) => r.item_id)).toEqual(
+      multi.expected_results.map((er: any) => er.expected_item_id),
+    );
+  } finally {
+    hdb.close();
+  }
 });

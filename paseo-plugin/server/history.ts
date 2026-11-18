@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   bytes,
   invocationDigest,
@@ -12,7 +12,7 @@ import {
 } from "../../packages/core/src/index.ts";
 import type { Item } from "../../packages/core/src/index.ts";
 import { loadHermesTimeline } from "./hermesHistory.ts";
-import { ompInvocationArgs as sharedOmpInvocationArgs, toolResultText } from "../../packages/omp/src/context.ts";
+import { ompInvocationArgs, toolResultText } from "../../packages/omp/src/context.ts";
 
 export type Message = Record<string, any>;
 export type History = {
@@ -21,6 +21,8 @@ export type History = {
   injected: [number, number][];
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
   recordsCapped?: boolean;
+  readError?: string;
+  readErrorDb?: string;
 };
 export interface Timeline {
   rows: Message[];
@@ -28,31 +30,41 @@ export interface Timeline {
   history: History;
 }
 
-export function findSession(home: string, session: string): string | undefined {
-  const sessionId = session.includes(":") ? (session.split(":")[2] ?? "") : session;
-  if (!sessionId || /[\\/:]/.test(sessionId)) return;
-  function search(directory: string): string | undefined {
-    if (!existsSync(directory)) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
-      (a, b) => a.name.localeCompare(b.name),
-    )) {
-      const filename = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        const result = search(filename);
-        if (result) return result;
-      } else if (entry.isFile() && entry.name.endsWith(`_${sessionId}.jsonl`))
-        return filename;
-    }
-  }
-  return search(join(home, ".omp", "agent", "sessions"));
+const MAX_TIMELINE_CACHE = 32;
+type CachedTimelineEntry = {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  timeline: Timeline;
+};
+const timelineCache = new Map<string, CachedTimelineEntry>();
+
+export function cloneTimeline(timeline: Timeline): Timeline {
+  return {
+    rows: timeline.rows.map((row) => ({ ...row })),
+    records: new Map(timeline.records),
+    history: {
+      messages: [...timeline.history.messages],
+      boundaries: [...timeline.history.boundaries],
+      injected: timeline.history.injected.map(([pos, len]) => [pos, len] as [number, number]),
+      ...(timeline.history.externalContext
+        ? { externalContext: { ...timeline.history.externalContext } }
+        : {}),
+      ...(timeline.history.recordsCapped !== undefined
+        ? { recordsCapped: timeline.history.recordsCapped }
+        : {}),
+      ...(timeline.history.readError !== undefined
+        ? { readError: timeline.history.readError }
+        : {}),
+      ...(timeline.history.readErrorDb !== undefined
+        ? { readErrorDb: timeline.history.readErrorDb }
+        : {}),
+    },
+  };
 }
 
-export function readHistory(home: string, scope: string): History {
+function parseHistoryFile(filename: string): History {
   const history: History = { messages: [], boundaries: [], injected: [] };
-  const [adapter, , session] = scope.split(":");
-  if (!["omp", "pi"].includes(adapter)) return history;
-  const filename = findSession(home, session);
-  if (!filename) return history;
   for (const line of readFileSync(filename, "utf8").split("\n")) {
     let data: Message;
     try {
@@ -79,6 +91,33 @@ export function readHistory(home: string, scope: string): History {
     else if (typeof data.role === "string") history.messages.push(data);
   }
   return history;
+}
+
+export function findSession(home: string, session: string): string | undefined {
+  const sessionId = session.includes(":") ? (session.split(":")[2] ?? "") : session;
+  if (!sessionId || /[\\/:]/.test(sessionId)) return;
+  function search(directory: string): string | undefined {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name),
+    )) {
+      const filename = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        const result = search(filename);
+        if (result) return result;
+      } else if (entry.isFile() && entry.name.endsWith(`_${sessionId}.jsonl`))
+        return filename;
+    }
+  }
+  return search(join(home, ".omp", "agent", "sessions"));
+}
+
+export function readHistory(home: string, scope: string): History {
+  const [adapter, , session] = scope.split(":");
+  if (!["omp", "pi"].includes(adapter)) return { messages: [], boundaries: [], injected: [] };
+  const filename = findSession(home, session);
+  if (!filename) return { messages: [], boundaries: [], injected: [] };
+  return parseHistoryFile(filename);
 }
 
 export function messageText(message: Message): string {
@@ -198,7 +237,31 @@ export function loadTimeline(
     const hermes = loadHermesTimeline(home, scope, storedItems, storedUnits);
     if (hermes) return hermes;
   }
-  const history = readHistory(home, scope);
+  const [adapter, , session] = scope.split(":");
+  const filename = ["omp", "pi"].includes(adapter) ? findSession(home, session) : undefined;
+  if (!filename) {
+    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
+  }
+  const absPath = resolve(filename);
+  let stat;
+  try {
+    stat = statSync(absPath);
+  } catch {
+    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
+  }
+  const cacheKey = `${absPath}\0${scope}`;
+  const cached = timelineCache.get(cacheKey);
+  if (
+    cached &&
+    cached.mtimeMs === stat.mtimeMs &&
+    cached.ctimeMs === stat.ctimeMs &&
+    cached.size === stat.size
+  ) {
+    timelineCache.delete(cacheKey);
+    timelineCache.set(cacheKey, cached);
+    return cloneTimeline(cached.timeline);
+  }
+  const history = parseHistoryFile(absPath);
   const calls = new Map<string, { block: Message; index: number }>();
   const duplicate = new Set<string>();
   const results = new Map<string, number>();
@@ -261,7 +324,10 @@ export function loadTimeline(
       typeof arguments_ === "object" &&
       toolResultText(message) !== null
     ) {
-      const args = ompInvocationArgs(tool, arguments_ as Record<string, unknown>);
+      const args = ompInvocationArgs(tool, arguments_ as Record<string, unknown>) as Record<
+        string,
+        Json
+      > | null;
       if (args) {
         const invocation = { tool_name: tool, arguments: args };
         const size = bytes(text);
@@ -304,14 +370,18 @@ export function loadTimeline(
     });
   }
   rows.reverse();
-  return { rows, records, history };
-}
-
-function ompInvocationArgs(
-  tool: string,
-  raw: Record<string, unknown>,
-): Record<string, Json> | null {
-  return sharedOmpInvocationArgs(tool, raw) as Record<string, Json> | null;
+  const built: Timeline = { rows, records, history };
+  timelineCache.delete(cacheKey);
+  timelineCache.set(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    size: stat.size,
+    timeline: built,
+  });
+  while (timelineCache.size > MAX_TIMELINE_CACHE) {
+    timelineCache.delete(timelineCache.keys().next().value!);
+  }
+  return cloneTimeline(built);
 }
 
 function pythonJson(value: unknown): string {

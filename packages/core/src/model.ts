@@ -167,7 +167,10 @@ export function canonical(value: Json): string {
   }
   return `{${Object.keys(value)
     .sort(unicodeCompare)
-    .map((key) => `${canonical(key)}:${canonical(value[key])}`)
+    .map(
+      (key) =>
+        `${canonical(key)}:${canonical(Object.getOwnPropertyDescriptor(value, key)!.value as Json)}`,
+    )
     .join(",")}}`;
 }
 function floatText(value: number): string {
@@ -243,7 +246,12 @@ export function parseCanonicalJson(source: string): Json {
       if (source[index++] !== ":") {
         throw new SyntaxError("Invalid JSON object");
       }
-      object[key] = parseValue();
+      Object.defineProperty(object, key, {
+        value: parseValue(),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
       skipWhitespace();
       if (source[index++] === "}") {
         return object;
@@ -301,12 +309,27 @@ export const invocationDigest = (
   omitted: {
     [key: string]: Json;
   } = {},
-): string =>
-  sha256(
-    canonical(
-      Object.keys(omitted).length ? { ...invocation, omitted_options: omitted } : invocation,
-    ),
-  );
+): string => {
+  if (!Object.keys(omitted).length) {
+    return sha256(canonical(invocation));
+  }
+  const merged: { [key: string]: Json } = {};
+  for (const key of Object.keys(invocation)) {
+    Object.defineProperty(merged, key, {
+      value: Object.getOwnPropertyDescriptor(invocation, key)!.value as Json,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  Object.defineProperty(merged, "omitted_options", {
+    value: omitted,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  return sha256(canonical(merged));
+};
 export const itemId = (
   scope: ScopeLike,
   callId: string,

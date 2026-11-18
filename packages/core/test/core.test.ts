@@ -63,6 +63,14 @@ test("canonical JSON preserves Unicode sorting, integer precision and float kind
     canonical(parseCanonicalJson('{"𐀀":3,"":4,"n":9007199254740993,"float":1.0}')),
     '{"float":1.0,"n":9007199254740993,"":4,"𐀀":3}',
   );
+  const protoObj = parseCanonicalJson('{"__proto__":{"a":1},"constructor":2,"toString":3}') as {
+    [key: string]: any;
+  };
+  assert.equal(canonical(protoObj), '{"__proto__":{"a":1},"constructor":2,"toString":3}');
+  assert.notEqual(
+    invocationDigest({ tool_name: "mcp_read_status", arguments: protoObj }),
+    invocationDigest({ tool_name: "mcp_read_status", arguments: { constructor: 2, toString: 3 } }),
+  );
   assert.equal(canonical(new PythonFloat(-0)), "-0.0");
   assert.equal(canonical(new PythonFloat(1e-7)), "1e-07");
   assert.equal(canonical(0.00001), "1e-05");
