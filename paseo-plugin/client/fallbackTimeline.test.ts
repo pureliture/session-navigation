@@ -186,6 +186,21 @@ describe("fallbackTimeline", () => {
       { ...timeline[2], item_id: null, manageable: false, tool_name: "delegate_task" },
     ]);
   });
+  test("mergeHermesTimelineRows keeps unmatched older server rows ahead of the merged tail", () => {
+    const parent = "hermes:atlas:session:unknown";
+    const serverRows: Row[] = [
+      { item_id: "srv-old", tool_call_id: "call-old", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 5 },
+      { item_id: "srv-new", tool_call_id: "call-new", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 700 },
+    ];
+    const timelineRows: Row[] = [
+      { item_id: "fb-user", tool_call_id: "", kind: "user", tool_name: "user", status: "visible", version: 1, tokens_display: "—", timeline_index: 9000, summary_line: "hello" },
+      { item_id: "fb-new", tool_call_id: "call-new", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 9001 },
+    ];
+    const merged = mergeHermesTimelineRows(serverRows, timelineRows, [], parent);
+    expect(merged.map((row) => row.item_id)).toEqual(["srv-old", null, "srv-new"]);
+    expect(merged[0].timeline_index).toBe(5);
+  });
+
 
   test("mergePagedRows deduplicates overlapping timeline_index boundaries and preserves newer row freshness", () => {
     const older: Row[] = [

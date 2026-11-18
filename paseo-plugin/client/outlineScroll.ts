@@ -2,6 +2,7 @@ export const OUTLINE_SETTLE_WINDOW_MS = 1500;
 export const OUTLINE_MAX_INITIAL_RENDER = 400;
 export const OUTLINE_MIN_INITIAL_RENDER = 50;
 export const OUTLINE_BOTTOM_STICK_THRESHOLD_PX = 48;
+export const OUTLINE_ACTIVE_SCROLL_UP_PX = 24;
 export const OUTLINE_PROGRAMMATIC_SCROLL_GUARD_MS = 150;
 
 export function initialRenderCount(totalRows: number): number {
@@ -122,7 +123,9 @@ export class OutlineAutoScroller {
     now?: number;
   }): void {
     const now = metrics.now ?? Date.now();
-    this.lastScrollTop = Math.max(0, metrics.scrollTop);
+    const top = Math.max(0, metrics.scrollTop);
+    const movedUp = top + OUTLINE_ACTIVE_SCROLL_UP_PX < this.lastScrollTop;
+    this.lastScrollTop = top;
     const maxTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
     const distFromBottom = Math.max(0, maxTop - this.lastScrollTop);
     if (distFromBottom <= OUTLINE_BOTTOM_STICK_THRESHOLD_PX) {
@@ -132,6 +135,11 @@ export class OutlineAutoScroller {
     }
     if (now <= this.programmaticScrollUntil) {
       return;
+    }
+    // Touch/trackpad upward scroll emits onScroll without wheel/drag events; treat a
+    // material upward move as user intent so top-drag older-page loading cannot stall.
+    if (movedUp) {
+      this.userScrolledUp = true;
     }
     if (!this.inInitialSettle(now) || this.userScrolledUp) {
       this.stickToBottom = false;

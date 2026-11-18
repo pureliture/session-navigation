@@ -454,12 +454,22 @@ export function mergeHermesTimelineRows(
       });
     }
   }
-  for (const row of rows) {
-    if (!row.tool_call_id || !consumed.has(row.tool_call_id)) {
-      merged.push(row);
-    }
-  }
-  return merged;
+  const unmatched = rows.filter((row) => !row.tool_call_id || !consumed.has(row.tool_call_id));
+  const matchedFloor = merged.reduce<number | null>((floor, row) => {
+    if (typeof row.timeline_index !== "number") return floor;
+    return floor === null ? row.timeline_index : Math.min(floor, row.timeline_index);
+  }, null);
+  // Unmatched server rows are older history outside the fallback window; keep them
+  // ahead of the merged tail so upward paging visibly prepends instead of appending.
+  const head =
+    matchedFloor === null
+      ? unmatched
+      : unmatched.filter((row) => typeof row.timeline_index !== "number" || row.timeline_index < matchedFloor);
+  const tail =
+    matchedFloor === null
+      ? []
+      : unmatched.filter((row) => typeof row.timeline_index === "number" && row.timeline_index >= matchedFloor);
+  return [...head, ...merged, ...tail];
 }
 
 function rowMergeKey(row: Row): string | null {

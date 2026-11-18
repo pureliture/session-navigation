@@ -176,7 +176,37 @@ describe("OutlineAutoScroller", () => {
     expect(initialRenderCount(120)).toBe(120);
   });
 
+  test("touch upward scroll without wheel events still arms upward intent (long-session top-drag must load older rows)", () => {
+    const scroller = new OutlineAutoScroller(1500);
+    scroller.syncSession("long-session", true);
+    const t0 = 1000000;
+    scroller.recordScroll({ scrollTop: 4000, scrollHeight: 5000, clientHeight: 1000, now: t0 });
+    for (const top of [3000, 1000, 100]) {
+      scroller.recordScroll({ scrollTop: top, scrollHeight: 5000, clientHeight: 1000, now: t0 + 5000 });
+    }
+    expect(scroller.isUserScrolledUp()).toBe(true);
+    expect(scroller.isStuckToBottom()).toBe(false);
+  });
+
+  test("trackpad upward scroll without explicit drag start still arms upward intent", () => {
+    const driver = new OutlineScrollDriver(1500);
+    driver.syncSession("trackpad-session", true);
+    const t0 = 2000000;
+    driver.handleScrollEvent(
+      { nativeEvent: { contentOffset: { y: 4000 }, contentSize: { height: 5000 }, layoutMeasurement: { height: 1000 } } },
+      t0,
+    );
+    driver.handleScrollEvent(
+      { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 5000 }, layoutMeasurement: { height: 1000 } } },
+      t0 + 5000,
+    );
+    expect(driver.scroller.isUserScrolledUp()).toBe(true);
+    expect(driver.scroller.isStuckToBottom()).toBe(false);
+    driver.dispose();
+  });
+
   test("cancels pending 60ms settle timer on session switch/dispose, prevents expand overwrite, and tracks streaming height growth", async () => {
+
     const driver = new OutlineScrollDriver(1500);
     let endCalls = 0;
     const offsets: number[] = [];
