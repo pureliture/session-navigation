@@ -145,3 +145,12 @@ CDP 실화면 DOM 덤프로 확인). 기대 결과의 수치·ID는 아래 4절�
 | 신규 세션 실시간 추적 | `[UNVERIFIED]` | 세션 생성 → Follow visible session 전환까지 1.5s 폴 로그, 바인딩 상태, 식별 불가 시 `No session in view` 전이 기록 |
 | 릴레이 지연 극한 | `[UNVERIFIED]` | page당 지연 3s/10s/30s 주입, 4s·2500ms·15s 컷오프별 spinner 유지/종료, 60s deadline 도달 여부 기록 |
 | 샌드박스 a/b seek | 검증 불가(환경): Hermes ACP `no dependency environment`, OMP RPC exit 1로 샌드박스 채팅 미기동. 실데몬에서만 유효 | `run.py`가 `reason: chat-runtime-down`으로 기록. 샌드박스 채팅 런타임 복구 후 재검증 |
+
+## 7. 결정 기록: compress 이후 이전 대화 표시 정책 (2026-11-19)
+
+결정: **(a) 전체 유지. 경계 접기·완전 숨김 미채택.** 3-에이전트 분석(Terra 성능·Hydrogen 경계·OMP Free UX) 교차검증 + 사용자 확정.
+
+- 화면 숨김만으론 서버 비용(전체 스캔·복제·집계) 그대로. 접기는 UX 대책이지 성능 해법이 아님.
+- 경계 탐지는 양쪽 다 추가 구현 필요(OMP `firstKeptEntryId` 역추적, Hermes 회전 체인+`_compressed_summary`). 오탐 시 빈 아웃라인·kept tail 손실.
+- a-seek 직접 원인은 이미 수정됨(ID/니들/signature). 경계 숨김 없이 해결된 문제.
+- 완전 숨김은 서버 불변식 6건 붕괴(고아 items 꼬리 부활 `service.ts:710-711`, `timeline_index`·`before_index`·병합·totals/unhide·seek 무한 페이징). 상세: 세션 대화 기록 참조.
