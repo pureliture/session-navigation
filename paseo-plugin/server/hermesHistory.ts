@@ -377,6 +377,17 @@ function candidateHermesDbs(home: string, profile: string): string[] {
   return candidates;
 }
 
+function tableColumns(db: DatabaseSync, table: "sessions" | "messages"): Set<string> {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>;
+    return new Set(
+      rows.map((r) => (typeof r.name === "string" ? r.name : "")).filter(Boolean),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export function hasHermesSession(home: string, profile: string, sessionId: string): boolean {
   if (!sessionId || /[\\/:]/.test(sessionId)) return false;
   for (const dbPath of candidateHermesDbs(home, profile)) {
@@ -388,6 +399,15 @@ export function hasHermesSession(home: string, profile: string, sessionId: strin
         found = Boolean(db.prepare("SELECT 1 FROM sessions WHERE id = ? LIMIT 1").get(sessionId));
       } catch {
         // Ignore missing sessions table in malformed/partial DBs.
+      }
+      if (!found && tableColumns(db, "sessions").has("parent_session_id")) {
+        try {
+          found = Boolean(
+            db.prepare("SELECT 1 FROM sessions WHERE parent_session_id = ? LIMIT 1").get(sessionId),
+          );
+        } catch {
+          // Ignore missing parent_session_id or unreadable sessions table.
+        }
       }
       if (!found) {
         try {
@@ -442,6 +462,12 @@ export function loadHermesTimeline(
     let matchedInThisDb = false;
     try {
       db = new DatabaseSync(dbPath, { readOnly: true });
+      const sessionCols = tableColumns(db, "sessions");
+      const hasParentSessionId = sessionCols.has("parent_session_id");
+      const hasStartedAt = sessionCols.has("started_at");
+      const messageCols = tableColumns(db, "messages");
+      const hasCompressedSummary = messageCols.has("_compressed_summary");
+
       let sessionRow: { id?: string; model_config?: string | null } | undefined;
       try {
         sessionRow = db
@@ -451,6 +477,15 @@ export function loadHermesTimeline(
         // Fall through to messages probe when sessions table is absent/unreadable.
       }
       let hasSession = Boolean(sessionRow?.id);
+      if (!hasSession && hasParentSessionId) {
+        try {
+          hasSession = Boolean(
+            db.prepare("SELECT 1 FROM sessions WHERE parent_session_id = ? LIMIT 1").get(sessionId),
+          );
+        } catch {
+          // Ignore sessions query errors.
+        }
+      }
       if (!hasSession) {
         try {
           hasSession = Boolean(
@@ -462,6 +497,37 @@ export function loadHermesTimeline(
       }
       if (!hasSession) continue;
       matchedInThisDb = true;
+
+      let targetSessionId = sessionId;
+      if (hasParentSessionId) {
+        const visited = new Set<string>([targetSessionId]);
+        const childStmt = db.prepare(
+          hasStartedAt
+            ? "SELECT id FROM sessions WHERE parent_session_id = ? ORDER BY started_at DESC, rowid DESC"
+            : "SELECT id FROM sessions WHERE parent_session_id = ? ORDER BY rowid DESC",
+        );
+        for (let hop = 0; hop < 32; hop++) {
+          const children = childStmt.all(targetSessionId) as Array<{ id?: unknown }>;
+          const next = children.find(
+            (row) => typeof row.id === "string" && row.id.length > 0 && !visited.has(row.id),
+          );
+          if (!next || typeof next.id !== "string") break;
+          visited.add(next.id);
+          targetSessionId = next.id;
+        }
+      }
+      if (targetSessionId !== sessionId) {
+        try {
+          const targetRow = db
+            .prepare("SELECT id, model_config FROM sessions WHERE id = ?")
+            .get(targetSessionId) as { id?: string; model_config?: string | null } | undefined;
+          if (targetRow?.model_config) {
+            sessionRow = targetRow;
+          }
+        } catch {
+          // Keep initial sessionRow fallback.
+        }
+      }
 
       let apiMode = "chat_completions";
       let usedTokens: number | undefined;
@@ -480,26 +546,16 @@ export function loadHermesTimeline(
         }
       }
 
-      const activeCount = db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND active = 1",
-        )
-        .get(sessionId) as { n?: number } | undefined;
-      if ((activeCount?.n ?? 0) > MAX_HISTORY_ROWS) {
-        throw new HistoryTooLargeError(
-          `hermes session exceeds ${MAX_HISTORY_ROWS} active rows (${activeCount?.n})`,
-        );
-      }
-
-      const dbRows = db
+      const rawDbRows = db
         .prepare(
           `SELECT id, role, content, tool_call_id, tool_calls, tool_name,
-                  codex_message_items, api_content, compacted
+                  codex_message_items, api_content, compacted,
+                  ${hasCompressedSummary ? "_compressed_summary" : "0 AS _compressed_summary"}
            FROM messages
            WHERE session_id = ? AND active = 1
            ORDER BY id ASC`,
         )
-        .all(sessionId) as Array<{
+        .all(targetSessionId) as Array<{
         id: number;
         role: string;
         content: string | null;
@@ -509,7 +565,16 @@ export function loadHermesTimeline(
         codex_message_items: string | null;
         api_content: string | null;
         compacted: number;
+        _compressed_summary: number;
       }>;
+      const summaryIndex = rawDbRows.findIndex((row) => Number(row._compressed_summary ?? 0) === 1);
+      const chunkStart = summaryIndex > 0 ? summaryIndex : 0;
+      const dbRows = chunkStart > 0 ? rawDbRows.slice(chunkStart) : rawDbRows;
+      if (dbRows.length > MAX_HISTORY_ROWS) {
+        throw new HistoryTooLargeError(
+          `hermes session chunk exceeds ${MAX_HISTORY_ROWS} active rows (${dbRows.length})`,
+        );
+      }
 
       const calls = new Map<string, { name: string; rawArgs: unknown; parsedArgs: unknown; index: number }>();
       const duplicate = new Set<string>();
@@ -809,6 +874,7 @@ export function loadHermesTimeline(
         messages: [],
         boundaries: [],
         injected: [],
+        chunkStart: 0,
         ...(usedTokens
           ? {
               externalContext: {
@@ -830,6 +896,7 @@ export function loadHermesTimeline(
       }
       return cloneTimeline(built);
     } catch (err) {
+      if (err instanceof HistoryTooLargeError) throw err;
       if (matchedInThisDb && !matchedReadError) {
         matchedReadError = {
           dbPath,
@@ -853,6 +920,7 @@ export function loadHermesTimeline(
         messages: [],
         boundaries: [],
         injected: [],
+        chunkStart: 0,
         readError: matchedReadError.error,
         readErrorDb: matchedReadError.dbPath,
       },

@@ -586,7 +586,11 @@ export class PaseoService {
     storedUnits: readonly Record<string, unknown>[] = this.store.listUnits(scope),
   ): Timeline {
     const timeline = loadTimeline(this.home, scope, storedItems, storedUnits);
-    if (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope) return timeline;
+    if (
+      timeline.rows.length > 0 ||
+      (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope)
+    )
+      return timeline;
     for (const target of this.store.targets(scope)) {
       const verified = this.verifiedTargetRecord(scope, target);
       if (!verified || timeline.records.has(verified.call_id)) continue;
@@ -714,9 +718,9 @@ export class PaseoService {
         });
       return merged;
     });
-    for (const item of items)
-      if (!seen.has(item.item_id)) rows.push(this.itemRow(item));
     if (!timeline.rows.length) {
+      for (const item of items)
+        if (!seen.has(item.item_id)) rows.push(this.itemRow(item));
       const calls = new Set(items.map((item) => item.tool_call_id));
       for (const unit of units.values()) {
         if (

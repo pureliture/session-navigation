@@ -20,6 +20,8 @@ export type History = {
   messages: Message[];
   boundaries: number[];
   injected: [number, number][];
+  /** Message index where the latest compaction chunk starts (0 = full history). */
+  chunkStart: number;
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
   recordsCapped?: boolean;
   readError?: string;
@@ -48,6 +50,7 @@ export function cloneTimeline(timeline: Timeline): Timeline {
       messages: [...timeline.history.messages],
       boundaries: [...timeline.history.boundaries],
       injected: timeline.history.injected.map(([pos, len]) => [pos, len] as [number, number]),
+      chunkStart: timeline.history.chunkStart,
       ...(timeline.history.externalContext
         ? { externalContext: { ...timeline.history.externalContext } }
         : {}),
@@ -65,7 +68,18 @@ export function cloneTimeline(timeline: Timeline): Timeline {
 }
 
 function parseHistoryFile(filename: string): History {
-  const history: History = { messages: [], boundaries: [], injected: [] };
+  const history: History = {
+    messages: [],
+    boundaries: [],
+    injected: [],
+    chunkStart: 0,
+  };
+  const messageIndexById = new Map<string, number>();
+  const entryIndexById = new Map<string, number>();
+  let latestKeptEntryId: string | undefined;
+  const trackEntry = (id: unknown) => {
+    if (typeof id === "string" && id) entryIndexById.set(id, history.messages.length);
+  };
   for (const line of readFileSync(filename, "utf8").split("\n")) {
     let data: Message;
     try {
@@ -78,18 +92,37 @@ function parseHistoryFile(filename: string): History {
       data.type === "message" &&
       data.message &&
       typeof data.message === "object"
-    )
+    ) {
+      if (typeof data.id === "string" && data.id)
+        messageIndexById.set(data.id, history.messages.length);
       history.messages.push(data.message);
-    else if (
-      ["compaction", "branch_summary", "reset_boundary"].includes(data.type)
-    )
+      continue;
+    }
+    trackEntry(data.id);
+    if (["compaction", "branch_summary", "reset_boundary"].includes(data.type)) {
       history.boundaries.push(history.messages.length);
-    else if (data.type === "custom" && typeof data.data?.reminder === "string")
+      if (data.type === "compaction")
+        latestKeptEntryId =
+          typeof data.firstKeptEntryId === "string"
+            ? data.firstKeptEntryId
+            : undefined;
+    } else if (data.type === "custom" && typeof data.data?.reminder === "string")
       history.injected.push([
         history.messages.length,
         length(data.data.reminder),
       ]);
-    else if (typeof data.role === "string") history.messages.push(data);
+    else if (typeof data.role === "string") {
+      if (typeof data.id === "string" && data.id)
+        messageIndexById.set(data.id, history.messages.length);
+      history.messages.push(data);
+    }
+  }
+  if (latestKeptEntryId) {
+    const index =
+      messageIndexById.get(latestKeptEntryId) ??
+      entryIndexById.get(latestKeptEntryId);
+    // Unknown ids fall back to the full history instead of an empty outline.
+    history.chunkStart = index ?? 0;
   }
   return history;
 }
@@ -115,9 +148,9 @@ export function findSession(home: string, session: string): string | undefined {
 
 export function readHistory(home: string, scope: string): History {
   const [adapter, , session] = scope.split(":");
-  if (!["omp", "pi"].includes(adapter)) return { messages: [], boundaries: [], injected: [] };
+  if (!["omp", "pi"].includes(adapter)) return { messages: [], boundaries: [], injected: [], chunkStart: 0 };
   const filename = findSession(home, session);
-  if (!filename) return { messages: [], boundaries: [], injected: [] };
+  if (!filename) return { messages: [], boundaries: [], injected: [], chunkStart: 0 };
   return parseHistoryFile(filename);
 }
 
@@ -241,14 +274,14 @@ export function loadTimeline(
   const [adapter, , session] = scope.split(":");
   const filename = ["omp", "pi"].includes(adapter) ? findSession(home, session) : undefined;
   if (!filename) {
-    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
+    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [], chunkStart: 0 } };
   }
   const absPath = resolve(filename);
   let stat;
   try {
     stat = statSync(absPath);
   } catch {
-    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
+    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [], chunkStart: 0 } };
   }
   if (stat.size > MAX_HISTORY_BYTES) {
     throw new HistoryTooLargeError(
@@ -268,9 +301,20 @@ export function loadTimeline(
     return cloneTimeline(cached.timeline);
   }
   const history = parseHistoryFile(absPath);
+  if (history.chunkStart > 0) {
+    const start = Math.min(history.chunkStart, history.messages.length);
+    history.messages = history.messages.slice(start);
+    history.boundaries = history.boundaries
+      .filter((index) => index >= start)
+      .map((index) => index - start);
+    history.injected = history.injected
+      .filter(([index]) => index >= start)
+      .map(([index, size]) => [index - start, size] as [number, number]);
+    history.chunkStart = 0;
+  }
   if (history.messages.length > MAX_HISTORY_ROWS) {
     throw new HistoryTooLargeError(
-      `history file exceeds ${MAX_HISTORY_ROWS} rows (${history.messages.length})`,
+      `history chunk exceeds ${MAX_HISTORY_ROWS} rows (${history.messages.length})`,
     );
   }
   const calls = new Map<string, { block: Message; index: number }>();
