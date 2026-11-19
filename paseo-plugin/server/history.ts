@@ -12,6 +12,7 @@ import {
 } from "../../packages/core/src/index.ts";
 import type { Item } from "../../packages/core/src/index.ts";
 import { loadHermesTimeline } from "./hermesHistory.ts";
+import { HistoryTooLargeError, MAX_HISTORY_BYTES, MAX_HISTORY_ROWS } from "./historyLimits.ts";
 import { ompInvocationArgs, toolResultText } from "../../packages/omp/src/context.ts";
 
 export type Message = Record<string, any>;
@@ -249,6 +250,11 @@ export function loadTimeline(
   } catch {
     return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
   }
+  if (stat.size > MAX_HISTORY_BYTES) {
+    throw new HistoryTooLargeError(
+      `history file exceeds ${MAX_HISTORY_BYTES} bytes (${stat.size})`,
+    );
+  }
   const cacheKey = `${absPath}\0${scope}`;
   const cached = timelineCache.get(cacheKey);
   if (
@@ -262,6 +268,11 @@ export function loadTimeline(
     return cloneTimeline(cached.timeline);
   }
   const history = parseHistoryFile(absPath);
+  if (history.messages.length > MAX_HISTORY_ROWS) {
+    throw new HistoryTooLargeError(
+      `history file exceeds ${MAX_HISTORY_ROWS} rows (${history.messages.length})`,
+    );
+  }
   const calls = new Map<string, { block: Message; index: number }>();
   const duplicate = new Set<string>();
   const results = new Map<string, number>();

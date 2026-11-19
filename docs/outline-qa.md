@@ -154,3 +154,31 @@ CDP 실화면 DOM 덤프로 확인). 기대 결과의 수치·ID는 아래 4절�
 - 경계 탐지는 양쪽 다 추가 구현 필요(OMP `firstKeptEntryId` 역추적, Hermes 회전 체인+`_compressed_summary`). 오탐 시 빈 아웃라인·kept tail 손실.
 - a-seek 직접 원인은 이미 수정됨(ID/니들/signature). 경계 숨김 없이 해결된 문제.
 - 완전 숨김은 서버 불변식 6건 붕괴(고아 items 꼬리 부활 `service.ts:710-711`, `timeline_index`·`before_index`·병합·totals/unhide·seek 무한 페이징). 상세: 세션 대화 기록 참조.
+
+## 8. 결정 변경: (B) 최신 청크만 표시 (2026-11-19, §7 폐기)
+
+§7의 (a) 전체 유지를 폐기하고 **(B) 최신 압축 청크만 표시**로 변경한다.
+
+근거: 전체 표시는 경계·페이징·검색·totals·unhide·seek의 관리·검토 포인트를 계속 늘린다. 최신 청크만 표시하면 행 수가 청크 크기로 상한되어 렌더·메모리·가상화 문제가 함께 사라진다.
+
+필수 선행·불변식:
+1. 경계 탐지: OMP는 `compaction` 라인이 kept tail 뒤에 append되므로 `firstKeptEntryId` 역추적. Hermes는 회전 체인(`parent_session_id`) + `_compressed_summary` 위치.
+2. 압축이 없는 세션은 전체가 단일 청크이므로 256MiB/100k행 상한을 유지한다.
+3. `list`·검색·`totals`·`before_index`를 청크 범위로 한정한다. 검색은 **최신 청크만** 대상으로 한다.
+4. `timeline_index` 좌표계(청크 로컬 vs 전역)와 `chatNavigation` seek 정합을 검증한다.
+5. Hermes 청크 = **마지막 압축 이후 행**. in-place 압축은 `active=1`이 이미 그 범위이고, 회전은 `parent_session_id` 체인을 따라 최신 링크의 `_compressed_summary` 행부터 표시한다. 세션 선택은 제품 결정이 아니라 체인 탐색 결과다.
+6. fallback(서버 타임라인 없음) 경로는 청크 개념이 없으므로 표시 정책을 별도 명시한다.
+7. 이전 청크에 속한 items의 unhide 경로를 정의한다.
+8. 하단 통계(`hidden_count`·`saved_bytes`·`tokens`·`total_rows`)는 표시 청크 기준으로 리셋한다.
+
+상태: 별도 PR. 이번 PR은 상한·권한·CI·manual hide만 반영.
+
+## 9. RPC 신뢰 경계 (2026-11-19)
+
+플러그인 RPC는 **Paseo 데몬 owner 신뢰 경계** 안에서 동작한다.
+
+- RPC 요청에는 `requestId`·`pluginId`·`method`·`input`만 있고 호출자 workspace/agent 신원이 없다(`@getpaseo/protocol` 요청 스키마).
+- 데몬은 플러그인 인스턴스 1개를 모든 세션에 공유하며, owner principal은 전 권한을 받는다. workspace 단위 RPC 격리는 없다.
+- 따라서 플러그인은 caller 단위 인가를 구현할 수 없다. `scope_key` 형식·등록 검증은 위조·오타 방지일 뿐 인가가 아니다.
+- 실질 경계는 (1) 데몬 소켓 접근 권한, (2) 홈 디렉터리 권한, (3) 같은 UID 프로세스는 어차피 원본 파일을 직접 읽을 수 있다는 사실이다.
+- 이 경계를 바꾸려면 호스트가 인증된 principal을 handler context에 전달해야 한다. 그때까지 이 문서를 계약으로 삼는다.

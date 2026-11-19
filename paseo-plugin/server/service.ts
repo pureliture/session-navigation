@@ -20,6 +20,8 @@ import {
   type Result,
 } from "../../packages/core/src/index.ts";
 import { bindAgents } from "./mapping.ts";
+import { manualHideItem } from "./manualHide.ts";
+import { HistoryTooLargeError } from "./historyLimits.ts";
 import {
   acquireHermesToggleLock,
   inspectHermesToggle,
@@ -469,7 +471,12 @@ export class PaseoService {
   }
 
   private failure(error: unknown): Reply {
-    const code = error instanceof EngineError ? error.code : "engine_error";
+    const code =
+      error instanceof EngineError
+        ? error.code
+        : error instanceof HistoryTooLargeError
+          ? error.code
+          : "engine_error";
     return {
       ok: false,
       error: code,
@@ -938,6 +945,29 @@ export class PaseoService {
       ) {
         return { ok: false, error: "invocation_conflict" };
       }
+      const fallbackId =
+        matchedTarget?.item_id ??
+        itemId(
+          scope,
+          record.call_id,
+          record.content_sha256,
+          record.invocation_digest,
+          record.result_position,
+        );
+      if (mode !== "summarize") {
+        return this.result(
+          this.store.put(
+            scope,
+            manualHideItem(fallbackId, record),
+            undefined,
+            true,
+          ),
+        );
+      }
+      const optionsOmitted = Boolean(
+        matchedTarget?.options_omitted ??
+          ("options_omitted" in record ? record.options_omitted : undefined),
+      );
       const refusal = refusalReason(record, this.engine.config);
       if (
         refusal &&
@@ -949,19 +979,6 @@ export class PaseoService {
         ].includes(refusal)
       )
         return { ok: false, error: refusal };
-      const fallbackId =
-        matchedTarget?.item_id ??
-        itemId(
-          scope,
-          record.call_id,
-          record.content_sha256,
-          record.invocation_digest,
-          record.result_position,
-        );
-      const optionsOmitted = Boolean(
-        matchedTarget?.options_omitted ??
-          (record as { options_omitted?: boolean }).options_omitted,
-      );
       const baseline = refusal
         ? null
         : selectRule(selectableText(record.content), [], this.engine.config);

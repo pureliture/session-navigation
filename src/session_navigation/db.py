@@ -267,6 +267,11 @@ def open_db(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
     resolved = resolve_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(resolved), timeout=30, check_same_thread=False, factory=EngineConnection)
+    try:
+        os.chmod(resolved, 0o600)
+    except OSError:
+        # Best effort: not every filesystem supports chmod.
+        pass
     conn.execute("PRAGMA busy_timeout=30000")
     try:
         check_protocol(conn)

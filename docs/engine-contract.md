@@ -222,15 +222,21 @@ truncated UI previews.
   `protected_error`, `sensitive_invocation`, `invocation_too_large`,
   `destructive_command`, `content_tampered`, `invalid_invocation_order`,
   `invocation_conflict`) without override.
-* **Paseo direct user manual hides** (`explicit_user_hide` and manual
-  `summarize_pending` requests from the Paseo UI): because the user explicitly
-  selects a target backed by verified `adapter_targets` or the complete host
-  original history (never a UI preview), the service allows manual override of
-  advisory policy gates (`not_long`, `protected_error`, `sensitive_invocation`,
-  `invocation_too_large`). Integrity, safety and concurrency fences
+* **Paseo direct user manual hides** (`explicit_user_hide` with `mode="hide"`):
+  manual hide is a separate operation, not engine compaction. It evaluates no
+  advisory or compaction policy (`not_long`, `protected_error`,
+  `sensitive_invocation`, `invocation_too_large`, rule selection, excerpt
+  generation). The replacement is a single line
+  `[hidden: <tool_name> <call_id>]`; the original output is kept for preview and
+  unhide, and the invocation snapshot is not stored. `sensitive_invocation` and
+  `invocation_too_large` are persistence guards, and manual hide must not defeat
+  them by writing the snapshot. Integrity, safety and concurrency fences
   (`destructive_command`, `content_tampered`, `invalid_invocation_order`,
   identity fencing `invocation_conflict`, and optimistic version CAS) remain
   strictly enforced and are never bypassed.
+* **Paseo manual summarize pending** (`summarize_pending`): still evaluates the
+  advisory gates with the override list above and produces the rule/excerpt
+  replacement, because summarize depends on compaction policy.
 
 ## Mutations, summaries and batches
 
@@ -293,6 +299,7 @@ not retried against a newly observed version without a new user decision.
 | `adapter_unavailable` | Publication without a compatible enabled Hide owner |
 | `invalid_adapter_registration`, `invalid_target_identity` | Invalid ownership or publication evidence |
 | `verification_failed`, `summarizer_unavailable` | Invalid/model-unavailable summary; preserve rule hide |
+| `history_too_large` | Host history exceeds the load limits (256 MiB or 100k rows); no partial timeline is returned |
 | Policy/identity refusals | Existing `protected_*`, `unsupported_tool`, `invalid_invocation`, `invocation_conflict`, `ambiguous`, `keep_lines_conflict`, etc. retain their established meaning |
 
 Python persistence exceptions expose `.code`; JSON transports preserve it rather
@@ -300,3 +307,11 @@ than relabel protocol/journal refusals as `db_error`. Busy errors normalize to
 `db_error` with no successful mutation. Middleware persistence failures preserve
 the outgoing originals and report loudly; host fail-open is not a persistence
 success. Never log original result bodies or invocation arguments as diagnostics.
+
+## File permissions
+
+Every driver (`NodeDriver`, `BunDriver`, Python `open_db`) applies mode `0600` to
+the state database on open. Existing files are tightened on the next open, so a
+one-time manual `chmod` is unnecessary. The chmod is best-effort on filesystems
+that do not support it. This is defense against path relocation and backup
+copies; it does not isolate processes running as the same user.

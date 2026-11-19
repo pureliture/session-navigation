@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { acquireHermesToggleLock, inspectHermesPluginInstall, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
@@ -10,6 +10,7 @@ import {
   sha256,
   invocationDigest,
   itemId,
+  refusalReason,
   type Item,
 } from "../../packages/core/src/index.ts";
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
@@ -28,6 +29,7 @@ import {
   type Message,
 } from "./history.ts";
 import { hermesFilterInvocation, loadHermesTimeline } from "./hermesHistory.ts";
+import { MAX_HISTORY_BYTES } from "./historyLimits.ts";
 import { bindAgents } from "./mapping.ts";
 import { MutationResultSchema } from "../shared/sessionNav.ts";
 
@@ -815,7 +817,11 @@ test("Hermes adapter_targets with options_omitted=1 remain manageable in list an
   const hidden = await service.handle("hide", { scope_key: hermesScope, item_id: id, mode: "hide" });
   expect(hidden.ok).toBe(true);
   expect(hidden.item.compacted_bytes_size).toBeLessThan(hidden.item.bytes_size);
-  expect(store.get(hermesScope, id)?.invocation_options_omitted).toBe(true);
+  const stored = store.get(hermesScope, id);
+  expect(stored?.compacted).toBe("[hidden: terminal call_timeout_1]");
+  expect(stored?.invocation_digest).toBe(fullDigest);
+  expect(stored?.invocation_snapshot).toBe(null);
+  expect(stored?.invocation_options_omitted).toBe(false);
 });
 
 test("PASEO_HOME redirects only the real home, never an isolated fixture home", () => {
@@ -1033,14 +1039,22 @@ test("Hermes local state.db loads full chronological timeline on the server, ena
   expect(hidePrompt.ok).toBe(true);
   expect(hidePrompt.visibility).toBe("hidden");
 
-  // Hide the Hermes terminal tool call (with timeout: 30 -> invocation_options_omitted = true)
+  // Hide the Hermes terminal tool call (with timeout: 30 -> options_omitted digest is preserved; manual hide omits invocation_snapshot)
   const hideTool = await service.handle("hide", {
     scope_key: hermesScope,
     item_id: listed.items[2].item_id,
   });
   expect(hideTool.ok).toBe(true);
   const storedTool = store.get(hermesScope, listed.items[2].item_id);
-  expect(storedTool?.invocation_options_omitted).toBe(true);
+  expect(storedTool?.compacted).toBe("[hidden: terminal call_h_term]");
+  expect(storedTool?.invocation_digest).toBe(
+    invocationDigest(
+      { tool_name: "terminal", arguments: { command: "kubectl get pods -n neurons" } },
+      { timeout: 30 },
+    ),
+  );
+  expect(storedTool?.invocation_snapshot).toBe(null);
+  expect(storedTool?.invocation_options_omitted).toBe(false);
 });
 
 test("unregistered Hermes custom profiles and new OMP sessions get virtual scopes and immediate server_timeline", async () => {
@@ -1179,7 +1193,7 @@ test("OMP summary_line normalizes <paseo-system>, <system-reminder>, <system-not
   const hidden = await call("hide", { item_id: toolRow.item_id, mode: "hide" });
   expect(hidden.ok).toBe(true);
   const stored = store.get(scope, toolRow.item_id)!;
-  expect(stored.compacted).toBe(`[hidden:${toolRow.item_id}]`);
+  expect(stored.compacted).toBe("[hidden: bash c_short]");
 
   const listedAfter = await call("list");
   const hiddenToolRow = listedAfter.items.find((r: any) => r.item_id === toolRow.item_id);
@@ -1314,11 +1328,16 @@ test("explicit_user_hide prioritizes verified adapter_targets while strictly enf
     hdb.close();
   }
 
-  // Hiding by tool_call_id should prioritize matchedTarget's verified invocation_digest and options_omitted
+  // Hiding by tool_call_id keeps the verified invocation_digest. Manual hide no
+  // longer stores the invocation snapshot or an excerpt: it writes a single-line
+  // replacement and keeps only the original output for preview/unhide.
   const hidePrio = await service.handle("hide", { scope_key: hScope, item_id: "call_prio" });
   expect(hidePrio.ok).toBe(true);
   expect(hidePrio.item_id).toBe(targetItemId);
-  expect(store.get(hScope, targetItemId)?.invocation_options_omitted).toBe(true);
+  expect(store.get(hScope, targetItemId)?.invocation_options_omitted).toBe(false);
+  expect(store.get(hScope, targetItemId)?.invocation_snapshot).toBe(null);
+  expect(store.get(hScope, targetItemId)?.excerpt_lines).toEqual([]);
+  expect(store.get(hScope, targetItemId)?.compacted).toBe("[hidden: terminal call_prio]");
   expect(store.get(hScope, targetItemId)?.invocation_digest).toBe(targetDigest);
 
   // Destructive commands MUST still be refused even for explicit_user_hide
@@ -2595,4 +2614,35 @@ test("Hermes YAML patching uses Document AST to preserve flow strings, block sca
       expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
     }
   }
+});
+
+test("manual hide ignores compaction policy and writes a single-line replacement", async () => {
+  const content = `Traceback (most recent call last):\nERROR: command failed with exit_code=1\n${"x".repeat(900)}`;
+  const invocation = { tool_name: "bash", arguments: { command: "false" } };
+  const { home, store, call } = fixture(
+    toolMessages(content, "bash", { command: "false" }),
+  );
+  const record = loadTimeline(home, scope).records.get("c1")!;
+  expect(refusalReason(record)).toBe("protected_error");
+
+  const hidden = await call("hide", { item_id: "c1" });
+  expect(hidden.ok).toBe(true);
+  const digest = invocationDigest(invocation);
+  const sha = sha256(content);
+  const item = store.get(scope, itemId(scope, "c1", sha, digest, 0));
+  expect(item?.compacted).toBe("[hidden: bash c1]");
+  expect(item?.excerpt_lines).toEqual([]);
+  expect(item?.invocation_snapshot).toBe(null);
+  expect(item?.original).toBe(content);
+  expect(item?.visibility).toBe("hidden");
+  expect(item?.compaction_source).toBe("explicit_user_hide");
+});
+
+test("history loader rejects files over the byte limit with history_too_large", async () => {
+  const { home, call } = fixture();
+  const path = join(home, ".omp/agent/sessions/project", "2026_sid.jsonl");
+  truncateSync(path, MAX_HISTORY_BYTES + 1);
+  const reply = await call("list");
+  expect(reply.ok).toBe(false);
+  expect(reply.error).toBe("history_too_large");
 });

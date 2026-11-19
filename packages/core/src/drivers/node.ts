@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import {
   exactRow,
@@ -13,6 +14,13 @@ export class NodeDriver implements Driver {
   constructor(path: string) {
     try {
       this.db = new DatabaseSync(path);
+      if (path !== ":memory:" && !path.startsWith("file:")) {
+        try {
+          chmodSync(path, 0o600);
+        } catch {
+          // Best effort: not every filesystem supports chmod.
+        }
+      }
     } catch (error) {
       throw normalizeError(error);
     }

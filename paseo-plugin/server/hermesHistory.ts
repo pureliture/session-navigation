@@ -11,6 +11,7 @@ import {
   type RecordInput,
 } from "../../packages/core/src/index.ts";
 import { cloneTimeline, formatToolSummary, preview, summaryLine, type History, type Timeline } from "./history.ts";
+import { HistoryTooLargeError, MAX_HISTORY_ROWS } from "./historyLimits.ts";
 
 export type HermesExtendedRecord = RecordInput & { options_omitted?: boolean };
 
@@ -477,6 +478,17 @@ export function loadHermesTimeline(
         } catch {
           // Ignore malformed model_config JSON.
         }
+      }
+
+      const activeCount = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND active = 1",
+        )
+        .get(sessionId) as { n?: number } | undefined;
+      if ((activeCount?.n ?? 0) > MAX_HISTORY_ROWS) {
+        throw new HistoryTooLargeError(
+          `hermes session exceeds ${MAX_HISTORY_ROWS} active rows (${activeCount?.n})`,
+        );
       }
 
       const dbRows = db
