@@ -171,7 +171,7 @@ CDP 실화면 DOM 덤프로 확인). 기대 결과의 수치·ID는 아래 4절�
 7. **이전 청크 items의 unhide 경로**: 이전 청크에 속한 항목은 아웃라인 표시·검색·집계에서 제외되지만, 저장소(`items`/`units`) 레코드는 보존되므로 직접 `unhide` RPC(item_id/unit_id 지정)는 계속 동작한다.
 8. **하단 수치·클라이언트 상태 리셋** (`paseo-plugin/client/sessionNavPanel.tsx`): 하단 `hidden_count`·`saved_bytes`·`total_rows`는 서버 `totals`(청크 기준)를 사용하며, 라이브 압축으로 `has_older`가 사라지거나 `total_rows`가 감소하면 기로드된 `olderServerState`를 무효화한다.
 
-상태: 구현 완료 (브랜치 `feat/latest-chunk-outline`, base `fix/subagent-code-review-fixes` 스택 Draft PR).
+상태: 구현 완료 (브랜치 `feat/latest-chunk-outline`, base `fix/subagent-code-review-fixes` 스택 Draft PR [#33](https://github.com/pureliture/session-navigation/pull/33), 머지 금지).
 
 ## 9. RPC 신뢰 경계 (2026-11-19)
 
