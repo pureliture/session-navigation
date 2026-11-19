@@ -221,30 +221,138 @@ def test_session_expiry_forgets_quiet_scopes():
 
 
 
-def test_disable_returns_to_original_and_reenable_applies():
+def test_disable_protects_existing_hidden_items_and_allows_unhide_then_reenable():
     ctx = FakeCtx(config={"enabled": True})
     state = plugin.register(ctx)
     mw = ctx.middlewares["llm_request"][0]
     compact = ctx.tools["hide_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
+    unhide = ctx.tools["unhide_context"]["handler"]
     body = _long_body()
     kwargs = dict(session_id="sess-toggle", api_mode="codex_responses")
 
     mw(request=_codex_request(body), **kwargs)
-    assert json.loads(compact({"tool_call_id": "call_1"},
-                            session_id="sess-toggle"))["ok"] is True
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-toggle"))
+    assert compacted["ok"] is True
     applied = mw(request=_codex_request(body), **kwargs)
     assert applied["request"]["input"][1]["output"] != body
 
     ctx.config["enabled"] = False
-    assert mw(request=_codex_request(body), **kwargs) is None
     untouched = _codex_request(body)
     snapshot = copy.deepcopy(untouched)
-    assert mw(request=untouched, **kwargs) is None
+    protected = mw(request=untouched, **kwargs)
     assert untouched == snapshot
+    assert protected is not None
+    assert protected["reason"].startswith("protection_only")
+    assert protected["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in protected["request"]["input"][1]["output"]
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-toggle")) == {
+        "ok": False, "error": "disabled",
+    }
+    listed = json.loads(list_items({}, session_id="sess-toggle"))
+    assert listed["ok"] is True and listed["compacted_count"] == 1
+    assert json.loads(unhide({"item_id": compacted["item_id"]}, session_id="sess-toggle"))["ok"] is True
+    assert mw(request=_codex_request(body), **kwargs) is None
 
     ctx.config["enabled"] = True
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-toggle"))["ok"] is True
     again = mw(request=_codex_request(body), **kwargs)
     assert again["request"]["input"][1]["output"] != body
+
+
+def test_adapter_control_off_enters_protection_only_without_recording_pending_or_reminders(tmp_path):
+    import hashlib
+    from dataclasses import replace
+
+    ctx = FakeCtx(config={"enabled": True})
+    state = plugin.register(ctx)
+    state.count_middlewares = lambda: 0
+    command_mod = _adapter.command
+    mw = ctx.middlewares["llm_request"][0]
+    compact = ctx.tools["hide_context"]["handler"]
+    summarize = ctx.tools["summarize_context"]["handler"]
+    manage = ctx.tools["manage_context"]["handler"]
+    list_items = ctx.tools["list_context_items"]["handler"]
+    unhide = ctx.tools["unhide_context"]["handler"]
+
+    body = _long_body()
+    big_unhidden = "\n".join(f"Large unhidden line {i:04d} padding " + "x" * 120 for i in range(400))
+    req = {
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "secret prompt"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": json.dumps({"path": "results/output.json"})},
+            {"type": "function_call_output", "call_id": "call_1", "output": body},
+            {"type": "function_call", "call_id": "call_2", "name": "read_file", "arguments": json.dumps({"path": "results/big.txt"})},
+            {"type": "function_call_output", "call_id": "call_2", "output": big_unhidden},
+        ]
+    }
+    kwargs = dict(session_id="sess-ctrl-off", api_mode="codex_responses")
+    mw(request=req, **kwargs)
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-ctrl-off"))
+    assert compacted["ok"] is True
+
+    scope = plugin.scope_for(state, "sess-ctrl-off")
+    assert scope is not None
+    # Seed a hidden user message AND mark call_1 as summarize_pending to confirm pending execution stops when Off.
+    stored = state.engine.store.get(scope, compacted["item_id"])
+    assert stored is not None
+    state.engine.store.put(
+        scope,
+        replace(stored, compaction_source="summarize_pending", version=stored.version + 1),
+        expected_version=stored.version,
+    )
+    msg_key, role, _idx, msg_text = _adapter.payload.message_keys("codex_responses", req)[0]
+    assert state.engine.store.set_message_visibility(
+        scope,
+        msg_key,
+        kind=role,
+        content_sha256=hashlib.sha256(msg_text.encode("utf-8")).hexdigest(),
+        char_count=len(msg_text),
+        visibility="hidden",
+    )["ok"] is True
+
+    class FailIfCalledSummarizer:
+        async def summarize(self, *args, **kwargs):
+            raise AssertionError("summarizer must not run while adapter_control is Off")
+
+    state.summarizer = FailIfCalledSummarizer()
+    state.reminders.note = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reminders must not run while Off"))
+
+    # Turn Hermes Off via shared adapter_control table (even while ctx.config["enabled"] stays True!).
+    state.engine.store.set_adapter_control("hermes", False)
+    state.store._sessions.clear()
+
+    out = mw(request=req, **kwargs)
+    assert out is not None
+    assert out["reason"] == "protection_only (applied 1)"
+    assert all(item.get("role") != "user" for item in out["request"]["input"])
+    assert out["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in out["request"]["input"][1]["output"]
+    assert out["request"]["input"][3]["output"] == big_unhidden
+    # No new candidates recorded while Off
+    assert state.store.entries(scope.scope_key()) == []
+    # Pending summary was NOT executed
+    assert state.engine.store.get(scope, compacted["item_id"]).compaction_source == "summarize_pending"
+    assert state.engine.store.adapter_session(scope)["enabled"] is False
+
+    # Mutating tools and mutating /nav commands are blocked while Off
+    assert json.loads(compact({"tool_call_id": "call_2"}, session_id="sess-ctrl-off")) == {"ok": False, "error": "disabled"}
+    assert json.loads(summarize({"tool_call_id": "call_2"}, session_id="sess-ctrl-off")) == {"ok": False, "error": "disabled"}
+    assert json.loads(manage({"tool_call_ids": ["call_2"], "action": "hide"}, session_id="sess-ctrl-off")) == {"ok": False, "error": "disabled"}
+    assert "disabled" in command_mod.nav_command(state=state, raw_args="hide call_2", session_id="sess-ctrl-off").lower()
+    assert "disabled" in command_mod.nav_command(state=state, raw_args="hide-msg 1", session_id="sess-ctrl-off").lower()
+
+    # Read & recovery paths (/nav status, /nav list, /nav unhide, /nav unhide-msg, list_context_items, unhide_context) work while Off
+    status_out = command_mod.nav_command(state=state, raw_args="status", session_id="sess-ctrl-off")
+    assert "protection_only" in status_out and compacted["item_id"] in status_out
+    listed = json.loads(list_items({}, session_id="sess-ctrl-off"))
+    assert listed["ok"] is True and listed["compacted_count"] == 1
+    assert json.loads(list_items({"view": "candidates"}, session_id="sess-ctrl-off")) == {"ok": True, "items": []}
+
+    assert command_mod.nav_command(state=state, raw_args="unhide 1", session_id="sess-ctrl-off").startswith("Unhidden")
+    assert command_mod.nav_command(state=state, raw_args="unhide-msg 1", session_id="sess-ctrl-off").startswith("Unhidden")
+    assert mw(request=req, **kwargs) is None
+    assert json.loads(unhide({"item_id": compacted["item_id"]}, session_id="sess-ctrl-off"))["ok"] is True
 
 
 def test_first_version_is_rule_only_no_external_call():
@@ -545,3 +653,618 @@ db.close();
 """
     proc = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_codex_strict_schema_null_optional_args_and_integer_ids_parity() -> None:
+    import shutil, subprocess
+    filter_invocation = _adapter.allowlist.filter_invocation
+
+    # Codex strict tool schemas emit explicit null for omitted optional parameters
+    inv_rf, om_rf = filter_invocation("read_file", '{"path": "src/app.py", "offset": null, "limit": null}')
+    assert inv_rf == {"tool_name": "read_file", "arguments": {"path": "src/app.py"}} and om_rf == {}
+    inv_tm, om_tm = filter_invocation("terminal", '{"command": "ls -la", "workdir": null, "timeout": null}')
+    assert inv_tm == {"tool_name": "terminal", "arguments": {"command": "ls -la"}} and om_tm == {}
+    inv_bs, om_bs = filter_invocation("browser_snapshot", '{"tab_id": 2, "selector": null}')
+    assert inv_bs == {"tool_name": "browser_snapshot", "arguments": {"tab_id": 2}} and om_bs == {}
+
+    bun = shutil.which("bun")
+    if bun:
+        proc = subprocess.run(
+            [
+                bun,
+                "-e",
+                'import { hermesFilterInvocation } from "./paseo-plugin/server/hermesHistory.ts";'
+                'const a = hermesFilterInvocation("read_file", \'{"path":"src/app.py","offset":null,"limit":null}\');'
+                'const b = hermesFilterInvocation("terminal", \'{"command":"ls -la","workdir":null,"timeout":null}\');'
+                'const c = hermesFilterInvocation("browser_snapshot", \'{"tab_id":2,"selector":null}\');'
+                'if (JSON.stringify(a?.invocation?.arguments) !== \'{"path":"src/app.py"}\') process.exit(2);'
+                'if (JSON.stringify(b?.invocation?.arguments) !== \'{"command":"ls -la"}\') process.exit(3);'
+                'if (JSON.stringify(c?.invocation?.arguments) !== \'{"tab_id":2}\') process.exit(4);',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_python_payload_ts_hermes_history_message_key_parity_both_modes(tmp_path) -> None:
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is required for TypeScript hermesHistory verification")
+
+    repo = Path(__file__).resolve().parents[1]
+    payload_mod = _adapter.payload
+
+    chat_payload = {
+        "messages": [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Run status check"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_chat_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path":"a.txt"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": " call_chat_1 ", "content": "contents of a.txt"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_chat_2",
+                        "type": "function",
+                        "function": {"name": "terminal", "arguments": '{"command":"ls"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_chat_2", "content": "file1\nfile2"},
+            {"role": "assistant", "content": "Both checks finished."},
+            {"role": "user", "content": "Thanks!"},
+        ]
+    }
+    chat_expected = [key for key, _role, _idx, text in payload_mod.message_keys("chat_completions", chat_payload) if text.strip()]
+
+    codex_payload = {
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Inspect pods"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Running kubectl"}]},
+            {"type": "function_call", "call_id": "call_cx_1", "name": "terminal", "arguments": '{"command":"kubectl get pods"}'},
+            {"type": "function_call_output", "call_id": " call_cx_1 ", "output": "pod-1 Running"},
+            {"type": "function_call", "call_id": "call_cx_2", "name": "read_file", "arguments": '{"path":"b.txt"}'},
+            {"type": "function_call_output", "call_id": "call_cx_2", "output": "b-body"},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Pods are healthy."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Great"}]},
+        ]
+    }
+    codex_expected = [key for key, _role, _idx, text in payload_mod.message_keys("codex_responses", codex_payload) if text.strip()]
+
+    script = f"""
+import {{ DatabaseSync }} from "node:sqlite";
+import {{ mkdirSync }} from "node:fs";
+import {{ join }} from "node:path";
+import {{ loadHermesTimeline }} from {json.dumps(str(repo / "paseo-plugin/server/hermesHistory.ts"))};
+
+const home = {json.dumps(str(tmp_path / "parity-home"))};
+mkdirSync(join(home, ".hermes"), {{ recursive: true }});
+const db = new DatabaseSync(join(home, ".hermes/state.db"));
+db.exec(`
+  CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+  CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,
+    tool_name TEXT,
+    codex_message_items TEXT,
+    api_content TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    compacted INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const insSess = db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)");
+const insMsg = db.prepare(`
+  INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, codex_message_items, api_content)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+// 1. chat_completions with empty-string and null-content tool_calls assistant rows + trimmed call_id
+insSess.run("s-chat", JSON.stringify({{ gateway_runtime: {{ api_mode: "chat_completions" }} }}));
+insMsg.run("s-chat", "user", "Run status check", null, null, null, null, null);
+insMsg.run("s-chat", "assistant", "", null, JSON.stringify([{{ id: "call_chat_1", type: "function", function: {{ name: "read_file", arguments: '{{"path":"a.txt"}}' }} }}]), null, null, null);
+insMsg.run("s-chat", "tool", "contents of a.txt", " call_chat_1 ", null, "read_file", null, null);
+insMsg.run("s-chat", "assistant", null, null, JSON.stringify([{{ id: "call_chat_2", type: "function", function: {{ name: "terminal", arguments: '{{"command":"ls"}}' }} }}]), null, null, null);
+insMsg.run("s-chat", "tool", "file1\\nfile2", "call_chat_2", null, "terminal", null, null);
+insMsg.run("s-chat", "assistant", "Both checks finished.", null, null, null, null, null);
+insMsg.run("s-chat", "user", "Thanks!", null, null, null, null, null);
+
+const tlChat = loadHermesTimeline(home, "hermes:default:s-chat:unknown");
+if (!tlChat) throw new Error("missing chat timeline");
+const chatActual = tlChat.rows.filter((r) => r.kind === "user" || r.kind === "assistant").map((r) => r.item_id);
+const chatExpected = {json.dumps(chat_expected)};
+if (JSON.stringify(chatActual) !== JSON.stringify(chatExpected)) {{
+  console.error("CHAT_PARITY_MISMATCH", JSON.stringify({{ chatActual, chatExpected }}));
+  process.exit(1);
+}}
+const trimmedTool = tlChat.rows.find((r) => r.tool_call_id === "call_chat_1");
+if (!trimmedTool || !trimmedTool.manageable || !tlChat.records.has("call_chat_1")) {{
+  console.error("TRIM_CALL_ID_FAIL", trimmedTool);
+  process.exit(2);
+}}
+
+// 2. codex_responses with codex_message_items and tool-only assistant row without message item
+insSess.run("s-codex", JSON.stringify({{ gateway_runtime: {{ api_mode: "codex_responses" }} }}));
+insMsg.run("s-codex", "user", "Inspect pods", null, null, null, null, "Inspect pods");
+insMsg.run(
+  "s-codex",
+  "assistant",
+  "",
+  null,
+  JSON.stringify([{{ call_id: "call_cx_1", type: "function", function: {{ name: "terminal", arguments: '{{"command":"kubectl get pods"}}' }} }}]),
+  null,
+  JSON.stringify([{{ type: "message", role: "assistant", content: [{{ type: "output_text", text: "Running kubectl" }}] }}]),
+  null,
+);
+insMsg.run("s-codex", "tool", "pod-1 Running", " call_cx_1 ", null, "terminal", null, null);
+insMsg.run(
+  "s-codex",
+  "assistant",
+  "",
+  null,
+  JSON.stringify([{{ call_id: "call_cx_2", type: "function", function: {{ name: "read_file", arguments: '{{"path":"b.txt"}}' }} }}]),
+  null,
+  null,
+  null,
+);
+insMsg.run("s-codex", "tool", "b-body", "call_cx_2", null, "read_file", null, null);
+insMsg.run("s-codex", "assistant", "Pods are healthy.", null, null, null, null, null);
+insMsg.run("s-codex", "user", "Great", null, null, null, null, "Great");
+
+const tlCodex = loadHermesTimeline(home, "hermes:default:s-codex:unknown");
+if (!tlCodex) throw new Error("missing codex timeline");
+const codexActual = tlCodex.rows.filter((r) => r.kind === "user" || r.kind === "assistant").map((r) => r.item_id);
+const codexExpected = {json.dumps(codex_expected)};
+if (JSON.stringify(codexActual) !== JSON.stringify(codexExpected)) {{
+  console.error("CODEX_PARITY_MISMATCH", JSON.stringify({{ codexActual, codexExpected }}));
+  process.exit(3);
+}}
+db.close();
+"""
+    proc = subprocess.run([bun, "-e", script], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_hermes_registers_protection_markers_and_fails_closed_on_control_lookup_error(monkeypatch):
+    ctx = FakeCtx(config={"enabled": True})
+    state = plugin.register(ctx)
+    mw = ctx.middlewares["llm_request"][0]
+    compact = ctx.tools["hide_context"]["handler"]
+    body = _long_body()
+    kwargs = dict(session_id="sess-markers", api_mode="codex_responses")
+
+    mw(request=_codex_request(body), **kwargs)
+    compacted = json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-markers"))
+    assert compacted["ok"] is True
+
+    scope = plugin.scope_for(state, "sess-markers")
+    assert scope is not None
+    reg_on = state.engine.store.adapter_session(scope)
+    assert reg_on is not None
+    assert reg_on["enabled"] is True
+    assert reg_on["capabilities"]["protection_only"] is True
+    assert reg_on["capabilities"]["bundle_fingerprint"] == _adapter.factories.RUNTIME_BUNDLE_FINGERPRINT
+
+    # Simulate an error reading adapter_control: _is_effectively_enabled must fail closed (False),
+    # keeping hidden items protected in protection_only mode and blocking new mutations.
+    monkeypatch.setattr(
+        state.engine.store,
+        "get_adapter_control",
+        lambda _aid: (_ for _ in ()).throw(RuntimeError("control_table_locked")),
+    )
+    assert _adapter.factories._is_effectively_enabled(state) is False
+    assert json.loads(compact({"tool_call_id": "call_1"}, session_id="sess-markers")) == {
+        "ok": False, "error": "disabled",
+    }
+    protected = mw(request=_codex_request(body), **kwargs)
+    assert protected is not None
+    assert protected["reason"] == "protection_only (applied 1)"
+    assert protected["request"]["input"][1]["output"] != body
+    assert compacted["item_id"] in protected["request"]["input"][1]["output"]
+
+    reg_off = state.engine.store.adapter_session(scope)
+    assert reg_off is not None
+    assert reg_off["enabled"] is False
+    assert reg_off["capabilities"]["protection_only"] is True
+    assert reg_off["capabilities"]["bundle_fingerprint"] == _adapter.factories.RUNTIME_BUNDLE_FINGERPRINT
+
+
+def test_protection_only_and_enabled_modes_enforce_branch_alias_and_invocation_identity_fences():
+    import hashlib
+    from session_navigation.model import ContextItem, compute_invocation_digest
+
+    body = _long_body()
+    content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    inv = {"tool_name": "read_file", "arguments": {"path": "results/output.json"}}
+    digest = compute_invocation_digest(inv)
+    for cfg_enabled in (False, True):
+        sess_id = f"sess-alias-{int(cfg_enabled)}"
+        alias_scope = Scope(
+            adapter_id="hermes",
+            host_profile="default",
+            session_id=sess_id,
+            branch_scope="default",
+        )
+        alias_item_id = _adapter.factories._item_id(
+            alias_scope.scope_key(), "call_1", content_sha, digest, 0,
+        )
+        ctx = FakeCtx(config={"enabled": cfg_enabled})
+        state = plugin.register(ctx)
+        mw = ctx.middlewares["llm_request"][0]
+
+        state.engine.store.put(
+            alias_scope,
+            ContextItem(
+                item_id=alias_item_id,
+                tool_call_id="call_1",
+                content_sha256=content_sha,
+                invocation_digest=digest,
+                original=body,
+                compacted=f"[hidden:{alias_item_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv,
+                result_position=0,
+            ),
+        )
+
+        # 1. Exact 5-tuple branch-alias match + hidden user message applies alias compacted summary
+        req_exact = {
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "secret prompt"}]},
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "results/output.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": body},
+            ]
+        }
+        msg_key, role, _idx, msg_text = _adapter.payload.message_keys("codex_responses", req_exact)[0]
+        assert state.engine.store.set_message_visibility(
+            alias_scope,
+            msg_key,
+            kind=role,
+            content_sha256=hashlib.sha256(msg_text.encode("utf-8")).hexdigest(),
+            char_count=len(msg_text),
+            visibility="hidden",
+        )["ok"] is True
+
+        out_exact = mw(request=req_exact, session_id=sess_id, api_mode="codex_responses")
+        assert out_exact is not None
+        if not cfg_enabled:
+            assert out_exact["reason"] == "protection_only (applied 1)"
+        outputs_exact = [item for item in out_exact["request"]["input"] if item.get("type") == "function_call_output"]
+        assert len(outputs_exact) == 1
+        assert outputs_exact[0]["output"] == f"[hidden:{alias_item_id}]"
+        assert all(item.get("role") != "user" for item in out_exact["request"]["input"])
+        assert body not in json.dumps(out_exact["request"])
+
+        # 2. Orphan tool output (missing function_call) MUST withhold both summary and raw body
+        req_orphan = {
+            "input": [
+                {"type": "function_call_output", "call_id": "call_1", "output": body},
+            ]
+        }
+        out_orphan = mw(request=req_orphan, session_id=sess_id, api_mode="codex_responses")
+        assert out_orphan is not None
+        assert out_orphan["request"]["input"][0]["output"] == (
+            f"[hidden:{alias_item_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert f"[hidden:{alias_item_id}]" != out_orphan["request"]["input"][0]["output"]
+        assert body not in json.dumps(out_orphan["request"])
+
+        # 3. Modified arguments with same call_id + sha256 MUST withhold both mismatched summary and raw body
+        req_mutated = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "results/other.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": body},
+            ]
+        }
+        out_mutated = mw(request=req_mutated, session_id=sess_id, api_mode="codex_responses")
+        assert out_mutated is not None
+        outputs_mutated = [item for item in out_mutated["request"]["input"] if item.get("type") == "function_call_output"]
+        assert outputs_mutated[0]["output"] == (
+            f"[hidden:{alias_item_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_mutated["request"])
+
+        # 4. unknown vs default alias conflict (visible in unknown while hidden in default) withholds safely
+        primary_scope = Scope(
+            adapter_id="hermes",
+            host_profile="default",
+            session_id=sess_id,
+            branch_scope="unknown",
+        )
+        primary_item_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_1", content_sha, digest, 0,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=primary_item_id,
+                tool_call_id="call_1",
+                content_sha256=content_sha,
+                invocation_digest=digest,
+                original=body,
+                compacted=f"[hidden:{primary_item_id}]",
+                excerpt_lines=(),
+                visibility="visible",
+                version=2,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv,
+                result_position=0,
+            ),
+        )
+        out_conflict = mw(request=req_exact, session_id=sess_id, api_mode="codex_responses")
+        assert out_conflict is not None
+        outputs_conflict = [item for item in out_conflict["request"]["input"] if item.get("type") == "function_call_output"]
+        assert outputs_conflict[0]["output"] == (
+            f"[hidden:{alias_item_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_conflict["request"])
+
+
+def test_shifted_position_withheld_and_exact_visible_identity_not_overmasked():
+    import hashlib
+    from session_navigation.model import ContextItem, compute_invocation_digest
+
+    body = _long_body()
+    content_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    inv_hidden = {"tool_name": "read_file", "arguments": {"path": "secret.json"}}
+    digest_hidden = compute_invocation_digest(inv_hidden)
+    inv_visible = {"tool_name": "read_file", "arguments": {"path": "public.json"}}
+    digest_visible = compute_invocation_digest(inv_visible)
+    inv_third = {"tool_name": "read_file", "arguments": {"path": "third.json"}}
+
+    for cfg_enabled in (False, True):
+        sess_id = f"sess-pos-vis-{int(cfg_enabled)}"
+        primary_scope = Scope(
+            adapter_id="hermes",
+            host_profile="default",
+            session_id=sess_id,
+            branch_scope="unknown",
+        )
+        ctx = FakeCtx(config={"enabled": cfg_enabled})
+        state = plugin.register(ctx)
+        mw = ctx.middlewares["llm_request"][0]
+
+        # Finding (1): Hidden at position 0, later shifted to position 1 by an earlier output for same call_id
+        shift_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_shift", content_sha, digest_hidden, 0,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=shift_id,
+                tool_call_id="call_shift",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{shift_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=0,
+            ),
+        )
+        req_shifted = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_shift",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "secret.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_shift", "output": "unrelated pre-existing output"},
+                {"type": "function_call_output", "call_id": "call_shift", "output": body},
+            ]
+        }
+        out_shifted = mw(request=req_shifted, session_id=sess_id, api_mode="codex_responses")
+        assert out_shifted is not None
+        shifted_outputs = [item for item in out_shifted["request"]["input"] if item.get("type") == "function_call_output"]
+        assert shifted_outputs[0]["output"] == "unrelated pre-existing output"
+        assert shifted_outputs[1]["output"] == (
+            f"[hidden:{shift_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_shifted["request"])
+
+        # Finding (4): Same (call_id, pos=0, content_sha) has both hidden (secret.json) and visible (public.json)
+        vis_hidden_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_vis", content_sha, digest_hidden, 0,
+        )
+        vis_visible_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_vis", content_sha, digest_visible, 0,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=vis_hidden_id,
+                tool_call_id="call_vis",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{vis_hidden_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=0,
+            ),
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=vis_visible_id,
+                tool_call_id="call_vis",
+                content_sha256=content_sha,
+                invocation_digest=digest_visible,
+                original=body,
+                compacted=f"[hidden:{vis_visible_id}]",
+                excerpt_lines=(),
+                visibility="visible",
+                version=2,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_visible,
+                result_position=0,
+            ),
+        )
+
+        def _req_for(inv_payload):
+            return {
+                "input": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_vis",
+                        "name": inv_payload["tool_name"],
+                        "arguments": json.dumps(inv_payload["arguments"]),
+                    },
+                    {"type": "function_call_output", "call_id": "call_vis", "output": body},
+                ]
+            }
+
+        out_vis = mw(request=_req_for(inv_visible), session_id=sess_id, api_mode="codex_responses")
+        if out_vis is not None:
+            vis_outputs = [item for item in out_vis["request"]["input"] if item.get("type") == "function_call_output"]
+            assert vis_outputs[0]["output"] == body
+
+        # Duplicate call_id with both visible (A) and hidden (B) invocations MUST be treated
+        # as ambiguous and withheld instead of binding the first (visible A) invocation.
+        req_dup_call = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_vis",
+                    "name": inv_visible["tool_name"],
+                    "arguments": json.dumps(inv_visible["arguments"]),
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_vis",
+                    "name": inv_hidden["tool_name"],
+                    "arguments": json.dumps(inv_hidden["arguments"]),
+                },
+                {"type": "function_call_output", "call_id": "call_vis", "output": body},
+            ]
+        }
+        out_dup_call = mw(request=req_dup_call, session_id=sess_id, api_mode="codex_responses")
+        assert out_dup_call is not None
+        dup_call_outputs = [item for item in out_dup_call["request"]["input"] if item.get("type") == "function_call_output"]
+        assert dup_call_outputs[0]["output"] == (
+            f"[hidden:{vis_hidden_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_dup_call["request"])
+
+        out_hid = mw(request=_req_for(inv_hidden), session_id=sess_id, api_mode="codex_responses")
+        assert out_hid is not None
+        hid_outputs = [item for item in out_hid["request"]["input"] if item.get("type") == "function_call_output"]
+        assert hid_outputs[0]["output"] == f"[hidden:{vis_hidden_id}]"
+
+        out_third = mw(request=_req_for(inv_third), session_id=sess_id, api_mode="codex_responses")
+        assert out_third is not None
+        third_outputs = [item for item in out_third["request"]["input"] if item.get("type") == "function_call_output"]
+        assert third_outputs[0]["output"] == (
+            f"[hidden:{vis_hidden_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_third["request"])
+
+        # Same (call_id, content_sha, invocation_digest) has pos=0 hidden and pos=1 visible:
+        # inserting a new output before it shifts pos=0 hidden onto pos=1, which MUST withhold pos=1.
+        dup_pos0_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_dup_pos", content_sha, digest_hidden, 0,
+        )
+        dup_pos1_id = _adapter.factories._item_id(
+            primary_scope.scope_key(), "call_dup_pos", content_sha, digest_hidden, 1,
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=dup_pos0_id,
+                tool_call_id="call_dup_pos",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{dup_pos0_id}]",
+                excerpt_lines=(),
+                visibility="hidden",
+                version=1,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=0,
+            ),
+        )
+        state.engine.store.put(
+            primary_scope,
+            ContextItem(
+                item_id=dup_pos1_id,
+                tool_call_id="call_dup_pos",
+                content_sha256=content_sha,
+                invocation_digest=digest_hidden,
+                original=body,
+                compacted=f"[hidden:{dup_pos1_id}]",
+                excerpt_lines=(),
+                visibility="visible",
+                version=2,
+                tool_name="read_file",
+                compaction_source="explicit_user_hide",
+                invocation_snapshot=inv_hidden,
+                result_position=1,
+            ),
+        )
+        req_dup_pos = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_dup_pos",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "secret.json"}),
+                },
+                {"type": "function_call_output", "call_id": "call_dup_pos", "output": "inserted earlier output"},
+                {"type": "function_call_output", "call_id": "call_dup_pos", "output": body},
+            ]
+        }
+        out_dup_pos = mw(request=req_dup_pos, session_id=sess_id, api_mode="codex_responses")
+        assert out_dup_pos is not None
+        dup_outputs = [item for item in out_dup_pos["request"]["input"] if item.get("type") == "function_call_output"]
+        assert dup_outputs[0]["output"] == "inserted earlier output"
+        assert dup_outputs[1]["output"] == (
+            f"[hidden:{dup_pos0_id} withheld due to invocation or scope identity conflict]"
+        )
+        assert body not in json.dumps(out_dup_pos["request"])

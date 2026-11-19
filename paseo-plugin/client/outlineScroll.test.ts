@@ -4,6 +4,7 @@ import {
   computeExpandedGroupScrollTop,
   initialRenderCount,
   OutlineAutoScroller,
+  OutlineScrollDriver,
 } from "./outlineScroll";
 
 describe("OutlineAutoScroller", () => {
@@ -173,5 +174,194 @@ describe("OutlineAutoScroller", () => {
       }),
     ).toBeNull();
     expect(initialRenderCount(120)).toBe(120);
+  });
+
+  test("touch upward scroll without wheel events still arms upward intent (long-session top-drag must load older rows)", () => {
+    const scroller = new OutlineAutoScroller(1500);
+    scroller.syncSession("long-session", true);
+    const t0 = 1000000;
+    scroller.recordScroll({ scrollTop: 4000, scrollHeight: 5000, clientHeight: 1000, now: t0 });
+    for (const top of [3000, 1000, 100]) {
+      scroller.recordScroll({ scrollTop: top, scrollHeight: 5000, clientHeight: 1000, now: t0 + 5000 });
+    }
+    expect(scroller.isUserScrolledUp()).toBe(true);
+    expect(scroller.isStuckToBottom()).toBe(false);
+  });
+
+  test("trackpad upward scroll without explicit drag start still arms upward intent", () => {
+    const driver = new OutlineScrollDriver(1500);
+    driver.syncSession("trackpad-session", true);
+    const t0 = 2000000;
+    driver.handleScrollEvent(
+      { nativeEvent: { contentOffset: { y: 4000 }, contentSize: { height: 5000 }, layoutMeasurement: { height: 1000 } } },
+      t0,
+    );
+    driver.handleScrollEvent(
+      { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 5000 }, layoutMeasurement: { height: 1000 } } },
+      t0 + 5000,
+    );
+    expect(driver.scroller.isUserScrolledUp()).toBe(true);
+    expect(driver.scroller.isStuckToBottom()).toBe(false);
+    driver.dispose();
+  });
+
+  test("cancels pending 60ms settle timer on session switch/dispose, prevents expand overwrite, and tracks streaming height growth", async () => {
+
+    const driver = new OutlineScrollDriver(1500);
+    let endCalls = 0;
+    const offsets: number[] = [];
+    const listA = {
+      scrollToEnd: () => {
+        endCalls++;
+      },
+      scrollToOffset: ({ offset }: { offset: number }) => {
+        offsets.push(offset);
+      },
+    };
+    const stateA = { sessionKey: "sessA", mounted: true, rowCount: 20, isLoading: false, hasSearchQuery: false };
+    driver.maybeSync(listA, stateA, { now: 1000 });
+    expect(endCalls).toBe(1);
+    // Switch session immediately before 60ms settle timer fires -> timer must be cancelled
+    driver.syncSession("sessB", true);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(endCalls).toBe(1);
+
+    // Expand group near bottom: handleContentSizeChange adjusts scrollToOffset and suppresses same-commit maybeSync bottom pin
+    endCalls = 0;
+    offsets.length = 0;
+    driver.handleLayout(listA, { nativeEvent: { layout: { height: 500 } } }, { ...stateA, sessionKey: "sessB" }, 2000);
+    driver.handleContentSizeChange(listA, 1500, { ...stateA, sessionKey: "sessB" }, 2010);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 1000 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 500 } } }, 2020);
+    endCalls = 0;
+    driver.prepareGroupExpand(listA, false);
+    driver.handleContentSizeChange(listA, 1750, { ...stateA, sessionKey: "sessB", rowCount: 24 }, 2100);
+    driver.maybeSync(listA, { ...stateA, sessionKey: "sessB", rowCount: 24 }, { now: 2110, scheduleFrame: () => {} });
+    expect(offsets.length).toBe(1);
+    expect(endCalls).toBe(0);
+    driver.dispose();
+
+    // Streaming height growth with constant rowCount keeps bottom pinned when stuck to bottom
+    const scroller = new OutlineAutoScroller(1500);
+    expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 800, isLoading: false, now: 1000 })).toBe(true);
+    expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 800, isLoading: false, now: 4000 })).toBe(false);
+    expect(scroller.shouldScrollToLatest({ sessionKey: "s", rowCount: 10, contentHeight: 920, isLoading: false, now: 4500 })).toBe(true);
+  });
+
+  test("preparePrepend preserves exact scrollTop by delta = nextScrollHeight - prevScrollHeight via both handleContentSizeChange and synchronous maybeSync", () => {
+    // 1. Async / React Native onContentSizeChange path
+    const driver = new OutlineScrollDriver(1500);
+    let endCalls = 0;
+    const offsets: number[] = [];
+    const list = {
+      scrollToEnd: () => {
+        endCalls++;
+      },
+      scrollToOffset: ({ offset }: { offset: number }) => {
+        offsets.push(offset);
+      },
+    };
+    const state = {
+      sessionKey: "sess-prepend",
+      mounted: true,
+      rowCount: 150,
+      isLoading: false,
+      hasSearchQuery: false,
+    };
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 600 } } }, state, 1000);
+    driver.handleContentSizeChange(list, 3000, state, 1010);
+    // User scrolls near top to scrollTop = 120
+    driver.handleWheel({ deltaY: -40 });
+    driver.handleScrollEvent(
+      { nativeEvent: { contentOffset: { y: 120 }, contentSize: { height: 3000 }, layoutMeasurement: { height: 600 } } },
+      2000,
+    );
+    endCalls = 0;
+    offsets.length = 0;
+
+    // Prepend 150 older rows -> scrollHeight grows 3000 -> 5850 (delta = 2850)
+    driver.preparePrepend(list);
+    driver.maybeSync(list, { ...state, rowCount: 300 }, { now: 2050, scheduleFrame: () => {} });
+    expect(endCalls).toBe(0);
+    expect(offsets).toEqual([]);
+    driver.handleContentSizeChange(list, 5850, { ...state, rowCount: 300 }, 2060);
+    expect(offsets).toEqual([120 + 2850]);
+    expect(endCalls).toBe(0);
+    driver.dispose();
+
+    // 2. Synchronous Web DOM useLayoutEffect path (scrollHeight updated before maybeSync)
+    const domDriver = new OutlineScrollDriver(1500);
+    const domNode = { scrollTop: 120, scrollHeight: 3000, clientHeight: 600 };
+    const domList = {
+      getScrollableNode: () => domNode,
+      scrollToEnd: () => {
+        endCalls++;
+      },
+      scrollToOffset: ({ offset }: { offset: number }) => {
+        domNode.scrollTop = offset;
+      },
+    };
+    domDriver.syncSession("sess-web", true);
+    domDriver.maybeSync(domList, { ...state, sessionKey: "sess-web" }, { now: 1000, scheduleFrame: () => {} });
+    domNode.scrollTop = 90;
+    domDriver.preparePrepend(domList);
+    domNode.scrollHeight = 4500; // Grew synchronously by 1500px
+    endCalls = 0;
+    domDriver.maybeSync(domList, { ...state, sessionKey: "sess-web", rowCount: 250 }, { now: 2000, scheduleFrame: () => {} });
+  });
+
+  test("display:none retention cycle never arms upward intent and restores scrollTop on revive", () => {
+    const driver = new OutlineScrollDriver(1500);
+    const dom = { scrollTop: 1446, scrollHeight: 4598, clientHeight: 731 };
+    const list = {
+      getScrollableNode: () => dom,
+      scrollToOffset: ({ offset }: { offset: number }) => { dom.scrollTop = offset; },
+      scrollToEnd: () => {},
+    };
+    const state = { sessionKey: "sess-live", mounted: true, rowCount: 150, isLoading: false, hasSearchQuery: false };
+    driver.syncSession("sess-live", true);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 1446 }, contentSize: { height: 4598 }, layoutMeasurement: { height: 731 } } });
+    // Host hides panel: layout collapses, Chromium reports scrollTop 0.
+    dom.scrollTop = 0;
+    dom.scrollHeight = 0;
+    dom.clientHeight = 0;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 0 } } }, state, 2000);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 0 }, contentSize: { height: 0 }, layoutMeasurement: { height: 0 } } });
+    expect(driver.scroller.isUserScrolledUp()).toBe(false);
+    expect(driver.scroller.isStuckToBottom()).toBe(true);
+    expect(driver.hasLiveLayout(list)).toBe(false);
+    // Host revives panel: DOM scrollTop is still 0, must restore 1446.
+    dom.scrollHeight = 4598;
+    dom.clientHeight = 731;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 731 } } }, state, 3000);
+    expect(dom.scrollTop).toBe(1446);
+    expect(driver.hasLiveLayout(list)).toBe(true);
+  });
+
+  test("preparePrepend during collapsed layout does not snapshot a stale position", () => {
+    const driver = new OutlineScrollDriver(1500);
+    const dom = { scrollTop: 500, scrollHeight: 4598, clientHeight: 731 };
+    const list = {
+      getScrollableNode: () => dom,
+      scrollToOffset: ({ offset }: { offset: number }) => { dom.scrollTop = offset; },
+      scrollToEnd: () => {},
+    };
+    const state = { sessionKey: "sess-live", mounted: true, rowCount: 150, isLoading: false, hasSearchQuery: false };
+    driver.syncSession("sess-live", true);
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 731 } } }, state, 1000);
+    driver.handleContentSizeChange(list, 4598, state, 1010);
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 500 }, contentSize: { height: 4598 }, layoutMeasurement: { height: 731 } } });
+    // Collapse, then a stray prepend snapshot attempt during hidden layout.
+    dom.scrollTop = 0;
+    dom.scrollHeight = 0;
+    dom.clientHeight = 0;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 0 } } }, state, 2000);
+    driver.preparePrepend(list);
+    // Revive: restore 500, then a content-size event must not stale-jump.
+    dom.scrollHeight = 4598;
+    dom.clientHeight = 731;
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 731 } } }, state, 3000);
+    expect(dom.scrollTop).toBe(500);
+    driver.handleContentSizeChange(list, 4598, state, 4000);
+    expect(dom.scrollTop).toBe(500);
   });
 });

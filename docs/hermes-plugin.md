@@ -59,6 +59,60 @@ Treat stored originals/backups as sensitive data. Hide is not secure erasure.
 The plugin does not add telemetry, read credential files, execute shell commands,
 or install software while handling a session.
 
+### Pausing Hermes, runtime verification, and multi-profile toggles
+
+- **DB-control-only Pause (Off)**: Pausing Hermes via Paseo Settings updates
+  shared SQLite `adapter_control` and `adapter_sessions` atomically in a single
+  transaction **without** disabling `settings.enabled` in `config.yaml`.
+  Keeping `config.yaml` enabled ensures any legacy Hermes/gateway process
+  (whose disabled middleware returns `None`) continues protecting existing
+  hidden items, while updated adapters enter `protection_only` via
+  `_is_effectively_enabled` + `_protection_only_rewrite` (keeping read/restore
+  tools and `/nav` recovery commands active).
+- **Strict invocation, position, & branch-alias identity fences**: Both
+  `middleware_step` (On) and `_protection_only_rewrite` (Off) check exact
+  5-tuple identity first (honoring explicit `visible` state unless ambiguous
+  with a branch-alias hidden record) and allow clean `unknown`/`default` alias
+  fallback only when the primary scope has no `(call_id, content_sha256)`
+  record and no alias conflict exists. When no exact match applies and a hidden
+  candidate shares `(call_id, content_sha256)` (e.g., shifted `result_position`,
+  mismatched `invocation_digest`, missing invocation, or `unknown`/`default`
+  conflict), a redaction placeholder (`[hidden:<item_id> withheld due to
+  invocation or scope identity conflict]`) is emitted instead of a mismatched
+  summary or raw original.
+- **Unverified live-process & frozen-worker limits**: Durable `adapter_sessions`
+  rows hold one entry per `scope_key` and cannot enumerate live, stale, or
+  duplicate Hermes/gateway OS processes, nor prove frozen workers using
+  `PluginContext.get_config` snapshots reloaded updated bundles or paused. Paseo
+  always surfaces `protectionVerified: false` with unverified warnings and
+  reinstall + full Hermes/gateway restart instructions (plus Outline / `/nav`
+  unhide recovery).
+- **D9 SQLite fail-open contract**: Because Hermes swallows `llm_request`
+  middleware exceptions and provides no request-abort hook, SQLite read/write
+  errors during a Hermes request fail open to the original request copy while
+  logging an error and surfacing `db_error_pending` (see `adapter_control`
+  lookup fail-closed guard for new mutations).
+- **Multi-profile YAML writes, lock, journal & rollback**: Both Hermes On and
+  Off hold Paseo's fail-closed cooperative lock
+  (`~/.hermes/.session-navigation-toggle.lock`, created exclusively with
+  `O_CREAT | O_EXCL` and released only by the owning inode/nonce/PID without
+  time-based auto-removal; if a previous process crashed, verify no toggle is
+  running and remove `~/.hermes/.session-navigation-toggle.lock` manually)
+  across YAML writes, SQLite `setAdapterControl`, and journal cleanup. Enabling
+  or reconciling across `~/.hermes/config.yaml` and
+  `~/.hermes/profiles/*/config.yaml` persists a crash-recovery journal
+  (`~/.hermes/.session-navigation-toggle.journal.json`), rejects symlinks,
+  parses the full YAML document with the `yaml` Document/CST parser (preserving
+  unrelated anchors/aliases, comments, flow maps, block scalars, and `...`
+  document-end markers while failing closed in both inspection and toggling on
+  duplicate keys, multi-document streams, merge keys, target-spine
+  anchors/aliases, or invalid YAML, and verifying post-edit semantic equality for
+  all unrelated keys), stages temp files across all targets, checks SHA-256 against concurrent modifications before commit, performs reverse rollback on disk or
+  pre-commit SQLite errors, and preserves committed YAML+SQLite state while
+  surfacing residual-journal status if post-commit journal cleanup fails. True
+  OS-level cross-file atomicity against mid-rename crashes or non-cooperative
+  external writers remains impossible.
+
 Registered surfaces:
 
 - Tools: `hide_context`, `summarize_context`, `list_context_items`,

@@ -2,8 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store } from "../../core/src/index.ts";
+import { Store, canonical, invocationDigest } from "../../core/src/index.ts";
 import { BunDriver } from "../../core/src/drivers/bun.ts";
+import { ompInvocationArgs } from "../src/context.ts";
 import { OmpService, MAX_CHUNK_BYTES, sessionScope } from "../src/service.ts";
 
 const stores: Store[] = [];
@@ -442,4 +443,97 @@ test("git diff --stat outputs with >8 (14) and >20 (30) evidence lines compact c
   expect(h30.ok).toBe(true);
   const cands = await call(adapter, "list_candidates", { snapshot_id: "snap-ev" });
   expect(cands.total).toBe(0);
+});
+
+test("ompInvocationArgs and OmpService preserve __proto__, constructor and toString keys without prototype mutation", async () => {
+  const rawArgs = JSON.parse(
+    '{"__proto__":{"admin":true},"constructor":{"bad":1},"toString":"custom","nested":{"__proto__":42,"a":1}}',
+  ) as Record<string, unknown>;
+  const filtered = ompInvocationArgs("mcp_read_status", rawArgs);
+  expect(filtered).not.toBeNull();
+  expect(Object.getPrototypeOf(filtered)).toBe(Object.prototype);
+  expect(Object.hasOwn(filtered!, "__proto__")).toBe(true);
+  expect(JSON.stringify(filtered)).toBe(
+    '{"__proto__":{"admin":true},"constructor":{"bad":1},"nested":{"__proto__":42,"a":1},"toString":"custom"}',
+  );
+  const invocation = { tool_name: "mcp_read_status", arguments: filtered as any };
+  expect(canonical(invocation)).toBe(
+    '{"arguments":{"__proto__":{"admin":true},"constructor":{"bad":1},"nested":{"__proto__":42,"a":1},"toString":"custom"},"tool_name":"mcp_read_status"}',
+  );
+
+  const adapter = service();
+  const content = Array.from({ length: 80 }, (_, i) => `row ${i}: ok`).join("\n");
+  const prepared = await call(adapter, "prepare", {
+    snapshot_id: "proto-snap",
+    records: [
+      {
+        call_id: "call-proto",
+        tool_name: "mcp_read_status",
+        arguments: rawArgs,
+        status: "ok",
+        content,
+      },
+    ],
+  });
+  expect(prepared.ok).toBe(true);
+  const compacted = await call(adapter, "compact", {
+    snapshot_id: "proto-snap",
+    tool_call_id: "call-proto",
+  });
+  expect(compacted.ok).toBe(true);
+  const stored = adapter.store.get(sessionScope("a"), String(compacted.item_id));
+  expect(stored?.invocation_digest).toBe(invocationDigest(invocation));
+});
+
+test("omp adapter_control off enters protection_only while allowing list_items and restore", async () => {
+  const adapter = service();
+  const scope = sessionScope("a");
+  await call(adapter, "prepare", { snapshot_id: "s1", records: [record("call-1")] });
+  const compacted = await call(adapter, "compact", { snapshot_id: "s1", tool_call_id: "call-1" });
+  expect(compacted.ok).toBe(true);
+  adapter.store.ensureMessages(scope, [{ unit_id: "msg:user:1", kind: "user", content_sha256: "sha", char_count: 4 }]);
+  expect(adapter.store.setMessageVisibility(scope, "msg:user:1", "user", "sha", 4, "hidden", 1).ok).toBe(true);
+
+  adapter.store.setAdapterControl("omp", false);
+
+  const prepared = await call(adapter, "prepare", {
+    snapshot_id: "s2",
+    records: [record("call-1"), record("call-2")],
+  });
+  expect(prepared.ok).toBe(true);
+  expect(prepared.adapter_enabled).toBe(false);
+  expect((prepared.patches as any[]).map((p) => p.call_id)).toEqual(["call-1"]);
+  expect(prepared.hidden_messages).toEqual(["msg:user:1"]);
+  expect(prepared.pending_summaries).toEqual([]);
+  expect(prepared.reminder_items).toBeUndefined();
+  expect(prepared.eligible_count).toBeUndefined();
+  expect(adapter.store.targets(scope).some((row) => row.tool_call_id === "call-2")).toBe(false);
+  expect(adapter.store.registration(scope)?.enabled).toBe(false);
+  expect(adapter.store.can(scope, "hide")).toBe(false);
+  expect(adapter.store.can(scope, "unhide")).toBe(false);
+  expect(adapter.store.registration(scope)?.capabilities.unhide).toBe(true);
+
+  for (const [method, params] of [
+    ["compact", { snapshot_id: "s2", tool_call_id: "call-1" }],
+    ["summarize", { snapshot_id: "s2", tool_call_id: "call-1" }],
+    ["summary_state", { snapshot_id: "s2", tool_call_id: "call-1" }],
+    ["manage", { snapshot_id: "s2", tool_call_ids: ["call-1"], action: "hide" }],
+  ] as const) {
+    expect(await call(adapter, method, params)).toEqual({ ok: false, error: "adapter_disabled" });
+  }
+
+  const listed = await call(adapter, "list_items", { snapshot_id: "s2" });
+  expect(listed.ok).toBe(true);
+  expect((listed.items as any[]).map((item) => item.item_id)).toEqual([compacted.item_id]);
+
+  const restored = await call(adapter, "restore", { item_id: compacted.item_id });
+  expect(restored.ok).toBe(true);
+
+  const afterRestore = await call(adapter, "prepare", {
+    snapshot_id: "s3",
+    records: [record("call-1")],
+  });
+  expect(afterRestore.ok).toBe(true);
+  expect(afterRestore.patches).toEqual([]);
+  expect(afterRestore.hidden_messages).toEqual(["msg:user:1"]);
 });

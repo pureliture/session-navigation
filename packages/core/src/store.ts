@@ -53,11 +53,19 @@ export interface Registration {
     hide: boolean;
     summarize: boolean;
     unhide: boolean;
+    protection_only?: boolean;
+    bundle_fingerprint?: string;
   };
   enabled: boolean;
   instance_id: string;
   last_seen: number;
   scope_key?: string;
+}
+export interface AdapterControl {
+  adapter_id: string;
+  enabled: boolean;
+  revision: number;
+  updated_at: number;
 }
 export class Store {
   readonly sqliteVersion: string;
@@ -85,6 +93,7 @@ export class Store {
           "calls",
           "adapter_sessions",
           "adapter_targets",
+          "adapter_control",
         ].every((name) =>
           driver.get("SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name]),
         )
@@ -411,11 +420,18 @@ export class Store {
     if (adapterRegistration.parent_scope === key ||
       (adapterRegistration.parent_scope && adapterRegistration.parent_scope.split(":").length !== 4))
       throw new EngineError("invalid_adapter_registration");
-    const capabilitiesBase = {
+    const capabilitiesBase: { [key: string]: Json } = {
       hide: adapterRegistration.capabilities.hide === true,
       summarize: adapterRegistration.capabilities.summarize === true,
       unhide: adapterRegistration.capabilities.unhide === true,
     };
+    if (adapterRegistration.capabilities.protection_only === true) {
+      capabilitiesBase.protection_only = true;
+    }
+    const bundleFp = adapterRegistration.capabilities.bundle_fingerprint;
+    if (typeof bundleFp === "string" && bundleFp && bundleFp.length <= 128) {
+      capabilitiesBase.bundle_fingerprint = bundleFp;
+    }
     return this.transaction(() => {
       const previousRegistration = this.driver.get(
         "SELECT * FROM adapter_sessions WHERE scope_key=?",
@@ -850,5 +866,61 @@ export class Store {
       }
       return counts;
     });
+  }
+
+  getAdapterControl(adapterId: string): AdapterControl | null {
+    if (typeof adapterId !== "string" || !adapterId.trim()) return null;
+    const row = this.driver.get("SELECT * FROM adapter_control WHERE adapter_id=?", [
+      adapterId.trim(),
+    ]);
+    if (!row) return null;
+    return {
+      adapter_id: String(row.adapter_id),
+      enabled: !!row.enabled,
+      revision: safeNumber(row.revision),
+      updated_at: Number(row.updated_at),
+    };
+  }
+
+  get_adapter_control(adapterId: string): AdapterControl | null {
+    return this.getAdapterControl(adapterId);
+  }
+
+  setAdapterControl(adapterId: string, enabled: boolean, now = this.clock()): AdapterControl {
+    if (typeof adapterId !== "string" || !adapterId.trim()) {
+      throw new EngineError("invalid_adapter_registration");
+    }
+    const id = adapterId.trim();
+    const flag = Boolean(enabled);
+    return this.transaction(() => {
+      const existing = this.driver.get("SELECT revision FROM adapter_control WHERE adapter_id=?", [
+        id,
+      ]);
+      const revision = existing ? safeNumber(existing.revision) + 1 : 1;
+      this.driver.run(
+        `INSERT INTO adapter_control(adapter_id, enabled, revision, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(adapter_id) DO UPDATE SET
+           enabled=excluded.enabled,
+           revision=excluded.revision,
+           updated_at=excluded.updated_at`,
+        [id, Number(flag), revision, now],
+      );
+      const escapedId = id.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      this.driver.run(
+        "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=? OR scope_key LIKE ? ESCAPE '\\'",
+        [Number(flag), id, `${escapedId}:%`],
+      );
+      return {
+        adapter_id: id,
+        enabled: flag,
+        revision,
+        updated_at: now,
+      };
+    });
+  }
+
+  set_adapter_control(adapterId: string, enabled: boolean, now = this.clock()): AdapterControl {
+    return this.setAdapterControl(adapterId, enabled, now);
   }
 }

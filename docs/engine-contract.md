@@ -81,6 +81,15 @@ Item IDs and identity references are recomputed for the destination scope; origi
 legacy rows are preserved. Registrations/target caches are not imported. Subsequent
 mutations use only the `omp:` scope: this is not an alias or live synchronization.
 Discovery must prefer the registered OMP scope over a legacy history-only scope.
+
+Legacy `pi:*` retention and retirement criteria: read and restore (`unhide`)
+compatibility for stored `pi:default:<session>:default` items (including Paseo
+scope lookup and `unhide` routing) MUST remain intact so users can inspect and
+restore previously hidden items. New hides and adapter registrations under `pi:*`
+remain disallowed (`adapter_not_detected`). This `pi:*` compatibility mapping MUST
+NOT be removed until either a dedicated migration tool moves all remaining `pi:*`
+rows into `omp:` scopes or legacy SQLite databases containing `pi:*` scopes are
+formally retired.
 Hermes's canonical branch remains **unknown**:
 `hermes:<profile>:<session>:unknown`. Keeping this suffix preserves existing
 item hashes and hidden state. A compression-created session ID is a new scope;
@@ -200,8 +209,34 @@ per scope. Skip individual oversized targets; prune oldest insertions until both
 bounds hold, in the same transaction as publication. This cache is not history:
 eviction never deletes items/originals already hidden. Empty batches create no
 items. **Never seed items with empty replacements.** A remote surface must resolve
-the scope, require capability, read the verified target and apply normal policy,
-identity fencing and CAS; it must not reconstruct host invocations from previews.
+the scope, require capability, prefer a verified `adapter_targets` entry when
+available (using its verified `original`, `content_sha256`, `invocation_digest`
+and `options_omitted`), and fall back only to the complete host original history
+(`.jsonl` / `state.db`) rather than reconstructing host invocations from
+truncated UI previews.
+
+### Policy boundary: agent tool calls vs. Paseo manual hides
+
+* **Agent tool calls** (`manage_context`, `hide_context`, `summarize_context`):
+  enforce every engine and adapter refusal gate (`not_long`,
+  `protected_error`, `sensitive_invocation`, `invocation_too_large`,
+  `destructive_command`, `content_tampered`, `invalid_invocation_order`,
+  `invocation_conflict`) without override.
+* **Paseo direct user manual hides** (`explicit_user_hide` with `mode="hide"`):
+  manual hide is a separate operation, not engine compaction. It evaluates no
+  advisory or compaction policy (`not_long`, `protected_error`,
+  `sensitive_invocation`, `invocation_too_large`, rule selection, excerpt
+  generation). The replacement is a single line
+  `[hidden: <tool_name> <call_id>]`; the original output is kept for preview and
+  unhide, and the invocation snapshot is not stored. `sensitive_invocation` and
+  `invocation_too_large` are persistence guards, and manual hide must not defeat
+  them by writing the snapshot. Integrity, safety and concurrency fences
+  (`destructive_command`, `content_tampered`, `invalid_invocation_order`,
+  identity fencing `invocation_conflict`, and optimistic version CAS) remain
+  strictly enforced and are never bypassed.
+* **Paseo manual summarize pending** (`summarize_pending`): still evaluates the
+  advisory gates with the override list above and produces the rule/excerpt
+  replacement, because summarize depends on compaction policy.
 
 ## Mutations, summaries and batches
 
@@ -264,6 +299,7 @@ not retried against a newly observed version without a new user decision.
 | `adapter_unavailable` | Publication without a compatible enabled Hide owner |
 | `invalid_adapter_registration`, `invalid_target_identity` | Invalid ownership or publication evidence |
 | `verification_failed`, `summarizer_unavailable` | Invalid/model-unavailable summary; preserve rule hide |
+| `history_too_large` | Host history exceeds the load limits (256 MiB or 100k rows); no partial timeline is returned |
 | Policy/identity refusals | Existing `protected_*`, `unsupported_tool`, `invalid_invocation`, `invocation_conflict`, `ambiguous`, `keep_lines_conflict`, etc. retain their established meaning |
 
 Python persistence exceptions expose `.code`; JSON transports preserve it rather
@@ -271,3 +307,11 @@ than relabel protocol/journal refusals as `db_error`. Busy errors normalize to
 `db_error` with no successful mutation. Middleware persistence failures preserve
 the outgoing originals and report loudly; host fail-open is not a persistence
 success. Never log original result bodies or invocation arguments as diagnostics.
+
+## File permissions
+
+Every driver (`NodeDriver`, `BunDriver`, Python `open_db`) applies mode `0600` to
+the state database on open. Existing files are tightened on the next open, so a
+one-time manual `chmod` is unnecessary. The chmod is best-effort on filesystems
+that do not support it. This is defense against path relocation and backup
+copies; it does not isolate processes running as the same user.

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { QueryClient, onlineManager } from "@tanstack/react-query";
 import type { Row } from "../shared/sessionNav";
-import { cancelChatNavigation, historyContainsRow, identityMatches, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
+import { cancelChatNavigation, historyContainsRow, identityMatches, parseRgb, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { readTimelineHistory } from "./timelineHistory";
 
 class Element {
@@ -33,6 +33,9 @@ class Element {
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
   closest(selector: string): Element | null {
     return this.matches(selector) ? this : this.parent?.closest(selector) ?? null;
+  }
+  contains(other: Element): boolean {
+    return other === this || this.children.some((child) => child === other || child.contains(other));
   }
   compareDocumentPosition(other: Element) {
     let root: Element = this;
@@ -266,6 +269,18 @@ test("identityMatches accepts tool-prefixed and long suffix identities only", ()
   expect(identityMatches("chat:abcdef1234", "abcdef1234")).toBe(true);
   expect(identityMatches("prefix_abcdef1234", "abcdef1234")).toBe(true);
   expect(identityMatches("call_12", "12")).toBe(false);
+});
+
+test("identityMatches extracts raw ids from rendered composite chat ids (beautiful-chat turn/call nesting)", () => {
+  const turn = "agent_tool_turn:0df7e012-ed1c-430c-9f19-8dedd6a1cc5c";
+  const callId = "call_LFavL5HAdjeWTHphJ5T2RXUy";
+  expect(identityMatches(`${turn}/${callId}`, callId)).toBe(true);
+  expect(identityMatches(`beautiful-chat/${turn}/${callId}/0`, callId)).toBe(true);
+  const sysMsg = "8867c53e-f297-4f4b-9cd4-3b4ac2c42767";
+  expect(identityMatches(`${turn}/paseo-agent-message%3A${sysMsg}`, `paseo-agent-message:${sysMsg}`)).toBe(true);
+  expect(identityMatches(`${turn}/paseo-agent-message%3A${sysMsg}`, sysMsg)).toBe(true);
+  // A different call in the same turn must not match.
+  expect(identityMatches(`${turn}/${callId}`, "call_AAAAAAAAAAAAAAAAAAAAAA")).toBe(false);
 });
 
 test("present target still navigates; incomplete or failed fetch cannot establish absence", async () => {
@@ -703,25 +718,78 @@ test("child navigation never selects a hidden parent chat or guesses between vis
   expect(child.scrolled).toBe(false);
 });
 
-test("double-clicking the same row within 1200ms never locks highlight background permanently blue, and switching rows clears previous highlight", async () => {
+test("modern highlight adapts to theme accentColor/isDark, separates message bar vs badge ring, preserves original styles on double-click/switch, and fades in 2 phases", async () => {
+  expect(parseRgb("#1a2")).toEqual({ r: 17, g: 170, b: 34 });
+  expect(parseRgb("#3b82f6")).toEqual({ r: 59, g: 130, b: 246 });
+  expect(parseRgb("#3b82f680")).toEqual({ r: 59, g: 130, b: 246 });
+  expect(parseRgb("rgb(94, 138, 117)")).toEqual({ r: 94, g: 138, b: 117 });
+  expect(parseRgb("rgba(16, 185, 129, 0.9)")).toEqual({ r: 16, g: 185, b: 129 });
+  expect(parseRgb("not-a-color")).toBeNull();
+
   const root = new Element({ "data-testid": "agent-chat-scroll" });
   const first = new Element({ "data-message-id": "m1" }, "first row");
   const second = new Element({ "data-message-id": "m2" }, "second row");
+  const badge = new Element({ "data-testid": "tool-call-badge", "data-tool-call-id": "call-b1" }, "bash");
   first.style.backgroundColor = "transparent";
-  root.add(first, second);
+  first.style.boxShadow = "none";
+  first.style.borderRadius = "";
+  first.style.transition = "opacity 100ms linear";
+  badge.style.borderRadius = "999px";
+  root.add(first, second, badge);
   const doc = new Element().add(root);
   const r1 = row("m1", "user");
   const r2 = row("m2", "user");
-  await scrollToMessageInChat(r1, [r1, r2], { document: doc });
-  // Second click while already highlighted blue must NOT capture rgba(59, 130, 246, 0.22) as original!
-  await scrollToMessageInChat(r1, [r1, r2], { document: doc });
-  expect(first.style.backgroundColor).toBe("rgba(59, 130, 246, 0.22)");
-  // Clicking another row immediately restores the first row's original background!
-  await scrollToMessageInChat(r2, [r1, r2], { document: doc });
+  const rBadge = row("call-b1", "tool");
+
+  // 1. Default sage accent in light mode on message row
+  await scrollToMessageInChat(r1, [r1, r2, rBadge], { document: doc });
+  expect(first.style.backgroundColor).toBe("rgba(94, 138, 117, 0.075)");
+  expect(first.style.boxShadow).toBe(
+    "inset 3px 0 0 0 rgba(94, 138, 117, 0.85), inset 0 0 0 1px rgba(94, 138, 117, 0.20)",
+  );
+  expect(first.style.borderRadius).toBe("10px");
+  expect(first.style.transition).toBe(
+    "background-color 180ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+  );
+
+  // 2. Double-clicking the same row must NOT capture highlight style as original!
+  await scrollToMessageInChat(r1, [r1, r2, rBadge], { document: doc, accentColor: "#10b981", isDark: true });
+  expect(first.style.backgroundColor).toBe("rgba(16, 185, 129, 0.13)");
+
+  // 3. Clicking a tool badge immediately restores first row's original styles at 0ms and applies ring + halo preserving existing borderRadius
+  await scrollToMessageInChat(rBadge, [r1, r2, rBadge], { document: doc, accentColor: "#10b981", isDark: true });
   expect(first.style.backgroundColor).toBe("transparent");
-  expect(second.style.backgroundColor).toBe("rgba(59, 130, 246, 0.22)");
-  await new Promise((resolve) => setTimeout(resolve, 1250));
+  expect(first.style.boxShadow).toBe("none");
+  expect(first.style.borderRadius).toBe("");
+  expect(first.style.transition).toBe("opacity 100ms linear");
+
+  expect(badge.style.backgroundColor).toBe("rgba(16, 185, 129, 0.16)");
+  expect(badge.style.boxShadow).toBe(
+    "inset 0 0 0 1.5px rgba(16, 185, 129, 0.65), 0 0 0 3px rgba(16, 185, 129, 0.12)",
+  );
+  expect(badge.style.borderRadius).toBe("999px");
+
+  // 4. Switching to second row (light theme custom rgba) -> two-phase fadeout:
+  //    850ms starts 420ms exit transition on bg/boxShadow; 1300ms restores transition/borderRadius completely.
+  await scrollToMessageInChat(r2, [r1, r2, rBadge], { document: doc, accentColor: "rgba(34, 197, 94, 1)", isDark: false });
+  expect(badge.style.backgroundColor).toBe("");
+  expect(badge.style.boxShadow).toBe("");
+  expect(badge.style.borderRadius).toBe("999px");
+
+  await new Promise((resolve) => setTimeout(resolve, 920));
+  expect(second.style.backgroundColor).toBe("rgba(34, 197, 94, 0)");
+  expect(second.style.boxShadow).toBe(
+    "inset 3px 0 0 0 rgba(34, 197, 94, 0), inset 0 0 0 1px rgba(34, 197, 94, 0)",
+  );
+  expect(second.style.transition).toBe(
+    "background-color 420ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 420ms cubic-bezier(0.4, 0, 0.2, 1)",
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 450));
   expect(second.style.backgroundColor).toBe("");
+  expect(second.style.boxShadow).toBe("");
+  expect(second.style.transition).toBe("");
+  expect(second.style.borderRadius).toBe("");
 });
 
 test("jumping from an old virtualized slice back to the newest row scrolls down with positive wheel delta and never calls loadOlder", async () => {
@@ -832,4 +900,508 @@ test("clicking an older mounted row dispatches upward wheel intent to release Pa
   });
   expect(await pending).toBe(false);
   expect(notFoundFired).toBe(false);
+});
+
+test("Markdown bold/code messages match HTML-rendered chat DOM, two <paseo-system> notices never collide on XML header, and Paseo virtualizer data-index=38 scrolls UP to row 1085", async () => {
+  // 1. Markdown-formatted Outline row matches rendered HTML textContent (without ** or `)
+  const mdRow: Row = {
+    ...row("msg:assistant:100:abc", "assistant"),
+    summary_line: "지시하신 대로 **코드는 일절 수정하지 않고**, **`OMP Free`** 에이전트로 조사했습니다.",
+    message_text: "지시하신 대로 **코드는 일절 수정하지 않고**, **`OMP Free`** 에이전트로 조사했습니다.",
+  };
+  const mdRoot = new Element({ "data-testid": "agent-chat-scroll" });
+  const mdNode = new Element(
+    { "data-history-row-id": "native-md" },
+    "지시하신 대로 코드는 일절 수정하지 않고, OMP Free 에이전트로 조사했습니다.",
+  );
+  mdRoot.add(mdNode);
+  expect(await scrollToMessageInChat(mdRow, [mdRow], { document: new Element().add(mdRoot) })).toBe(true);
+  expect(mdNode.scrolled).toBe(true);
+
+  // 2. Two distinct <paseo-system> subagent notifications never collide on '<paseo-system version="1"...'
+  const noticeA = '<paseo-system version="1" kind="agent-notification" source-agent-id="sub-aaa111" source-agent-title="Audit Alpha" event="finished"><agent-response>Alpha result</agent-response></paseo-system>';
+  const noticeB = '<paseo-system version="1" kind="agent-notification" source-agent-id="sub-bbb222" source-agent-title="Audit Beta" event="finished"><agent-response>Beta result</agent-response></paseo-system>';
+  const rowB: Row = { ...row("msg:user:2:b", "user"), summary_line: "[Subagent finished] Audit Beta", message_text: noticeB };
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "user_message", text: noticeA } }] }, rowB)).toBe(false);
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "plugin", data: { title: "Audit Beta" } } }] }, rowB)).toBe(true);
+
+  // 3. Long 1150-row session at bottom of Paseo 40-item virtualizer (data-index="38" at scrollTop=9200):
+  // Clicking row 1085 MUST scroll UPWARD and find row 1085 instead of confusing data-index=38 with row 38!
+  const vRoot = new Element({ "data-testid": "agent-chat-scroll" });
+  vRoot.scrollHeight = 10_000;
+  vRoot.clientHeight = 800;
+  vRoot.scrollTop = 9_200;
+  const tailNode = new Element({ "data-history-row-id": "stream-38", "data-index": "38" }, "Checklist Progress OMP TODO");
+  vRoot.add(tailNode);
+  const allRows = Array.from({ length: 1150 }, (_, idx) => ({
+    ...row(`r_${idx}`, idx % 2 === 0 ? "user" : "assistant"),
+    summary_line: idx === 1085 ? "이건수정바로하지말고 검토만해 세션이 그렇게 길지않은데" : `Turn item ${idx}`,
+    message_text: idx === 1085 ? "이건수정바로하지말고 검토만해 세션이 그렇게 길지않은데" : `Turn item ${idx}`,
+  }));
+  const vDoc = {
+    defaultView: {
+      WheelEvent: class {
+        type: string;
+        deltaY?: number;
+        constructor(type: string, init?: { deltaY?: number }) {
+          this.type = type;
+          this.deltaY = init?.deltaY;
+        }
+      },
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    },
+    querySelectorAll: (sel: string) => (sel.includes("agent-chat-scroll") ? [vRoot] : vRoot.querySelectorAll(sel)),
+  };
+  let targetMounted: any = null;
+  let clock = 1000;
+  const found = await scrollToMessageInChat(allRows[1085], allRows, {
+    document: vDoc,
+    now: () => (clock += 120),
+    afterLoad: async () => {
+      if (vRoot.scrollTop < 9_000 && !targetMounted) {
+        targetMounted = new Element(
+          { "data-history-row-id": "stream-32", "data-index": "32" },
+          "이건수정바로하지말고 검토만해 세션이 그렇게 길지않은데",
+        );
+        vRoot.children = [targetMounted];
+        targetMounted.parent = vRoot;
+      }
+    },
+  });
+  expect(found).toBe(true);
+  expect(targetMounted?.scrolled).toBe(true);
+});
+
+test("short messages (<4 chars) match exact text/lines without substring false positives like ok in token", async () => {
+  const shortMsgs = ["진행해", "ㅇㅇ", "ok", "고쳐"];
+  for (const phrase of shortMsgs) {
+    const root = new Element({ "data-testid": "agent-chat-scroll" });
+    const falseMatch = new Element({ "data-history-row-id": "n-false" }, `token book ${phrase} extra words`);
+    const targetNode = new Element({ "data-history-row-id": "n-exact" }, phrase);
+    root.add(falseMatch, targetNode);
+    const doc = new Element().add(root);
+    const r = { ...row("short-id", "user"), summary_line: phrase, message_text: `<system-reminder>long block</system-reminder>\n${phrase}` };
+
+    expect(await scrollToMessageInChat(r, [r], { document: doc })).toBe(true);
+    expect(falseMatch.scrolled).toBe(false);
+    expect(targetNode.scrolled).toBe(true);
+
+    expect(historyContainsRow({ complete: true, entries: [{ item: { type: "user_message", text: `token book ${phrase} longer` } }] }, r)).toBe(false);
+    expect(
+      historyContainsRow(
+        { complete: true, entries: [{ item: { type: "user_message", text: `<system-notice>notice</system-notice>\n${phrase}` } }] },
+        r,
+      ),
+    ).toBe(true);
+  }
+});
+
+test("duplicate phrase in middle turn jumps to exact ordinal node using adjacent unique boundaries", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc = new Element().add(root);
+  const rows: Row[] = [
+    { ...row("u0", "user"), summary_line: "npm test", message_text: "npm test" },
+    { ...row("a1", "assistant"), summary_line: "Unique milestone alpha", message_text: "Unique milestone alpha" },
+    { ...row("u2", "user"), summary_line: "npm test", message_text: "npm test" },
+    { ...row("u3", "user"), summary_line: "npm test", message_text: "npm test" },
+    { ...row("a4", "assistant"), summary_line: "Unique milestone beta", message_text: "Unique milestone beta" },
+    { ...row("u5", "user"), summary_line: "npm test", message_text: "npm test" },
+  ];
+  const domNodes = rows.map((r, i) => new Element({ "data-history-row-id": `dom-${i}` }, r.summary_line));
+  root.add(...domNodes);
+
+  // Target index 3 (second "npm test" between milestone alpha and beta)
+  expect(await scrollToMessageInChat(rows[3], rows, { document: doc })).toBe(true);
+  expect(domNodes[0].scrolled).toBe(false);
+  expect(domNodes[2].scrolled).toBe(false);
+  expect(domNodes[3].scrolled).toBe(true);
+  expect(domNodes[5].scrolled).toBe(false);
+});
+
+test("narrow viewport (<600px) does not click collapsed tool-call-group toggle to avoid opening ToolCallSheetModal", async () => {
+  const f = fixture();
+  (f.doc as any).defaultView = { innerWidth: 390 };
+  expect(await scrollToMessageInChat(f.second, f.rows, f.options)).toBe(true);
+  expect(f.clicks()).toBe(0);
+  expect(f.group.scrolled).toBe(true);
+  expect(f.group.style.backgroundColor).toContain("rgba");
+});
+
+test("Scenario 1 (A-1 & A-3): 0ms immediate jump to overscan row without getHistory, and missing row restores initialScrollTop promptly", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 30_000;
+  root.clientHeight = 500;
+  root.scrollTop = 18_240;
+  (root as any).getBoundingClientRect = () => ({ top: 500, bottom: 1000 });
+  const doc = new Element().add(root);
+
+  const rows: Row[] = Array.from({ length: 1850 }, (_, idx) => ({
+    ...row(`msg-${idx}`, idx % 2 === 0 ? "user" : "assistant"),
+    timeline_index: idx,
+    summary_line: `Turn message ${idx}`,
+    message_text: `Turn message ${idx}`,
+  }));
+
+  // Mount overscan 1816..1828 where 1816..1823 are outside viewport pixels and 1824..1828 are inside viewport.
+  const domNodes = new Map<number, Element>();
+  for (let i = 1816; i <= 1828; i++) {
+    const node = new Element(
+      { "data-history-row-id": `native-${i}`, "data-index": String(i - 1800) },
+      `Turn message ${i}`,
+    );
+    (node as any).getBoundingClientRect = () =>
+      i < 1824 ? { top: -200, bottom: -50 } : { top: 520, bottom: 980 };
+    root.add(node);
+    domNodes.set(i, node);
+  }
+
+  let waits = 0;
+  const foundOverscan = await scrollToMessageInChat(rows[1819], rows, {
+    document: doc,
+    afterLoad: async () => {
+      waits++;
+    },
+  });
+  expect(foundOverscan).toBe(true);
+  expect(waits).toBe(0);
+  expect(domNodes.get(1819)?.scrolled).toBe(true);
+
+  // Missing older row without getHistory cuts off via noProgressTimeoutMs (not 60s) and restores initialScrollTop
+  root.scrollTop = 18_240;
+  let clock = 0;
+  let notFound = 0;
+  const missingTarget: Row = {
+    ...row("missing-old", "user"),
+    timeline_index: 5,
+    summary_line: "Archived prompt 5",
+    message_text: "Archived prompt 5",
+  };
+  const foundMissing = await scrollToMessageInChat(missingTarget, [missingTarget, ...rows], {
+    document: doc,
+    now: () => clock,
+    afterLoad: async () => {
+      clock += 500;
+    },
+    onNotFound: () => {
+      notFound++;
+    },
+  });
+  expect(foundMissing).toBe(false);
+  expect(notFound).toBe(1);
+  expect(clock).toBeLessThan(10_000);
+  expect(root.scrollTop).toBe(18_240);
+});
+
+test("Scenario 2 (A-2): <paseo-system> message-id matches paseo-agent-message badge inside collapsed group and findTurn skips unmounted <paseo-system> for following Agent reply", async () => {
+  const msgId = "74c63d4c-1111-2222-3333-444455556666";
+  const sysXml = `<paseo-system version="1" kind="agent-notification" source-agent-id="sub-1" source-agent-title="Worker" message-id="${msgId}"><agent-response>Checked all files</agent-response></paseo-system>`;
+  const uPrev: Row = { ...row("u-prev", "user"), timeline_index: 1775, summary_line: "Inspect the logs", message_text: "Inspect the logs" };
+  const sysRow: Row = { ...row("u-sys", "user"), timeline_index: 1778, summary_line: "[Subagent notification] Worker", message_text: sysXml };
+  const agentReply: Row = { ...row("ast-1779", "assistant"), timeline_index: 1779, summary_line: "Final diagnosis complete", message_text: "Final diagnosis complete" };
+  const rows = [uPrev, sysRow, agentReply];
+
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "tool_call", callId: `paseo-agent-message:${msgId}` } }] }, sysRow)).toBe(true);
+  expect(historyContainsRow({ complete: true, entries: [{ item: { type: "command", callId: `paseo-agent-message:${msgId}` } }] }, sysRow)).toBe(true);
+
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc: any = new Element().add(root);
+  doc.defaultView = { innerWidth: 1200 };
+
+  const userNode = new Element({ "data-history-row-id": "native-u-prev" }, "Inspect the logs");
+  const group = new Element({ "data-testid": "tool-call-group" }, "1 subagent message");
+  const toggle = new Element({ role: "button", "aria-expanded": "false" });
+  group.add(toggle);
+  const msgBadge = new Element({ "data-tool-call-id": `paseo-agent-message:${msgId}` }, "Agent notification");
+  let groupClicks = 0;
+  toggle.onClick = () => {
+    groupClicks++;
+    toggle.attrs["aria-expanded"] = "true";
+    group.add(msgBadge);
+  };
+
+  const turnSummary = new Element({ "data-testid": "turn-summary", "aria-expanded": "false" }, "Completed turn");
+  const replyNode = new Element({ "data-history-row-id": "native-ast-1779" }, "Final diagnosis complete");
+  let turnClicks = 0;
+  turnSummary.onClick = () => {
+    turnClicks++;
+    turnSummary.attrs["aria-expanded"] = "true";
+    root.add(replyNode);
+  };
+
+  root.add(userNode, group, turnSummary);
+
+  // 1. Clicking <paseo-system> row expands tool-call-group and highlights paseo-agent-message:<id> badge
+  expect(await scrollToMessageInChat(sysRow, rows, { document: doc, afterExpand: async () => {} })).toBe(true);
+  expect(groupClicks).toBe(1);
+  expect(msgBadge.scrolled).toBe(true);
+
+  // 2. Narrow viewport (<600px) highlights group without expanding modal sheet
+  msgBadge.scrolled = false;
+  toggle.attrs["aria-expanded"] = "false";
+  group.children = [toggle];
+  doc.defaultView.innerWidth = 390;
+  expect(await scrollToMessageInChat(sysRow, rows, { document: doc, afterExpand: async () => {} })).toBe(true);
+  expect(groupClicks).toBe(1);
+  expect(group.scrolled).toBe(true);
+
+  // 3. Clicking following Agent reply (row[1779]) skips unmounted <paseo-system> in findTurn, anchors on uPrev, expands turnSummary, and jumps to replyNode
+  group.children = [toggle];
+  expect(await scrollToMessageInChat(agentReply, rows, { document: doc, afterExpand: async () => {} })).toBe(true);
+  expect(turnClicks).toBe(1);
+  expect(replyNode.scrolled).toBe(true);
+});
+
+test("Scenario 3 (A-3 & A-4): duplicate tools (75x get_agent_activity/wait) and Compacted context ratio distortion never reverse scroll direction", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 100_000;
+  root.clientHeight = 800;
+  // Scroll position is 0.40 of extent even though mounted content is at row 1650 (compacted context distortion)
+  root.scrollTop = 40_000;
+  const wheelDeltas: number[] = [];
+  root.onEvent = (ev) => {
+    if (ev.type === "wheel" && typeof ev.deltaY === "number") wheelDeltas.push(ev.deltaY);
+  };
+  const doc: any = {
+    defaultView: {
+      WheelEvent: class {
+        type: string;
+        deltaY?: number;
+        constructor(type: string, init?: { deltaY?: number }) {
+          this.type = type;
+          this.deltaY = init?.deltaY;
+        }
+      },
+      Event: class {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+    },
+    querySelectorAll: (sel: string) => (sel.includes("agent-chat-scroll") ? [root] : root.querySelectorAll(sel)),
+  };
+
+  // Build 1861-row session with 75 repeated get_agent_activity & wait tools spanning 61..1851
+  const rows: Row[] = Array.from({ length: 1861 }, (_, idx) => {
+    if (idx % 24 === 13 && idx >= 61 && idx <= 1851) {
+      return {
+        ...row(`call_dup_${idx}`, "tool"),
+        timeline_index: idx,
+        tool_name: idx % 48 === 13 ? "get_agent_activity" : "wait",
+        summary_line: idx % 48 === 13 ? "get_agent_activity" : "wait",
+      };
+    }
+    return {
+      ...row(`msg_${idx}`, idx % 2 === 0 ? "user" : "assistant"),
+      timeline_index: idx,
+      summary_line: idx === 1779 ? "Target summary ready" : `Unique turn content ${idx}`,
+      message_text: idx === 1779 ? "Target summary ready" : `Unique turn content ${idx}`,
+    };
+  });
+
+  // Currently mounted at scrollTop=40000: row 1650 + repeated duplicate tools + accidental partial mention of target phrase
+  const compactBanner = new Element({ "data-testid": "compaction-banner" }, "Compacted context");
+  const node1650 = new Element({ "data-history-row-id": "dom-1650", "data-index": "10" }, "Unique turn content 1650");
+  const dupBadge = new Element({ "data-testid": "tool-call-badge" }, "get_agent_activity");
+  const dupWait = new Element({ "data-testid": "tool-call-badge" }, "wait");
+  const falsePremature = new Element({ "data-history-row-id": "dom-1651", "data-index": "11" }, "Unique turn content 1651 (Target summary ready)");
+  const targetNode = new Element({ "data-history-row-id": "dom-1779", "data-index": "35" }, "Target summary ready");
+  root.add(compactBanner, node1650, dupBadge, dupWait, falsePremature);
+
+  const observedScrollTops: number[] = [];
+  let clock = 0;
+  const found = await scrollToMessageInChat(rows[1779], rows, {
+    document: doc,
+    now: () => (clock += 120),
+    afterLoad: async () => {
+      observedScrollTops.push(root.scrollTop);
+      if (root.scrollTop > 40_000 && !root.children.includes(targetNode)) {
+        root.children = [targetNode];
+        targetNode.parent = root;
+      }
+    },
+  });
+
+  expect(found).toBe(true);
+  expect(falsePremature.scrolled).toBe(false);
+  expect(targetNode.scrolled).toBe(true);
+  // Must have scrolled DOWNWARD (> 40_000), never upward!
+  expect(observedScrollTops.every((top) => top > 40_000)).toBe(true);
+});
+
+test("long pre-compression seek survives slow older-history pagination (rendered chat, unmounted target)", async () => {
+  // Beautiful-chat rendered DOM: composite turn/call ids, no native badges.
+  // Target is 400+ entries above the mounted tail; each older page is slow.
+  const turn = "agent_tool_turn:bd0497dd-5c4b-438f-a0af-7f523f912a6e";
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 8000;
+  root.clientHeight = 700;
+  root.scrollTop = 7300;
+  const doc = new Element().add(root);
+  const rows: Row[] = Array.from({ length: 800 }, (_, idx) => ({
+    ...row(idx < 700 ? `outline-${idx}` : `tail-${idx}`, "assistant"),
+    timeline_index: idx,
+    summary_line: `Outline message ${idx}`,
+    message_text: `Outline message ${idx}`,
+  }));
+  const tailNodes = [
+    new Element({ "data-message-id": `${turn}/call_LFavL5HAdjeWTHphJ5T2RXUy` }, "readRead some-file.py"),
+    new Element({ "data-message-id": "052b4947-7af9-4a69-a00f-5fb17a5cc414" }, "Tail reply text"),
+  ];
+  root.add(...tailNodes);
+  const targetNode = new Element(
+    { "data-message-id": `${turn}/call_00_sfrmago9exbschabupzaix7x` },
+    "manage_context result ok False applied 0 failed 1 verification_failed",
+  );
+  const target: Row = {
+    ...row("display_hermes_298396", "tool"),
+    tool_call_id: "call_00_sfrmago9exbschabupzaix7x",
+    tool_name: "manage_context",
+    timeline_index: 753,
+    summary_line: "0 managed, 1 failed",
+    tool_output: '{"ok": false, "applied": 0, "failed": 1, "error": "verification_failed"}',
+  };
+  const allRows = [...rows.slice(0, 753), target, ...rows.slice(753)];
+  let clock = 0;
+  let pages = 0;
+  const spinner = new Element({ "data-testid": "load-older-history-spinner" });
+  root.add(spinner);
+  const found = await scrollToMessageInChat(target, allRows, {
+    document: doc,
+    now: () => clock,
+    afterLoad: async () => {
+      // Each older page takes 3s (relay + virtualizer settle); 5 pages to reach target.
+      clock += 3000;
+      pages++;
+      if (pages >= 5) {
+        root.children = root.children.filter((node) => node !== spinner);
+        if (!root.children.includes(targetNode)) root.add(targetNode);
+      }
+    },
+  });
+  expect(found).toBe(true);
+  expect(pages).toBeGreaterThanOrEqual(5);
+  expect(targetNode.scrolled).toBe(true);
+});
+
+test("short (<=8 char) text needles never establish the mounted window (seek direction poison)", async () => {
+  // Outline row 669 summary starts with "수정 결과 ..." (4-char needle "수정 결과").
+  // Mounted chat "수정 결과를 보고서뿐 아니라 ..." must NOT bind to it: the only
+  // honest answer is mounted=[] -> sweep up -> page older.
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 8000;
+  root.clientHeight = 700;
+  root.scrollTop = 7300;
+  const doc = new Element().add(root);
+  const rows: Row[] = Array.from({ length: 100 }, (_, idx) => ({
+    ...row(`outline-${idx}`, "assistant"),
+    timeline_index: idx,
+    summary_line: idx === 69 ? "수정 결과 보고서 초안" : `Outline message ${idx}`,
+    message_text: idx === 69 ? "수정 결과 보고서 초안" : `Outline message ${idx}`,
+  }));
+  root.add(new Element(
+    { "data-message-id": "some-post-compression-message-id" },
+    "수정 결과를 보고서뿐 아니라 실제 bulk 실행 경로와 시험 코드에서 대조하겠습니다",
+  ));
+  const target: Row = {
+    ...row("outline-5-tool", "tool"),
+    tool_call_id: "call_00_target0000000000000000000000",
+    tool_name: "terminal",
+    timeline_index: 5,
+    summary_line: "terminal output",
+  };
+  const allRows = [target, ...rows];
+  let clock = 0;
+  const seenTops: number[] = [];
+  const found = await scrollToMessageInChat(target, allRows, {
+    document: doc,
+    now: () => clock,
+    afterLoad: async () => { seenTops.push(root.scrollTop); clock += 500; },
+  });
+  // Target unreachable in this fixture, but seek must go UP (older), never tail-jump.
+  expect(found).toBe(false);
+  expect(Math.min(...seenTops)).toBeLessThan(7300);
+  expect(root.scrollTop).toBe(7300);
+});
+
+test("nested rendered rows (parent + child share text) dedupe to a unique match despite faulty anchors", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 4000;
+  root.clientHeight = 800;
+  root.scrollTop = 3200;
+  const doc = new Element().add(root);
+  const rows: Row[] = Array.from({ length: 20 }, (_, idx) => ({
+    ...row(`outline-${idx}`, "assistant"),
+    timeline_index: idx,
+    summary_line: `Outline message ${idx}`,
+    message_text: `Outline message ${idx}`,
+  }));
+  const target: Row = {
+    ...row("msg:user:1794996946812:902a43a2f331", "user"),
+    timeline_index: 10,
+    summary_line: "우선 커밋하고 PR생성해줘",
+    message_text: "우선 커밋하고 PR생성해줘",
+  };
+  const allRows = [...rows.slice(0, 10), target, ...rows.slice(10)];
+  // beautiful-chat nesting: outer ROW wraps inner ROW with identical text.
+  const inner = new Element({ "data-history-row-id": "msg_1794996946726_975decyxg" }, "You19:15:46우선 커밋하고 PR생성해줘");
+  const outer = new Element({ "data-message-id": "msg_1794996946726_975decyxg" }, "").add(inner);
+  outer.textContent = "You19:15:46우선 커밋하고 PR생성해줘";
+  root.add(outer);
+  // A faulty lower anchor before the target (wrong boundary guess).
+  root.add(new Element({ "data-message-id": "outline-anchor" }, "Outline message 3"));
+  const found = await scrollToMessageInChat(target, allRows, { document: doc });
+  expect(found).toBe(true);
+  expect(outer.scrolled).toBe(true);
+});
+
+test("seek keeps sweeping up right after older pagination despite spurious fresh text match", async () => {
+  // Trace: top=65 at extent, needOlder fires once (49->92 rows), then a fresh
+  // text match flips direction downward and the seek dies at restore.
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 9282;
+  root.clientHeight = 709;
+  root.scrollTop = 65;
+  const doc = new Element().add(root);
+  const rows: Row[] = Array.from({ length: 150 }, (_, idx) => ({
+    ...row(`outline-${idx}`, "assistant"),
+    timeline_index: 605 + idx,
+    summary_line: `Outline message ${605 + idx}`,
+    message_text: `Outline message ${605 + idx}`,
+  }));
+  const target: Row = {
+    ...row("display_hermes_298396", "tool"),
+    tool_call_id: "call_00_sfrmago9exbschabupzaix7x",
+    tool_name: "manage_context",
+    timeline_index: 753,
+    summary_line: "0 managed, 1 failed",
+  };
+  const allRows = [...rows.slice(0, 148), target, ...rows.slice(148)];
+  // Freshly paged chat text that spuriously matches a NEWER outline row.
+  root.add(new Element({ "data-message-id": "fresh-assistant-mid" }, "Outline message 754 plus unrelated paged suffix text here"));
+  const targetNode = new Element(
+    { "data-message-id": "agent_tool_turn:t/call_00_sfrmago9exbschabupzaix7x" },
+    "manage_context result verification_failed",
+  );
+  let clock = 0;
+  let pages = 0;
+  const seenTops: number[] = [];
+  const found = await scrollToMessageInChat(target, allRows, {
+    document: doc,
+    now: () => clock,
+    afterLoad: async () => {
+      seenTops.push(root.scrollTop);
+      clock += 500;
+      pages++;
+      if (pages >= 3 && !root.children.includes(targetNode)) root.add(targetNode);
+    },
+  });
+  expect(found).toBe(true);
+  // Must keep paging upward, never jump back down past the start.
+  expect(Math.max(...seenTops)).toBeLessThanOrEqual(65 + 709 * 2);
 });

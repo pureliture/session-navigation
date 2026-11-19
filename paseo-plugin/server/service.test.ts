@@ -1,16 +1,24 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { acquireHermesToggleLock, inspectHermesPluginInstall, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
 import {
   Store,
   EngineError,
+  canonical,
   sha256,
   invocationDigest,
   itemId,
+  refusalReason,
   type Item,
 } from "../../packages/core/src/index.ts";
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
+import {
+  messageKey as ompMessageKey,
+  ompInvocationArgs,
+  toolResultText,
+} from "../../packages/omp/src/context.ts";
 import { OmpService } from "../../packages/omp/src/service.ts";
 import { PaseoService } from "./service.ts";
 import {
@@ -20,6 +28,8 @@ import {
   preview,
   type Message,
 } from "./history.ts";
+import { hermesFilterInvocation, loadHermesTimeline } from "./hermesHistory.ts";
+import { MAX_HISTORY_BYTES } from "./historyLimits.ts";
 import { bindAgents } from "./mapping.ts";
 import { MutationResultSchema } from "../shared/sessionNav.ts";
 
@@ -807,7 +817,11 @@ test("Hermes adapter_targets with options_omitted=1 remain manageable in list an
   const hidden = await service.handle("hide", { scope_key: hermesScope, item_id: id, mode: "hide" });
   expect(hidden.ok).toBe(true);
   expect(hidden.item.compacted_bytes_size).toBeLessThan(hidden.item.bytes_size);
-  expect(store.get(hermesScope, id)?.invocation_options_omitted).toBe(true);
+  const stored = store.get(hermesScope, id);
+  expect(stored?.compacted).toBe("[hidden: terminal call_timeout_1]");
+  expect(stored?.invocation_digest).toBe(fullDigest);
+  expect(stored?.invocation_snapshot).toBe(null);
+  expect(stored?.invocation_options_omitted).toBe(false);
 });
 
 test("PASEO_HOME redirects only the real home, never an isolated fixture home", () => {
@@ -1025,12 +1039,1610 @@ test("Hermes local state.db loads full chronological timeline on the server, ena
   expect(hidePrompt.ok).toBe(true);
   expect(hidePrompt.visibility).toBe("hidden");
 
-  // Hide the Hermes terminal tool call (with timeout: 30 -> invocation_options_omitted = true)
+  // Hide the Hermes terminal tool call (with timeout: 30 -> options_omitted digest is preserved; manual hide omits invocation_snapshot)
   const hideTool = await service.handle("hide", {
     scope_key: hermesScope,
     item_id: listed.items[2].item_id,
   });
   expect(hideTool.ok).toBe(true);
   const storedTool = store.get(hermesScope, listed.items[2].item_id);
-  expect(storedTool?.invocation_options_omitted).toBe(true);
+  expect(storedTool?.compacted).toBe("[hidden: terminal call_h_term]");
+  expect(storedTool?.invocation_digest).toBe(
+    invocationDigest(
+      { tool_name: "terminal", arguments: { command: "kubectl get pods -n neurons" } },
+      { timeout: 30 },
+    ),
+  );
+  expect(storedTool?.invocation_snapshot).toBe(null);
+  expect(storedTool?.invocation_options_omitted).toBe(false);
+});
+
+test("unregistered Hermes custom profiles and new OMP sessions get virtual scopes and immediate server_timeline", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, service } = fixture([], false);
+  const agentsDir = join(home, ".paseo/agents/ws");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    join(home, ".paseo/config.json"),
+    JSON.stringify({
+      agents: {
+        providers: {
+          "hermes-ariadne": { extends: "acp", command: ["hermes", "-p", "ariadne", "acp"] },
+        },
+      },
+    }),
+  );
+  // 1. Registered on disk (OMP JSONL + Hermes profile DB), but NOT in adapter_sessions/items/units
+  writeFileSync(
+    join(agentsDir, "omp-new.json"),
+    JSON.stringify({ id: "agent-omp-new", provider: "omp", persistence: { provider: "omp", sessionId: "sid", metadata: {} } }),
+  );
+  writeFileSync(
+    join(agentsDir, "ariadne.json"),
+    JSON.stringify({
+      id: "agent-ariadne",
+      provider: "hermes-ariadne",
+      persistence: { provider: "hermes-ariadne", sessionId: "ariadne-sid", metadata: { provider: "acp" } },
+    }),
+  );
+  writeFileSync(
+    join(agentsDir, "claude-acp.json"),
+    JSON.stringify({
+      id: "agent-claude-acp",
+      provider: "claude",
+      persistence: { provider: "acp", sessionId: "claude-sid", metadata: { provider: "acp" } },
+    }),
+  );
+  const sessionsDir = join(home, ".omp/agent/sessions/project");
+  writeFileSync(
+    join(sessionsDir, "2026_sid.jsonl"),
+    JSON.stringify({ type: "message", message: { role: "user", timestamp: 1, content: "hello omp" } }),
+  );
+  const ariadneDir = join(home, ".hermes/profiles/ariadne");
+  mkdirSync(ariadneDir, { recursive: true });
+  const db = new DatabaseSync(join(ariadneDir, "state.db"));
+  try {
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("ariadne-sid", "{}");
+    db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+      "ariadne-sid",
+      "user",
+      "hello ariadne",
+    );
+  } finally {
+    db.close();
+  }
+
+  const scopesReply = await service.handle("scopes", {});
+  expect(scopesReply.ok).toBe(true);
+  const byAgent = new Map(scopesReply.scopes.map((s: any) => [s.agent_id, s]));
+  expect(byAgent.get("agent-omp-new")).toMatchObject({
+    scope_key: "omp:default:sid:default",
+    items: 0,
+  });
+  expect(byAgent.get("agent-ariadne")).toMatchObject({
+    scope_key: "hermes:ariadne:ariadne-sid:unknown",
+    items: 0,
+  });
+  expect(byAgent.has("agent-claude-acp")).toBe(false);
+
+  const ariadneList = await service.handle("list", { scope_key: "hermes:ariadne:ariadne-sid:unknown" });
+  expect(ariadneList.ok).toBe(true);
+  expect(ariadneList.server_timeline).toBe(true);
+  expect(ariadneList.items[0].summary_line).toBe("hello ariadne");
+
+  const { hasHermesSession } = await import("./hermesHistory.ts");
+  expect(hasHermesSession(home, "ariadne", "ariadne-sid")).toBe(true);
+  expect(hasHermesSession(home, "ariadne", "claude-sid")).toBe(false);
+});
+
+test("OMP summary_line normalizes <paseo-system>, <system-reminder>, <system-notice> and preserves hidden tool summaries", async () => {
+  const { call, store } = fixture([
+    {
+      role: "user",
+      timestamp: 100,
+      content:
+        '<system-reminder>Secret reminder block</system-reminder><paseo-system version="1" kind="agent-message" source-agent-id="sub-999999" source-agent-title="Reviewer">Please inspect the diff carefully.\nSecond line</paseo-system>',
+    },
+    {
+      role: "user",
+      timestamp: 200,
+      content:
+        '<system-notice>Notice text</system-notice><paseo-system version="1" kind="agent-notification" source-agent-id="sub-123" source-agent-title="Worker" event="finished">Done</paseo-system>',
+    },
+    {
+      role: "user",
+      timestamp: 300,
+      content: "<system-reminder>Ignored</system-reminder>\n진행해",
+    },
+    {
+      role: "assistant",
+      timestamp: 400,
+      content: [{ type: "toolCall", id: "c_short", name: "bash", arguments: { command: "ls -la" } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c_short",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "short" }],
+    },
+  ]);
+
+  const listedBefore = await call("list");
+  expect(listedBefore.items[0].summary_line).toBe("[Agent message · Reviewer] Please inspect the diff carefully.");
+  expect(listedBefore.items[1].summary_line).toBe("[Subagent finished] Worker");
+  expect(listedBefore.items[2].summary_line).toBe("진행해");
+
+  const toolRow = listedBefore.items[3];
+  const hidden = await call("hide", { item_id: toolRow.item_id, mode: "hide" });
+  expect(hidden.ok).toBe(true);
+  const stored = store.get(scope, toolRow.item_id)!;
+  expect(stored.compacted).toBe("[hidden: bash c_short]");
+
+  const listedAfter = await call("list");
+  const hiddenToolRow = listedAfter.items.find((r: any) => r.item_id === toolRow.item_id);
+  expect(hiddenToolRow.status).toBe("hidden");
+  expect(hiddenToolRow.summary_line).toBe("short");
+});
+
+test("hermesHistory normalizes trimmed call_id and increments result_position per call occurrence", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { loadHermesTimeline } = await import("./hermesHistory.ts");
+  const { home } = fixture([]);
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const db = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("dup-pos", "{}");
+    const ins = db.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+    ins.run("dup-pos", "assistant", "", null, JSON.stringify([{ id: " call_dup ", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } }]), null);
+    ins.run("dup-pos", "tool", "first result", " call_dup ", null, "read_file");
+    ins.run("dup-pos", "tool", "second result", "call_dup", null, "read_file");
+  } finally {
+    db.close();
+  }
+  const scopeKey = "hermes:default:dup-pos:unknown";
+  const inv = { tool_name: "read_file", arguments: { path: "a.txt" } };
+  const digest = invocationDigest(inv);
+  const item0: Item = {
+    item_id: itemId(scopeKey, "call_dup", sha256("first result"), digest, 0),
+    tool_call_id: "call_dup",
+    result_position: 0,
+    content_sha256: sha256("first result"),
+    invocation_digest: digest,
+    original: "first result",
+    compacted: "[hidden:0]",
+    excerpt_lines: [],
+    visibility: "hidden",
+    version: 2,
+    tool_name: "read_file",
+    compaction_source: "explicit_user_hide",
+    invocation_snapshot: inv,
+    context_hint: null,
+    invocation_options_omitted: false,
+    created_at: 0,
+    updated_at: 0,
+  };
+  const item1: Item = {
+    ...item0,
+    item_id: itemId(scopeKey, "call_dup", sha256("second result"), digest, 1),
+    result_position: 1,
+    content_sha256: sha256("second result"),
+    original: "second result",
+    compacted: "[hidden:1]",
+  };
+  const tl = loadHermesTimeline(home, scopeKey, [item0, item1]);
+  expect(tl).not.toBeNull();
+  const toolRows = tl!.rows.filter((r) => r.kind === "tool");
+  expect(toolRows.map((r) => r.item_id)).toEqual([item0.item_id, item1.item_id]);
+});
+
+test("explicit_user_hide prioritizes verified adapter_targets while strictly enforcing destructive_command and identity fencing", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, store, service, register } = fixture([], false);
+  const hScope = "hermes:atlas:target-prio:unknown";
+  register(hScope);
+
+  // Publish a verified target with options_omitted = 1 AND also put a Hermes state.db row
+  const targetContent = Array.from({ length: 40 }, (_, i) => `line ${i}: ok`).join("\n");
+  const targetInv = { tool_name: "terminal", arguments: { command: "echo hi" } };
+  const targetOmitted = { timeout: 45 };
+  const targetDigest = invocationDigest(targetInv, targetOmitted);
+  const targetSha = sha256(targetContent);
+  const targetItemId = itemId(hScope, "call_prio", targetSha, targetDigest, 0);
+  store.publishTargets(hScope, [
+    {
+      record: {
+        call_id: "call_prio",
+        content: targetContent,
+        content_sha256: targetSha,
+        invocation: targetInv,
+        invocation_digest: targetDigest,
+        result_position: 0,
+        status: "ok",
+      },
+      omitted: targetOmitted,
+    },
+  ]);
+
+  const profileDir = join(home, ".hermes/profiles/atlas");
+  mkdirSync(profileDir, { recursive: true });
+  const hdb = new DatabaseSync(join(profileDir, "state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    hdb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("target-prio", "{}");
+    const ins = hdb.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+    // State.db has no omitted timeout, whereas adapter_targets has verified omitted timeout!
+    ins.run("target-prio", "assistant", "", null, JSON.stringify([{ id: "call_prio", type: "function", function: { name: "terminal", arguments: '{"command":"echo hi"}' } }]), null);
+    ins.run("target-prio", "tool", targetContent, "call_prio", null, "terminal");
+    // Also add a destructive command row to verify explicit_user_hide strictly refuses destructive_command!
+    ins.run("target-prio", "assistant", "", null, JSON.stringify([{ id: "call_rm", type: "function", function: { name: "terminal", arguments: '{"command":"rm -rf /tmp/evil"}' } }]), null);
+    ins.run("target-prio", "tool", "deleted", "call_rm", null, "terminal");
+  } finally {
+    hdb.close();
+  }
+
+  // Hiding by tool_call_id keeps the verified invocation_digest. Manual hide no
+  // longer stores the invocation snapshot or an excerpt: it writes a single-line
+  // replacement and keeps only the original output for preview/unhide.
+  const hidePrio = await service.handle("hide", { scope_key: hScope, item_id: "call_prio" });
+  expect(hidePrio.ok).toBe(true);
+  expect(hidePrio.item_id).toBe(targetItemId);
+  expect(store.get(hScope, targetItemId)?.invocation_options_omitted).toBe(false);
+  expect(store.get(hScope, targetItemId)?.invocation_snapshot).toBe(null);
+  expect(store.get(hScope, targetItemId)?.excerpt_lines).toEqual([]);
+  expect(store.get(hScope, targetItemId)?.compacted).toBe("[hidden: terminal call_prio]");
+  expect(store.get(hScope, targetItemId)?.invocation_digest).toBe(targetDigest);
+
+  // Destructive commands MUST still be refused even for explicit_user_hide
+  const hideRm = await service.handle("hide", { scope_key: hScope, item_id: "call_rm" });
+  expect(hideRm.ok).toBe(false);
+  expect(hideRm.error).toBe("destructive_command");
+
+  // Identity fencing: different invocation_digest for the same (call_id, content_sha256, result_position) -> invocation_conflict
+  const altDigest = invocationDigest({ tool_name: "terminal", arguments: { command: "echo alt" } });
+  const altItemId = itemId(hScope, "call_prio", targetSha, altDigest, 0);
+  store.publishTargets(hScope, [
+    {
+      record: {
+        call_id: "call_prio",
+        content: targetContent,
+        content_sha256: targetSha,
+        invocation: { tool_name: "terminal", arguments: { command: "echo alt" } },
+        invocation_digest: altDigest,
+        result_position: 0,
+        status: "ok",
+      },
+    },
+  ]);
+  const fenceFail = await service.handle("hide", { scope_key: hScope, item_id: altItemId });
+  expect(fenceFail.ok).toBe(false);
+  expect(fenceFail.error).toBe("invocation_conflict");
+
+  // Tampered adapter_targets row fails integrity verification and cannot bypass content_tampered
+  const tamperedId = itemId(hScope, "call_tampered", sha256("real"), targetDigest, 0);
+  store.driver.run(
+    "INSERT INTO adapter_targets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      hScope,
+      tamperedId,
+      "call_tampered",
+      0,
+      targetDigest,
+      JSON.stringify(targetInv),
+      "tampered body",
+      sha256("real"),
+      "terminal",
+      0,
+      0,
+      999,
+    ],
+  );
+  expect((await service.handle("hide", { scope_key: hScope, item_id: "call_tampered" })).error).toBe(
+    "not_found",
+  );
+});
+
+test("OMP JSONL timeline cache isolates caller mutations and invalidates immediately on file change", () => {
+  const { home } = fixture(toolMessages("alpha"));
+  const filePath = join(home, ".omp/agent/sessions/project/2026_sid.jsonl");
+
+  const t1 = loadTimeline(home, scope);
+  expect(t1.rows.length).toBeGreaterThan(0);
+  const originalToolCount = t1.rows.length;
+  const originalRecordSize = t1.records.size;
+
+  // Mutate returned rows and records; cached entry must stay completely isolated
+  t1.rows[0].summary_line = "MUTATED_SUMMARY";
+  t1.rows.push({ item_id: "injected", kind: "user" });
+  t1.records.clear();
+
+  const t2 = loadTimeline(home, scope);
+  expect(t2.rows).toHaveLength(originalToolCount);
+  expect(t2.rows[0].summary_line).not.toBe("MUTATED_SUMMARY");
+  expect(t2.records.size).toBe(originalRecordSize);
+
+  // Update JSONL file (size + mtime change) -> cache invalidates immediately
+  writeFileSync(
+    filePath,
+    toolMessages("beta updated output")
+      .map((m) => JSON.stringify({ type: "message", message: m }))
+      .join("\n"),
+  );
+  const t3 = loadTimeline(home, scope);
+  expect(t3.records.get("c1")?.content).toBe("beta updated output");
+
+  // Explicit mtime change with identical size also invalidates
+  const bumped = new Date(Date.now() + 10_000);
+  utimesSync(filePath, bumped, bumped);
+  const t4 = loadTimeline(home, scope);
+  expect(t4.records.get("c1")?.content).toBe("beta updated output");
+});
+
+test("Hermes state.db timeline cache invalidates within the same ms and distinguishes absent session from matched DB read error", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home } = fixture([]);
+  const hermesDir = join(home, ".hermes");
+  mkdirSync(hermesDir, { recursive: true });
+  const dbPath = join(hermesDir, "state.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_call_id TEXT,
+      tool_calls TEXT,
+      tool_name TEXT,
+      codex_message_items TEXT,
+      api_content TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      compacted INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("cache-sid", "{}");
+  db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+    "cache-sid",
+    "user",
+    "prompt 1",
+  );
+
+  const scopeKey = "hermes:default:cache-sid:unknown";
+  const tl1 = loadHermesTimeline(home, scopeKey);
+  expect(tl1).not.toBeNull();
+  expect(tl1!.rows.map((r) => r.summary_line)).toEqual(["prompt 1"]);
+  // Mutate returned rows to verify shallow-clone isolation
+  tl1!.rows[0].summary_line = "MUTATED";
+  const tl2 = loadHermesTimeline(home, scopeKey);
+  expect(tl2!.rows.map((r) => r.summary_line)).toEqual(["prompt 1"]);
+
+  // Modify DB inside the same ms (UPDATE with same byte length!) -> change counter detects immediately
+  db.prepare("UPDATE messages SET content = ? WHERE session_id = ?").run("prompt 2", "cache-sid");
+  const tl3 = loadHermesTimeline(home, scopeKey);
+  expect(tl3!.rows.map((r) => r.summary_line)).toEqual(["prompt 2"]);
+
+  // Absent session returns null
+  expect(loadHermesTimeline(home, "hermes:default:nonexistent-sid:unknown")).toBeNull();
+
+  // Matched session whose DB fails while reading messages distinguishes readError from null
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("broken-sid", "{}");
+  db.exec("DROP TABLE messages");
+  db.close();
+
+  const broken = loadHermesTimeline(home, "hermes:default:broken-sid:unknown");
+  expect(broken).not.toBeNull();
+  expect(broken!.rows).toEqual([]);
+  expect(typeof broken!.history.readError).toBe("string");
+  expect(broken!.history.readErrorDb).toBe(dbPath);
+
+  // If a secondary candidate DB holds a healthy copy, fallback succeeds cleanly without readError
+  const fallbackDir = join(hermesDir, "profiles/backup");
+  mkdirSync(fallbackDir, { recursive: true });
+  const fbDb = new DatabaseSync(join(fallbackDir, "state.db"));
+  try {
+    fbDb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    fbDb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("broken-sid", "{}");
+    fbDb.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+      "broken-sid",
+      "user",
+      "recovered prompt",
+    );
+  } finally {
+    fbDb.close();
+  }
+  const recovered = loadHermesTimeline(home, "hermes:default:broken-sid:unknown");
+  expect(recovered).not.toBeNull();
+  expect(recovered!.history.readError).toBeUndefined();
+  expect(recovered!.rows.map((r) => r.summary_line)).toEqual(["recovered prompt"]);
+
+  // WAL mode same-ms write invalidation check + service list surfacing timeline_read_error
+  const walDir = join(hermesDir, "profiles/walprof");
+  mkdirSync(walDir, { recursive: true });
+  const wdb = new DatabaseSync(join(walDir, "state.db"));
+  try {
+    wdb.exec("PRAGMA journal_mode=WAL");
+    wdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    wdb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("wal-sid", "{}");
+    wdb.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+      "wal-sid",
+      "user",
+      "wal initial",
+    );
+    expect(loadHermesTimeline(home, "hermes:walprof:wal-sid:unknown")!.rows.map((r) => r.summary_line)).toEqual([
+      "wal initial",
+    ]);
+    wdb.prepare("UPDATE messages SET content = ? WHERE session_id = ?").run("wal updated", "wal-sid");
+    expect(loadHermesTimeline(home, "hermes:walprof:wal-sid:unknown")!.rows.map((r) => r.summary_line)).toEqual([
+      "wal updated",
+    ]);
+  } finally {
+    wdb.close();
+  }
+
+  const { home: errHome, service } = fixture([]);
+  const errHermesDir = join(errHome, ".hermes/profiles/onlybroken");
+  mkdirSync(errHermesDir, { recursive: true });
+  const errDb = new DatabaseSync(join(errHermesDir, "state.db"));
+  errDb.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT)");
+  errDb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("only-broken", "{}");
+  errDb.close();
+  const brokenList = await service.handle("list", {
+    scope_key: "hermes:onlybroken:only-broken:unknown",
+  });
+  expect(brokenList.ok).toBe(true);
+  expect(brokenList.server_timeline).toBe(false);
+  expect(typeof brokenList.timeline_read_error).toBe("string");
+});
+
+test("shared host_identity.json v1 contract matches OMP context, history.ts, and hermesHistory.ts", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const fixturePath = resolve(import.meta.dir, "../../contracts/fixtures/host_identity.json");
+  const hostFix = JSON.parse(readFileSync(fixturePath, "utf8"));
+  expect(hostFix.version).toBe(1);
+
+  const { home } = fixture([]);
+  const ompDir = join(home, ".omp/agent/sessions/contract");
+  mkdirSync(ompDir, { recursive: true });
+
+  const ompEntries: Message[] = [];
+  for (const m of hostFix.omp.messages) {
+    expect(ompMessageKey(m.message)).toBe(m.expected_key);
+    expect(messageKey(0, m.message)).toBe(m.expected_key);
+    ompEntries.push(m.message);
+  }
+  for (const t of hostFix.omp.tools) {
+    const rawArgs = JSON.parse(t.raw_arguments_json);
+    const filteredArgs = ompInvocationArgs(t.tool_name, rawArgs);
+    expect(filteredArgs).not.toBeNull();
+    const inv = { tool_name: t.tool_name, arguments: filteredArgs as any };
+    expect(canonical(inv)).toBe(t.expected_invocation_json);
+    expect(invocationDigest(inv)).toBe(t.expected_invocation_digest);
+    const toolResultMsg = {
+      role: "toolResult",
+      toolCallId: t.call_id,
+      toolName: t.tool_name,
+      isError: false,
+      content: t.result_content,
+    };
+    expect(toolResultText(toolResultMsg)).toBe(t.expected_text);
+    ompEntries.push(
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: t.call_id, name: t.tool_name, arguments: rawArgs }],
+      },
+      toolResultMsg,
+    );
+  }
+  writeFileSync(
+    join(ompDir, "2026_fixture-omp-sid.jsonl"),
+    ompEntries.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
+  );
+  const ompTl = loadTimeline(home, hostFix.omp.scope);
+  for (const m of hostFix.omp.messages) {
+    const row = ompTl.rows.find((r) => r.item_id === m.expected_key);
+    expect(row?.summary_line).toBe(m.expected_summary_line);
+  }
+  for (const t of hostFix.omp.tools) {
+    const rec = ompTl.records.get(t.call_id);
+    const row = ompTl.rows.find((r) => r.tool_call_id === t.call_id);
+    expect(rec?.content).toBe(t.expected_text);
+    expect(rec?.content_sha256).toBe(t.expected_content_sha256);
+    expect(rec?.invocation_digest).toBe(t.expected_invocation_digest);
+    expect(row?.item_id).toBe(t.expected_item_id);
+  }
+
+  for (const invCase of hostFix.hermes.invocations) {
+    const res = hermesFilterInvocation(invCase.tool_name, invCase.raw_arguments_json);
+    expect(res).not.toBeNull();
+    expect(canonical(res!.invocation)).toBe(invCase.expected_invocation_json);
+    expect(canonical(res!.omitted ?? {})).toBe(invCase.expected_omitted_json);
+    expect(invocationDigest(res!.invocation, res!.omitted)).toBe(invCase.expected_invocation_digest);
+  }
+
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const hdb = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const insS = hdb.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)");
+    const insM = hdb.prepare(
+      "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, codex_message_items, api_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const mode of ["chat_completions", "codex_responses"] as const) {
+      const sec = hostFix.hermes[mode];
+      insS.run(sec.session_id, JSON.stringify({ gateway_runtime: { api_mode: mode } }));
+      for (const r of sec.db_rows) {
+        insM.run(
+          sec.session_id,
+          r.role,
+          r.content ?? null,
+          r.tool_call_id ?? null,
+          r.tool_calls ? JSON.stringify(r.tool_calls) : null,
+          r.tool_name ?? null,
+          r.codex_message_items ? JSON.stringify(r.codex_message_items) : null,
+          r.api_content ?? null,
+        );
+      }
+      const tl = loadHermesTimeline(home, sec.scope);
+      expect(tl).not.toBeNull();
+      expect(
+        tl!.rows.filter((r) => r.kind === "user" || r.kind === "assistant").map((r) => r.item_id),
+      ).toEqual(sec.expected_message_keys);
+      const tRow = tl!.rows.find((r) => r.tool_call_id === sec.expected_tool.call_id);
+      const tRec = tl!.records.get(sec.expected_tool.call_id);
+      expect(tRec?.invocation_digest).toBe(sec.expected_tool.invocation_digest);
+      expect(tRow?.item_id).toBe(sec.expected_tool.expected_item_id);
+    }
+
+    const multi = hostFix.hermes.multi_result;
+    insS.run(multi.session_id, JSON.stringify({ gateway_runtime: { api_mode: "codex_responses" } }));
+    for (const r of multi.db_rows) {
+      insM.run(
+        multi.session_id,
+        r.role,
+        r.content ?? null,
+        r.tool_call_id ?? null,
+        r.tool_calls ? JSON.stringify(r.tool_calls) : null,
+        r.tool_name ?? null,
+        null,
+        null,
+      );
+    }
+    const storedMulti: Item[] = multi.expected_results.map((er: any) => ({
+      item_id: er.expected_item_id,
+      tool_call_id: multi.call_id,
+      result_position: er.result_position,
+      content_sha256: sha256(er.content),
+      invocation_digest: multi.expected_invocation_digest,
+      original: er.content,
+      compacted: "[hidden]",
+      excerpt_lines: [],
+      visibility: "hidden",
+      version: 2,
+      tool_name: "read_file",
+      compaction_source: "explicit_user_hide",
+      invocation_snapshot: { tool_name: "read_file", arguments: { path: "multi.txt" } },
+      context_hint: null,
+      invocation_options_omitted: false,
+      created_at: 0,
+      updated_at: 0,
+    }));
+    const tlMulti = loadHermesTimeline(home, multi.scope, storedMulti);
+    expect(tlMulti).not.toBeNull();
+    expect(tlMulti!.rows.filter((r) => r.kind === "tool").map((r) => r.item_id)).toEqual(
+      multi.expected_results.map((er: any) => er.expected_item_id),
+    );
+  } finally {
+    hdb.close();
+  }
+});
+
+test("list RPC supports limit + before_index cursor pagination, preserves contiguous tool groups across page boundaries, and keeps full-session totals", async () => {
+  const messages: Message[] = [
+    { role: "user", timestamp: 100, content: "First prompt" },
+    {
+      role: "assistant",
+      timestamp: 200,
+      content: [
+        { type: "toolCall", id: "t_old_hidden", name: "read", arguments: { path: "old.txt" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      timestamp: 210,
+      toolCallId: "t_old_hidden",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "old output ".repeat(120) }],
+    },
+    { role: "user", timestamp: 300, content: "Second prompt" },
+    {
+      role: "assistant",
+      timestamp: 400,
+      content: [
+        { type: "toolCall", id: "t_grp_1", name: "bash", arguments: { command: "echo 1" } },
+        { type: "toolCall", id: "t_grp_2", name: "bash", arguments: { command: "echo 2" } },
+        { type: "toolCall", id: "t_grp_3", name: "bash", arguments: { command: "echo 3" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      timestamp: 410,
+      toolCallId: "t_grp_1",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "g1" }],
+    },
+    {
+      role: "toolResult",
+      timestamp: 420,
+      toolCallId: "t_grp_2",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "g2" }],
+    },
+    {
+      role: "toolResult",
+      timestamp: 430,
+      toolCallId: "t_grp_3",
+      toolName: "bash",
+      isError: false,
+      content: [{ type: "text", text: "g3" }],
+    },
+    { role: "assistant", timestamp: 500, content: [{ type: "text", text: "Latest reply" }] },
+  ];
+
+  const { call } = fixture(messages);
+  const full = await call("list");
+  expect(full.items).toHaveLength(7); // u0, t_old_hidden, u1, t_grp_1, t_grp_2, t_grp_3, ast_latest
+  expect(full.items.map((r: any) => r.timeline_index)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  expect(full.has_older).toBe(false);
+  expect(full.next_before_index).toBeNull();
+
+  // Hide the older tool call (timeline_index = 1) so it sits outside the tail slice
+  const oldTool = full.items[1];
+  const hidden = await call("hide", { item_id: oldTool.item_id, expected_version: oldTool.version });
+  expect(hidden.ok).toBe(true);
+
+  // Request latest 3 rows -> index 4, 5, 6 starts inside the contiguous tool group [3, 4, 5]!
+  // Server must expand startIndex backward to 3 so the tool group is NEVER split across pages.
+  const tailPage = await call("list", { limit: 3 });
+  expect(tailPage.items.map((r: any) => r.timeline_index)).toEqual([3, 4, 5, 6]);
+  expect(tailPage.has_older).toBe(true);
+  expect(tailPage.next_before_index).toBe(3);
+  expect(tailPage.totals).toEqual({
+    total_rows: 7,
+    manageable_count: 7,
+    hidden_count: 1,
+    saved_bytes: Math.max(0, hidden.item.bytes_size - hidden.item.compacted_bytes_size),
+  });
+
+  // Request older page using next_before_index=3 with limit=2 -> gets [1, 2], has_older=true, next_before_index=1
+  const olderPage = await call("list", { limit: 2, before_index: tailPage.next_before_index });
+  expect(olderPage.items.map((r: any) => r.timeline_index)).toEqual([1, 2]);
+  expect(olderPage.items[0].status).toBe("hidden");
+  expect(olderPage.has_older).toBe(true);
+  expect(olderPage.next_before_index).toBe(1);
+
+  // Final older page
+  const firstPage = await call("list", { limit: 5, before_index: olderPage.next_before_index });
+  expect(firstPage.items.map((r: any) => r.timeline_index)).toEqual([0]);
+  expect(firstPage.has_older).toBe(false);
+  expect(firstPage.next_before_index).toBeNull();
+
+  // Search query returns matching older rows across the entire session without paging slice
+  const searchRes = await call("list", { query: "First prompt", limit: 2 });
+  expect(searchRes.items.map((r: any) => r.timeline_index)).toEqual([0]);
+  expect(searchRes.has_older).toBe(false);
+});
+
+function installRepoHermesPlugin(home: string): string {
+  const targetVendor = join(home, ".hermes/plugins/session-navigation/vendor");
+  mkdirSync(join(home, ".hermes/plugins/session-navigation"), { recursive: true });
+  cpSync(resolve(import.meta.dir, "../../hermes-plugin/vendor"), targetVendor, { recursive: true });
+  const check = inspectHermesPluginInstall(home);
+  expect(check.protectionSupportedOnDisk).toBe(true);
+  expect(typeof check.bundleFingerprint).toBe("string");
+  return check.bundleFingerprint!;
+}
+
+test("session-nav adapter toggles inspect, require verified protection before disabling, update multi-profile Hermes YAML with rollback, sync capabilities, and reject symlinks", async () => {
+  const { home, store, service, register } = fixture([], true);
+
+  // Default state before .hermes exists
+  const initial = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(initial.ok).toBe(true);
+  expect(initial.omp).toMatchObject({ installed: true, enabled: true });
+  expect(initial.hermes).toMatchObject({ installed: false, enabled: false, profileCount: 0 });
+
+  // Build default + 2 named Hermes profiles inside temp home
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  const tycheDir = join(hermesRoot, "profiles", "tyche");
+  mkdirSync(atlasDir, { recursive: true });
+  mkdirSync(tycheDir, { recursive: true });
+
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const tycheCfg = join(tycheDir, "config.yaml");
+
+  writeFileSync(
+    rootCfg,
+    [
+      "# Global Hermes configuration",
+      "model: claude-3-7-sonnet # keep model intact",
+      "plugins:",
+      "  entries:",
+      "    other-plugin:",
+      "      enabled: true",
+      "    session-navigation:",
+      "      enabled: true # still valid",
+      "      settings:",
+      "        enabled: true # toggle comment preserved",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    atlasCfg,
+    [
+      "# Atlas profile config",
+      "model: gpt-5",
+      "plugins:",
+      "  entries:",
+      "    session-navigation:",
+      "      settings:",
+      "        enabled: false",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    tycheCfg,
+    [
+      "# Tyche profile config without session-navigation entry yet",
+      "model: gemini-2.5-pro",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  // Register hermes scope with a hidden message so unhide stays true when paused
+  const hermesScope = "hermes:atlas:sid:main";
+  register(hermesScope);
+  expect(
+    store.setMessageVisibility(hermesScope, "msg:user:1", "user", "sha", 4, "hidden", 1).ok,
+  ).toBe(true);
+
+  const mixed = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(mixed.ok).toBe(true);
+  expect(mixed.hermes).toMatchObject({
+    installed: true,
+    enabled: true,
+    mixed: true,
+    profileCount: 3,
+    canDisable: true,
+    protectionVerified: false,
+  });
+
+  // Pausing Hermes via Settings updates shared SQLite adapter_control only while leaving config.yaml
+  // intact so older/frozen Hermes processes never disable middleware protection.
+  const pausedBeforeInstall = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(pausedBeforeInstall.ok).toBe(true);
+  expect(pausedBeforeInstall.hermes).toMatchObject({
+    installed: true,
+    enabled: false,
+    mixed: true,
+    profileCount: 3,
+    canDisable: true,
+    protectionVerified: false,
+    pluginInstalled: false,
+  });
+  expect(pausedBeforeInstall.hermes.warning).toContain("Hermes plugin is not installed");
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # toggle comment preserved");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: false");
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
+  expect(service.capabilities(hermesScope)).toMatchObject({
+    state: "adapter_disabled",
+    hide: false,
+    summarize: false,
+    unhide: true,
+  });
+  expect(service.capabilities(hermesScope).hint).toContain("D9");
+
+  // Re-enable Hermes globally across all 3 profiles (writes config.yaml + clears mixed state)
+  const enabledHermes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(enabledHermes.ok).toBe(true);
+  expect(enabledHermes.hermes).toMatchObject({
+    installed: true,
+    enabled: true,
+    profileCount: 3,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  expect(enabledHermes.hermes.mixed).toBeUndefined();
+
+  for (const cfgPath of [rootCfg, atlasCfg, tycheCfg]) {
+    const content = readFileSync(cfgPath, "utf8");
+    expect(content).toContain("# ");
+    expect(content).toContain("model:");
+    expect(content).toContain("enabled: true");
+  }
+  const rootAfterOn = readFileSync(rootCfg, "utf8");
+  expect(rootAfterOn).toContain("# Global Hermes configuration");
+  expect(rootAfterOn).toContain("model: claude-3-7-sonnet # keep model intact");
+  expect(rootAfterOn).toContain("other-plugin:\n      enabled: true");
+  expect(rootAfterOn).toContain("enabled: true # toggle comment preserved");
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
+  expect(service.capabilities(hermesScope).state).toBe("ready");
+
+  // Install current Hermes plugin and register protection_only + bundle_fingerprint;
+  // Pausing Off still stays DB-control-only and keeps protectionVerified=false (live process proof impossible via SQLite).
+  const bundleFingerprint = installRepoHermesPlugin(home);
+  const verifiedCaps = {
+    hide: true,
+    summarize: true,
+    unhide: true,
+    protection_only: true,
+    bundle_fingerprint: bundleFingerprint,
+  };
+  register(hermesScope, verifiedCaps);
+  register("hermes:default:sid-default:unknown", verifiedCaps);
+  register("hermes:tyche:sid-tyche:unknown", verifiedCaps);
+
+  const disabledHermes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(disabledHermes.ok).toBe(true);
+  expect(disabledHermes.hermes).toMatchObject({
+    installed: true,
+    enabled: false,
+    profileCount: 3,
+    protectionSupportedOnDisk: true,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  expect(disabledHermes.hermes.mixed).toBeUndefined();
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # toggle comment preserved");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: true");
+  expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: true");
+  expect(disabledHermes.hermes.statusText).toContain("Paused via DB control");
+  expect(disabledHermes.hermes.warning).toContain("Older Hermes sessions may keep running");
+  expect(disabledHermes.hermes.warning).toContain("DB failures may send original content");
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
+
+  // Disable OMP via toggle and confirm capability state transitions cleanly
+  const disabledOmp = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "omp",
+    enabled: false,
+  });
+  expect(disabledOmp.ok).toBe(true);
+  expect(disabledOmp.omp.enabled).toBe(false);
+  expect(store.getAdapterControl("omp")?.enabled).toBe(false);
+  expect(service.capabilities(scope).state).toBe("adapter_disabled");
+
+  // Symlink defense: replacing a profile config with an external symlink must be rejected without touching target
+  const externalTarget = join(home, "outside-secret.yaml");
+  writeFileSync(externalTarget, "untouched: true\n", "utf8");
+  rmSync(tycheCfg);
+  symlinkSync(externalTarget, tycheCfg);
+
+  const symlinkResult = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(symlinkResult.ok).toBe(false);
+  expect(symlinkResult.error).toBe("unsafe_hermes_config_path");
+  expect(readFileSync(externalTarget, "utf8")).toBe("untouched: true\n");
+});
+
+test("Hermes Off pauses via DB control only, preserves config.yaml for legacy processes, and never claims live-process verification", async () => {
+  const { home, store, service, register } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  mkdirSync(atlasDir, { recursive: true });
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const enabledYaml = "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n";
+  writeFileSync(rootCfg, enabledYaml, "utf8");
+  writeFileSync(atlasCfg, enabledYaml, "utf8");
+
+  // 1. Legacy installed plugin (disabled middleware returns None) keeps config.yaml enabled when paused
+  const legacyCore = join(hermesRoot, "plugins/session-navigation/vendor/session_navigation");
+  const legacyAdapter = join(hermesRoot, "plugins/session-navigation/vendor/session_navigation_hermes");
+  mkdirSync(legacyCore, { recursive: true });
+  mkdirSync(legacyAdapter, { recursive: true });
+  writeFileSync(join(legacyCore, "__init__.py"), "", "utf8");
+  writeFileSync(join(legacyCore, "adapter_registry.py"), "class AdapterRegistryMixin:\n    pass\n", "utf8");
+  writeFileSync(join(legacyAdapter, "__init__.py"), "", "utf8");
+  writeFileSync(
+    join(legacyAdapter, "factories.py"),
+    "def make_middleware(state):\n    def on_llm_request(**kwargs):\n        return None\n    return on_llm_request\n",
+    "utf8",
+  );
+
+  const legacyScope = "hermes:default:legacy-s1:unknown";
+  register(legacyScope);
+  const legacyInspect = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(legacyInspect.hermes).toMatchObject({
+    pluginInstalled: true,
+    protectionSupportedOnDisk: false,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  const legacyOff = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(legacyOff.ok).toBe(true);
+  expect(legacyOff.hermes.enabled).toBe(false);
+  expect(legacyOff.hermes.protectionVerified).toBe(false);
+  expect(legacyOff.hermes.warning).toContain("keeps config.yaml enabled");
+  expect(readFileSync(rootCfg, "utf8")).toBe(enabledYaml);
+  expect(readFileSync(atlasCfg, "utf8")).toBe(enabledYaml);
+
+  // 2. Even after upgrading disk plugin AND registering current bundle_fingerprint,
+  //    durable adapter_sessions rows never justify protectionVerified=true or editing config.yaml to false.
+  rmSync(join(hermesRoot, "plugins"), { recursive: true, force: true });
+  const bundleFingerprint = installRepoHermesPlugin(home);
+
+  const atlasStaleScope = "hermes:atlas:stale-s2:unknown";
+  store.register(legacyScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: false, unhide: true, protection_only: true, bundle_fingerprint: "stale-old-fp" },
+    enabled: true,
+    instance_id: "old-proc-1",
+  }, 100);
+  store.register(atlasStaleScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: false, unhide: true },
+    enabled: true,
+    instance_id: "old-proc-2",
+  }, 100);
+  const hiddenItem = seed(store, "item_hermes_hidden_1", atlasStaleScope);
+  expect(
+    store.put(atlasStaleScope, { ...hiddenItem, visibility: "hidden", version: 2 }, 1).ok,
+  ).toBe(true);
+
+  const staleInspect = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(staleInspect.hermes).toMatchObject({
+    pluginInstalled: true,
+    protectionSupportedOnDisk: true,
+    protectionVerified: false,
+    canDisable: true,
+  });
+  expect(staleInspect.hermes.unverifiedScopes).toContain(legacyScope);
+  expect(staleInspect.hermes.unverifiedScopes).toContain(atlasStaleScope);
+
+  // 3. Even after all known scopes register current capabilities, protectionVerified stays false
+  //    and unhide recovery remains available while paused via DB control.
+  const verifiedCaps = {
+    hide: true,
+    summarize: true,
+    unhide: true,
+    protection_only: true,
+    bundle_fingerprint: bundleFingerprint,
+  };
+  store.register(legacyScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: verifiedCaps,
+    enabled: true,
+    instance_id: "new-proc-1",
+  }, 1000);
+  store.register(atlasStaleScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: verifiedCaps,
+    enabled: true,
+    instance_id: "new-proc-2",
+  }, 1000);
+
+  const originalNow = store.clock;
+  (store as any).clock = () => 1500;
+  try {
+    const postUpdateInspect = await service.handle("session-nav.get-adapter-toggles", {});
+    expect(postUpdateInspect.hermes).toMatchObject({
+      enabled: false,
+      protectionVerified: false,
+      canDisable: true,
+    });
+    expect(postUpdateInspect.hermes.warning).toContain("Older Hermes sessions may keep running");
+    expect(postUpdateInspect.hermes.warning).toContain("DB failures may send original content");
+    expect(readFileSync(rootCfg, "utf8")).toBe(enabledYaml);
+    expect(readFileSync(atlasCfg, "utf8")).toBe(enabledYaml);
+
+    const unhidden = await service.handle("unhide", {
+      scope_key: atlasStaleScope,
+      item_id: hiddenItem.item_id,
+    });
+    expect(unhidden.ok).toBe(true);
+  } finally {
+    (store as any).clock = originalNow;
+  }
+});
+
+test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-validates YAML, rolls back cleanly, surfaces partial updates, and rolls back on single-tx SQLite failure", async () => {
+  const { home, store, service, register } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  const tycheDir = join(hermesRoot, "profiles", "tyche");
+  mkdirSync(atlasDir, { recursive: true });
+  mkdirSync(tycheDir, { recursive: true });
+
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const tycheCfg = join(tycheDir, "config.yaml");
+
+  const makeCfg = (label: string, enabled: boolean) =>
+    `# ${label} header\nplugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: ${enabled} # keep comment\n`;
+
+  writeFileSync(rootCfg, makeCfg("default", true), "utf8");
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, 'plugins: "scalar-invalid"\n', "utf8");
+
+  const bundleFingerprint = installRepoHermesPlugin(home);
+  const verifiedCaps = {
+    hide: true,
+    summarize: true,
+    unhide: true,
+    protection_only: true,
+    bundle_fingerprint: bundleFingerprint,
+  };
+  register("hermes:default:s1:unknown", verifiedCaps);
+  register("hermes:atlas:s2:unknown", verifiedCaps);
+  register("hermes:tyche:s3:unknown", verifiedCaps);
+
+  // 1. Pre-validation rejects malformed YAML in 3rd profile BEFORE writing any file
+  const invalidYamlRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(invalidYamlRes.ok).toBe(false);
+  expect(invalidYamlRes.error).toBe("hermes_invalid_config_yaml");
+  expect(invalidYamlRes.hermes).toMatchObject({ rolledBack: false, partialUpdate: false });
+  expect(readFileSync(rootCfg, "utf8")).toBe(makeCfg("default", true));
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
+
+  // Fix tyche config for lock, commit, rollback, and SQLite transaction tests
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+
+  // 2. Cooperative toggle lock fails closed even for aged locks (no time-based auto-unlink race),
+  //    blocks BOTH On and Off concurrent toggle writers, and exposes manual crash recovery guidance.
+  const lockPath = join(hermesRoot, ".session-navigation-toggle.lock");
+  const agedLockContent = JSON.stringify({
+    pid: 999999,
+    startedAt: Date.now() - 300_000,
+    nonce: "other-long-running",
+  });
+  writeFileSync(lockPath, agedLockContent, "utf8");
+  const pastTime = new Date(Date.now() - 300_000);
+  utimesSync(lockPath, pastTime, pastTime);
+
+  const lockedOnRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(lockedOnRes.ok).toBe(false);
+  expect(lockedOnRes.error).toBe("hermes_toggle_locked");
+  expect(lockedOnRes.hermes.error).toContain(".session-navigation-toggle.lock");
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
+  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+
+  const lockedOffRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: false,
+  });
+  expect(lockedOffRes.ok).toBe(false);
+  expect(lockedOffRes.error).toBe("hermes_toggle_locked");
+  expect(lockedOffRes.hermes.error).toContain(".session-navigation-toggle.lock");
+  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+  expect(store.getAdapterControl("hermes")).toBeNull();
+  rmSync(lockPath);
+
+  // Release ownership guard: stale lock handle A MUST NOT unlink contender B's lock after manual replacement
+  const lockA = acquireHermesToggleLock(home);
+  expect(lockA.ok).toBe(true);
+  if (lockA.ok) {
+    rmSync(lockPath);
+    const lockB = acquireHermesToggleLock(home);
+    expect(lockB.ok).toBe(true);
+    lockA.release();
+    expect(existsSync(lockPath)).toBe(true);
+    const blockedByB = acquireHermesToggleLock(home);
+    expect(blockedByB).toEqual({ ok: false, error: "hermes_toggle_locked" });
+    if (lockB.ok) {
+      lockB.release();
+    }
+    expect(existsSync(lockPath)).toBe(false);
+  }
+
+  // Also verify lock stays held across YAML commit through SQLite setAdapterControl and journal cleanup
+  let lockHeldDuringDbCommit = false;
+  const origSetCtrlSpy = store.setAdapterControl.bind(store);
+  store.setAdapterControl = ((adapterId: string, flag: boolean, now?: number) => {
+    if (adapterId === "hermes") {
+      lockHeldDuringDbCommit = existsSync(lockPath);
+    }
+    return origSetCtrlSpy(adapterId, flag, now);
+  }) as typeof store.setAdapterControl;
+  try {
+    const spyOnRes = await service.handle("session-nav.set-adapter-toggle", {
+      adapter: "hermes",
+      enabled: true,
+    });
+    expect(spyOnRes.ok).toBe(true);
+    expect(lockHeldDuringDbCommit).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
+  } finally {
+    store.setAdapterControl = origSetCtrlSpy;
+  }
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+  store.driver.run("DELETE FROM adapter_control WHERE adapter_id='hermes'");
+  store.driver.run("UPDATE adapter_sessions SET enabled=1 WHERE adapter_id='hermes' OR scope_key LIKE 'hermes:%'");
+
+  // 3. Commit failure on 3rd profile rolls back 1st and 2nd profiles cleanly and removes resolved journal
+  const journalPath = join(hermesRoot, ".session-navigation-toggle.journal.json");
+  service.hermesWriteOptions = {
+    onBeforeCommitFile: (filePath) => {
+      if (filePath === tycheCfg) throw new Error("injected_rename_fail");
+    },
+  };
+  const rolledBackRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(rolledBackRes.ok).toBe(false);
+  expect(rolledBackRes.error).toBe("injected_rename_fail");
+  expect(rolledBackRes.hermes).toMatchObject({
+    rolledBack: true,
+    partialUpdate: false,
+    updatedFiles: [],
+    rollbackFailedFiles: [],
+  });
+  expect(rolledBackRes.hermes.rolledBackFiles).toEqual([atlasCfg, rootCfg]);
+  expect(readFileSync(rootCfg, "utf8")).toBe(makeCfg("default", true));
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
+  expect(readFileSync(tycheCfg, "utf8")).toBe(makeCfg("tyche", false));
+  expect(existsSync(journalPath)).toBe(false);
+  expect(store.getAdapterControl("hermes")).toBeNull();
+
+  // 4. Commit failure on 3rd profile + rollback failure on 2nd profile surfaces partial update,
+  //    per-profile state, and persists recovery journal across subsequent getAdapterToggles calls.
+  service.hermesWriteOptions = {
+    onBeforeCommitFile: (filePath) => {
+      if (filePath === tycheCfg) throw new Error("disk_io_fail");
+    },
+    onBeforeRollbackFile: (filePath) => {
+      if (filePath === atlasCfg) throw new Error("rollback_eacces");
+    },
+  };
+  const partialRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(partialRes.ok).toBe(false);
+  expect(partialRes.error).toBe("hermes_partial_update:disk_io_fail");
+  expect(partialRes.hermes).toMatchObject({
+    rolledBack: false,
+    partialUpdate: true,
+    mixed: true,
+    rolledBackFiles: [rootCfg],
+    rollbackFailedFiles: [atlasCfg],
+  });
+  expect(partialRes.hermes.profiles).toEqual([
+    { profile: "default", configPath: rootCfg, enabled: true },
+    { profile: "atlas", configPath: atlasCfg, enabled: true },
+    { profile: "tyche", configPath: tycheCfg, enabled: false },
+  ]);
+  expect(partialRes.hermes.error).toContain("Partial config update");
+  expect(partialRes.hermes.error).toContain(atlasCfg);
+  expect(existsSync(journalPath)).toBe(true);
+
+  const inspectedAfterPartial = await service.handle("session-nav.get-adapter-toggles", {});
+  expect(inspectedAfterPartial.hermes).toMatchObject({
+    partialUpdate: true,
+    mixed: true,
+    rollbackFailedFiles: [atlasCfg],
+  });
+  expect(inspectedAfterPartial.hermes.warning).toContain("journal");
+
+  // Reconcile all profiles back to enabled=true, clearing the journal while preserving inline comments
+  service.hermesWriteOptions = undefined;
+  const reconciled = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(reconciled.ok).toBe(true);
+  expect(reconciled.hermes.enabled).toBe(true);
+  expect(reconciled.hermes.mixed).toBeUndefined();
+  expect(existsSync(journalPath)).toBe(false);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: true # keep comment");
+
+  // 5. Concurrent external writer modification before commit fails closed, rolls back earlier profiles,
+  //    and preserves inline comments even when rootCfg was already enabled: true!
+  const externalContent = "# external writer\nmodel: custom-external\n";
+  service.hermesWriteOptions = {
+    onBeforeCommitFile: (filePath) => {
+      if (filePath === rootCfg) {
+        writeFileSync(atlasCfg, externalContent, "utf8");
+      }
+    },
+  };
+  const concurrentRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(concurrentRes.ok).toBe(false);
+  expect(concurrentRes.error).toBe("hermes_concurrent_modification");
+  expect(concurrentRes.hermes.rolledBack).toBe(true);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(atlasCfg, "utf8")).toBe(externalContent);
+
+  // 6. Single-transaction SQLite failure (injected on UPDATE adapter_sessions inside setAdapterControl)
+  //    rolls back both adapter_control AND committed config files so DB and disk never diverge!
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+  store.setAdapterControl("hermes", false, 500);
+  service.hermesWriteOptions = undefined;
+  const origDriverRun = store.driver.run.bind(store.driver);
+  store.driver.run = ((sql: string, params?: unknown[]) => {
+    if (sql.includes("UPDATE adapter_sessions")) {
+      throw new EngineError("db_full");
+    }
+    return origDriverRun(sql, params);
+  }) as typeof store.driver.run;
+  try {
+    const dbFailRes = await service.handle("session-nav.set-adapter-toggle", {
+      adapter: "hermes",
+      enabled: true,
+    });
+    expect(dbFailRes.ok).toBe(false);
+    expect(dbFailRes.error).toBe("db_full");
+    expect(dbFailRes.hermes.rolledBack).toBe(true);
+    expect(store.getAdapterControl("hermes")?.enabled).toBe(false);
+    expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+    expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: false # keep comment");
+    expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: false # keep comment");
+    expect(existsSync(journalPath)).toBe(false);
+  } finally {
+    store.driver.run = origDriverRun;
+  }
+
+  // 7. Post-DB-commit journal cleanup failure MUST NOT roll back already-committed YAML files;
+  //    surfaces hermes_journal_cleanup_failed + residual journal while keeping SQLite and YAML enabled=true.
+  service.hermesWriteOptions = {
+    onBeforeClearJournal: () => {
+      throw new Error("eperm_unlink_journal");
+    },
+  };
+  const cleanupFailRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(cleanupFailRes.ok).toBe(false);
+  expect(cleanupFailRes.error).toBe("hermes_journal_cleanup_failed:eperm_unlink_journal");
+  expect(cleanupFailRes.hermes).toMatchObject({
+    enabled: true,
+    rolledBack: false,
+    partialUpdate: true,
+    mixed: true,
+  });
+  expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(atlasCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(readFileSync(tycheCfg, "utf8")).toContain("enabled: true # keep comment");
+  expect(existsSync(journalPath)).toBe(true);
+
+  service.hermesWriteOptions = undefined;
+  const cleanedUpRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(cleanedUpRes.ok).toBe(true);
+  expect(cleanedUpRes.hermes.mixed).toBeUndefined();
+  expect(cleanedUpRes.hermes.partialUpdate).toBeUndefined();
+  expect(existsSync(journalPath)).toBe(false);
+});
+
+test("Hermes YAML patching uses Document AST to preserve flow strings, block scalars, doc-end markers, user settings, and fail closed on ambiguous YAML", async () => {
+  const { parse } = await import("yaml");
+
+  // 1. String literal containing "enabled: false" inside flow map must NOT be mutated
+  const flowInput = [
+    "# user header",
+    "model: claude-sonnet-4 # keep comment",
+    "plugins:",
+    "  entries:",
+    "    session-navigation:",
+    '      settings: {note: "hello, enabled: false", other: x}',
+    "",
+  ].join("\n");
+  const flowPatched = patchHermesConfigYaml(flowInput, true);
+  expect(flowPatched).toContain("# user header");
+  expect(flowPatched).toContain("model: claude-sonnet-4 # keep comment");
+  expect(readHermesPluginEnabled(flowPatched)).toBe(true);
+  expect(parse(flowPatched)).toEqual({
+    model: "claude-sonnet-4",
+    plugins: {
+      entries: {
+        "session-navigation": {
+          settings: {
+            note: "hello, enabled: false",
+            other: "x",
+            enabled: true,
+          },
+        },
+      },
+    },
+  });
+
+  // 2. Unrelated multiline block scalar containing `enabled: false` must stay intact while boolean `enabled` patches cleanly
+  const blockScalarInput = [
+    "model: gpt-5",
+    "plugins:",
+    "  entries:",
+    "    session_navigation:",
+    "      settings:",
+    "        note: |",
+    "          enabled: false",
+    "          second line",
+    "        enabled: false # keep inline",
+    "        keep_lines_limit: 5",
+    "",
+  ].join("\n");
+  const blockPatched = patchHermesConfigYaml(blockScalarInput, true);
+  expect(readHermesPluginEnabled(blockPatched)).toBe(true);
+  expect(blockPatched).toContain("# keep inline");
+  expect(parse(blockPatched)).toEqual({
+    model: "gpt-5",
+    plugins: {
+      entries: {
+        session_navigation: {
+          settings: {
+            note: "enabled: false\nsecond line\n",
+            enabled: true,
+            keep_lines_limit: 5,
+          },
+        },
+      },
+    },
+  });
+
+  // 3. Explicit YAML document-end marker `...` must keep added mappings inside the document before `...`
+  const docEndInput = [
+    "---",
+    "model: gpt-5",
+    "...",
+    "",
+  ].join("\n");
+  const docEndPatched = patchHermesConfigYaml(docEndInput, true);
+  expect(readHermesPluginEnabled(docEndPatched)).toBe(true);
+  expect(docEndPatched.indexOf("plugins:")).toBeGreaterThan(-1);
+  expect(docEndPatched.indexOf("plugins:")).toBeLessThan(docEndPatched.lastIndexOf("..."));
+  expect(parse(docEndPatched)).toEqual({
+    model: "gpt-5",
+    plugins: {
+      entries: {
+        "session-navigation": {
+          settings: {
+            enabled: true,
+          },
+        },
+      },
+    },
+  });
+
+  // 4. Unrelated anchors/aliases are preserved safely in syntax & semantics, while
+  //    invalid/unsupported YAML (duplicates, multi-doc, target-spine alias, non-boolean enabled including "false"/"true"/block scalar strings)
+  //    surfaces unknown status + error in getAdapterToggles and blocks both On and Off toggles.
+  const unrelatedAliasInput = [
+    "default_provider: &prov",
+    "  timeout: 30",
+    "fallback_provider: *prov",
+    "model: gpt-5",
+    "",
+  ].join("\n");
+  const unrelatedAliasPatched = patchHermesConfigYaml(unrelatedAliasInput, true);
+  expect(unrelatedAliasPatched).toContain("&prov");
+  expect(unrelatedAliasPatched).toContain("*prov");
+  expect(readHermesPluginEnabled(unrelatedAliasPatched)).toBe(true);
+  expect(parse(unrelatedAliasPatched)).toEqual({
+    default_provider: { timeout: 30 },
+    fallback_provider: { timeout: 30 },
+    model: "gpt-5",
+    plugins: {
+      entries: {
+        "session-navigation": {
+          settings: {
+            enabled: true,
+          },
+        },
+      },
+    },
+  });
+
+  const { home, store, service } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  const atlasDir = join(hermesRoot, "profiles", "atlas");
+  mkdirSync(atlasDir, { recursive: true });
+  const rootCfg = join(hermesRoot, "config.yaml");
+  const atlasCfg = join(atlasDir, "config.yaml");
+  const validRoot =
+    "# root intact\nmodel: claude-3-7\nplugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n";
+  writeFileSync(rootCfg, validRoot, "utf8");
+  store.setAdapterControl("hermes", true, 100);
+
+  for (const invalidContent of [
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: false\n        enabled: true\n",
+    "model: first\n---\nmodel: second\n",
+    "defaults: &shared\n  enabled: true\nplugins:\n  entries:\n    session-navigation:\n      settings: *shared\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: \"false\"\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: \"true\"\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: 'false'\n",
+    "plugins:\n  entries:\n    session_navigation:\n      settings:\n        enabled: |\n          false\n",
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: \"maybe\"\n",
+  ]) {
+    expect(() => readHermesPluginEnabled(invalidContent)).toThrow("hermes_invalid_config_yaml");
+    expect(() => patchHermesConfigYaml(invalidContent, true)).toThrow("hermes_invalid_config_yaml");
+    expect(() => patchHermesConfigYaml(invalidContent, false)).toThrow("hermes_invalid_config_yaml");
+
+    writeFileSync(atlasCfg, invalidContent, "utf8");
+    const inspectedInvalid = await service.handle("session-nav.get-adapter-toggles", {});
+    expect(inspectedInvalid.ok).toBe(true);
+    expect(inspectedInvalid.hermes).toMatchObject({
+      enabled: false,
+      stateUnknown: true,
+      error: "hermes_invalid_config_yaml",
+      canDisable: false,
+      statusText: "Config YAML error (state unknown).",
+    });
+    expect(inspectedInvalid.hermes.warning).toContain("invalid or unsupported YAML");
+
+    for (const targetEnabled of [true, false]) {
+      const res = await service.handle("session-nav.set-adapter-toggle", {
+        adapter: "hermes",
+        enabled: targetEnabled,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error).toBe("hermes_invalid_config_yaml");
+      expect(readFileSync(rootCfg, "utf8")).toBe(validRoot);
+      expect(readFileSync(atlasCfg, "utf8")).toBe(invalidContent);
+      expect(store.getAdapterControl("hermes")?.enabled).toBe(true);
+    }
+  }
+});
+
+test("manual hide ignores compaction policy and writes a single-line replacement", async () => {
+  const content = `Traceback (most recent call last):\nERROR: command failed with exit_code=1\n${"x".repeat(900)}`;
+  const invocation = { tool_name: "bash", arguments: { command: "false" } };
+  const { home, store, call } = fixture(
+    toolMessages(content, "bash", { command: "false" }),
+  );
+  const record = loadTimeline(home, scope).records.get("c1")!;
+  expect(refusalReason(record)).toBe("protected_error");
+
+  const hidden = await call("hide", { item_id: "c1" });
+  expect(hidden.ok).toBe(true);
+  const digest = invocationDigest(invocation);
+  const sha = sha256(content);
+  const item = store.get(scope, itemId(scope, "c1", sha, digest, 0));
+  expect(item?.compacted).toBe("[hidden: bash c1]");
+  expect(item?.excerpt_lines).toEqual([]);
+  expect(item?.invocation_snapshot).toBe(null);
+  expect(item?.original).toBe(content);
+  expect(item?.visibility).toBe("hidden");
+  expect(item?.compaction_source).toBe("explicit_user_hide");
+});
+
+test("history loader rejects files over the byte limit with history_too_large", async () => {
+  const { home, call } = fixture();
+  const path = join(home, ".omp/agent/sessions/project", "2026_sid.jsonl");
+  truncateSync(path, MAX_HISTORY_BYTES + 1);
+  const reply = await call("list");
+  expect(reply.ok).toBe(false);
+  expect(reply.error).toBe("history_too_large");
 });

@@ -48,6 +48,35 @@ Publication and registry/catalog approval are separate steps; see
 - Validate comma-grouped numbers alongside other literal facts.
 - Keep original host history and stored originals unchanged; apply all
   exclusions/replacements only to outgoing request copies.
+- Harden Hermes Off toggling and multi-profile `config.yaml` updates in Paseo:
+  - Record live `protection_only` and import-time `RUNTIME_BUNDLE_FINGERPRINT`
+    markers in `adapter_sessions.capabilities`, fail closed in
+    `_is_effectively_enabled` on `adapter_control` lookup errors, break the
+    `.schemas`/`.handlers` import cycle, and enforce strict 5-tuple invocation,
+    shifted-position `(call_id, content_sha256)`, exact-`visible` precedence,
+    and `unknown`/`default` branch-alias fences in both `middleware_step` and
+    `_protection_only_rewrite`.
+  - Switch Hermes Off in Paseo Settings to DB-control-only (`adapter_control` +
+    `adapter_sessions` updated in a single SQLite transaction while leaving
+    `config.yaml` enabled so legacy/frozen Hermes processes never disable
+    middleware protection), always report `protectionVerified: false` given
+    durable `adapter_sessions` cannot enumerate live OS processes, and surface
+    accurate reinstall/full-restart, `PluginContext.get_config`, and D9 SQLite
+    fail-open guidance.
+  - Linearize both Hermes On and Off toggles under a single fail-closed
+    cooperative lock (`O_CREAT | O_EXCL`, verified on release by inode/nonce/PID
+    without time-based stale reclamation, with explicit manual crash-recovery
+    guidance) held through SQLite `setAdapterControl` and journal cleanup; protect
+    multi-profile YAML writes with persisted crash-recovery journaling,
+    symlink rejection, full-document `yaml` AST parsing/validation (preserving
+    unrelated anchors/aliases, comments, flow maps, multiline scalars, and `...`
+    end markers while propagating parse/validation errors to inspection and
+    failing closed on duplicate keys, multi-doc streams, merge keys, or
+    target-spine anchors/aliases, plus verifying semantic invariance of all
+    unrelated keys), SHA-256 conflict
+    SQLite failure, and non-rollback residual-journal reporting if post-commit
+    journal cleanup fails (documenting OS limits against non-cooperative
+    writers and mid-rename crashes).
 - Tighten `protected_error` and `sensitive_invocation` matchers to same-line
   domain+state co-occurrence and credential-bearing keys/tokens so ordinary
   code, Korean prose, and CLI flags remain eligible, replace per-turn/50-75-90%

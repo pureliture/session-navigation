@@ -1,5 +1,11 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+export {
+  DEFAULT_OUTLINE_SETTINGS,
+  outlineSettings,
+  outlineSettingsSchema,
+  type OutlineSettingsValues,
+} from "./outlineSettings";
 
 export const StatusSchema = z.enum(["hidden", "visible", "unhidden"]);
 
@@ -21,7 +27,7 @@ export const RowSchema = z.object({
   item_id: z.string().nullable(),
   tool_call_id: z.string(),
   tool_name: z.string().nullable().optional(),
-  kind: z.enum(["user", "assistant", "tool"]).optional(),
+  kind: z.enum(["user", "assistant", "agent", "tool"]).optional(),
   status: StatusSchema,
   visibility: z.enum(["hidden", "visible"]).optional(),
   version: z.number().int(),
@@ -38,6 +44,7 @@ export const RowSchema = z.object({
   message_text: z.string().optional(),
   replacement_text: z.string().optional(),
   summary_pending: z.boolean().optional(),
+  timeline_index: z.number().int().nonnegative().optional(),
 });
 
 export const DbErrorChoicesSchema = z.array(
@@ -83,6 +90,13 @@ export const ManageResultSchema = z.object({
   choices: z.array(z.string()).optional(),
 });
 
+export const ListTotalsSchema = z.object({
+  total_rows: z.number().int(),
+  manageable_count: z.number().int(),
+  hidden_count: z.number().int(),
+  saved_bytes: z.number(),
+});
+
 export const ListResultSchema = z.object({
   ok: z.boolean(),
   items: z.array(RowSchema),
@@ -96,6 +110,10 @@ export const ListResultSchema = z.object({
     .optional(),
   server_timeline: z.boolean().optional(),
   records_capped: z.boolean().optional(),
+  timeline_read_error: z.string().optional(),
+  has_older: z.boolean().optional(),
+  next_before_index: z.number().int().nonnegative().nullable().optional(),
+  totals: ListTotalsSchema.optional(),
   error: z.string().optional(),
   choices: z.array(z.string()).optional(),
 });
@@ -139,6 +157,8 @@ export const listItemsRpc = defineRpc({
     scope_key: z.string(),
     query: z.string().optional(),
     snapshot_id: z.string().optional(),
+    limit: z.number().int().min(1).max(2000).optional(),
+    before_index: z.number().int().nonnegative().optional(),
   }),
   output: ListResultSchema,
 });
@@ -247,6 +267,67 @@ export const dbChoiceRpc = defineRpc({
   }),
   output: DbChoiceResultSchema,
 });
+
+export const OmpAdapterToggleSchema = z.object({
+  installed: z.boolean(),
+  enabled: z.boolean(),
+  statusText: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export const HermesProfileToggleStateSchema = z.object({
+  profile: z.string(),
+  configPath: z.string(),
+  enabled: z.boolean(),
+});
+
+export const HermesAdapterToggleSchema = z.object({
+  installed: z.boolean(),
+  enabled: z.boolean(),
+  profileCount: z.number().int().nonnegative(),
+  enabledProfileCount: z.number().int().nonnegative().optional(),
+  mixed: z.boolean().optional(),
+  stateUnknown: z.boolean().optional(),
+  canDisable: z.boolean().optional(),
+  protectionVerified: z.boolean().optional(),
+  pluginInstalled: z.boolean().optional(),
+  protectionSupportedOnDisk: z.boolean().optional(),
+  unverifiedScopes: z.array(z.string()).optional(),
+  profiles: z.array(HermesProfileToggleStateSchema).optional(),
+  rolledBack: z.boolean().optional(),
+  partialUpdate: z.boolean().optional(),
+  updatedFiles: z.array(z.string()).optional(),
+  rolledBackFiles: z.array(z.string()).optional(),
+  rollbackFailedFiles: z.array(z.string()).optional(),
+  statusText: z.string().optional(),
+  warning: z.string().optional(),
+  remediation: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export const AdapterTogglesResultSchema = z.object({
+  ok: z.boolean(),
+  omp: OmpAdapterToggleSchema,
+  hermes: HermesAdapterToggleSchema,
+  error: z.string().optional(),
+});
+
+export const getAdapterTogglesRpc = defineRpc({
+  name: "session-nav.get-adapter-toggles",
+  input: z.object({}),
+  output: AdapterTogglesResultSchema,
+});
+
+export const setAdapterToggleRpc = defineRpc({
+  name: "session-nav.set-adapter-toggle",
+  input: z.object({
+    adapter: z.enum(["omp", "hermes"]),
+    enabled: z.boolean(),
+  }),
+  output: AdapterTogglesResultSchema,
+});
+
+export type AdapterTogglesResult = z.infer<typeof AdapterTogglesResultSchema>;
 
 export interface ScopeContext {
   adapterId?: string;

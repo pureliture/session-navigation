@@ -51,6 +51,44 @@ export interface FixtureVectors {
 export const fixtures: FixtureVectors = JSON.parse(
   readFileSync(new URL("../../../contracts/fixtures/core.json", import.meta.url), "utf8"),
 ) as FixtureVectors;
+
+interface HostIdentityFixtures {
+  version: number;
+  omp: {
+    scope: string;
+    tools: {
+      name: string;
+      call_id: string;
+      expected_text: string;
+      expected_invocation_json: string;
+      expected_content_sha256: string;
+      expected_invocation_digest: string;
+      expected_item_id: string;
+    }[];
+  };
+  hermes: {
+    invocations: {
+      name: string;
+      expected_invocation_json: string;
+      expected_omitted_json: string;
+      expected_invocation_digest: string;
+    }[];
+    multi_result: {
+      scope: string;
+      call_id: string;
+      expected_invocation_digest: string;
+      expected_results: {
+        result_position: number;
+        content: string;
+        expected_item_id: string;
+      }[];
+    };
+  };
+}
+
+const hostIdentityFixtures: HostIdentityFixtures = JSON.parse(
+  readFileSync(new URL("../../../contracts/fixtures/host_identity.json", import.meta.url), "utf8"),
+) as HostIdentityFixtures;
 export function body(vector: TextVector): string {
   let content =
     Array(vector.repeat).fill(vector.line).join("\n") + (vector.suffix ? "\n" + vector.suffix : "");
@@ -75,7 +113,7 @@ export function record(content: string, itemIdentity = "call"): RecordInput {
 }
 export function snapshot(store: Store): unknown {
   return Object.fromEntries(
-    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets"].map(
+    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets", "adapter_control"].map(
       (table) => [
         table,
         store.driver.all(`SELECT * FROM ${table} ORDER BY 1,2`).map((row) => {
@@ -209,7 +247,7 @@ async function sharedStoreVectors(): Promise<{ shared: unknown; pending: unknown
   ];
   store.recordCall(scope, "usage", 10, 20, 30, 0.25, 100);
   const schemaInfo = Object.fromEntries(
-    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets"].map(
+    ["meta", "items", "identities", "units", "calls", "adapter_sessions", "adapter_targets", "adapter_control"].map(
       (table) => [table, store.driver.all(`PRAGMA table_info(${table})`)],
     ),
   );
@@ -267,6 +305,46 @@ export async function runVectors(): Promise<unknown> {
     operations,
     shared,
     pending,
+    host_identity: hostIdentityVectors(),
+  };
+}
+
+function hostIdentityVectors(): unknown {
+  const ompTools = hostIdentityFixtures.omp.tools.map((entry) => {
+    const invocation = parseCanonicalJson(entry.expected_invocation_json) as { [key: string]: Json };
+    const contentSha = sha256(entry.expected_text);
+    const digest = invocationDigest(invocation);
+    const id = itemId(hostIdentityFixtures.omp.scope, entry.call_id, contentSha, digest, 0);
+    return {
+      name: entry.name,
+      canonical_invocation: canonical(invocation),
+      content_sha256: contentSha,
+      invocation_digest: digest,
+      item_id: id,
+    };
+  });
+  const hermesInvocations = hostIdentityFixtures.hermes.invocations.map((entry) => {
+    const invocation = parseCanonicalJson(entry.expected_invocation_json) as { [key: string]: Json };
+    const omitted = parseCanonicalJson(entry.expected_omitted_json) as { [key: string]: Json };
+    return {
+      name: entry.name,
+      canonical_invocation: canonical(invocation),
+      canonical_omitted: canonical(omitted),
+      invocation_digest: invocationDigest(invocation, omitted),
+    };
+  });
+  const multi = hostIdentityFixtures.hermes.multi_result;
+  const multiInv = { tool_name: "read_file", arguments: { path: "multi.txt" } };
+  const multiDigest = invocationDigest(multiInv);
+  const hermesMultiResult = multi.expected_results.map((res) => ({
+    result_position: res.result_position,
+    item_id: itemId(multi.scope, multi.call_id, sha256(res.content), multiDigest, res.result_position),
+  }));
+  return {
+    version: hostIdentityFixtures.version,
+    omp_tools: ompTools,
+    hermes_invocations: hermesInvocations,
+    hermes_multi_result: hermesMultiResult,
   };
 }
 

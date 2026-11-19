@@ -2,7 +2,7 @@ import type { Row } from "../shared/sessionNav";
 
 export function previewContent(row: Row | null) {
   if (!row) return { subtitle: "", sections: [], metadata: "" };
-  const message = row.kind === "user" || row.kind === "assistant";
+  const message = row.kind === "user" || row.kind === "assistant" || row.kind === "agent";
   const hidden = row.status === "hidden";
   const sections: Array<{ label: string; text: string }> = [];
   if (hidden) {
@@ -23,7 +23,11 @@ export function previewContent(row: Row | null) {
   }
   if (row.manageable === false) sections.push({ label: "Read-only", text: "Display-only item; context controls unavailable." });
   const subtitle =
-    row.kind === "assistant" ? "Agent" : row.kind === "user" ? "User" : row.tool_name || row.kind || "Item";
+    row.kind === "assistant" || row.kind === "agent"
+      ? "Agent"
+      : row.kind === "user"
+        ? "User"
+        : row.tool_name || row.kind || "Item";
   return {
     subtitle,
     sections,

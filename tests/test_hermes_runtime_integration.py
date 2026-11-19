@@ -175,10 +175,15 @@ def test_default_off_records_nothing_and_rewrites_nothing() -> None:
     body = _long_body()
     out = mw(**_mw_kwargs(_chat_request(body), "sess-off"))
     assert out is None, "default-off middleware must return None"
-    for name, entry in ctx.tools.items():
-        assert json.loads(entry["handler"]({}, session_id="sess-off")) == {
+    for name in ("hide_context", "summarize_context", "manage_context"):
+        assert json.loads(ctx.tools[name]["handler"]({}, session_id="sess-off")) == {
             "ok": False, "error": "disabled",
         }, f"{name} must report disabled when the setting is absent"
+    listed = json.loads(ctx.tools["list_context_items"]["handler"]({}, session_id="sess-off"))
+    assert listed["ok"] is True and listed["items"] == []
+    assert json.loads(ctx.tools["unhide_context"]["handler"]({}, session_id="sess-off")) == {
+        "ok": False, "error": "not_found",
+    }
 
 
 def test_enabled_rewrites_only_the_outgoing_copy() -> None:

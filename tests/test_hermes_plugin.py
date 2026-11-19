@@ -118,10 +118,16 @@ def test_disabled_by_default():
     mw = ctx.middlewares["llm_request"][0]
     request = _codex_request(_long_body())
     assert mw(**_mw_kwargs(request, "sess-off", "codex_responses")) is None
-    for name, entry in ctx.tools.items():
-        raw = entry["handler"]({}, session_id="sess-off")
+    for name in ("hide_context", "summarize_context", "manage_context"):
+        raw = ctx.tools[name]["handler"]({}, session_id="sess-off")
         assert isinstance(raw, str)
         assert json.loads(raw) == {"ok": False, "error": "disabled"}
+    listed = json.loads(ctx.tools["list_context_items"]["handler"]({}, session_id="sess-off"))
+    assert listed["ok"] is True and listed["count"] == 0 and listed["items"] == []
+    cands = json.loads(ctx.tools["list_context_items"]["handler"]({"view": "candidates"}, session_id="sess-off"))
+    assert cands == {"ok": True, "items": []}
+    unhide_missing = json.loads(ctx.tools["unhide_context"]["handler"]({}, session_id="sess-off"))
+    assert unhide_missing == {"ok": False, "error": "not_found"}
 
 
 def test_enabled_end_to_end_compact_two_requests_list_restore():

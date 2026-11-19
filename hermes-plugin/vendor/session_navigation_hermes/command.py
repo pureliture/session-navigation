@@ -54,7 +54,7 @@ def _session_id(state: Any, raw_args: str, kwargs: dict[str, Any]) -> str:
     if isinstance(env, str) and env.strip():
         return env.strip()
     parts = str(raw_args or "").split()
-    if parts and parts[0] not in {"list", "hide", "unhide", "restore", "rehide", "manage", "summarize", "messages", "hide-msg", "unhide-msg"}:
+    if parts and parts[0] not in {"status", "list", "hide", "unhide", "restore", "rehide", "manage", "summarize", "messages", "hide-msg", "unhide-msg"}:
         return parts[0]
     return ""
 
@@ -200,6 +200,13 @@ def _toggle_message(state: Any, session_id: str, target: str, hide: bool) -> str
         expected_version=int(unit.get("version") or 1))
     if not result.get("ok"):
         return ("Hide" if hide else "Unhide") + " failed: " + str(result.get("error"))
+    if hide:
+        try:
+            from .factories import _register_adapter
+
+            _register_adapter(state, scope, True)
+        except Exception:
+            pass
     if (unit.get("visibility") == "hidden") != hide:
         tokens = state.usage.message_tokens(session_id, unit)
         state.usage.adjust(session_id, tokens if hide else -tokens)
@@ -218,12 +225,23 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
     session_id = _session_id(state, text, kwargs)
 
     verb = parts[0].lower() if parts else "list"
-    if verb not in {"list", "hide", "unhide", "restore", "rehide", "manage", "summarize", "messages", "hide-msg", "unhide-msg"} and session_id == verb:
+    if verb not in {"status", "list", "hide", "unhide", "restore", "rehide", "manage", "summarize", "messages", "hide-msg", "unhide-msg"} and session_id == verb:
         parts = parts[1:]
         verb = parts[0].lower() if parts else "list"
 
     if state is None:
         return "Session navigation: no state available.\nHints: /nav hide <id> | /nav unhide <id> | /nav manage"
+
+    if verb == "status":
+        from .factories import _is_effectively_enabled
+
+        mode = "enabled" if _is_effectively_enabled(state) else "disabled (protection_only; DB errors fail open per D9)"
+        return (
+            f"Session navigation status: {mode}\n"
+            + _list_text(state, session_id)
+            + "\n"
+            + state.usage.footer(session_id)
+        )
 
     if verb in ("", "list", "ls"):
         return _list_text(state, session_id) + "\n" + state.usage.footer(session_id)
@@ -232,7 +250,9 @@ def nav_command(first: Any = None, raw_args: Any = "", *rest: Any, **kwargs: Any
         return _messages_text(state, session_id) + "\n" + state.usage.footer(session_id)
 
     if verb in ("hide-msg", "unhide-msg"):
-        if not state.is_enabled():
+        from .factories import _is_effectively_enabled
+
+        if verb == "hide-msg" and not _is_effectively_enabled(state):
             return "Session navigation: disabled"
         target = parts[1] if len(parts) > 1 else ""
         if not target:

@@ -70,6 +70,7 @@ from .factories import (
     PluginState,
     _default_count_llm_middlewares,
     _dump,
+    _is_effectively_enabled,
     make_hide_handler,
     make_list_handler,
     make_manage_handler,
@@ -174,7 +175,7 @@ def register(ctx: Any) -> PluginState:
     # each new session prompt. Absent API, disabled plugin, or a duplicate
     # registration must never block tool/middleware registration.
     register_section = getattr(ctx, "register_system_prompt_section", None)
-    if callable(register_section) and state.is_enabled():
+    if callable(register_section) and _is_effectively_enabled(state):
         try:
             register_section(
                 SUPERVISION_SECTION_ID,

@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   bytes,
   invocationDigest,
@@ -12,7 +12,8 @@ import {
 } from "../../packages/core/src/index.ts";
 import type { Item } from "../../packages/core/src/index.ts";
 import { loadHermesTimeline } from "./hermesHistory.ts";
-import { toolResultText } from "../../packages/omp/src/context.ts";
+import { HistoryTooLargeError, MAX_HISTORY_BYTES, MAX_HISTORY_ROWS } from "./historyLimits.ts";
+import { ompInvocationArgs, toolResultText } from "../../packages/omp/src/context.ts";
 
 export type Message = Record<string, any>;
 export type History = {
@@ -21,6 +22,8 @@ export type History = {
   injected: [number, number][];
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
   recordsCapped?: boolean;
+  readError?: string;
+  readErrorDb?: string;
 };
 export interface Timeline {
   rows: Message[];
@@ -28,30 +31,41 @@ export interface Timeline {
   history: History;
 }
 
-export function findSession(home: string, session: string): string | undefined {
-  if (!session || /[\\/:]/.test(session)) return;
-  function search(directory: string): string | undefined {
-    if (!existsSync(directory)) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
-      (a, b) => a.name.localeCompare(b.name),
-    )) {
-      const filename = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        const result = search(filename);
-        if (result) return result;
-      } else if (entry.isFile() && entry.name.endsWith(`_${session}.jsonl`))
-        return filename;
-    }
-  }
-  return search(join(home, ".omp", "agent", "sessions"));
+const MAX_TIMELINE_CACHE = 32;
+type CachedTimelineEntry = {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  timeline: Timeline;
+};
+const timelineCache = new Map<string, CachedTimelineEntry>();
+
+export function cloneTimeline(timeline: Timeline): Timeline {
+  return {
+    rows: timeline.rows.map((row) => ({ ...row })),
+    records: new Map(timeline.records),
+    history: {
+      messages: [...timeline.history.messages],
+      boundaries: [...timeline.history.boundaries],
+      injected: timeline.history.injected.map(([pos, len]) => [pos, len] as [number, number]),
+      ...(timeline.history.externalContext
+        ? { externalContext: { ...timeline.history.externalContext } }
+        : {}),
+      ...(timeline.history.recordsCapped !== undefined
+        ? { recordsCapped: timeline.history.recordsCapped }
+        : {}),
+      ...(timeline.history.readError !== undefined
+        ? { readError: timeline.history.readError }
+        : {}),
+      ...(timeline.history.readErrorDb !== undefined
+        ? { readErrorDb: timeline.history.readErrorDb }
+        : {}),
+    },
+  };
 }
 
-export function readHistory(home: string, scope: string): History {
+function parseHistoryFile(filename: string): History {
   const history: History = { messages: [], boundaries: [], injected: [] };
-  const [adapter, , session] = scope.split(":");
-  if (!["omp", "pi"].includes(adapter)) return history;
-  const filename = findSession(home, session);
-  if (!filename) return history;
   for (const line of readFileSync(filename, "utf8").split("\n")) {
     let data: Message;
     try {
@@ -78,6 +92,33 @@ export function readHistory(home: string, scope: string): History {
     else if (typeof data.role === "string") history.messages.push(data);
   }
   return history;
+}
+
+export function findSession(home: string, session: string): string | undefined {
+  const sessionId = session.includes(":") ? (session.split(":")[2] ?? "") : session;
+  if (!sessionId || /[\\/:]/.test(sessionId)) return;
+  function search(directory: string): string | undefined {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name),
+    )) {
+      const filename = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        const result = search(filename);
+        if (result) return result;
+      } else if (entry.isFile() && entry.name.endsWith(`_${sessionId}.jsonl`))
+        return filename;
+    }
+  }
+  return search(join(home, ".omp", "agent", "sessions"));
+}
+
+export function readHistory(home: string, scope: string): History {
+  const [adapter, , session] = scope.split(":");
+  if (!["omp", "pi"].includes(adapter)) return { messages: [], boundaries: [], injected: [] };
+  const filename = findSession(home, session);
+  if (!filename) return { messages: [], boundaries: [], injected: [] };
+  return parseHistoryFile(filename);
 }
 
 export function messageText(message: Message): string {
@@ -114,9 +155,50 @@ export function preview(value: unknown): string {
   return encoded.subarray(0, end).toString("utf8") + "\n… [truncated]";
 }
 
+const SYSTEM_BLOCK_RE =
+  /<system-reminder>[\s\S]*?<\/system-reminder>|<system-notice>[\s\S]*?<\/system-notice>/gu;
+
+function stripSystemBlocks(text: string): string {
+  return text.replace(SYSTEM_BLOCK_RE, "");
+}
+
+function sliceCodepoints(text: string, maxLen: number): string {
+  return [...text].slice(0, maxLen).join("");
+}
+
+function formatPaseoSystemSummary(trimmed: string): string {
+  const titleMatch = /source-agent-title="([^"]+)"/u.exec(trimmed);
+  const eventMatch = /event="([^"]+)"/u.exec(trimmed);
+  const idMatch = /source-agent-id="([^"]+)"/u.exec(trimmed);
+  const kindMatch = /kind="([^"]+)"/u.exec(trimmed);
+  const label = titleMatch?.[1]?.trim() || (idMatch?.[1] ? idMatch[1].slice(0, 8) : "");
+  if (eventMatch?.[1]) {
+    return sliceCodepoints(`[Subagent ${eventMatch[1]}] ${label || "subagent"}`, 220);
+  }
+  if (kindMatch?.[1] === "agent-notification") {
+    return sliceCodepoints(`[Subagent notification] ${label || "subagent"}`, 220);
+  }
+  const body = trimmed
+    .replace(/^<paseo-system\b[^>]*(?:>|$)/u, "")
+    .replace(/<\/paseo-system>/gu, "")
+    .replace(/<[^>]+>/gu, " ");
+  const bodyLine = splitLines(body)
+    .map((line) => line.trim().replace(/\s+/gu, " "))
+    .find(Boolean);
+  const formatted = bodyLine
+    ? `[Agent message${label ? ` · ${label}` : ""}] ${bodyLine}`
+    : `[Agent message] ${label || "subagent"}`;
+  return sliceCodepoints(formatted, 220);
+}
+
 export function summaryLine(text: string): string {
-  return [
-    ...splitLines(text)
+  const stripped = stripSystemBlocks(text);
+  const trimmed = stripped.trimStart();
+  if (trimmed.startsWith("<paseo-system")) {
+    return formatPaseoSystemSummary(trimmed);
+  }
+  return sliceCodepoints(
+    splitLines(stripped)
       .map((line) => line.trim().replace(/\s+/gu, " "))
       .filter(
         (line) =>
@@ -126,9 +208,8 @@ export function summaryLine(text: string): string {
       )
       .slice(0, 2)
       .join("\n"),
-  ]
-    .slice(0, 220)
-    .join("");
+    220,
+  );
 }
 
 export function formatToolSummary(tool: string, text: string): string {
@@ -157,7 +238,41 @@ export function loadTimeline(
     const hermes = loadHermesTimeline(home, scope, storedItems, storedUnits);
     if (hermes) return hermes;
   }
-  const history = readHistory(home, scope);
+  const [adapter, , session] = scope.split(":");
+  const filename = ["omp", "pi"].includes(adapter) ? findSession(home, session) : undefined;
+  if (!filename) {
+    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
+  }
+  const absPath = resolve(filename);
+  let stat;
+  try {
+    stat = statSync(absPath);
+  } catch {
+    return { rows: [], records: new Map(), history: { messages: [], boundaries: [], injected: [] } };
+  }
+  if (stat.size > MAX_HISTORY_BYTES) {
+    throw new HistoryTooLargeError(
+      `history file exceeds ${MAX_HISTORY_BYTES} bytes (${stat.size})`,
+    );
+  }
+  const cacheKey = `${absPath}\0${scope}`;
+  const cached = timelineCache.get(cacheKey);
+  if (
+    cached &&
+    cached.mtimeMs === stat.mtimeMs &&
+    cached.ctimeMs === stat.ctimeMs &&
+    cached.size === stat.size
+  ) {
+    timelineCache.delete(cacheKey);
+    timelineCache.set(cacheKey, cached);
+    return cloneTimeline(cached.timeline);
+  }
+  const history = parseHistoryFile(absPath);
+  if (history.messages.length > MAX_HISTORY_ROWS) {
+    throw new HistoryTooLargeError(
+      `history file exceeds ${MAX_HISTORY_ROWS} rows (${history.messages.length})`,
+    );
+  }
   const calls = new Map<string, { block: Message; index: number }>();
   const duplicate = new Set<string>();
   const results = new Map<string, number>();
@@ -220,7 +335,10 @@ export function loadTimeline(
       typeof arguments_ === "object" &&
       toolResultText(message) !== null
     ) {
-      const args = ompInvocationArgs(tool, arguments_ as Record<string, unknown>);
+      const args = ompInvocationArgs(tool, arguments_ as Record<string, unknown>) as Record<
+        string,
+        Json
+      > | null;
       if (args) {
         const invocation = { tool_name: tool, arguments: args };
         const size = bytes(text);
@@ -263,95 +381,18 @@ export function loadTimeline(
     });
   }
   rows.reverse();
-  return { rows, records, history };
-}
-
-function ompInvocationArgs(
-  tool: string,
-  raw: Record<string, unknown>,
-): Record<string, Json> | null {
-  const str = (key: string) =>
-    typeof raw[key] === "string" && (raw[key] as string).trim()
-      ? (raw[key] as string)
-      : undefined;
-  switch (tool) {
-    case "eval":
-      return typeof raw.code === "string" && raw.code
-        ? { code: raw.code, ...(typeof raw.language === "string" ? { language: raw.language } : {}) }
-        : null;
-    case "browser_list_tabs":
-    case "list_hosts":
-    case "list_terminals":
-    case "list_schedules":
-      return {};
-    case "inspect_schedule":
-    case "schedule_logs":
-      return typeof raw.id === "string" && raw.id ? { id: raw.id } : null;
-    case "read": {
-      const path = str("path");
-      return path && !path.trim().startsWith("xd://") ? { path } : null;
-    }
-    case "bash": {
-      const command = str("command");
-      if (!command) return null;
-      const cwd = str("cwd");
-      return cwd ? { command, cwd } : { command };
-    }
-    case "grep": {
-      const pattern = str("pattern");
-      if (!pattern) return null;
-      const path = str("path");
-      return path ? { pattern, path } : { pattern };
-    }
-    case "glob":
-      return { path: str("path") ?? "." };
-    case "web_search": {
-      const query = str("query");
-      return query ? { query } : null;
-    }
-    case "get_agent_activity":
-    case "get_agent_status": {
-      const agentId = str("agentId");
-      return agentId ? { agentId } : null;
-    }
-    case "list_models":
-    case "inspect_provider": {
-      const provider = str("provider");
-      return provider ? { provider } : null;
-    }
-    case "capture_terminal": {
-      const terminalId = str("terminalId");
-      return terminalId ? { terminalId } : null;
-    }
-    case "browser_snapshot":
-    case "browser_logs": {
-      const browserId = str("browserId");
-      return browserId ? { browserId } : null;
-    }
-    case "list_agents":
-    case "list_workspaces":
-    case "list_providers":
-    case "list_profiles": {
-      const out: Record<string, string> = {};
-      const cwd = str("cwd");
-      const serverId = str("serverId");
-      if (cwd) out.cwd = cwd;
-      if (serverId) out.serverId = serverId;
-      return out;
-    }
-    default:
-      if (
-        ["memory_authority_pack_read", "brain_memory_search", "brain_context_resolve"].includes(tool) ||
-        (tool.startsWith("mcp_") && /(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)/i.test(tool))
-      ) {
-        try {
-          return JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b)))));
-        } catch {
-          return null;
-        }
-      }
-      return null;
+  const built: Timeline = { rows, records, history };
+  timelineCache.delete(cacheKey);
+  timelineCache.set(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    size: stat.size,
+    timeline: built,
+  });
+  while (timelineCache.size > MAX_TIMELINE_CACHE) {
+    timelineCache.delete(timelineCache.keys().next().value!);
   }
+  return cloneTimeline(built);
 }
 
 function pythonJson(value: unknown): string {

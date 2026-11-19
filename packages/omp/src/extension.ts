@@ -79,9 +79,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   owner: string, linkage: { parent_scope: string; subagent_id: string } | null): Promise<void> {
   const child = linkage !== null;
   const z = pi.zod;
-  if (!child) pi.on("before_agent_start", async (event) => ({
-    systemPrompt: [...event.systemPrompt, CLEANUP_GUIDANCE],
-  }));
+  let adapterEnabled = true;
   let candidate: Candidate | null = null;
   let generation = 0;
   const modelControllers = new Set<AbortController>();
@@ -120,6 +118,23 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       return null;
     }
   }
+  if (!child) pi.on("before_agent_start", async (event, ctx) => {
+    try {
+      const sid = sessionId(ctx) ?? sessionId(startContext) ?? "main";
+      const status = await rpc("adapter_status", { session_id: sid }, 1000);
+      if (status && status.ok && typeof status.enabled === "boolean") {
+        adapterEnabled = status.enabled;
+      }
+    } catch {
+      /* retain last known adapterEnabled */
+    }
+    if (!adapterEnabled) {
+      return { systemPrompt: [...event.systemPrompt] };
+    }
+    return {
+      systemPrompt: [...event.systemPrompt, CLEANUP_GUIDANCE],
+    };
+  });
   function collect(
     messages: any[],
   ): { records: RecordItem[]; positions: Map<string, number> } | null {
@@ -235,6 +250,11 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     });
     queue = prepared.catch(() => undefined);
     const response = await prepared;
+    if (response.adapter_enabled === false) {
+      adapterEnabled = false;
+    } else if (response.ok) {
+      adapterEnabled = true;
+    }
     const fatalErrors = [
       "db_error",
       "db_full",
@@ -340,7 +360,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       }
       afterTool = true;
     }
-    note = child
+    note = child || !adapterEnabled || response.adapter_enabled === false
       ? null
       : reminder.note(
           turn,
@@ -397,8 +417,16 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         method === "manage" ||
         method === "list_candidates") &&
       (!candidate?.confirmed || candidate.session !== session)
-    )
+    ) {
+      if (method !== "list_candidates") {
+        const status = await rpc("adapter_status", { session_id: session }, 2000, signal);
+        if (status.ok && status.enabled === false) {
+          adapterEnabled = false;
+          return { ok: false, error: "adapter_disabled" };
+        }
+      }
       return { ok: false, error: "unconfirmed_snapshot" };
+    }
     return rpc(
       method,
       {
@@ -737,14 +765,20 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<Reply> {
+    const session = sessionId(ctx);
+    if (!session) return { ok: false, error: "invalid_session" };
+    const status = await rpc("adapter_status", { session_id: session }, 2000, signal);
+    if (status.ok && status.enabled === false) {
+      adapterEnabled = false;
+      return { ok: false, error: "adapter_disabled" };
+    }
     const ids = params.tool_call_ids;
     if (ids === undefined || (Array.isArray(ids) && ids.length === 0))
       return { ok: false, error: "tool_call_ids_required" };
     if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string" && id.trim()))
       return { ok: false, error: "invalid_tool_call_ids" };
     const snapshot = candidate;
-    const session = sessionId(ctx);
-    if (!session || !snapshot?.confirmed || snapshot.session !== session)
+    if (!snapshot?.confirmed || snapshot.session !== session)
       return { ok: false, error: "unconfirmed_snapshot" };
     const action = params.action ?? "auto";
     if (!["auto", "hide", "summarize"].includes(String(action)))

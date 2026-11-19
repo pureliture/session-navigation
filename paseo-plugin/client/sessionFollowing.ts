@@ -83,7 +83,7 @@ export function boundRootSessions(
   return result;
 }
 
-export function resolveWorkspaceSessionState({ pinnedAgentId, trackedAgentId, hasTrackerSignal, trackerSupported, hasDocument, demandedAgentIds, boundSessions, workspaceAgentIds }: {
+export function resolveWorkspaceSessionState({ pinnedAgentId, trackedAgentId, hasTrackerSignal, trackerSupported, hasDocument, demandedAgentIds, boundSessions, workspaceAgentIds, followVisible = true }: {
   pinnedAgentId: string | null;
   trackedAgentId: string | null;
   hasTrackerSignal: boolean;
@@ -92,6 +92,7 @@ export function resolveWorkspaceSessionState({ pinnedAgentId, trackedAgentId, ha
   demandedAgentIds: readonly string[];
   boundSessions: readonly BoundSession[];
   workspaceAgentIds?: readonly string[];
+  followVisible?: boolean;
 }): { mode: "pinned" | "follow" | "single-auto" | "chooser"; effectiveAgentId: string | null; unavailablePin: boolean } {
   if (pinnedAgentId) {
     if (workspaceAgentIds !== undefined && !workspaceAgentIds.includes(pinnedAgentId) &&
@@ -99,6 +100,12 @@ export function resolveWorkspaceSessionState({ pinnedAgentId, trackedAgentId, ha
       return { mode: "chooser", effectiveAgentId: null, unavailablePin: true };
     }
     return { mode: "pinned", effectiveAgentId: pinnedAgentId, unavailablePin: false };
+  }
+  if (!followVisible) {
+    if (boundSessions.length === 1 && (workspaceAgentIds !== undefined || !trackerSupported)) {
+      return { mode: "single-auto", effectiveAgentId: boundSessions[0].agentId, unavailablePin: false };
+    }
+    return { mode: "chooser", effectiveAgentId: null, unavailablePin: false };
   }
   if (hasDocument) {
     return { mode: "follow", effectiveAgentId: trackedAgentId, unavailablePin: false };

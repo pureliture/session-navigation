@@ -16,9 +16,31 @@ export function actionAllowed(
   );
 }
 
+export function isManagedAdapterProvider(
+  provider?: string | null,
+  scopeKey?: string | null,
+): boolean {
+  if (typeof scopeKey === "string" && scopeKey) {
+    const prefix = scopeKey.split(":")[0]?.toLowerCase() ?? "";
+    return prefix === "omp" || prefix === "hermes" || prefix === "pi";
+  }
+  if (typeof provider === "string" && provider.trim()) {
+    const normalized = provider.trim().toLowerCase();
+    return (
+      normalized === "omp" ||
+      normalized === "pi" ||
+      normalized === "acp" ||
+      normalized === "hermes" ||
+      /^hermes[-_:]/u.test(normalized)
+    );
+  }
+  return true;
+}
+
 export function capabilityNotice(
   error?: string,
   capabilities?: Capabilities,
+  options?: { provider?: string | null; scopeKey?: string | null; rowCount?: number },
 ): string | null {
   if (error === "runtime_unsupported")
     return "Session Navigation requires Node >=22.13. Upgrade the Paseo daemon runtime.";
@@ -32,11 +54,21 @@ export function capabilityNotice(
   if (error)
     return `Engine/runtime error: ${error}. Refresh the outline before retrying.`;
   if (capabilities?.state === "adapter_disabled")
-    return "The session adapter is disabled. Enable it in the session host to hide or summarize.";
-  if (!capabilities || capabilities.state === "adapter_not_detected")
+    return (
+      capabilities.hint ??
+      (options?.scopeKey?.startsWith("hermes:")
+        ? "Context management paused via DB control — updated protection-only sessions protect hidden items while older/frozen Hermes processes stay active until restarted (SQLite DB errors fail open per D9)."
+        : "Context management paused in settings — existing hidden items stay protected.")
+    );
+  if (!capabilities || capabilities.state === "adapter_not_detected") {
+    if (!isManagedAdapterProvider(options?.provider, options?.scopeKey)) return null;
+    if (options?.rowCount === 0 && (!options?.scopeKey || !capabilities || capabilities.state === "adapter_not_detected")) {
+      return null;
+    }
     return (
       capabilities?.hint ??
       "Adapter not detected. Install and enable the Session Navigation adapter in the session host. History and existing hidden items remain available."
     );
+  }
   return null;
 }

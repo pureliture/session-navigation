@@ -1,5 +1,7 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { outlineSettings } from "./shared/outlineSettings";
 import {
+  getAdapterTogglesRpc,
   hideBatchRpc,
   unhideBatchRpc,
   dbChoiceRpc,
@@ -8,10 +10,12 @@ import {
   listItemsRpc,
   listScopesRpc,
   manageItemsRpc,
+  setAdapterToggleRpc,
   summarizeItemRpc,
   unhideItemRpc,
 } from "./shared/sessionNav";
 import {
+  getAdapterToggles,
   hideBatch,
   unhideBatch,
   dbChoice,
@@ -20,12 +24,14 @@ import {
   listItems,
   listScopes,
   manageItems,
+  setAdapterToggle,
   summarizeItem,
   unhideItem,
   closeService,
 } from "./server/sessionNav";
 
 export default function contribute(server: PluginServerContext) {
+  server.registerSettings?.(outlineSettings);
   server.handle(listItemsRpc, listItems);
   server.handle(listScopesRpc, listScopes);
   server.handle(hideItemRpc, hideItem);
@@ -36,5 +42,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(manageItemsRpc, manageItems);
   server.handle(forkScopeRpc, forkScope);
   server.handle(dbChoiceRpc, dbChoice);
+  server.handle(getAdapterTogglesRpc, getAdapterToggles);
+  server.handle(setAdapterToggleRpc, setAdapterToggle);
   return () => closeService();
 }

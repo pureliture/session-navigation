@@ -80,6 +80,15 @@ REQUIRED: dict[str, str] = {
 }
 
 _TERMINAL_BLOCKED_TRUTHY_OPTIONS = ("background", "pty", "persist_on_release", "notify")
+_INT_OR_STR_ID_KEYS = {
+    "id",
+    "tabId",
+    "tab_id",
+    "scheduleId",
+    "schedule_id",
+    "terminalId",
+    "terminal_id",
+}
 _MCP_READ_PATTERN = re.compile(
     r"(?:^|_)(?:read|get|list|search|query|inspect|resolve|fetch)(?:$|_)",
     re.IGNORECASE,
@@ -167,7 +176,11 @@ def filter_invocation(
         for flag in _TERMINAL_BLOCKED_TRUTHY_OPTIONS:
             if flag in args and bool(args[flag]):
                 raise AdapterRejected("unsupported_arguments")
-        if "timeout" in args and (type(args["timeout"]) is not int or args["timeout"] < 1):
+        if (
+            "timeout" in args
+            and args["timeout"] is not None
+            and (type(args["timeout"]) is not int or args["timeout"] < 1)
+        ):
             raise AdapterRejected("unsupported_arguments")
 
     if name in REQUIRED:
@@ -197,6 +210,8 @@ def filter_invocation(
     omitted: dict[str, Any] = {}
     for key in sorted(args):
         val = args[key]
+        if val is None:
+            continue
         if key in field_set:
             if name == "read_file" and key in {"offset", "limit"}:
                 if type(val) is not int or val < 1:
@@ -217,6 +232,8 @@ def filter_invocation(
                     filtered[key] = list(val)
                 else:
                     raise AdapterRejected("invalid_invocation")
+            elif key in _INT_OR_STR_ID_KEYS and type(val) is int:
+                filtered[key] = val
             else:
                 if not isinstance(val, str):
                     raise AdapterRejected("invalid_invocation")

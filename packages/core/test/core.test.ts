@@ -63,6 +63,14 @@ test("canonical JSON preserves Unicode sorting, integer precision and float kind
     canonical(parseCanonicalJson('{"𐀀":3,"":4,"n":9007199254740993,"float":1.0}')),
     '{"float":1.0,"n":9007199254740993,"":4,"𐀀":3}',
   );
+  const protoObj = parseCanonicalJson('{"__proto__":{"a":1},"constructor":2,"toString":3}') as {
+    [key: string]: any;
+  };
+  assert.equal(canonical(protoObj), '{"__proto__":{"a":1},"constructor":2,"toString":3}');
+  assert.notEqual(
+    invocationDigest({ tool_name: "mcp_read_status", arguments: protoObj }),
+    invocationDigest({ tool_name: "mcp_read_status", arguments: { constructor: 2, toString: 3 } }),
+  );
   assert.equal(canonical(new PythonFloat(-0)), "-0.0");
   assert.equal(canonical(new PythonFloat(1e-7)), "1e-07");
   assert.equal(canonical(0.00001), "1e-05");
@@ -472,4 +480,85 @@ test("independent SQLite writers reject stale CAS and observe subsequent interle
         assert.equal(rows[0].original, toolRecord.content);
       }
     } finally { for (const writer of others) writer.close(); }
+  }));
+
+test("adapter_control stores toggle revisions and synchronizes adapter_sessions.enabled", () =>
+  database((store, path) => {
+    assert.equal(store.getAdapterControl("omp"), null);
+    assert.equal(store.get_adapter_control("hermes"), null);
+    store.register("omp:default:s1:default", {
+      adapter_id: "omp",
+      adapter_protocol: 1,
+      capabilities: { hide: true, summarize: true, unhide: true },
+      enabled: true,
+      instance_id: "inst-1",
+    });
+    const first = store.setAdapterControl("omp", false, 100);
+    assert.deepEqual(first, { adapter_id: "omp", enabled: false, revision: 1, updated_at: 100 });
+    assert.equal(store.registration("omp:default:s1:default")?.enabled, false);
+    assert.equal(store.can("omp:default:s1:default", "hide"), false);
+
+    const second = store.set_adapter_control("omp", true, 200);
+    assert.deepEqual(second, { adapter_id: "omp", enabled: true, revision: 2, updated_at: 200 });
+    assert.equal(store.registration("omp:default:s1:default")?.enabled, true);
+
+    const reopened = new Store(makeDriver(path));
+    try {
+      assert.deepEqual(reopened.getAdapterControl("omp"), second);
+    } finally {
+      reopened.close();
+    }
+
+    // Failure during adapter_sessions update must roll back adapter_control in the same transaction
+    const driver = (store as any).driver;
+    const origRun = driver.run.bind(driver);
+    driver.run = (sql: string, params?: unknown[]) => {
+      if (sql.includes("UPDATE adapter_sessions")) {
+        throw new Error("injected_session_update_failure");
+      }
+      return origRun(sql, params);
+    };
+    try {
+      assert.throws(() => store.setAdapterControl("omp", false, 300), /injected_session_update_failure/);
+      assert.deepEqual(store.getAdapterControl("omp"), second);
+      assert.equal(store.registration("omp:default:s1:default")?.enabled, true);
+    } finally {
+      driver.run = origRun;
+    }
+  }));
+
+test("register preserves optional protection_only and bundle_fingerprint capability markers", () =>
+  database((store) => {
+    store.register("hermes:default:plain:unknown", {
+      adapter_id: "hermes",
+      adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true },
+      enabled: true,
+      instance_id: "inst-plain",
+    });
+    store.register("hermes:default:marked:unknown", {
+      adapter_id: "hermes",
+      adapter_protocol: 1,
+      capabilities: {
+        hide: true,
+        summarize: false,
+        unhide: true,
+        protection_only: true,
+        bundle_fingerprint: "fp-ts-1234",
+      },
+      enabled: false,
+      instance_id: "inst-marked",
+    });
+    assert.deepEqual(store.registration("hermes:default:plain:unknown")?.capabilities, {
+      hide: true,
+      summarize: false,
+      unhide: true,
+    });
+    assert.deepEqual(store.registration("hermes:default:marked:unknown")?.capabilities, {
+      hide: true,
+      summarize: false,
+      unhide: true,
+      protection_only: true,
+      bundle_fingerprint: "fp-ts-1234",
+    });
   }));

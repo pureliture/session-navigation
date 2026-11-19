@@ -1,6 +1,7 @@
 import type { RpcInput } from "@getpaseo/plugin";
 import { ServiceClient } from "./client";
 import {
+  getAdapterTogglesRpc,
   hideBatchRpc,
   unhideBatchRpc,
   dbChoiceRpc,
@@ -9,6 +10,7 @@ import {
   listItemsRpc,
   listScopesRpc,
   manageItemsRpc,
+  setAdapterToggleRpc,
   summarizeItemRpc,
   unhideItemRpc,
 } from "../shared/sessionNav";
@@ -70,4 +72,20 @@ export function forkScope(input: RpcInput<typeof forkScopeRpc>) {
 }
 export function dbChoice(input: RpcInput<typeof dbChoiceRpc>) {
   return request("dbChoice", input);
+}
+export async function getAdapterToggles(_input: RpcInput<typeof getAdapterTogglesRpc> = {}) {
+  const reply = await request("getAdapterToggles", {});
+  return {
+    omp: { installed: true, enabled: true },
+    hermes: { installed: false, enabled: false, profileCount: 0 },
+    ...reply,
+  };
+}
+export async function setAdapterToggle(input: RpcInput<typeof setAdapterToggleRpc>) {
+  const reply = await request("setAdapterToggle", input);
+  return {
+    omp: { installed: true, enabled: true },
+    hermes: { installed: false, enabled: false, profileCount: 0 },
+    ...reply,
+  };
 }

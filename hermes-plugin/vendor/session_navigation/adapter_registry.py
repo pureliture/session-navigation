@@ -77,6 +77,11 @@ class AdapterRegistryMixin:
         if not instance_id or key.split(":", 1)[0] != adapter_id:
             raise ValueError("invalid_adapter_registration")
         packed = {name: capabilities.get(name) is True for name in ("hide", "summarize", "unhide")}
+        if capabilities.get("protection_only") is True:
+            packed["protection_only"] = True
+        bundle_fp = capabilities.get("bundle_fingerprint")
+        if isinstance(bundle_fp, str) and bundle_fp and len(bundle_fp) <= 128:
+            packed["bundle_fingerprint"] = bundle_fp
         if any(value is not None and (not isinstance(value, str) or not value or len(value) > 1024)
                for value in (parent_scope, tool_call_id, subagent_id)):
             raise ValueError("invalid_adapter_registration")
@@ -154,3 +159,57 @@ class AdapterRegistryMixin:
             return []
         with self._lock:
             return [dict(row) for row in self.connection.execute("SELECT * FROM adapter_targets WHERE scope_key=? ORDER BY seq", (session["scope_key"],))]
+
+    def get_adapter_control(self, adapter_id: str):
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            return None
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT * FROM adapter_control WHERE adapter_id=?",
+                (adapter_id.strip(),),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "adapter_id": str(row["adapter_id"]),
+                "enabled": bool(row["enabled"]),
+                "revision": int(row["revision"]),
+                "updated_at": float(row["updated_at"]),
+            }
+
+    def set_adapter_control(self, adapter_id: str, enabled: bool, *, now: float | None = None):
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            raise ValueError("invalid_adapter_registration")
+        aid = adapter_id.strip()
+        flag = bool(enabled)
+        stamp = time.time() if now is None else float(now)
+        with self._lock, self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT revision FROM adapter_control WHERE adapter_id=?",
+                (aid,),
+            ).fetchone()
+            revision = (int(row["revision"]) + 1) if row is not None else 1
+            self.connection.execute(
+                """INSERT INTO adapter_control(adapter_id, enabled, revision, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(adapter_id) DO UPDATE SET
+                     enabled=excluded.enabled,
+                     revision=excluded.revision,
+                     updated_at=excluded.updated_at""",
+                (aid, int(flag), revision, stamp),
+            )
+            escaped_aid = aid.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            self.connection.execute(
+                "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=? OR scope_key LIKE ? ESCAPE '\\'",
+                (int(flag), aid, f"{escaped_aid}:%"),
+            )
+            return {
+                "adapter_id": aid,
+                "enabled": flag,
+                "revision": revision,
+                "updated_at": stamp,
+            }
+
+    getAdapterControl = get_adapter_control
+    setAdapterControl = set_adapter_control

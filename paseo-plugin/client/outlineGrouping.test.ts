@@ -522,4 +522,45 @@ describe("mixed summarize and hide group states (Issue #16)", () => {
     const group = buildGroupedRows(rows, {}, {})[0] as Extract<OutlineRow, { type: "group" }>;
     expect(group.subTitle).toBe("todo, eval, read, manage_context, +1");
   });
+
+  test("normalizes <paseo-system> agent-message/notification and strips <system-reminder>/<system-notice>, clamps short hidden bytes, and keeps agent kind ungrouped", () => {
+    const { messageSummarySnippet, effectiveRowBytes } = require("./outlineGrouping");
+    expect(
+      messageSummarySnippet(
+        '<system-reminder>skip me</system-reminder><paseo-system version="1" kind="agent-message" source-agent-title="Worker">Run checks now</paseo-system>',
+      ),
+    ).toBe("[Agent message · Worker] Run checks now");
+    expect(
+      messageSummarySnippet(
+        '<system-notice>notice</system-notice><paseo-system version="1" kind="agent-notification" source-agent-title="Audit" event="finished">ok</paseo-system>',
+      ),
+    ).toBe("[Subagent finished] Audit");
+    expect(messageSummarySnippet('<paseo-system version="1" kind="agent-message" source-agent-id="1234567890"></paseo-system>')).toBe(
+      "[Agent message] 12345678",
+    );
+
+    const shortHidden: Row = {
+      item_id: "short_1",
+      tool_call_id: "c_short",
+      kind: "tool",
+      tool_name: "bash",
+      status: "hidden",
+      version: 2,
+      tokens_display: "—",
+      bytes_size: 5,
+      compacted_bytes_size: 40,
+    };
+    expect(effectiveRowBytes(shortHidden)).toBe(5);
+
+    const grouped = buildGroupedRows(
+      [
+        { item_id: "t1", tool_call_id: "c1", kind: "tool", status: "visible", version: 1, tokens_display: "—" },
+        { item_id: "ag1", tool_call_id: "", kind: "agent", tool_name: "todo", status: "visible", version: 1, tokens_display: "—" },
+        { item_id: "t2", tool_call_id: "c2", kind: "tool", status: "visible", version: 1, tokens_display: "—" },
+      ],
+      {},
+      {},
+    );
+    expect(grouped.map((g) => g.type)).toEqual(["group", "assistant", "group"]);
+  });
 });
