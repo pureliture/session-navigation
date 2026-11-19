@@ -44,7 +44,12 @@ def target_cwd() -> str:
     return str(Path.home() / "Projects")
 
 def project_dir_key() -> str:
-    return "Users-" + "_".join(Path(target_cwd()).parts[1:])
+    parts = Path(target_cwd()).parts[1:]
+    keys = ("-".join(parts), "Users-" + "_".join(parts))
+    for key in keys:
+        if (real_home() / ".paseo" / "agents" / key).is_dir():
+            return key
+    return keys[0]
 
 EXPECTED_HERMES_MESSAGES = 1089
 EXPECTED_HERMES_SESSIONS = 1
