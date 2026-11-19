@@ -1,7 +1,7 @@
 # 아웃라인 QA 체크리스트 · 증상→커밋 추적표
 
 Session navigation **아웃라인 본체**의 수동 검증을 재현 가능하게 고정한 문서.
-작성 시점 2026-11-19, 브랜치 `fix/subagent-code-review-fixes` (PR #32, 머지 금지).
+작성 시점 2026-11-19, 머지 후 `main` 기준 (PR #32·#33 머지 완료).
 
 검증 규칙: 코드 인용은 `git log`(커밋 메시지·diff)와 현재 워킹트리 파일 내용으로만 확인했다.
 저장소에서 확인할 수 없는 값은 `[UNVERIFIED]`로 표시하고, 필요 계측을 함께 적는다.
@@ -171,7 +171,7 @@ CDP 실화면 DOM 덤프로 확인). 기대 결과의 수치·ID는 아래 4절�
 7. **이전 청크 items의 unhide 경로**: 이전 청크에 속한 항목은 아웃라인 표시·검색·집계에서 제외되지만, 저장소(`items`/`units`) 레코드는 보존되므로 직접 `unhide` RPC(item_id/unit_id 지정)는 계속 동작한다.
 8. **하단 수치·클라이언트 상태 리셋** (`paseo-plugin/client/sessionNavPanel.tsx`): 하단 `hidden_count`·`saved_bytes`·`total_rows`는 서버 `totals`(청크 기준)를 사용하며, 라이브 압축으로 `has_older`가 사라지거나 `total_rows`가 감소하면 기로드된 `olderServerState`를 무효화한다.
 
-상태: 구현 완료 (브랜치 `feat/latest-chunk-outline`, base `fix/subagent-code-review-fixes` 스택 Draft PR [#33](https://github.com/pureliture/session-navigation/pull/33), 머지 금지).
+상태: 구현 완료, `main` 머지 완료 (PR #32 리팩토링 위에 스택된 PR [#33](https://github.com/pureliture/session-navigation/pull/33); 머지 후 브랜치 삭제).
 
 ## 9. RPC 신뢰 경계 (2026-11-19)
 
