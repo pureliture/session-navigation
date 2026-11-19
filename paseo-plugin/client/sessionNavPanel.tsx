@@ -424,6 +424,7 @@ export function SessionNavPanel({
     rows: Row[];
     hasOlder: boolean;
     nextBeforeIndex: number | null;
+    totalRows?: number;
   } | null>(null);
   const [olderFallbackState, setOlderFallbackState] = useState<{
     sessionKey: string;
@@ -787,8 +788,19 @@ export function SessionNavPanel({
   });
 
   const isHermesScope = Boolean(resolvedScopeKey?.startsWith("hermes:"));
-  const needsLinkedTimeline = !activeChild && !!resolvedScopeKey && scopes.some((scope) => scope.parent_scope === resolvedScopeKey &&
-    scope.tool_call_id && !listQuery.data?.items.some((row) => row.tool_call_id === scope.tool_call_id));
+  const hasServerTimeline = Boolean(listQuery.data?.server_timeline);
+  const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
+  const needsLinkedTimeline =
+    listQuery.data !== undefined &&
+    !hasServerTimeline &&
+    !activeChild &&
+    !!resolvedScopeKey &&
+    scopes.some(
+      (scope) =>
+        scope.parent_scope === resolvedScopeKey &&
+        scope.tool_call_id &&
+        !listQuery.data?.items.some((row) => row.tool_call_id === scope.tool_call_id),
+    );
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
@@ -824,10 +836,25 @@ export function SessionNavPanel({
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
   }, [scopeKey, queryClient]);
 
-  const hasServerTimeline = Boolean(listQuery.data?.server_timeline);
-  const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
+  const listTotalsRows = listQuery.data?.totals?.total_rows;
+  const listHasOlder = listQuery.data?.has_older;
+  const serverOlderInvalidated = Boolean(
+    olderServerState &&
+      olderServerState.sessionKey === sessionViewKey &&
+      listQuery.data !== undefined &&
+      (!listHasOlder ||
+        (typeof listTotalsRows === "number" &&
+          typeof olderServerState.totalRows === "number" &&
+          listTotalsRows < olderServerState.totalRows)),
+  );
+  useEffect(() => {
+    if (serverOlderInvalidated) {
+      setOlderServerState(null);
+    }
+  }, [serverOlderInvalidated]);
 
-  const activeOlderServer = olderServerState?.sessionKey === sessionViewKey ? olderServerState : null;
+  const activeOlderServer =
+    olderServerState?.sessionKey === sessionViewKey && !serverOlderInvalidated ? olderServerState : null;
   const activeOlderFallback = olderFallbackState?.sessionKey === sessionViewKey ? olderFallbackState : null;
   const serverTailRows = listQuery.data?.items ?? [];
   const serverRows = useMemo(
@@ -843,7 +870,7 @@ export function SessionNavPanel({
   const rawRows = useMemo(
     () =>
       resolvedScopeKey
-        ? activeChild
+        ? activeChild || hasServerTimeline
           ? serverRows
           : needsHermesFallbackMerge
             ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
@@ -852,6 +879,7 @@ export function SessionNavPanel({
     [
       resolvedScopeKey,
       activeChild,
+      hasServerTimeline,
       serverRows,
       needsHermesFallbackMerge,
       fallbackRows,
@@ -946,6 +974,7 @@ export function SessionNavPanel({
     let cursor = maxIdx + 1;
     let hasOlderFlag = olderServerState.hasOlder;
     let nextBefore: number | null = olderServerState.nextBeforeIndex;
+    let refreshedTotalRows = olderServerState.totalRows;
     while (cursor > minIdx) {
       const span = Math.min(2000, Math.max(OUTLINE_PAGE_SIZE, cursor - minIdx));
       const res = await listRpc({
@@ -954,6 +983,9 @@ export function SessionNavPanel({
         before_index: cursor,
       });
       if (sessionViewKeyRef.current !== capturedKey || !res.ok || res.items.length === 0) return;
+      if (typeof res.totals?.total_rows === "number") {
+        refreshedTotalRows = res.totals.total_rows;
+      }
       collected.unshift(...res.items);
       const firstIdx = res.items[0]?.timeline_index;
       if (typeof firstIdx !== "number" || firstIdx <= minIdx || !res.has_older || res.next_before_index == null) {
@@ -971,6 +1003,7 @@ export function SessionNavPanel({
         rows: mergePagedRows(collected, []),
         hasOlder: hasOlderFlag,
         nextBeforeIndex: nextBefore,
+        totalRows: refreshedTotalRows ?? prev.totalRows,
       };
     });
   };
@@ -1049,6 +1082,7 @@ export function SessionNavPanel({
             hasOlder: Boolean(result.has_older && result.next_before_index != null),
             nextBeforeIndex:
               typeof result.next_before_index === "number" ? result.next_before_index : null,
+            totalRows: result.totals?.total_rows ?? prev?.totalRows,
           };
         });
       } catch (err) {

@@ -161,17 +161,17 @@ CDP 실화면 DOM 덤프로 확인). 기대 결과의 수치·ID는 아래 4절�
 
 근거: 전체 표시는 경계·페이징·검색·totals·unhide·seek의 관리·검토 포인트를 계속 늘린다. 최신 청크만 표시하면 행 수가 청크 크기로 상한되어 렌더·메모리·가상화 문제가 함께 사라진다.
 
-필수 선행·불변식:
-1. 경계 탐지: OMP는 `compaction` 라인이 kept tail 뒤에 append되므로 `firstKeptEntryId` 역추적. Hermes는 회전 체인(`parent_session_id`) + `_compressed_summary` 위치.
-2. 압축이 없는 세션은 전체가 단일 청크이므로 256MiB/100k행 상한을 유지한다.
-3. `list`·검색·`totals`·`before_index`를 청크 범위로 한정한다. 검색은 **최신 청크만** 대상으로 한다.
-4. `timeline_index` 좌표계(청크 로컬 vs 전역)와 `chatNavigation` seek 정합을 검증한다.
-5. Hermes 청크 = **마지막 압축 이후 행**. in-place 압축은 `active=1`이 이미 그 범위이고, 회전은 `parent_session_id` 체인을 따라 최신 링크의 `_compressed_summary` 행부터 표시한다. 세션 선택은 제품 결정이 아니라 체인 탐색 결과다.
-6. fallback(서버 타임라인 없음) 경로는 청크 개념이 없으므로 표시 정책을 별도 명시한다.
-7. 이전 청크에 속한 items의 unhide 경로를 정의한다.
-8. 하단 통계(`hidden_count`·`saved_bytes`·`tokens`·`total_rows`)는 표시 청크 기준으로 리셋한다.
+필수 선행·구현 불변식:
+1. **OMP 경계 탐지** (`paseo-plugin/server/history.ts`): 마지막 `compaction` 라인의 `firstKeptEntryId`가 가리키는 메시지 인덱스부터 `messages`/`boundaries`/`injected`를 슬라이스한다. `firstKeptEntryId`가 없거나 해석 불가하면 빈 아웃라인 대신 전체 이력으로 fallback한다.
+2. **상한 유지**: 압축이 없는 세션은 전체가 단일 청크이므로 파일 크기 256MiB(`MAX_HISTORY_BYTES`) 및 **청크 기준** 100k행(`MAX_HISTORY_ROWS`) 상한을 유지한다.
+3. **서비스 범위 한정** (`paseo-plugin/server/service.ts`): 서버 타임라인(`timeline.rows.length > 0`)이 있을 때 이전 청크의 고아 `store.items` 및 `adapter_targets`를 꼬리에 부활시키지 않으며, `list`·검색(`query`)·`totals`·`before_index`는 모두 최신 청크 행만 대상으로 한다.
+4. **좌표계 정합**: `timeline_index`는 청크 로컬(`0..N-1`)로 재부여되며, `chatNavigation` seek는 `identityMatches`/텍스트 매칭을 우선하면서 동일한 청크 로컬 `timeline_index`로 마운트 윈도우 순서를 판정한다.
+5. **Hermes 경계 탐지** (`paseo-plugin/server/hermesHistory.ts`): `PRAGMA table_info`로 `messages._compressed_summary` 및 `sessions.parent_session_id`/`started_at` 존재를 감지한다. `parent_session_id` 체인을 `started_at DESC, rowid DESC` 기준으로 최대 32 hop 추적(방문 집합으로 cycle 방지, 자식 없으면 요청 세션 사용)한 뒤, 대상 세션의 `active=1` 행 중 첫 `_compressed_summary=1` 행부터 슬라이스한다. `_compressed_summary` 컬럼이 없는 구버전 DB는 `0 AS _compressed_summary`로 대체해 전체 `active=1` 행을 표시하며, 경계 이전의 tool call과 이후의 tool result는 페어링되지 않아 `display_only`로 남는다.
+6. **fallback(`server_timeline: false`) 정책**: 서버 타임라인 파일/DB가 없는 원격·fallback 경로는 압축 경계 메타데이터가 없으므로 기존 호스트 타임라인/저장 레코드 기반 표시 및 상향 페이징 방식을 그대로 유지한다. 반대로 `server_timeline: true`일 때는 클라이언트가 `fallbackTimelineQuery`/`mergeLinkedParentRows`를 비활성화해 이전 청크 서브에이전트 행이 재유입되지 않도록 차단한다.
+7. **이전 청크 items의 unhide 경로**: 이전 청크에 속한 항목은 아웃라인 표시·검색·집계에서 제외되지만, 저장소(`items`/`units`) 레코드는 보존되므로 직접 `unhide` RPC(item_id/unit_id 지정)는 계속 동작한다.
+8. **하단 수치·클라이언트 상태 리셋** (`paseo-plugin/client/sessionNavPanel.tsx`): 하단 `hidden_count`·`saved_bytes`·`total_rows`는 서버 `totals`(청크 기준)를 사용하며, 라이브 압축으로 `has_older`가 사라지거나 `total_rows`가 감소하면 기로드된 `olderServerState`를 무효화한다.
 
-상태: 별도 PR. 이번 PR은 상한·권한·CI·manual hide만 반영.
+상태: 구현 완료 (브랜치 `feat/latest-chunk-outline`, base `fix/subagent-code-review-fixes` 스택 Draft PR [#33](https://github.com/pureliture/session-navigation/pull/33), 머지 금지).
 
 ## 9. RPC 신뢰 경계 (2026-11-19)
 

@@ -586,7 +586,11 @@ export class PaseoService {
     storedUnits: readonly Record<string, unknown>[] = this.store.listUnits(scope),
   ): Timeline {
     const timeline = loadTimeline(this.home, scope, storedItems, storedUnits);
-    if (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope) return timeline;
+    if (
+      timeline.rows.length > 0 ||
+      (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope)
+    )
+      return timeline;
     for (const target of this.store.targets(scope)) {
       const verified = this.verifiedTargetRecord(scope, target);
       if (!verified || timeline.records.has(verified.call_id)) continue;
@@ -649,9 +653,15 @@ export class PaseoService {
     query = "",
     paging?: { limit?: number; before_index?: number },
   ): Reply {
-    const items = this.store.items(scope);
-    const rawUnits = this.store.listUnits(scope);
-    const timeline = this.timeline(scope, items, rawUnits);
+    let items = this.store.items(scope);
+    let rawUnits = this.store.listUnits(scope);
+    let timeline = this.timeline(scope, items, rawUnits);
+    const effectiveScope = timeline.history.effectiveScope;
+    if (effectiveScope && effectiveScope !== scope) {
+      items = this.store.items(effectiveScope);
+      rawUnits = this.store.listUnits(effectiveScope);
+      timeline = this.timeline(scope, items, rawUnits);
+    }
     const stored = new Map(items.map((item) => [item.item_id, item]));
     const units = new Map(
       rawUnits.map((unit) => [String(unit.unit_id), unit]),
@@ -714,9 +724,9 @@ export class PaseoService {
         });
       return merged;
     });
-    for (const item of items)
-      if (!seen.has(item.item_id)) rows.push(this.itemRow(item));
     if (!timeline.rows.length) {
+      for (const item of items)
+        if (!seen.has(item.item_id)) rows.push(this.itemRow(item));
       const calls = new Set(items.map((item) => item.tool_call_id));
       for (const unit of units.values()) {
         if (
