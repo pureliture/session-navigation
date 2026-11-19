@@ -743,10 +743,15 @@ type SearchBounds = {
   low?: number;
   high?: number;
   extent?: number;
-  sweepDirection?: "up" | "down";
   triedUpEdge?: boolean;
   triedDownEdge?: boolean;
+  sweepDirection?: "up" | "down";
+  // Set when needOlder fires: the next window is mid-pagination (row surge,
+  // mixed old/new text). Force upward sweep for a few calls so a spurious
+  // freshly-mounted text match cannot flip direction downward.
+  forceUpCalls?: number;
 };
+
 type SeekOutcome = "moved" | "needOlder" | "atNewerEdge" | "unknown";
 
 function mountedRowIndices(root: any, rows: Row[]): { indices: number[]; virtual: any[] } {
@@ -854,7 +859,11 @@ function seekMountedWindow(
 
   const mountedOrders = mounted.map((idx) => rowOrder(rows, idx));
   let older: boolean;
-  if (mountedOrders.length > 0) {
+  if ((bounds.forceUpCalls ?? 0) > 0) {
+    bounds.forceUpCalls = (bounds.forceUpCalls ?? 0) - 1;
+    older = true;
+    bounds.sweepDirection = "up";
+  } else if (mountedOrders.length > 0) {
     const minMountedOrder = Math.min(...mountedOrders);
     const maxMountedOrder = Math.max(...mountedOrders);
     if (targetOrder < minMountedOrder) {
@@ -892,12 +901,10 @@ function seekMountedWindow(
     if (virtual.length > 0 && !virtual.some((node) => node.getAttribute("data-index") === "0")) {
       return "moved";
     }
-    if (mountedOrders.length === 0) {
-      if (!bounds.triedUpEdge) {
-        bounds.triedUpEdge = true;
-      }
-      return "needOlder";
+    if (!bounds.triedUpEdge) {
+      bounds.triedUpEdge = true;
     }
+    bounds.forceUpCalls = 4;
     return "needOlder";
   }
   if (!older && position >= extent - 1) return "atNewerEdge";
@@ -1105,6 +1112,9 @@ async function navigate(
   const paginationCutoff = noProgressCutoff === null ? null : Math.max(noProgressCutoff, 15000);
   let lastOutcome: SeekOutcome | null = null;
   let pagingInFlight = false;
+  let lastMovedTop: number | null = null;
+  let movedStreakDir = 0;
+  let movedStreakCount = 0;
   while (version === navigationVersion) {
     if (await navigateLoaded(row, rows, root, version, options)) return true;
     if (version !== navigationVersion) return false;
@@ -1120,6 +1130,33 @@ async function navigate(
       scrollHeight = lastScrollHeight;
     }
     if (scrollHeight !== lastScrollHeight) { lastScrollHeight = scrollHeight; lastProgress = now(); pagingInFlight = true; }
+    if (lastOutcome === "moved") {
+      // Virtualized chats reuse row nodes: signature/row count can stay frozen
+      // while seek visibly advances. Steady movement in one direction refreshes
+      // the short no-progress clock a few times; beyond that a frozen signature
+      // means the seek is lost. Never escalate to the 15s pagination cutoff.
+      let top: number | null = null;
+      try {
+        const t = chatScroller(root)?.scrollTop;
+        top = typeof t === "number" ? t : null;
+      } catch {
+        top = null;
+      }
+      if (top === null) {
+        lastProgress = now();
+      } else if (lastMovedTop === null || Math.abs(top - lastMovedTop) >= 2) {
+        const dir = lastMovedTop === null ? 0 : Math.sign(top - lastMovedTop);
+        if (dir !== 0 && dir !== movedStreakDir) {
+          movedStreakDir = dir;
+          movedStreakCount = 0;
+        }
+        if (movedStreakCount < 3) {
+          movedStreakCount++;
+          lastProgress = now();
+        }
+        lastMovedTop = top;
+      }
+    }
     if (root.querySelector('[data-testid="load-older-history-spinner"]')) pagingInFlight = true;
     else if (lastOutcome !== "needOlder" && lastOutcome !== "moved") pagingInFlight = false;
     const cutoff = pagingInFlight ? paginationCutoff : noProgressCutoff;

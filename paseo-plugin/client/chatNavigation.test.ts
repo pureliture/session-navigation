@@ -1359,3 +1359,49 @@ test("nested rendered rows (parent + child share text) dedupe to a unique match 
   expect(found).toBe(true);
   expect(outer.scrolled).toBe(true);
 });
+
+test("seek keeps sweeping up right after older pagination despite spurious fresh text match", async () => {
+  // Trace: top=65 at extent, needOlder fires once (49->92 rows), then a fresh
+  // text match flips direction downward and the seek dies at restore.
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  root.scrollHeight = 9282;
+  root.clientHeight = 709;
+  root.scrollTop = 65;
+  const doc = new Element().add(root);
+  const rows: Row[] = Array.from({ length: 150 }, (_, idx) => ({
+    ...row(`outline-${idx}`, "assistant"),
+    timeline_index: 605 + idx,
+    summary_line: `Outline message ${605 + idx}`,
+    message_text: `Outline message ${605 + idx}`,
+  }));
+  const target: Row = {
+    ...row("display_hermes_298396", "tool"),
+    tool_call_id: "call_00_sfrmago9exbschabupzaix7x",
+    tool_name: "manage_context",
+    timeline_index: 753,
+    summary_line: "0 managed, 1 failed",
+  };
+  const allRows = [...rows.slice(0, 148), target, ...rows.slice(148)];
+  // Freshly paged chat text that spuriously matches a NEWER outline row.
+  root.add(new Element({ "data-message-id": "fresh-assistant-mid" }, "Outline message 754 plus unrelated paged suffix text here"));
+  const targetNode = new Element(
+    { "data-message-id": "agent_tool_turn:t/call_00_sfrmago9exbschabupzaix7x" },
+    "manage_context result verification_failed",
+  );
+  let clock = 0;
+  let pages = 0;
+  const seenTops: number[] = [];
+  const found = await scrollToMessageInChat(target, allRows, {
+    document: doc,
+    now: () => clock,
+    afterLoad: async () => {
+      seenTops.push(root.scrollTop);
+      clock += 500;
+      pages++;
+      if (pages >= 3 && !root.children.includes(targetNode)) root.add(targetNode);
+    },
+  });
+  expect(found).toBe(true);
+  // Must keep paging upward, never jump back down past the start.
+  expect(Math.max(...seenTops)).toBeLessThanOrEqual(65 + 709 * 2);
+});
