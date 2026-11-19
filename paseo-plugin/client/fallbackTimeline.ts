@@ -454,7 +454,17 @@ export function mergeHermesTimelineRows(
       });
     }
   }
-  const unmatched = rows.filter((row) => !row.tool_call_id || !consumed.has(row.tool_call_id));
+  const timelineMessageKeys = new Set(
+    timeline
+      .map(messageDedupeKey)
+      .filter((key): key is string => key !== null),
+  );
+  const unmatched = rows.filter((row) => {
+    if (row.tool_call_id && consumed.has(row.tool_call_id)) return false;
+    const key = messageDedupeKey(row);
+    if (key && timelineMessageKeys.has(key)) return false;
+    return true;
+  });
   const matchedFloor = merged.reduce<number | null>((floor, row) => {
     if (typeof row.timeline_index !== "number") return floor;
     return floor === null ? row.timeline_index : Math.min(floor, row.timeline_index);
@@ -470,6 +480,19 @@ export function mergeHermesTimelineRows(
       ? []
       : unmatched.filter((row) => typeof row.timeline_index === "number" && row.timeline_index >= matchedFloor);
   return [...head, ...merged, ...tail];
+}
+
+function messageDedupeKey(row: Row): string | null {
+  if (
+    row.kind !== "user" &&
+    row.kind !== "assistant" &&
+    row.kind !== "agent" &&
+    row.tool_name !== "compaction"
+  )
+    return null;
+  const text = String(row.message_text ?? row.summary_line ?? "").trim().slice(0, 120);
+  if (!text) return null;
+  return `${row.kind}\0${text}`;
 }
 
 function rowMergeKey(row: Row): string | null {
