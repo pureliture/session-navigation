@@ -22,6 +22,8 @@ export type History = {
   injected: [number, number][];
   /** Message index where the latest compaction chunk starts (0 = full history). */
   chunkStart: number;
+  /** Scope of the session actually loaded after following the rotation chain. */
+  effectiveScope?: string;
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
   recordsCapped?: boolean;
   readError?: string;
@@ -51,6 +53,9 @@ export function cloneTimeline(timeline: Timeline): Timeline {
       boundaries: [...timeline.history.boundaries],
       injected: timeline.history.injected.map(([pos, len]) => [pos, len] as [number, number]),
       chunkStart: timeline.history.chunkStart,
+      ...(timeline.history.effectiveScope
+        ? { effectiveScope: timeline.history.effectiveScope }
+        : {}),
       ...(timeline.history.externalContext
         ? { externalContext: { ...timeline.history.externalContext } }
         : {}),

@@ -529,6 +529,11 @@ export function loadHermesTimeline(
         }
       }
 
+      const effectiveScope =
+        targetSessionId === sessionId
+          ? scope
+          : `hermes:${profile}:${targetSessionId}:unknown`;
+
       let apiMode = "chat_completions";
       let usedTokens: number | undefined;
       if (typeof sessionRow?.model_config === "string" && sessionRow.model_config) {
@@ -853,7 +858,7 @@ export function loadHermesTimeline(
         const resolvedItemId = storedItem
           ? storedItem.item_id
           : record
-            ? itemId(scope, callId, record.content_sha256, record.invocation_digest, record.result_position)
+            ? itemId(effectiveScope, callId, record.content_sha256, record.invocation_digest, record.result_position)
             : `display_hermes_${row.id}`;
 
         rows.push({
@@ -875,6 +880,7 @@ export function loadHermesTimeline(
         boundaries: [],
         injected: [],
         chunkStart: 0,
+        effectiveScope,
         ...(usedTokens
           ? {
               externalContext: {

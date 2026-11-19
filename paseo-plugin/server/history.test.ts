@@ -341,6 +341,40 @@ test("PaseoService.list excludes pre-compaction Hermes targets/items and scopes 
     saved_bytes: 0,
   });
   expect((await service.handle("list", { scope_key: hScope, query: "pre-compaction" })).items).toEqual([]);
+
+  // Items stored under the child rotation session must still apply when the
+  // list request uses the parent session's scope.
+  const childScope = "hermes:default:h-new:unknown";
+  store.register(childScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "test",
+  });
+  const curInv = { tool_name: "read_file", arguments: { path: "cur.txt" } };
+  store.publishTargets(childScope, [
+    {
+      record: {
+        call_id: "call_cur",
+        content: curContent,
+        content_sha256: sha256(curContent),
+        invocation: curInv,
+        invocation_digest: invocationDigest(curInv),
+        result_position: 0,
+        status: "ok",
+      },
+    },
+  ]);
+  expect((await service.handle("hide", { scope_key: childScope, item_id: "call_cur" })).ok).toBe(
+    true,
+  );
+  const afterChildHide = await service.handle("list", { scope_key: hScope });
+  expect(
+    afterChildHide.items.find((row: any) => row.tool_call_id === "call_cur")?.status,
+  ).toBe("hidden");
+  expect(afterChildHide.totals.hidden_count).toBe(1);
+  expect(afterChildHide.totals.saved_bytes).toBeGreaterThan(0);
 });
 
 test("PaseoService.list excludes pre-compaction store items/targets from rows, totals, search, and before_index pagination", async () => {

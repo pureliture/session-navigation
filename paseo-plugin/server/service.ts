@@ -653,9 +653,15 @@ export class PaseoService {
     query = "",
     paging?: { limit?: number; before_index?: number },
   ): Reply {
-    const items = this.store.items(scope);
-    const rawUnits = this.store.listUnits(scope);
-    const timeline = this.timeline(scope, items, rawUnits);
+    let items = this.store.items(scope);
+    let rawUnits = this.store.listUnits(scope);
+    let timeline = this.timeline(scope, items, rawUnits);
+    const effectiveScope = timeline.history.effectiveScope;
+    if (effectiveScope && effectiveScope !== scope) {
+      items = this.store.items(effectiveScope);
+      rawUnits = this.store.listUnits(effectiveScope);
+      timeline = this.timeline(scope, items, rawUnits);
+    }
     const stored = new Map(items.map((item) => [item.item_id, item]));
     const units = new Map(
       rawUnits.map((unit) => [String(unit.unit_id), unit]),
