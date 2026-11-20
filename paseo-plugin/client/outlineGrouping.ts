@@ -423,3 +423,14 @@ export function groupMutationItems(
   );
   return members.map((row) => ({ item_id: row.item_id ?? row.tool_call_id, expected_version: row.version }));
 }
+
+/**
+ * B8: footer count label for a scoped (search-filtered) outline. Unscoped
+ * outlines keep the legacy "N entries"/"N hidden" text; a narrowed scope
+ * shows "N of M …" so the totals context is not lost. Active counts at or
+ * above the total (merged fallback rows) fall back to the plain label.
+ */
+export function scopedCountLabel(activeCount: number, totalCount: number, noun: string): string {
+  if (activeCount >= totalCount) return `${activeCount} ${noun}`;
+  return `${activeCount} of ${totalCount} ${noun}`;
+}

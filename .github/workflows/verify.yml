@@ -78,6 +78,14 @@ jobs:
       - name: paseo tests (bun + node)
         run: npm test
         working-directory: paseo-plugin
+      # B12: the bun-parity pytest needs bun on PATH, so it runs in the js
+      # job (the python job has no bun). The grep enforces execution: a
+      # bun-missing skip fails the step instead of going green silently.
+      - name: bun-parity pytest (must execute, not skip)
+        run: |
+          pip install pytest
+          python -m pytest "tests/test_b2_b12_hermes.py::test_codex_strict_schema_parity_with_ts_hermes_history" -v 2>&1 | tee /tmp/bun-parity.log
+          grep -q "1 passed" /tmp/bun-parity.log
       - name: typecheck (core, omp, paseo)
         run: |
           (cd packages/core && npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.9.3 && ./node_modules/.bin/tsc --noEmit)

@@ -21,7 +21,7 @@ import {
 } from "../shared/sessionNav";
 import { cancelChatNavigation, parseRgb, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { PreviewDrawer } from "./PreviewDrawer";
-import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
+import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { childrenForCall, hasMissingLinkedChildren, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
@@ -33,6 +33,7 @@ import {
   fmtTokens,
   groupMutationItems,
   outlineRowKey,
+  scopedCountLabel,
   type OutlineRow,
 } from "./outlineGrouping";
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
@@ -765,6 +766,9 @@ export function SessionNavPanel({
         capabilities: result.capabilities,
         server_timeline: Boolean(result.server_timeline),
         records_capped: Boolean((result as Record<string, unknown>).records_capped),
+        // B10: paused-adapter banner state (P1-7 parity).
+        paused: result.paused === true,
+        paused_warning: typeof result.paused_warning === "string" ? result.paused_warning : undefined,
         has_older: Boolean(result.has_older),
         next_before_index: typeof result.next_before_index === "number" ? result.next_before_index : null,
         totals: result.totals,
@@ -924,6 +928,15 @@ export function SessionNavPanel({
   const serverTotals = !query ? listQuery.data?.totals : undefined;
   const hiddenCount = serverTotals ? serverTotals.hidden_count : localHiddenCount;
   const savedBytes = serverTotals ? serverTotals.saved_bytes : localSavedBytes;
+  // B8: unscoped totals for the footer count label. The loaded list totals
+  // are authoritative when present; otherwise the unfiltered rows are.
+  const unscopedTotals = listQuery.data?.totals;
+  const totalEntries = unscopedTotals?.total_rows ?? rawRows.length;
+  const totalHidden = useMemo(
+    () => unscopedTotals?.hidden_count ?? rawRows.filter((r) => r.status === "hidden").length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unscopedTotals, rawRows],
+  );
   const entryCount =
     serverTotals && !needsHermesFallbackMerge && !needsLinkedTimeline
       ? serverTotals.total_rows
@@ -1786,9 +1799,13 @@ export function SessionNavPanel({
   const capNotice = listQuery.data?.records_capped === true && !notice && !capabilityMessage && !displayOnly
     ? "Large session: oldest tool controls omitted"
     : null;
-  const noticeBar = notice || capabilityMessage || capNotice || displayOnly ? (
+  // B10: paused-adapter warning (P1-7 parity) renders as its own banner line
+  // above the generic capability notice; existing notices are unchanged.
+  const pausedNotice = selectPausedNotice(listQuery.data);
+  const noticeBar = notice || capabilityMessage || capNotice || pausedNotice || displayOnly ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
       {displayOnly ? <Text style={styles.noticeText}>subagent context is not managed</Text> : null}
+      {pausedNotice ? <Text style={styles.noticeText}>{pausedNotice}</Text> : null}
       {notice || capabilityMessage || capNotice ?
         <Text style={styles.noticeText}>{notice ?? capabilityMessage ?? capNotice}</Text> : null}
     </View>
@@ -2053,7 +2070,7 @@ export function SessionNavPanel({
               : "context — tokens"}
           </Text>
           <Text style={[styles.usageLabel, { textAlign: "right" }]} numberOfLines={1}>
-            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : `${entryCount} entries`}
+            {hiddenCount > 0 ? `${scopedCountLabel(hiddenCount, totalHidden, "hidden")} · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : scopedCountLabel(entryCount, totalEntries, "entries")}
           </Text>
         </View>
       </View>

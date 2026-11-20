@@ -934,3 +934,14 @@ test("Hermes WAL growth invalidates the cache and middle-byte rewrites change th
   const tokenAfter = fileChangeToken(walPath, false);
   expect(tokenAfter).not.toBe(tokenBefore);
 });
+
+test("OMP custom reminder lines account injected length without crashing", () => {
+  const home = homeWith([
+    entry("a", "user", "first", 1),
+    JSON.stringify({ type: "custom", id: "rem-1", data: { reminder: "0123456789abc" } }),
+    entry("b", "assistant", "second", 2),
+  ]);
+  const timeline = loadTimeline(home, scope);
+  expect(timeline.history.injected).toEqual([[1, 13]]);
+  expect(timeline.history.messages).toHaveLength(2);
+});

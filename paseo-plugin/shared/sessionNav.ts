@@ -112,6 +112,9 @@ export const ListResultSchema = z.object({
     })
     .optional(),
   server_timeline: z.boolean().optional(),
+  // B10: paused adapter state (P1-7 parity). Additive: ready scopes omit both.
+  paused: z.boolean().optional(),
+  paused_warning: z.string().optional(),
   records_capped: z.boolean().optional(),
   timeline_read_error: z.string().optional(),
   has_older: z.boolean().optional(),

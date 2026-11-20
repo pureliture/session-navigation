@@ -13,6 +13,7 @@ import {
   isSummarizedRow,
   outlineRowKey,
   rowMetric,
+  scopedCountLabel,
   truncateString,
   type OutlineRow,
 } from "./outlineGrouping";
@@ -28,6 +29,21 @@ describe("outlineGrouping", () => {
     test("formats KiB", () => {
       expect(fmtBytes(2048)).toBe("2.0 KiB");
       expect(fmtBytes(1536)).toBe("1.5 KiB");
+    });
+  });
+
+  describe("scopedCountLabel", () => {
+    test("unscoped counts keep the legacy plain label", () => {
+      expect(scopedCountLabel(200, 200, "entries")).toBe("200 entries");
+      expect(scopedCountLabel(3, 3, "hidden")).toBe("3 hidden");
+      expect(scopedCountLabel(0, 0, "entries")).toBe("0 entries");
+    });
+    test("narrowed scopes show active-of-total", () => {
+      expect(scopedCountLabel(3, 200, "entries")).toBe("3 of 200 entries");
+      expect(scopedCountLabel(1, 7, "hidden")).toBe("1 of 7 hidden");
+    });
+    test("merged rows above the total fall back to plain", () => {
+      expect(scopedCountLabel(210, 200, "entries")).toBe("210 entries");
     });
   });
 

@@ -864,6 +864,15 @@ export class PaseoService {
     } else {
       pageItems = indexedRows;
     }
+    const capabilities = this.capabilities(effectiveScope);
+    // B10: propagate the paused state (P1-7 parity) so the panel can render
+    // the protection-only warning. Additive: ready scopes omit both fields.
+    const pausedAdapter = effectiveScope.startsWith("hermes:")
+      ? "hermes"
+      : effectiveScope.startsWith("omp:")
+        ? "omp"
+        : null;
+    const paused = capabilities.state === "adapter_disabled" && pausedAdapter !== null;
     return {
       ok: true,
       // P0-1: echo the requested (parent) scope_key for API compatibility;
@@ -871,7 +880,16 @@ export class PaseoService {
       // rotation-effective scope.
       scope_key: requestedScope ?? scope,
       items: pageItems,
-      capabilities: this.capabilities(effectiveScope),
+      capabilities,
+      ...(paused
+        ? {
+            paused: true,
+            paused_warning:
+              pausedAdapter === "hermes"
+                ? "adapter paused: hides/summaries are disabled, but stored hidden items are still redacted from outgoing requests (protection-only); capabilities refresh on resume."
+                : "adapter paused: hides/summaries are disabled; existing hidden items stay protected (protection-only).",
+          }
+        : {}),
       server_timeline: timeline.rows.length > 0,
       has_older: hasOlder,
       next_before_index: nextBeforeIndex,

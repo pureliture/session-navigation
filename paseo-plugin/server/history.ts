@@ -145,7 +145,7 @@ function parseHistoryFile(filename: string): History {
     } else if (data.type === "custom" && typeof data.data?.reminder === "string")
       history.injected.push([
         history.messages.length,
-        length(data.reminder),
+        length(data.data.reminder),
       ]);
     else if (typeof data.role === "string") {
       if (typeof data.id === "string" && data.id)

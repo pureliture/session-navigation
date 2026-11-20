@@ -602,6 +602,31 @@ test("scope counts are real and include zero-item registrations; absent/disabled
   ).toBe(true);
 });
 
+test("list propagates paused state and warning for disabled adapters (P1-7 parity)", async () => {
+  const { service, register } = fixture([], false);
+  const hermesScope = "hermes:default:paused-sid:unknown";
+  register(hermesScope, { hide: true, summarize: true, unhide: true }, 1, false);
+  const paused = await service.handle("list", { scope_key: hermesScope });
+  expect(paused.ok).toBe(true);
+  expect(paused.capabilities.state).toBe("adapter_disabled");
+  expect(paused.paused).toBe(true);
+  expect(paused.paused_warning).toContain("protection-only");
+  expect(paused.paused_warning).toContain("capabilities refresh on resume");
+
+  const ompScope = "omp:default:paused-sid:default";
+  register(ompScope, { hide: true, summarize: true, unhide: true }, 1, false);
+  const ompPaused = await service.handle("list", { scope_key: ompScope });
+  expect(ompPaused.paused).toBe(true);
+  expect(ompPaused.paused_warning).toContain("protection-only");
+
+  register(scope);
+  const ready = await service.handle("list", { scope_key: scope });
+  expect(ready.ok).toBe(true);
+  expect(ready.paused).toBeUndefined();
+  expect(ready.paused_warning).toBeUndefined();
+  expect(ListResultSchema.parse(ready).scope_key).toBe(scope);
+});
+
 test("Paseo upgrades a Hide through the owning session and never requeues an accepted summary", async () => {
   const {store,call,register}=fixture();
   const key="hermes:default:upgrade:unknown";
