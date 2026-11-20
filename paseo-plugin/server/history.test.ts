@@ -1,6 +1,6 @@
 import { summaryDedupeKey } from "../shared/sessionNav.ts";
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,7 +12,7 @@ import {
   type Item,
 } from "../../packages/core/src/index.ts";
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
-import { hasHermesSession } from "./hermesHistory.ts";
+import { fileChangeToken, hasHermesSession } from "./hermesHistory.ts";
 import { loadTimeline } from "./history.ts";
 import { HistoryTooLargeError, MAX_HISTORY_ROWS } from "./historyLimits.ts";
 import { PaseoService } from "./service.ts";
@@ -645,4 +645,292 @@ test("empty valid Hermes chunk is authoritative and never resurrects stale targe
     hidden_count: 0,
     saved_bytes: 0,
   });
+});
+
+test("Hermes fork children without compaction summaries never hijack the parent outline", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  const insSess = db.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  );
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  );
+  // Rotation child carries a summary; a newer ACP fork/subagent child does not.
+  insSess.run("fork-parent", "{}", null, 100);
+  insSess.run("rotation-old", "{}", "fork-parent", 150);
+  insSess.run("fork-new", "{}", "fork-parent", 200);
+  insMsg.run("fork-parent", "user", "parent prompt", 0);
+  insMsg.run("rotation-old", "user", "[CONTEXT COMPACTION] rotation summary", 1);
+  insMsg.run("rotation-old", "assistant", "rotation reply", 0);
+  insMsg.run("fork-new", "user", "fork subagent prompt", 0);
+  insMsg.run("fork-new", "assistant", "fork subagent reply", 0);
+
+  const tl = loadTimeline(home, "hermes:default:fork-parent:unknown");
+  expect(tl.rows.map((r) => r.summary_line)).toEqual([
+    "[CONTEXT COMPACTION] rotation summary",
+    "rotation reply",
+  ]);
+  expect(tl.history.effectiveScope).toBe("hermes:default:rotation-old:unknown");
+});
+
+test("Hermes fork with no summary child and empty child shell both stay on the parent", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  const insSess = db.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  );
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  );
+  // Two live fork children, neither a rotation: the parent keeps its outline.
+  insSess.run("ambiguous", "{}", null, 100);
+  insSess.run("fork-a", "{}", "ambiguous", 150);
+  insSess.run("fork-b", "{}", "ambiguous", 200);
+  insMsg.run("ambiguous", "user", "parent prompt", 0);
+  insMsg.run("fork-a", "user", "fork a prompt", 0);
+  insMsg.run("fork-b", "user", "fork b prompt", 0);
+  const ambiguous = loadTimeline(home, "hermes:default:ambiguous:unknown");
+  expect(ambiguous.rows.map((r) => r.summary_line)).toEqual(["parent prompt"]);
+  expect(ambiguous.history.effectiveScope ?? "hermes:default:ambiguous:unknown").toBe(
+    "hermes:default:ambiguous:unknown",
+  );
+
+  // A single empty child shell never hijacks a parent that owns content.
+  insSess.run("shell-parent", "{}", null, 100);
+  insSess.run("empty-shell", "{}", "shell-parent", 200);
+  insMsg.run("shell-parent", "user", "shell parent prompt", 0);
+  const shelled = loadTimeline(home, "hermes:default:shell-parent:unknown");
+  expect(shelled.rows.map((r) => r.summary_line)).toEqual(["shell parent prompt"]);
+});
+
+test("Hermes rotation child with null/empty model_config does not inherit the parent usage anchor", () => {
+  for (const childConfig of [null, ""]) {
+    const home = tempHome();
+    const db = hermesDb(home);
+    const insSess = db.prepare(
+      "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+    );
+    insSess.run(
+      "anchor-parent",
+      JSON.stringify({ _usage_anchor: { prompt_tokens: 9000, completion_tokens: 100 } }),
+      null,
+      100,
+    );
+    if (childConfig === null) {
+      db.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, NULL, ?, ?)").run(
+        "anchor-child",
+        "anchor-parent",
+        200,
+      );
+    } else {
+      insSess.run("anchor-child", "", "anchor-parent", 200);
+    }
+    db.prepare(
+      "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+    ).run("anchor-child", "user", "post-rotation prompt", 0);
+    const tl = loadTimeline(home, "hermes:default:anchor-parent:unknown");
+    expect(tl.history.effectiveScope).toBe("hermes:default:anchor-child:unknown");
+    expect(tl.history.externalContext).toBeUndefined();
+  }
+  // A child with its own anchor still reports its own gauge.
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  ).run(
+    "anchor-parent",
+    JSON.stringify({ _usage_anchor: { prompt_tokens: 9000, completion_tokens: 100 } }),
+    null,
+    100,
+  );
+  db.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  ).run(
+    "anchor-child",
+    JSON.stringify({ _usage_anchor: { prompt_tokens: 120, completion_tokens: 30 } }),
+    "anchor-parent",
+    200,
+  );
+  db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  ).run("anchor-child", "user", "post-rotation prompt", 0);
+  const tl = loadTimeline(home, "hermes:default:anchor-parent:unknown");
+  expect(tl.history.externalContext?.used_tokens).toBe(150);
+});
+
+test("OMP later compaction with missing firstKeptEntryId keeps the last valid boundary", () => {
+  const home = homeWith([
+    entry("pre", "user", "pre-compaction question", 1),
+    entry("a", "user", "kept question", 2),
+    entry("b", "assistant", "kept answer", 3),
+    JSON.stringify({ type: "compaction", id: "cmp1", firstKeptEntryId: "a" }),
+    entry("c", "user", "third question", 4),
+    JSON.stringify({ type: "compaction", id: "cmp2", firstKeptEntryId: "missing" }),
+    JSON.stringify({ type: "compaction", id: "cmp3" }),
+    entry("d", "assistant", "fourth answer", 5),
+  ]);
+  const timeline = loadTimeline(home, scope);
+  const texts = timeline.rows.map((row: any) => row.message_text);
+  expect(texts.some((text: string) => text.includes("pre-compaction question"))).toBe(false);
+  expect(texts.some((text: string) => text.includes("kept question"))).toBe(true);
+  expect(texts.some((text: string) => text.includes("fourth answer"))).toBe(true);
+});
+
+test("OMP empty latest chunk stays authoritative without resurrecting rows", async () => {
+  const home = homeWith([
+    entry("a", "user", "old question", 1),
+    entry("b", "assistant", "old answer", 2),
+    // Self-referencing boundary at the end: nothing is kept.
+    JSON.stringify({ type: "compaction", id: "cmp", firstKeptEntryId: "cmp" }),
+  ]);
+  const direct = loadTimeline(home, scope);
+  expect(direct.rows).toEqual([]);
+  expect(direct.history.chunkAuthoritative).toBe(true);
+
+  const store = new Store(new BunDriver(join(home, "state.sqlite3")));
+  cleanup.push(() => store.close());
+  store.register(scope, {
+    adapter_id: "omp",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "test",
+  });
+  const service = new PaseoService(store, home);
+  const listed = await service.handle("list", { scope_key: scope });
+  expect(listed.ok).toBe(true);
+  expect(listed.items).toEqual([]);
+  expect(listed.server_timeline).toBe(false);
+});
+
+test("Hermes rotation list hits the cache on repeat and propagates history_too_large", async () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  ).run("cache-parent", "{}", null, 100);
+  db.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  ).run("cache-child", "{}", "cache-parent", 200);
+  db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+    "cache-child",
+    "user",
+    "cached prompt",
+  );
+  const hScope = "hermes:default:cache-parent:unknown";
+  const store = new Store(new BunDriver(join(home, "state.sqlite3")));
+  cleanup.push(() => store.close());
+  store.register(hScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "test",
+  });
+  const service = new PaseoService(store, home);
+  const first = await service.handle("list", { scope_key: hScope });
+  const second = await service.handle("list", { scope_key: hScope });
+  expect(first.ok).toBe(true);
+  expect(second).toEqual(first);
+
+  // Oversized rotated chunk surfaces a bounded error instead of throwing.
+  const big = tempHome();
+  const bigDb = hermesDb(big);
+  bigDb.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  ).run("big-parent", "{}", null, 100);
+  bigDb.prepare(
+    "INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)",
+  ).run("big-child", "{}", "big-parent", 200);
+  const insBig = bigDb.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)");
+  bigDb.exec("BEGIN");
+  for (let i = 0; i <= MAX_HISTORY_ROWS; i++) insBig.run("big-child", "user", `filler prompt ${i}`);
+  bigDb.exec("COMMIT");
+  const bigStore = new Store(new BunDriver(join(big, "state.sqlite3")));
+  cleanup.push(() => bigStore.close());
+  const bigScope = "hermes:default:big-parent:unknown";
+  bigStore.register(bigScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "test",
+  });
+  const bigService = new PaseoService(bigStore, big);
+  const oversized = await bigService.handle("list", { scope_key: bigScope });
+  expect(oversized.ok).toBe(false);
+  expect(oversized.error).toBe("history_too_large");
+});
+
+test("Hermes WAL growth invalidates the cache and middle-byte rewrites change the token", () => {
+  const home = tempHome("paseo-hermes-wal-");
+  const dir = join(home, ".hermes");
+  mkdirSync(dir, { recursive: true });
+  const writer = new DatabaseSync(join(dir, "state.db"));
+  cleanup.push(() => {
+    try {
+      writer.close();
+    } catch {
+      // Already closed.
+    }
+  });
+  writer.exec("PRAGMA journal_mode=WAL");
+  writer.exec(`
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT, parent_session_id TEXT, started_at REAL);
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_call_id TEXT,
+      tool_calls TEXT,
+      tool_name TEXT,
+      codex_message_items TEXT,
+      api_content TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      compacted INTEGER NOT NULL DEFAULT 0,
+      _compressed_summary INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  writer.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("wal-sess", "{}");
+  writer.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+    "wal-sess",
+    "user",
+    `wal-only prompt ${"x".repeat(4000)}`,
+  );
+  const hScope = "hermes:default:wal-sess:unknown";
+  const before = loadTimeline(home, hScope);
+  expect(before?.rows).toHaveLength(1);
+
+  // WAL growth from a second write invalidates the cache end to end.
+  writer.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)").run(
+    "wal-sess",
+    "assistant",
+    "second wal reply",
+  );
+  const grown = loadTimeline(home, hScope);
+  expect(grown?.rows).toHaveLength(2);
+
+  // A same-size middle-byte rewrite (what a non-truncating RESTART
+  // checkpoint can leave behind) changes the token even when size and
+  // mtime are pinned back: only WAL content sensitivity distinguishes
+  // the states, so the stale snapshot is never reused.
+  const walPath = join(dir, "state.db-wal");
+  const wal = readFileSync(walPath);
+  expect(wal.length).toBeGreaterThan(512);
+  const tokenBefore = fileChangeToken(walPath, false);
+  expect(tokenBefore).toMatch(/:walhash:[0-9a-f]{64}/);
+  const overlay = Buffer.from(wal);
+  overlay.fill(0x61, 200, 400);
+  // Keep first-32B header and last-24B tail identical: a header+tail
+  // sample cannot see this rewrite.
+  overlay.subarray(0, 32).set(wal.subarray(0, 32));
+  overlay.subarray(overlay.length - 24).set(wal.subarray(wal.length - 24));
+  writeFileSync(walPath, overlay);
+  const pinned = new Date(946684800000);
+  utimesSync(walPath, pinned, pinned);
+  expect(statSync(walPath).size).toBe(wal.length);
+  const tokenAfter = fileChangeToken(walPath, false);
+  expect(tokenAfter).not.toBe(tokenBefore);
 });

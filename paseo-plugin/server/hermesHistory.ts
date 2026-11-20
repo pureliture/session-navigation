@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -105,7 +106,49 @@ const MAX_HERMES_TIMELINE_CACHE = 32;
 
 const hermesTimelineCache = new Map<string, { snapshot: string; timeline: Timeline }>();
 
-function fileChangeToken(filePath: string, isDb: boolean): string {
+function walContentToken(fd: number, size: number): string {
+  // B6: a non-truncating RESTART checkpoint can overwrite middle WAL frames
+  // while leaving size/mtime (and even coarse header+tail bytes) unchanged,
+  // so a header+tail sample alone can miss the rewrite and serve a stale
+  // cached timeline. Session WALs are small, so hash the whole sidecar
+  // (up to 8 MiB); larger WALs fall back to the structural frame token
+  // (header checkpoint/salt words, derived frame count, last frame header).
+  try {
+    if (size < 32) return "";
+    if (size <= 8 * 1024 * 1024) {
+      const buf = Buffer.alloc(size);
+      let read = 0;
+      while (read < size) {
+        const n = readSync(fd, buf, read, size - read, read);
+        if (n <= 0) break;
+        read += n;
+      }
+      if (read !== size) return "";
+      return `:walhash:${createHash("sha256").update(buf).digest("hex")}`;
+    }
+    const hdr = Buffer.alloc(32);
+    readSync(fd, hdr, 0, 32, 0);
+    if (hdr.readUInt32BE(0) !== 0x377f0682 && hdr.readUInt32BE(0) !== 0x377f0683) return "";
+    const pageSize = hdr.readUInt32BE(8) || 4096;
+    const checkpointSeq = hdr.readUInt32BE(12);
+    const salt = hdr.subarray(16, 32).toString("hex");
+    const frameSize = 24 + pageSize;
+    const frames = Math.max(0, Math.floor((size - 32) / frameSize));
+    let lastFrame = "";
+    if (frames > 0) {
+      const last = Buffer.alloc(24);
+      readSync(fd, last, 0, 24, 32 + (frames - 1) * frameSize);
+      lastFrame = last.toString("hex");
+    }
+    return `:wal${checkpointSeq}:${salt}:${frames}:${lastFrame}`;
+  } catch {
+    return ":wal-unreadable";
+  }
+}
+
+// Exported for regression tests: the timeline cache snapshot derives from
+// this token, so WAL content sensitivity is verified directly against it.
+export function fileChangeToken(filePath: string, isDb: boolean): string {
   let st;
   try {
     st = statSync(filePath);
@@ -121,6 +164,14 @@ function fileChangeToken(filePath: string, isDb: boolean): string {
       const n = readSync(fd, hdr, 0, 100, 0);
       if (n >= 96) {
         extra = `:${hdr.readUInt32BE(24)}:${hdr.readUInt32BE(92)}`;
+      }
+    } else if (filePath.endsWith("-wal")) {
+      extra = walContentToken(fd, st.size);
+      if (!extra) {
+        const hdrLen = Math.min(32, st.size);
+        const hdr = Buffer.alloc(hdrLen);
+        readSync(fd, hdr, 0, hdrLen, 0);
+        extra = `:${hdr.toString("hex")}`;
       }
     } else if (st.size > 0) {
       const hdrLen = Math.min(32, st.size);
@@ -540,20 +591,78 @@ export function loadHermesTimeline(
 
       let targetSessionId = sessionId;
       if (hasParentSessionId) {
+        // A1: not every parent_session_id child is a compaction rotation —
+        // ACP forks, subagent runs and empty child shells also link back to
+        // the parent. Following any newest child lets a non-rotation child
+        // hijack the parent outline. Disambiguate per hop:
+        // - a single child keeps legacy blind-follow behavior (rotation
+        //   chains whose intermediate sessions carry no active rows);
+        // - with several children (a fork), only a live child carrying a
+        //   compaction summary (_compressed_summary=1) counts as the
+        //   rotation successor; otherwise the walk stops;
+        // - after the walk, an empty final target falls back to the deepest
+        //   walked session with active messages, so an empty child shell
+        //   never hijacks a parent that still owns the latest content.
+        const database: DatabaseSync = db;
         const visited = new Set<string>([targetSessionId]);
-        const childStmt = db.prepare(
+        const path = [targetSessionId];
+        const childStmt = database.prepare(
           hasStartedAt
             ? "SELECT id FROM sessions WHERE parent_session_id = ? ORDER BY started_at DESC, rowid DESC"
             : "SELECT id FROM sessions WHERE parent_session_id = ? ORDER BY rowid DESC",
         );
+        const hasLiveMessages = (id: string): boolean => {
+          try {
+            return Boolean(
+              database.prepare("SELECT 1 FROM messages WHERE session_id = ? AND active = 1 LIMIT 1").get(id),
+            );
+          } catch {
+            return false;
+          }
+        };
+        const hasRotationSummary = (id: string): boolean => {
+          if (!hasCompressedSummary) return false;
+          try {
+            return Boolean(
+              database
+                .prepare(
+                  "SELECT 1 FROM messages WHERE session_id = ? AND active = 1 AND _compressed_summary = 1 LIMIT 1",
+                )
+                .get(id),
+            );
+          } catch {
+            return false;
+          }
+        };
         for (let hop = 0; hop < 32; hop++) {
-          const children = childStmt.all(targetSessionId) as Array<{ id?: unknown }>;
-          const next = children.find(
+          let children: Array<{ id?: unknown }>;
+          try {
+            children = childStmt.all(targetSessionId) as Array<{ id?: unknown }>;
+          } catch {
+            break;
+          }
+          const fresh = children.filter(
             (row) => typeof row.id === "string" && row.id.length > 0 && !visited.has(row.id),
-          );
-          if (!next || typeof next.id !== "string") break;
-          visited.add(next.id);
-          targetSessionId = next.id;
+          ) as Array<{ id: string }>;
+          if (fresh.length === 0) break;
+          let next: string | undefined;
+          if (fresh.length === 1) {
+            next = fresh[0].id;
+          } else {
+            next = fresh.find((row) => hasLiveMessages(row.id) && hasRotationSummary(row.id))?.id;
+          }
+          if (!next) break;
+          visited.add(next);
+          path.push(next);
+          targetSessionId = next;
+        }
+        if (!hasLiveMessages(targetSessionId)) {
+          for (let i = path.length - 1; i >= 0; i--) {
+            if (hasLiveMessages(path[i])) {
+              targetSessionId = path[i];
+              break;
+            }
+          }
         }
       }
       if (targetSessionId !== sessionId) {
@@ -561,7 +670,11 @@ export function loadHermesTimeline(
           const targetRow = db
             .prepare("SELECT id, model_config FROM sessions WHERE id = ?")
             .get(targetSessionId) as { id?: string; model_config?: string | null } | undefined;
-          if (targetRow?.model_config) {
+          // A2: always prefer the rotation child's own row. Inheriting the
+          // parent row when the child model_config is null/empty surfaces
+          // the parent's pre-compaction _usage_anchor (stale used_tokens
+          // gauge). A child without config simply reports no anchor.
+          if (targetRow && typeof targetRow.id === "string") {
             sessionRow = targetRow;
           }
         } catch {

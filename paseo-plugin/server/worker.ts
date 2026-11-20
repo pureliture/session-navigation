@@ -28,7 +28,7 @@ parentPort!.on("message", (request) => {
         reply: {
           ok: false,
           error: code,
-          ...(["db_error", "db_full", "unsafe_journal_mode"].includes(code)
+          ...(["db_error", "db_full", "unsafe_journal_mode", "engine_protocol_incompatible"].includes(code)
             ? { choices: ["abort_request", "send_original"] }
             : {}),
         },

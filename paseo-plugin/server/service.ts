@@ -519,7 +519,10 @@ export class PaseoService {
     return {
       ok: false,
       error: code,
-      ...(["db_error", "db_full", "unsafe_journal_mode"].includes(code)
+      // B5: every abortable failure code offers the abort backlog choice.
+      // engine_protocol_incompatible is terminal for the session (the
+      // middleware cannot proceed), so it aborts rather than retries.
+      ...(["db_error", "db_full", "unsafe_journal_mode", "engine_protocol_incompatible"].includes(code)
         ? { choices: ["abort_request", "send_original"] }
         : {}),
     };
@@ -1188,7 +1191,7 @@ export class PaseoService {
         version: result.version ?? result.item?.version ?? null,
         ...(result.error ? { error: result.error } : {}),
       });
-      if (["db_error", "db_full"].includes(result.error ?? ""))
+      if (["db_error", "db_full", "unsafe_journal_mode", "engine_protocol_incompatible"].includes(result.error ?? ""))
         return {
           ...result,
           items: results,
@@ -1225,19 +1228,45 @@ export class PaseoService {
         failed: input.tool_call_ids.length,
         items: [],
       };
-    const timeline = this.timeline(scope);
+    // C1: the timeline used to load upfront, so an oversized history threw
+    // history_too_large even for ids that resolve from stored items alone.
+    // Resolve those first and load the timeline lazily, only when an id has
+    // no stored item; ids that still need the timeline under an oversized
+    // history get a bounded per-item error instead of an unhandled throw.
+    let timeline: Timeline | undefined;
+    let timelineOversized = false;
+    const timelineRows = (): Timeline["rows"] => {
+      if (timeline) return timeline.rows;
+      if (timelineOversized) return [];
+      try {
+        timeline = this.timeline(scope);
+      } catch (error) {
+        if (!(error instanceof HistoryTooLargeError)) throw error;
+        timelineOversized = true;
+        return [];
+      }
+      return timeline.rows;
+    };
     const results: Reply[] = [];
     for (const id of new Set<string>(input.tool_call_ids)) {
       const existing = this.store
         .items(scope)
         .find((item) => item.tool_call_id === id);
-      const target =
-        existing?.item_id ??
-        timeline.rows.find((row) => row.tool_call_id === id && row.manageable)
-          ?.item_id;
+      let itemId = existing?.item_id;
+      if (!itemId) {
+        itemId = timelineRows().find((row) => row.tool_call_id === id && row.manageable)?.item_id;
+      }
+      if (!itemId) {
+        results.push({
+          tool_call_id: id,
+          ok: false,
+          ...(timelineOversized ? { error: "history_too_large" } : { error: "not_found" }),
+        });
+        continue;
+      }
       const result = await this.mutate(
         scope,
-        target ?? "",
+        itemId,
         "hide",
         mode,
         existing?.version,

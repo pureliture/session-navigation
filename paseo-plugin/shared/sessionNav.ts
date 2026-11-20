@@ -99,6 +99,9 @@ export const ListTotalsSchema = z.object({
 
 export const ListResultSchema = z.object({
   ok: z.boolean(),
+  // B5: the service echoes the requested (parent) scope_key for API
+  // compatibility; the schema must not strip it.
+  scope_key: z.string().optional(),
   items: z.array(RowSchema),
   capabilities: CapabilitiesSchema.optional(),
   context: z
@@ -262,7 +265,10 @@ export const forkScopeRpc = defineRpc({
 export const dbChoiceRpc = defineRpc({
   name: "session-nav.db.choice",
   input: z.object({
-    scope_key: z.string().optional(),
+    // B5: the server requires a 4-segment scope_key (invalid_scope
+    // otherwise), so the schema requires it too instead of silently
+    // accepting calls that can never succeed.
+    scope_key: z.string(),
     choice: z.enum(["abort_request", "send_original"]),
   }),
   output: DbChoiceResultSchema,

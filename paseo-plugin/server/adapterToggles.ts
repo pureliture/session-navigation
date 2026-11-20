@@ -25,7 +25,6 @@ import {
   isScalar,
   parseAllDocuments,
   Scalar,
-  visit,
   YAMLMap,
   type Node,
   type Pair,
@@ -206,31 +205,13 @@ function parseValidatedHermesDocument(yamlText: string): {
     throw new Error("hermes_invalid_config_yaml");
   }
 
-  visit(doc, (_key, node) => {
-    if (isMap(node)) {
-      const seenKeys = new Set<string>();
-      for (const pair of node.items) {
-        if (
-          !isPair(pair) ||
-          !isScalar(pair.key) ||
-          typeof pair.key.value !== "string" ||
-          pair.key.value === "<<"
-        ) {
-          throw new Error("hermes_invalid_config_yaml");
-        }
-        if (seenKeys.has(pair.key.value)) {
-          throw new Error("hermes_invalid_config_yaml");
-        }
-        seenKeys.add(pair.key.value);
-      }
-    }
-  });
-
-  try {
-    doc.toJS({ mapAsMap: true, maxAliasCount: 100 });
-  } catch {
-    throw new Error("hermes_invalid_config_yaml");
-  }
+  // B4: key validation is scoped to the session-navigation target path
+  // (root/plugins/entries/<navKey>/settings). Unrelated sections may
+  // legitimately use non-string YAML keys (e.g. `ports: {8080: http}`) and
+  // must not be rejected as hermes_invalid_config_yaml; the blanket
+  // whole-document visit() that did this is intentionally gone.
+  const targetMaps: YAMLMap[] = [];
+  if (doc.contents && isMap(doc.contents)) targetMaps.push(doc.contents);
 
   let navKey: "session-navigation" | "session_navigation" = "session-navigation";
   if (doc.contents && isMap(doc.contents)) {
@@ -241,6 +222,7 @@ function parseValidatedHermesDocument(yamlText: string): {
       if (!isMap(pluginsPair.value)) {
         throw new Error("hermes_invalid_config_yaml");
       }
+      targetMaps.push(pluginsPair.value);
       const entriesPair = getMapPair(pluginsPair.value, "entries");
       if (entriesPair !== undefined) {
         assertSafeTargetNode(entriesPair.key);
@@ -248,6 +230,7 @@ function parseValidatedHermesDocument(yamlText: string): {
         if (!isMap(entriesPair.value)) {
           throw new Error("hermes_invalid_config_yaml");
         }
+        targetMaps.push(entriesPair.value);
         navKey = resolveNavEntryKey(entriesPair.value);
         const navPair = getMapPair(entriesPair.value, navKey);
         if (navPair !== undefined) {
@@ -256,6 +239,7 @@ function parseValidatedHermesDocument(yamlText: string): {
           if (!isMap(navPair.value)) {
             throw new Error("hermes_invalid_config_yaml");
           }
+          targetMaps.push(navPair.value);
           const settingsPair = getMapPair(navPair.value, "settings");
           if (settingsPair !== undefined) {
             assertSafeTargetNode(settingsPair.key);
@@ -263,6 +247,7 @@ function parseValidatedHermesDocument(yamlText: string): {
             if (!isMap(settingsPair.value)) {
               throw new Error("hermes_invalid_config_yaml");
             }
+            targetMaps.push(settingsPair.value);
             const enabledPair = getMapPair(settingsPair.value, "enabled");
             if (enabledPair !== undefined) {
               assertSafeTargetNode(enabledPair.key);
@@ -271,6 +256,23 @@ function parseValidatedHermesDocument(yamlText: string): {
           }
         }
       }
+    }
+  }
+  for (const map of targetMaps) {
+    const seenKeys = new Set<string>();
+    for (const pair of map.items) {
+      if (
+        !isPair(pair) ||
+        !isScalar(pair.key) ||
+        typeof pair.key.value !== "string" ||
+        pair.key.value === "<<"
+      ) {
+        throw new Error("hermes_invalid_config_yaml");
+      }
+      if (seenKeys.has(pair.key.value)) {
+        throw new Error("hermes_invalid_config_yaml");
+      }
+      seenKeys.add(pair.key.value);
     }
   }
 
@@ -758,8 +760,16 @@ interface ToggleJournal {
 }
 
 function assertNonSymlinkIfExists(filePath: string, realRoot: string): void {
-  if (!existsSync(filePath)) return;
-  const st = lstatSync(filePath);
+  // B4: existsSync follows symlinks, so it returns false for a DANGLING
+  // symlink and the lstatSync below would never run — the docs promise
+  // symlink rejection. lstatSync first: it succeeds on dangling links.
+  let st;
+  try {
+    st = lstatSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return;
+    throw err;
+  }
   if (st.isSymbolicLink() || !st.isFile()) {
     throw new Error("unsafe_hermes_path");
   }

@@ -48,16 +48,23 @@ function resolveHermesProfile(
   return "default";
 }
 
+function isAcpValue(value: unknown): boolean {
+  return typeof value === "string" && value.toLowerCase() === "acp";
+}
+
 export function bindAgents<T extends ScopeEntry>(
   home: string,
   scopes: T[],
   paseoHome = home === homedir()
-    ? process.env.PASEO_HOME ?? join(home, ".paseo")
+    ? (process.env.PASEO_HOME || join(home, ".paseo"))
     : join(home, ".paseo"),
   capabilitiesFn?: (scopeKey: string) => T["capabilities"],
 ): T[] {
+  // B3: an empty PASEO_HOME must fall back to the default dir, never to the
+  // process CWD (join("", "agents") would scan wherever the host runs).
+  const agentsRoot = paseoHome || join(home, ".paseo");
   let providers: Record<string, any> = {};
-  const config = join(paseoHome, "config.json");
+  const config = join(paseoHome || join(home, ".paseo"), "config.json");
   if (existsSync(config)) {
     try {
       const parsed = JSON.parse(readFileSync(config, "utf8"));
@@ -68,7 +75,11 @@ export function bindAgents<T extends ScopeEntry>(
   }
   function scan(directory: string): void {
     if (!existsSync(directory)) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    // B3: sorted traversal for deterministic agent_id binding.
+    const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    for (const entry of entries) {
       const filename = join(directory, entry.name);
       if (entry.isDirectory()) {
         scan(filename);
@@ -82,6 +93,9 @@ export function bindAgents<T extends ScopeEntry>(
         continue;
       }
       if (!agent || typeof agent.id !== "string") continue;
+      // B3: skip archived/retired agent descriptors so stale metadata never
+      // overwrites live agent_id bindings.
+      if (agent.archived === true || agent.status === "archived" || agent.retired === true) continue;
       const session =
         agent.runtimeInfo?.sessionId ?? agent.persistence?.sessionId;
       const provider =
@@ -96,11 +110,17 @@ export function bindAgents<T extends ScopeEntry>(
         ? agent.persistence?.metadata?.profile ?? "default"
         : resolveHermesProfile(agent, provider, configured);
       if (typeof session !== "string" || typeof profile !== "string" || !profile) continue;
+      // B3: scope segments become scope_key parts — a ":" in either would
+      // forge extra segments and hijack unrelated scopes (including a fake
+      // virtual scope_key via agent_id overwrite).
+      if (session.includes(":") || profile.includes(":") || /[\\\/]/.test(session)) continue;
+      // B3: only an explicit ACP transport/provider/extends marks an agent
+      // as ACP (case-insensitive). A "hermes-*" provider prefix alone is a
+      // Hermes provider name, not ACP, and must not reroute the session.
       const acp =
-        transport === "acp" ||
-        provider === "acp" ||
-        (typeof provider === "string" && provider.startsWith("hermes")) ||
-        configured?.extends === "acp";
+        isAcpValue(transport) ||
+        isAcpValue(provider) ||
+        isAcpValue(configured?.extends);
       if (!omp && !acp) continue;
       const canonical = `${omp ? "omp" : "hermes"}:${profile}:${session}:${omp ? "default" : "unknown"}`;
       const existingCanonical = scopes.find((scope) => scope.scope_key === canonical);
@@ -140,6 +160,6 @@ export function bindAgents<T extends ScopeEntry>(
       if (selected) selected.agent_id = agent.id;
     }
   }
-  scan(join(paseoHome, "agents"));
+  scan(join(agentsRoot, "agents"));
   return scopes;
 }
