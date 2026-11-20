@@ -2669,6 +2669,33 @@ test("history loader rejects files over the byte limit with history_too_large", 
   expect(reply.error).toBe("history_too_large");
 });
 
+test("msg: hide/unhide through the service gate survive oversized history via the stored unit", async () => {
+  const { home, store, call } = fixture();
+  const unitId = "msg:user:p0:deadbeefcafe";
+  // Seed the unit as a prior hide would have, then blow past the byte cap so
+  // every timeline load throws HistoryTooLargeError.
+  expect(
+    store.setMessageVisibility(scope, unitId, "user", sha256("hello"), 5, "hidden").ok,
+  ).toBe(true);
+  expect(
+    store.setMessageVisibility(scope, unitId, "user", sha256("hello"), 5, "visible").ok,
+  ).toBe(true);
+  truncateSync(join(home, ".omp/agent/sessions/project", "2026_sid.jsonl"), MAX_HISTORY_BYTES + 1);
+  const hidden = await call("hide", { item_id: unitId });
+  expect(hidden.ok).toBe(true);
+  expect(hidden.visibility).toBe("hidden");
+  const shown = await call("unhide", { item_id: unitId });
+  expect(shown.ok).toBe(true);
+  expect(shown.visibility).toBe("visible");
+  // Unknown msg: IDs still 404 instead of surfacing history_too_large.
+  expect((await call("hide", { item_id: "msg:user:p9:000000000000" })).error).toBe(
+    "not_found",
+  );
+  expect((await call("unhide", { item_id: "msg:user:p9:000000000000" })).error).toBe(
+    "not_found",
+  );
+});
+
 test("parent-scope Hermes mutations resolve the rotation-effective child scope", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const { home, store, service, register } = fixture([], false);

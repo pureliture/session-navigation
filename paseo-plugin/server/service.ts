@@ -915,16 +915,30 @@ export class PaseoService {
     if (id.startsWith("msg:")) {
       if (command === "hide" && mode === "summarize")
         return { ok: false, error: "summarize_unsupported" };
-      const row = this.timeline(scope).rows.find(
-        (row) => row.item_id === id && row.kind !== "tool",
-      );
+      // P1-11: resolve the stored unit first. A unit carries everything
+      // setMessageVisibility needs on the UPDATE path (kind/sha/count), so
+      // timeline rows are only loaded for hide, and an oversized timeline
+      // falls back to the unit instead of failing hide/unhide (and thus
+      // batch/manage via mutate). Normal-history contracts are unchanged.
       const unit = this.store
         .listUnits(scope)
         .find((unit) => unit.unit_id === id);
-      if (!row && (!unit || command !== "unhide"))
-        return { ok: false, error: "not_found" };
       if (command === "unhide" && !unit)
         return { ok: false, error: "not_found" };
+      let row: Timeline["rows"][number] | undefined;
+      let timelineOversized = false;
+      if (command === "hide") {
+        try {
+          row = this.timeline(scope).rows.find(
+            (row) => row.item_id === id && row.kind !== "tool",
+          );
+        } catch (error) {
+          if (!(error instanceof HistoryTooLargeError)) throw error;
+          timelineOversized = true;
+        }
+        if (!row && (!unit || !timelineOversized))
+          return { ok: false, error: "not_found" };
+      }
       const text = row?.message_text ?? "";
       return {
         item_id: id,
