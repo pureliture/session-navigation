@@ -75,7 +75,12 @@ test("canonical JSON preserves Unicode sorting, integer precision and float kind
   assert.equal(canonical(new PythonFloat(1e-7)), "1e-07");
   assert.equal(canonical(0.00001), "1e-05");
   assert.throws(() => canonical(9007199254740992), /unsafe_json_number/);
-  assert.throws(() => canonical("\ud800"), /invalid_unicode/);
+  assert.equal(canonical(String.fromCharCode(0xd800)), `"${String.fromCharCode(0xfffd)}"`);
+  assert.equal(canonical(String.fromCharCode(0xdc00)), `"${String.fromCharCode(0xfffd)}"`);
+  const lonePair = `a${String.fromCharCode(0xd800)}b${String.fromCharCode(0xdc00)}c`;
+  assert.equal(canonical(lonePair), `"a${String.fromCharCode(0xfffd)}b${String.fromCharCode(0xfffd)}c"`);
+  assert.equal(canonical(`a${String.fromCharCode(0xd83d, 0xde00)}b`), '"a😀b"');
+  assert.equal(canonical({ q: String.fromCharCode(0xd800) }), `{"q":"${String.fromCharCode(0xfffd)}"}`);
   assert.throws(() => parseCanonicalJson("[1,]"), SyntaxError);
   assert.throws(() => parseCanonicalJson('{"x":NaN}'), SyntaxError);
   assert.equal(canonical(parseCanonicalJson("[]")), "[]");

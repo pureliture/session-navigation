@@ -220,7 +220,7 @@ function setOwnProperty(target: Record<string, unknown>, key: string, value: unk
   });
 }
 
-function canonicalJsonObject(value: unknown): unknown {
+function canonicalJsonObject(value: unknown, seen?: WeakSet<object>): unknown {
   if (value === null || typeof value === "boolean" || typeof value === "string") return value;
   if (typeof value === "number") {
     if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
@@ -228,21 +228,52 @@ function canonicalJsonObject(value: unknown): unknown {
     }
     return value;
   }
-  if (Array.isArray(value)) return value.map(canonicalJsonObject);
-  if (value && typeof value === "object") {
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) throw new Error("invalid_json_object");
-    const obj = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort(codepointCompare)) {
-      const entry = Object.getOwnPropertyDescriptor(obj, key)?.value;
-      if (entry === undefined) continue;
-      setOwnProperty(out, key, canonicalJsonObject(entry));
+  if (typeof value === "object") {
+    // Hostile arguments may be cyclic (structured-cloneable but not JSON-finite).
+    // Guard recursion so normalization degrades to "not an invocation" instead of
+    // overflowing the call stack.
+    const refs = seen ?? new WeakSet<object>();
+    if (refs.has(value)) throw new Error("invalid_json_cycle");
+    refs.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((entry) => canonicalJsonObject(entry, refs));
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) throw new Error("invalid_json_object");
+      const obj = value as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(obj).sort(codepointCompare)) {
+        const entry = Object.getOwnPropertyDescriptor(obj, key)?.value;
+        if (entry === undefined) continue;
+        setOwnProperty(out, key, canonicalJsonObject(entry, refs));
+      }
+      return out;
+    } finally {
+      refs.delete(value);
     }
-    return out;
   }
   throw new Error("invalid_json_value");
 }
+
+/**
+ * Total string conversion for host/tool-controlled display values. String()
+ * throws on null-prototype objects and hostile toString, which previously
+ * surfaced as a fatal db_error; coerce primitives and yield "" otherwise.
+ */
+export function safeString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return "";
+}
+
+/**
+ * Worker RPC timeout. Must stay >= SQLite busy_timeout=5000 (see core Store)
+ * plus margin: a legitimate lock wait must never look like a dead worker, or
+ * the client invalidates the worker, cools down, and the next context hook
+ * sends hidden content as plaintext.
+ */
+export const ADAPTER_RPC_TIMEOUT_MS = 8000;
 export function ompInvocationArgs(
   tool: string,
   raw: Record<string, unknown>,
@@ -440,7 +471,7 @@ export async function prepareSnapshot(
         records: chunk,
         ...(append ? { append: true } : {}),
       },
-      2000,
+      ADAPTER_RPC_TIMEOUT_MS,
     );
     if (!response.ok || !Array.isArray(response.patches)) return response;
     for (const patch of response.patches) patches.push(patch);
@@ -497,6 +528,13 @@ export async function prepareRequest(
       }
     }),
   );
+  // P0-3 fail-closed: hidden content exists here (pending summaries ride on hidden
+  // items). If the adapter is disabled mid-prepare, apply_summary/summary_failed
+  // answers adapter_disabled; returning that bare error carries no patches, so the
+  // context hook would send the original messages as plaintext. Tolerate the
+  // disable and fall through to the final snapshot, which returns the last safe
+  // patches with adapter_enabled:false while disabled.
+  let adapterDisabled = false;
   for (const job of jobs.values()) {
     if (!isCurrent()) return { ok: false, error: "unconfirmed_snapshot" };
     const text = summaries.get(job.item_id);
@@ -508,8 +546,12 @@ export async function prepareRequest(
         ...(job.version === undefined ? {} : { expected_version: job.version }),
         ...(text ? { summary_text: text } : {}),
       },
-      5000,
+      ADAPTER_RPC_TIMEOUT_MS,
     );
+    if (!finished.ok && finished.error === "adapter_disabled") {
+      adapterDisabled = true;
+      continue;
+    }
     if (
       !finished.ok &&
       finished.error !== "verification_failed" &&
@@ -518,5 +560,11 @@ export async function prepareRequest(
     )
       return finished;
   }
-  return prepareSnapshot(records, session, token, send);
+  const settled = await prepareSnapshot(records, session, token, send);
+  // The last safe snapshot failed after the adapter went away: surface an explicit
+  // fatal error so the hook aborts instead of sending originals with no patches.
+  if (!settled.ok && adapterDisabled) {
+    return { ok: false, error: "adapter_disabled", adapter_enabled: false };
+  }
+  return settled;
 }

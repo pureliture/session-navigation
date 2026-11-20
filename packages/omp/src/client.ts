@@ -9,8 +9,18 @@ export interface WorkerTransport {
   onerror: ((event: ErrorEvent) => void) | null;
 }
 
+export interface RequestOptions {
+  /**
+   * When false, a timeout resolves { ok: false, error: "timeout" } without
+   * terminating the worker or starting the cooldown. Use for read-only probes
+   * (adapter_status): a slow status must not kill a healthy worker and push
+   * the next context hook into a cooldown that leaks hidden content.
+   */
+  invalidateOnTimeout?: boolean;
+}
+
 export interface ServiceClient {
-  request(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply>;
+  request(method: string, params: object, timeout: number, signal?: AbortSignal, options?: RequestOptions): Promise<Reply>;
   close(): void;
 }
 
@@ -46,8 +56,8 @@ export class WorkerClient implements ServiceClient {
       new Worker(new URL("../dist/worker.js", import.meta.url).href),
   ) {}
 
-  request(method: string, params: object, timeout: number, signal?: AbortSignal): Promise<Reply> {
-    const request = this.queue.then(() => this.exchange(method, params, timeout, signal));
+  request(method: string, params: object, timeout: number, signal?: AbortSignal, options?: RequestOptions): Promise<Reply> {
+    const request = this.queue.then(() => this.exchange(method, params, timeout, signal, options));
     this.queue = request.catch(() => undefined);
     return request;
   }
@@ -85,6 +95,7 @@ export class WorkerClient implements ServiceClient {
     params: object,
     timeout: number,
     signal?: AbortSignal,
+    options?: RequestOptions,
   ): Promise<Reply> {
     if (this.closed) return Promise.resolve({ ok: false, error: "shutdown" });
     if (signal?.aborted) {
@@ -103,8 +114,21 @@ export class WorkerClient implements ServiceClient {
     }
     return new Promise((resolve) => {
       const id = this.nextId++;
-      const timer = setTimeout(() => this.invalidate(worker, "timeout"), timeout);
       const abort = (): void => this.invalidate(worker, "cancelled");
+      const finishSoftTimeout = (): void => {
+        // Read-only probe timed out: drop the slot without killing the worker.
+        // A late reply no longer matches pending and is ignored.
+        if (this.pending?.id === id) this.pending = undefined;
+        signal?.removeEventListener("abort", abort);
+        resolve({ ok: false, error: "timeout" });
+      };
+      const timer = setTimeout(
+        () => {
+          if (options?.invalidateOnTimeout === false) finishSoftTimeout();
+          else this.invalidate(worker, "timeout");
+        },
+        timeout,
+      );
       signal?.addEventListener("abort", abort, { once: true });
       this.pending = {
         id,

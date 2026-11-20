@@ -26,7 +26,7 @@ import {
   type Result,
   type Row,
 } from "../../core/src/index.ts";
-import { ompInvocationArgs } from "./context.ts";
+import { ompInvocationArgs, safeString } from "./context.ts";
 
 export const MAX_SCOPES = 32;
 export const MAX_CHUNK_RECORDS = 64;
@@ -70,6 +70,30 @@ function mutationReply(result: Result): Reply {
   };
 }
 
+/**
+ * First non-empty display field for hints. Mirrors the old
+ * `String(a || b || ...)` order while never throwing on exotic values
+ * (null-prototype objects, hostile toString), which used to surface as a
+ * fatal db_error.
+ */
+function hintText(args: { [key: string]: Json }): string {
+  const fields = [
+    args.command,
+    args.path,
+    args.pattern,
+    args.query,
+    args.agentId,
+    args.provider,
+    args.terminalId,
+    args.browserId,
+  ];
+  for (const field of fields) {
+    if (!field) continue;
+    const text = safeString(field);
+    if (text) return text.slice(0, 160);
+  }
+  return "";
+}
 export class OmpService {
   readonly engine: Engine;
   readonly snapshots = new Map<string, Snapshot>();
@@ -130,7 +154,7 @@ export class OmpService {
         return mutationReply(
           this.engine.unhide(
             scope,
-            String(params.item_id ?? ""),
+            safeString(params.item_id ?? ""),
             params.expected_version == null ? undefined : Number(params.expected_version),
           ),
         );
@@ -245,7 +269,7 @@ export class OmpService {
     return {
       call_id,
       content,
-      content_sha256: String(raw.content_sha256 || sha256(content)),
+      content_sha256: safeString(raw.content_sha256) || sha256(content),
       invocation,
       invocation_digest: invocationDigest(invocation),
       status: "ok",
@@ -385,10 +409,7 @@ export class OmpService {
   }
 
   private listItems(scope: string, session: string, params: Record<string, unknown>): Reply {
-    const items = this.engine.listItems(
-      scope,
-      typeof params.query === "string" ? params.query : "",
-    );
+    const items = this.engine.listItems(scope, safeString(params.query));
     const rows: Record<string, unknown>[] = items.map((item) => ({
       ...item,
       call_id: item.tool_call_id,
@@ -470,17 +491,7 @@ export class OmpService {
         return {
           tool_call_id: record.call_id,
           tool_name: record.invocation.tool_name,
-          hint: String(
-            args.command ||
-              args.path ||
-              args.pattern ||
-              args.query ||
-              args.agentId ||
-              args.provider ||
-              args.terminalId ||
-              args.browserId ||
-              "",
-          ).slice(0, 160),
+          hint: hintText(args),
           bytes_size: bytes(record.content),
           tokens_display: "—",
         };
@@ -490,17 +501,7 @@ export class OmpService {
 
   private recordHint(record: RecordInput, maxLen = 64): string {
     const args = record.invocation.arguments as { [key: string]: Json };
-    const raw = String(
-      args.command ||
-        args.path ||
-        args.pattern ||
-        args.query ||
-        args.agentId ||
-        args.provider ||
-        args.terminalId ||
-        args.browserId ||
-        "",
-    )
+    const raw = hintText(args)
       .replace(/\r?\n/g, " ")
       .trim();
     return raw.length <= maxLen ? raw : `${raw.slice(0, maxLen - 1)}…`;
@@ -757,7 +758,7 @@ export class OmpService {
   ): Promise<Reply> {
     const snapshot = this.confirmed(session, params.snapshot_id);
     if (!snapshot) return { ok: false, error: "unconfirmed_snapshot" };
-    const record = snapshot.records.get(String(params.tool_call_id));
+    const record = snapshot.records.get(safeString(params.tool_call_id));
     if (!record) return { ok: false, error: "not_found" };
     const conflict = this.identityError(scope, record);
     if (conflict) return { ok: false, error: conflict };
@@ -773,7 +774,7 @@ export class OmpService {
   }
 
   private finishSummary(scope: string, method: string, params: Record<string, unknown>): Reply {
-    const item = this.store.get(scope, String(params.item_id));
+    const item = this.store.get(scope, safeString(params.item_id));
     if (!item || item.compaction_source !== "summarize_pending")
       return { ok: false, error: "not_found" };
     if (params.expected_version !== undefined && params.expected_version !== item.version)
@@ -804,7 +805,7 @@ export class OmpService {
     const snapshot = this.confirmed(session, params.snapshot_id);
     if (!snapshot) return { ok: false, error: "unconfirmed_snapshot" };
     const action = params.action ?? "auto";
-    if (!["auto", "hide", "summarize"].includes(String(action)))
+    if (!["auto", "hide", "summarize"].includes(safeString(action)))
       return { ok: false, error: "invalid_action" };
     const rawKeepLines = params.keep_lines;
     const normalizedKeepLines =

@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { WorkerClient, type ServiceClient } from "./client.ts";
+import { WorkerClient, type RequestOptions, type ServiceClient } from "./client.ts";
 import { acquireExtension, releaseExtension } from "./registration.ts";
 import {
+  ADAPTER_RPC_TIMEOUT_MS,
   BoundaryReminder,
   CLEANUP_GUIDANCE,
   MAX_SUMMARY_CONCURRENCY,
@@ -12,6 +13,7 @@ import {
   ompInvocationArgs,
   prepareRequest,
   messageText,
+  safeString,
   toolResultText,
   hash,
   type Candidate,
@@ -97,14 +99,16 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     params: object,
     timeout: number,
     signal?: AbortSignal,
-  ): Promise<Reply> => client.request(method, { ...params, ...(linkage ?? {}) }, timeout, signal) as Promise<Reply>;
+    options?: RequestOptions,
+  ): Promise<Reply> => client.request(method, { ...params, ...(linkage ?? {}) }, timeout, signal, options) as Promise<Reply>;
   function rpc(
     method: string,
     params: object,
     timeout: number,
     signal?: AbortSignal,
+    options?: RequestOptions,
   ): Promise<Reply> {
-    const run = queue.then(() => rpcOnce(method, params, timeout, signal));
+    const run = queue.then(() => rpcOnce(method, params, timeout, signal, options));
     queue = run.catch(() => undefined);
     return run;
   }
@@ -121,7 +125,11 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   if (!child) pi.on("before_agent_start", async (event, ctx) => {
     try {
       const sid = sessionId(ctx) ?? sessionId(startContext) ?? "main";
-      const status = await rpc("adapter_status", { session_id: sid }, 1000);
+      // P0-4: read-only probe — never kill the worker or start a cooldown on a
+      // slow status, and allow a full busy_timeout + margin for lock waits.
+      const status = await rpc("adapter_status", { session_id: sid }, ADAPTER_RPC_TIMEOUT_MS, undefined, {
+        invalidateOnTimeout: false,
+      });
       if (status && status.ok && typeof status.enabled === "boolean") {
         adapterEnabled = status.enabled;
       }
@@ -255,6 +263,10 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     } else if (response.ok) {
       adapterEnabled = true;
     }
+    // Fail-closed set: these errors mean the worker could not prove what is
+    // hidden, so sending the original messages would leak hidden content.
+    // adapter_disabled covers a disable mid-prepare (P0-3); cooldown/timeout
+    // cover worker invalidation after a slow status/lock wait (P0-4).
     const fatalErrors = [
       "db_error",
       "db_full",
@@ -262,6 +274,9 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       "engine_protocol_incompatible",
       "worker_error",
       "invalid_response",
+      "adapter_disabled",
+      "cooldown",
+      "timeout",
     ];
     const dbFailure =
       !response.ok && typeof response.error === "string" && fatalErrors.includes(response.error);
@@ -348,7 +363,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     for (let idx = activeMessages.length - 1; idx >= 0; idx--) {
       const msg = activeMessages[idx];
       if (msg?.role !== "toolResult") break;
-      const toolName = String(msg.toolName ?? "");
+      const toolName = safeString(msg.toolName ?? "");
       if (
         toolName === "manage_context" ||
         toolName === "hide_context" ||
@@ -419,7 +434,9 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
       (!candidate?.confirmed || candidate.session !== session)
     ) {
       if (method !== "list_candidates") {
-        const status = await rpc("adapter_status", { session_id: session }, 2000, signal);
+        const status = await rpc("adapter_status", { session_id: session }, ADAPTER_RPC_TIMEOUT_MS, signal, {
+          invalidateOnTimeout: false,
+        });
         if (status.ok && status.enabled === false) {
           adapterEnabled = false;
           return { ok: false, error: "adapter_disabled" };
@@ -767,7 +784,9 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
   ): Promise<Reply> {
     const session = sessionId(ctx);
     if (!session) return { ok: false, error: "invalid_session" };
-    const status = await rpc("adapter_status", { session_id: session }, 2000, signal);
+    const status = await rpc("adapter_status", { session_id: session }, ADAPTER_RPC_TIMEOUT_MS, signal, {
+      invalidateOnTimeout: false,
+    });
     if (status.ok && status.enabled === false) {
       adapterEnabled = false;
       return { ok: false, error: "adapter_disabled" };
@@ -781,7 +800,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     if (!snapshot?.confirmed || snapshot.session !== session)
       return { ok: false, error: "unconfirmed_snapshot" };
     const action = params.action ?? "auto";
-    if (!["auto", "hide", "summarize"].includes(String(action)))
+    if (!["auto", "hide", "summarize"].includes(safeString(action)))
       return { ok: false, error: "invalid_action" };
     const rawKeepLines = params.keep_lines;
     const normalizedKeepLines =

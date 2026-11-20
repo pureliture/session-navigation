@@ -145,8 +145,15 @@ export function canonical(value: Json): string {
     return "null";
   }
   if (typeof value === "string") {
-    if (/[\uD800-\uDFFF]/u.test(value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ""))) {
-      throw new TypeError("invalid_unicode");
+    // Lone surrogates cannot round-trip through canonical JSON digests. Fold them to
+    // U+FFFD instead of throwing: a hostile tool result degrades to a display
+    // replacement instead of aborting the whole turn as db_error.
+    if (value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "").match(/[\uD800-\uDFFF]/)) {
+      value = value
+        .replace(/([\uD800-\uDBFF])([\uDC00-\uDFFF])?/g, (pair: string, _high: string, low: string | undefined) =>
+          low ? pair : "�",
+        )
+        .replace(/[\uDC00-\uDFFF]/g, "�");
     }
     return JSON.stringify(value);
   }
