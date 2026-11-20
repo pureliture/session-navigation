@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { focusedSessionTab, parseSessionTab } from "./hostCompat";
 import { selectMainOrFallbackAgent } from "./sessionFollowing";
-import { childrenForCall, mergeHermesTimelineRows, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget } from "./subagents";
+import { childrenForCall, hasMissingLinkedChildren, mergeHermesTimelineRows, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget } from "./subagents";
 import type { Row } from "../shared/sessionNav";
 
 test("linked delegate calls missing from adapter targets are display-only timeline rows, never fabricated targets", () => {
@@ -128,4 +128,35 @@ test("Paseo-orchestrated OMP subagents with their own registered scope keep thei
   });
   expect(routedManaged).toEqual({ agentId: "paseo-omp-child", subagentFallback: false, inView: true });
   expect(scopeForAgent(scopes, routedManaged.agentId ?? "")).toBe("omp:default:child-sid:default");
+});
+
+test("rotation fallback matches h-new subagent children while the panel addresses h-old", () => {
+  const oldParent = "hermes:default:session-old:unknown";
+  const newParent = "hermes:default:session-new:unknown";
+  const rotated = { scope_key: "hermes:default:child:unknown", parent_scope: newParent, tool_call_id: "call-1", subagent_id: "sa-1" };
+  // Rotation-moved child resolves under the pre-rotation parent scope.
+  expect(childrenForCall([rotated], oldParent, "call-1")).toEqual([rotated]);
+  // Exact parent_scope matches always win; the fallback never merges in.
+  const exact = { scope_key: "hermes:default:child2:unknown", parent_scope: oldParent, tool_call_id: "call-1", subagent_id: "sa-2" };
+  expect(childrenForCall([rotated, exact], oldParent, "call-1")).toEqual([exact]);
+  // Mismatched call ids and other profiles never match.
+  expect(childrenForCall([rotated], oldParent, "call-other")).toEqual([]);
+  const otherProfile = { ...rotated, parent_scope: "hermes:atlas:session-new:unknown" };
+  expect(childrenForCall([otherProfile], oldParent, "call-1")).toEqual([]);
+  // OMP scopes keep exact matching only (no rotation fallback).
+  const ompParent = "omp:default:parent:default";
+  const ompChild = { scope_key: "omp:default:child:default", parent_scope: "omp:default:other:default", tool_call_id: "call-1", subagent_id: "Bird" };
+  expect(childrenForCall([ompChild], ompParent, "call-1")).toEqual([]);
+});
+
+test("hasMissingLinkedChildren ignores server-owned rows and rotation-moved in-flight calls", () => {
+  const oldParent = "hermes:default:session-old:unknown";
+  const newParent = "hermes:default:session-new:unknown";
+  const rotated = { scope_key: "hermes:default:child:unknown", parent_scope: newParent, tool_call_id: "call-1", subagent_id: "sa-1" };
+  expect(hasMissingLinkedChildren([], [rotated], oldParent)).toBe(true);
+  // Server already owns the row (e.g. toolResult landed): nothing missing.
+  expect(hasMissingLinkedChildren([{ tool_call_id: "call-1" }], [rotated], oldParent)).toBe(false);
+  // No linked children at all.
+  expect(hasMissingLinkedChildren([], [], oldParent)).toBe(false);
+  expect(hasMissingLinkedChildren([], [{ scope_key: "hermes:default:x:unknown", parent_scope: oldParent }], oldParent)).toBe(false);
 });

@@ -1,5 +1,4 @@
-import { expect, test } from "bun:test";
-import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, resolveWorkspaceSessionState, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, nextWorkspaceTrackedAgent, readSessionTimelineIds, resolveSessionTarget, resolveWorkspaceSessionState, selectMainOrFallbackAgent, sessionFollowCandidates, workspaceHeaderText } from "./sessionFollowing";
 import { QueryClient } from "@tanstack/react-query";
 import { defaultWorkspaceState, selectWorkspaceAgent, workspaceTabSchema } from "./workspaceState";
 
@@ -279,4 +278,50 @@ test("managed Paseo subagents stay on the child while unmanaged children fall ba
   expect(selectMainOrFallbackAgent({ tab: { kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" }, managed: false,
     fallback: { agentId: null, subagent: false }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
     .toEqual({ agentId: "parent", subagentFallback: false, inView: true });
+});
+
+test("workspace header names the single-auto session instead of Follow visible session", () => {
+  const pinned = workspaceHeaderText({ pinnedAgentId: "agent-1", pinnedTitle: "Alpha", mode: "pinned", hasDocument: true, effectiveAgentId: "agent-1", effectiveTitle: "Alpha" });
+  expect(pinned).toBe("Pinned · Alpha ▾");
+  const chooser = workspaceHeaderText({ pinnedAgentId: null, mode: "chooser", hasDocument: true, effectiveAgentId: null });
+  expect(chooser).toBe("Choose a session ▾");
+  // Desktop web (hasDocument) with followVisible=false resolves single-auto:
+  // the header must name the session, matching the dropdown behavior.
+  const singleAutoWeb = workspaceHeaderText({ pinnedAgentId: null, mode: "single-auto", hasDocument: true, effectiveAgentId: "agent-1", effectiveTitle: "Alpha" });
+  expect(singleAutoWeb).toBe("Session · Alpha ▾");
+  const singleAutoNative = workspaceHeaderText({ pinnedAgentId: null, mode: "single-auto", hasDocument: false, effectiveAgentId: "agent-1", effectiveTitle: "Alpha" });
+  expect(singleAutoNative).toBe("Session · Alpha ▾");
+  const followNative = workspaceHeaderText({ pinnedAgentId: null, mode: "follow", hasDocument: false, effectiveAgentId: "agent-1", effectiveTitle: "Alpha" });
+  expect(followNative).toBe("Following · Alpha ▾");
+  // Untitled agents fall back to the id prefix; empty follow state keeps the generic label.
+  const untitled = workspaceHeaderText({ pinnedAgentId: null, mode: "single-auto", hasDocument: true, effectiveAgentId: "agent-123456" });
+  expect(untitled).toBe("Session · agent-12 ▾");
+  const emptyFollow = workspaceHeaderText({ pinnedAgentId: null, mode: "follow", hasDocument: true, effectiveAgentId: null });
+  expect(emptyFollow).toBe("Follow visible session ▾");
+});
+
+test("workspace tracking resets last-valid state on workspace switch", () => {
+  const base = {
+    rawHasSignal: true,
+    membership: "accept" as const,
+    candidateAgentIds: ["a"],
+    panelWorkspaceId: "w1",
+    lookupWorkspaceId: null,
+    lookupLoaded: true,
+    workspaceChanged: false,
+    lastValid: "a",
+    tracked: "a",
+  };
+  expect(nextWorkspaceTrackedAgent({ ...base, rawFocusedId: "a" })).toEqual({ lastValid: "a", tracked: "a" });
+  // Workspace switch drops stale selections even when the focus signal still names the old agent.
+  expect(nextWorkspaceTrackedAgent({ ...base, rawFocusedId: "a", workspaceChanged: true })).toEqual({ lastValid: null, tracked: null });
+  // Null focus with a signal clears; without a signal the previous tracking is preserved.
+  expect(nextWorkspaceTrackedAgent({ ...base, rawFocusedId: null })).toEqual({ lastValid: null, tracked: null });
+  expect(nextWorkspaceTrackedAgent({ ...base, rawFocusedId: null, rawHasSignal: false })).toEqual({ lastValid: "a", tracked: "a" });
+  // Reject and unknown-with-loading hold the last valid agent instead of guessing.
+  expect(nextWorkspaceTrackedAgent({ ...base, membership: "reject", rawFocusedId: "b" })).toEqual({ lastValid: "a", tracked: "a" });
+  expect(nextWorkspaceTrackedAgent({ ...base, membership: "unknown", rawFocusedId: "b", lookupLoaded: false })).toEqual({ lastValid: "a", tracked: "a" });
+  // Unknown membership resolves through the workspace lookup.
+  expect(nextWorkspaceTrackedAgent({ ...base, membership: "unknown", rawFocusedId: "b", lookupWorkspaceId: "w1" })).toEqual({ lastValid: "b", tracked: "b" });
+  expect(nextWorkspaceTrackedAgent({ ...base, membership: "unknown", rawFocusedId: "b", lookupWorkspaceId: "w2" })).toEqual({ lastValid: "a", tracked: "a" });
 });

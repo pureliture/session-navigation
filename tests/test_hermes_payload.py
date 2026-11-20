@@ -164,3 +164,48 @@ def test_apply_bad_handle_skipped():
     assert applied == []
     assert skipped[0]["reason"] == "handle_mismatch"
     assert new_payload == request
+
+
+def test_message_keys_number_over_full_payload_without_chunk_offset():
+    """P0-2 ground truth: p{N} counts user/assistant messages over the FULL
+    active payload. Tool/result entries never consume a position, so IDs stay
+    stable when pre-summary rows exist alongside post-summary ones."""
+    request = {
+        "input": [
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "before summary"}]},
+            {"type": "function_call", "call_id": "c0", "name": "read_file",
+             "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c0", "output": "pre-summary data"},
+            {"type": "message", "role": "assistant",
+             "content": [{"type": "output_text", "text": "ack"}]},
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "after summary"}]},
+        ]
+    }
+    keys = payload.message_keys("codex_responses", request)
+    assert len(keys) == 3
+    assert keys[0][0].startswith("msg:user:p0:")
+    assert keys[1][0].startswith("msg:assistant:p1:")
+    assert keys[2][0].startswith("msg:user:p2:")
+    assert [index for _, _, index, _ in keys] == [0, 3, 4]
+    # drop_messages resolves hides against the same full-payload numbering.
+    dropped = payload.drop_messages("codex_responses", request, {keys[1][0]})
+    remaining = [item for item in dropped["input"] if item.get("type", "message") == "message"]
+    assert [item["role"] for item in remaining] == ["user", "user"]
+    assert [item["content"][0]["text"] for item in remaining] == ["before summary", "after summary"]
+
+
+def test_message_keys_chat_numbering_ignores_tool_messages():
+    """P0-2 ground truth (chat_completions): tool roles never take a p{N} slot."""
+    request = {
+        "messages": [
+            {"role": "user", "content": "read it"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "file body"},
+            {"role": "assistant", "content": "done"},
+        ]
+    }
+    keys = payload.message_keys("chat_completions", request)
+    assert [key.split(":")[2] for key, _, _, _ in keys] == ["p0", "p1", "p2"]
+    assert [role for _, role, _, _ in keys] == ["user", "assistant", "assistant"]

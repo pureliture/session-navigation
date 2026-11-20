@@ -30,7 +30,8 @@ export function registerNavigation(
       : []),
     client.addCommandCenterItem({
       id: "open-session-nav", title: "Open session navigation", icon: "List", keywords: ["session", "nav", "navigation", "context", "compact"], context: "agent",
-      onSelect({ openPanel }) { openPanel("session-nav", { location: "explorer" }); },
+      // Older hosts may omit context APIs: no-op instead of throwing.
+      onSelect(context) { context?.openPanel?.("session-nav", { location: "explorer" }); },
     }),
     client.addCommandCenterItem({
       id: "open-session-nav-settings",
@@ -38,11 +39,13 @@ export function registerNavigation(
       icon: "Settings",
       keywords: ["session", "nav", "navigation", "settings", "preferences", "outline"],
       context: "global",
-      onSelect({ openSettings }) { openSettings("settings"); },
+      // Older hosts may not provide openSettings in the command context:
+      // no-op instead of throwing on an unsupported host API.
+      onSelect(context) { context?.openSettings?.("settings"); },
     }),
     client.addSlashCommand({
       name: "nav", description: "Open session navigation", argumentHint: "", context: "agent",
-      async onSubmit({ openPanel }) { openPanel("session-nav", { location: "explorer" }); },
+      async onSubmit(context) { context?.openPanel?.("session-nav", { location: "explorer" }); },
     }),
   ];
   return () => {

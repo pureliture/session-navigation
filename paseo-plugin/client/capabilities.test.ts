@@ -3,6 +3,7 @@ import {
   actionAllowed,
   capabilityNotice,
   isManagedAdapterProvider,
+  selectPausedNotice,
   type Capabilities,
 } from "./capabilities";
 import type { Row } from "../shared/sessionNav";
@@ -89,4 +90,17 @@ test("UI capability gates retain display and offline Unhide, and distinguish ada
       { scopeKey: "hermes:default:s1:unknown" },
     ),
   ).toBe("Custom paused hint");
+});
+
+test("selectPausedNotice surfaces the server paused warning, defaults without one, and stays null otherwise", () => {
+  expect(selectPausedNotice({ paused: true, paused_warning: "adapter paused: custom" })).toBe(
+    "adapter paused: custom",
+  );
+  expect(selectPausedNotice({ paused: true })).toBe(
+    "Adapter paused — hides and summaries are disabled.",
+  );
+  expect(selectPausedNotice({ paused: false, paused_warning: "stale" })).toBeNull();
+  expect(selectPausedNotice({})).toBeNull();
+  expect(selectPausedNotice(null)).toBeNull();
+  expect(selectPausedNotice(undefined)).toBeNull();
 });

@@ -12,9 +12,11 @@ import {
   type AdapterTogglesResult,
 } from "../shared/sessionNav";
 import {
+  outlineSettingsFromHostHook,
   resolveOutlineSettingsValues,
   setUseOutlineSettingsOverride,
   shouldOpenPreviewDrawerOnRowPress,
+  useOutlineSettings,
   type OutlineSettingsState,
 } from "./outlineSettingsHook";
 import { resolveWorkspaceSessionState } from "./sessionFollowing";
@@ -33,22 +35,32 @@ let currentToggleData: AdapterTogglesResult = {
 const invalidatedKeys: any[] = [];
 const setQueryDataCalls: Array<{ key: any; data: any }> = [];
 let nextToggleResultOverride: AdapterTogglesResult | null = null;
+let togglesQueryError: Error | null = null;
 
 mock.module("react-native", () => ({
+  // Superset shared with mobileScroll.test.ts and outlineRows.test.ts (see
+  // note there): every mock for this specifier must satisfy every consumer.
   View: "View",
   Text: "Text",
   Pressable: "Pressable",
   ScrollView: "ScrollView",
   Switch: "Switch",
+  TextInput: "TextInput",
+  Linking: "Linking",
+  Platform: "Platform",
 }));
 
 mock.module("@getpaseo/plugin/client/ui", () => ({
+  // Superset shared with outlineRows.test.ts (see note there): every mock
+  // for this specifier must satisfy every consumer regardless of scheduling.
+  Icon: undefined,
   Loading: undefined,
   ScrollView: undefined,
   SettingsAction: undefined,
   SettingsCard: undefined,
   SettingsSection: undefined,
   SettingsSwitch: undefined,
+  TextInput: undefined,
 }));
 
 mock.module("@getpaseo/plugin/client", () => ({
@@ -92,6 +104,13 @@ mock.module("@tanstack/react-query", () => ({
   }),
   useQuery: (opts: { queryKey: any; queryFn: () => Promise<any> }) => {
     void opts;
+    if (togglesQueryError) {
+      return {
+        data: undefined,
+        isPending: false,
+        error: togglesQueryError,
+      };
+    }
     return {
       data: currentToggleData,
       isPending: false,
@@ -168,6 +187,7 @@ afterEach(() => {
   invalidatedKeys.length = 0;
   setQueryDataCalls.length = 0;
   nextToggleResultOverride = null;
+  togglesQueryError = null;
   currentToggleData = {
     ok: true,
     omp: { installed: true, enabled: true, statusText: "Active" },
@@ -490,5 +510,187 @@ describe("Outline settings & Session Navigation SettingsScreen", () => {
     );
     expect(recoverButtons).toHaveLength(1);
     expect(recoverButtons[0].props.disabled).toBe(false);
+  });
+  test("SettingsScreen surfaces adapter fetch failures instead of fabricating healthy defaults", async () => {
+    // Dynamic import: mock.module registrations above must apply before the
+    // screen module loads (same pattern as the other SettingsScreen tests).
+    const { SettingsScreen } = await import("./settingsScreen");
+    setUseOutlineSettingsOverride(() => ({
+      status: "ready",
+      revision: "rev-1",
+      values: { followVisibleSession: true, openPreviewOnRowClick: false },
+      saving: false,
+      saveError: null,
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+
+    // Simulate a worker/DB failure on the initial toggles fetch.
+    togglesQueryError = new Error("db_error");
+    try {
+      const tree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+      const joined = collectText(tree).join("\n");
+      // The failure is surfaced, not swallowed…
+      expect(joined).toContain("db_error");
+      // …and no fabricated healthy state is shown: both toggles render
+      // disabled with a forced-off value.
+      const switches = findAll(tree, (el) => el.type === "Switch");
+      expect(switches).toHaveLength(4);
+      for (const sw of switches.slice(0, 2)) {
+        expect(sw.props.value).toBe(false);
+        expect(sw.props.disabled).toBe(true);
+      }
+    } finally {
+      togglesQueryError = null;
+    }
+
+    // A recovered fetch renders verified state again.
+    const recoveredTree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    expect(collectText(recoveredTree).join("\n")).not.toContain("db_error");
+    const recoveredSwitches = findAll(recoveredTree, (el) => el.type === "Switch");
+    expect(recoveredSwitches[0].props.value).toBe(true);
+    expect(recoveredSwitches[0].props.disabled).toBe(false);
+  });
+  test("SettingsScreen shows omp statusText and hermes unverifiedScopes, and remediation survives a lone warning", async () => {
+    const { SettingsScreen } = await import("./settingsScreen");
+    setUseOutlineSettingsOverride(() => ({
+      status: "ready",
+      revision: "rev-1",
+      values: { followVisibleSession: true, openPreviewOnRowClick: false },
+      saving: false,
+      saveError: null,
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+
+    currentToggleData = {
+      ok: true,
+      omp: { installed: true, enabled: false, statusText: "Paused (existing hidden items protected)" },
+      hermes: {
+        installed: true,
+        enabled: true,
+        profileCount: 2,
+        statusText: "2/2 profiles enabled",
+        unverifiedScopes: ["hermes:default:stale-session:unknown"],
+        warning: "One scope failed verification.",
+        remediation: "Re-run a turn in the unverified scope.",
+      },
+    };
+
+    const tree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    const joined = collectText(tree).join("\n");
+    expect(joined).toContain("Paused (existing hidden items protected)");
+    expect(joined).toContain("Unverified scopes: hermes:default:stale-session:unknown.");
+    // A lone warning (non-mixed, non-partial) must not hide remediation.
+    expect(joined).toContain("One scope failed verification.");
+    expect(joined).toContain("Re-run a turn in the unverified scope.");
+  });
+
+  test("SettingsScreen surfaces outline errors on both switches and offers reload on settings error", async () => {
+    const { SettingsScreen } = await import("./settingsScreen");
+
+    // saveError while ready: both Outline switches carry the error.
+    setUseOutlineSettingsOverride(() => ({
+      status: "ready",
+      revision: "rev-1",
+      values: { followVisibleSession: true, openPreviewOnRowClick: false },
+      saving: false,
+      saveError: "save_failed",
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+    const saveErrTree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    const saveErrSwitches = findAll(
+      saveErrTree,
+      (el) => el.type === "Switch" && (el.props?.accessibilityLabel === "Follow visible session" || el.props?.accessibilityLabel === "Open preview on row click"),
+    );
+    expect(saveErrSwitches).toHaveLength(2);
+    // FallbackSwitch renders the error as text (the inner Switch only takes
+    // value/disabled): the error must appear once per Outline switch.
+    const saveErrOccurrences = collectText(saveErrTree).join("\n").split("save_failed").length - 1;
+    expect(saveErrOccurrences).toBe(2);
+
+    // settings.status === "error": both switches surface the host error and a
+    // Reload settings action recovers through settings.reload().
+    let reloadCalls = 0;
+    setUseOutlineSettingsOverride(() => ({
+      status: "error",
+      error: "host_settings_down",
+      saving: false,
+      saveError: "host_settings_down",
+      save: async () => false,
+      reset: async () => false,
+      reload: async () => {
+        reloadCalls++;
+      },
+    }));
+    const errTree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    const errSwitches = findAll(
+      errTree,
+      (el) => el.type === "Switch" && (el.props?.accessibilityLabel === "Follow visible session" || el.props?.accessibilityLabel === "Open preview on row click"),
+    );
+    expect(errSwitches).toHaveLength(2);
+    for (const sw of errSwitches) {
+      expect(sw.props.disabled).toBe(true);
+    }
+    // The host error renders once per Outline switch plus once on the reload action.
+    const errOccurrences = collectText(errTree).join("\n").split("host_settings_down").length - 1;
+    expect(errOccurrences).toBe(3);
+    const reloadButtons = findAll(
+      errTree,
+      (el) => el.type === "Pressable" && el.props?.accessibilityLabel === "Reload settings",
+    );
+    expect(reloadButtons).toHaveLength(1);
+    expect(collectText(errTree).join("\n")).toContain("host_settings_down");
+    reloadButtons[0].props.onPress();
+    // The reload spy increments synchronously inside the async stub, so no
+    // timer flush is needed to observe the call.
+    expect(reloadCalls).toBe(1);
+  });
+
+  test("useOutlineSettings reports an unsupported host API as an explicit error, never silent ready", () => {
+    // The real client module exposes no useSettings (older hosts predate the
+    // settings API), so the hook must surface an explicit error state.
+    const state = useOutlineSettings();
+    expect(state.status).toBe("error");
+    if (state.status !== "error") throw new Error("expected error state");
+    expect(state.error).toBe("outline_settings_unsupported");
+    expect(state.saveError).toBe("outline_settings_unsupported");
+    expect(resolveOutlineSettingsValues(state)).toEqual(DEFAULT_OUTLINE_SETTINGS);
+    // No-op saves must report failure instead of pretending success.
+    return state.save(DEFAULT_OUTLINE_SETTINGS, "rev").then((ok) => {
+      expect(ok).toBe(false);
+    });
+  });
+
+  test("outlineSettingsFromHostHook surfaces throwing hooks instead of fabricated defaults", () => {
+    const throwing = outlineSettingsFromHostHook(() => {
+      throw new Error("host_boom");
+    });
+    expect(throwing.status).toBe("error");
+    if (throwing.status !== "error") throw new Error("expected error state");
+    expect(throwing.error).toBe("host_boom");
+
+    const missing = outlineSettingsFromHostHook(() => undefined);
+    expect(missing.status).toBe("error");
+    if (missing.status !== "error") throw new Error("expected error state");
+    expect(missing.error).toBe("outline_settings_unsupported");
+
+    const readyValues = { followVisibleSession: false, openPreviewOnRowClick: true };
+    const ready = outlineSettingsFromHostHook(() => () => ({
+      status: "ready",
+      revision: "rev-9",
+      values: readyValues,
+      saving: false,
+      saveError: null,
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+    expect(ready).toMatchObject({ status: "ready", revision: "rev-9", values: readyValues });
+    expect(resolveOutlineSettingsValues(ready)).toEqual(readyValues);
   });
 });

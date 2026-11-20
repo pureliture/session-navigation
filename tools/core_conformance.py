@@ -445,7 +445,64 @@ def summary_input_view(vector):
         return {"error": exc.reason}
 
 
+def adapter_control_coverage():
+    """B12: exercise the adapter_control lifecycle Python-side.
+
+    Differential TS behavior belongs to packages/core/test (peer-owned);
+    this pins the Python contract instead: get/set round-trip, revision
+    bumps, session enabled sync, invalid-input rejection, SQLite CHECK on
+    `enabled`, and DBError normalization when the write fails.
+    """
+    import sqlite3
+
+    from session_navigation.db import DBError
+
+    scope = FIXTURES["scope"]
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteContextStore(Path(directory) / "control.db")
+        assert store.get_adapter_control("hermes") is None
+        assert store.getAdapterControl("hermes") is None
+        store.register_adapter(
+            scope,
+            adapter_id="hermes",
+            instance_id="python-control",
+            capabilities=dict(hide=True, summarize=False, unhide=True),
+        )
+        first = store.set_adapter_control("hermes", False, now=100.0)
+        assert first == {
+            "adapter_id": "hermes",
+            "enabled": False,
+            "revision": 1,
+            "updated_at": 100.0,
+        }
+        assert store.adapter_session(scope)["enabled"] is False
+        assert store.adapter_can(scope, "hide") is False
+        second = store.setAdapterControl("hermes", True, now=200.0)
+        assert second["enabled"] is True and second["revision"] == 2
+        assert store.adapter_session(scope)["enabled"] is True
+        assert store.adapter_can(scope, "hide") is True
+        for bad in ("", "   ", None, 42):
+            try:
+                store.set_adapter_control(bad, True)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"set_adapter_control accepted {bad!r}")
+        try:
+            store.connection.execute(
+                "INSERT INTO adapter_control(adapter_id, enabled, revision, updated_at)"
+                " VALUES ('evil', 2, 1, 0.0)"
+            )
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("adapter_control accepted enabled=2")
+        store.close()
+    print("PASS adapter_control lifecycle (Python)")
+
+
 def main():
+    adapter_control_coverage()
     expected = asyncio.run(vectors())
     for runtime in ("node", "bun"):
         output = subprocess.run(

@@ -72,3 +72,19 @@ export function capabilityNotice(
   }
   return null;
 }
+
+export type PausedListData = {
+  paused?: boolean;
+  paused_warning?: string;
+} | null | undefined;
+
+/**
+ * B10: paused-adapter banner text (P1-7 parity). The server sends
+ * paused/paused_warning on list replies while the adapter is disabled but
+ * stored hidden items stay protected; the panel renders this above the
+ * generic capability notice.
+ */
+export function selectPausedNotice(data: PausedListData): string | null {
+  if (!data?.paused) return null;
+  return data.paused_warning ?? "Adapter paused — hides and summaries are disabled.";
+}

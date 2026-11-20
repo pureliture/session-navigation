@@ -21,9 +21,9 @@ import {
 } from "../shared/sessionNav";
 import { cancelChatNavigation, parseRgb, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { PreviewDrawer } from "./PreviewDrawer";
-import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
+import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
-import { childrenForCall, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
+import { childrenForCall, hasMissingLinkedChildren, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import {
   buildGroupedRows,
@@ -32,10 +32,13 @@ import {
   fmtTokenCount,
   fmtTokens,
   groupMutationItems,
+  outlineRowKey,
+  scopedCountLabel,
   type OutlineRow,
 } from "./outlineGrouping";
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
-import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
+import { appendOlderServerPage, shouldInvalidateOlderServerPage } from "./outlinePaging";
+import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem, OutlineEmptyState } from "./outlineRows";
 import { outlineRefreshQueryKeys } from "./outlineRefresh";
 import { OutlineScrollDriver } from "./outlineScroll";
 import {
@@ -763,6 +766,9 @@ export function SessionNavPanel({
         capabilities: result.capabilities,
         server_timeline: Boolean(result.server_timeline),
         records_capped: Boolean((result as Record<string, unknown>).records_capped),
+        // B10: paused-adapter banner state (P1-7 parity).
+        paused: result.paused === true,
+        paused_warning: typeof result.paused_warning === "string" ? result.paused_warning : undefined,
         has_older: Boolean(result.has_older),
         next_before_index: typeof result.next_before_index === "number" ? result.next_before_index : null,
         totals: result.totals,
@@ -792,15 +798,9 @@ export function SessionNavPanel({
   const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
   const needsLinkedTimeline =
     listQuery.data !== undefined &&
-    !hasServerTimeline &&
     !activeChild &&
     !!resolvedScopeKey &&
-    scopes.some(
-      (scope) =>
-        scope.parent_scope === resolvedScopeKey &&
-        scope.tool_call_id &&
-        !listQuery.data?.items.some((row) => row.tool_call_id === scope.tool_call_id),
-    );
+    hasMissingLinkedChildren(listQuery.data.items, scopes, resolvedScopeKey);
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
@@ -838,20 +838,30 @@ export function SessionNavPanel({
 
   const listTotalsRows = listQuery.data?.totals?.total_rows;
   const listHasOlder = listQuery.data?.has_older;
-  const serverOlderInvalidated = Boolean(
-    olderServerState &&
-      olderServerState.sessionKey === sessionViewKey &&
-      listQuery.data !== undefined &&
-      (!listHasOlder ||
-        (typeof listTotalsRows === "number" &&
-          typeof olderServerState.totalRows === "number" &&
-          listTotalsRows < olderServerState.totalRows)),
-  );
+  const serverOlderInvalidated = shouldInvalidateOlderServerPage({
+    state: olderServerState,
+    sessionKey: sessionViewKey,
+    // While the tail is still loading there is no new evidence: keep older pages.
+    tailHasOlder: listQuery.data === undefined ? true : Boolean(listHasOlder),
+    tailTotalRows: typeof listTotalsRows === "number" ? listTotalsRows : undefined,
+    searchActive: Boolean(query),
+  });
   useEffect(() => {
     if (serverOlderInvalidated) {
       setOlderServerState(null);
     }
   }, [serverOlderInvalidated]);
+
+  // Search replaces the visible list: clear paged older pages instead of
+  // re-merging them when the query is cleared.
+  useEffect(() => {
+    if (!query) return;
+    setOlderServerState(null);
+    setOlderFallbackState(null);
+    setIsLoadingOlderServer(false);
+    setIsLoadingOlderFallback(false);
+    loadingOlderKeyRef.current = null;
+  }, [query]);
 
   const activeOlderServer =
     olderServerState?.sessionKey === sessionViewKey && !serverOlderInvalidated ? olderServerState : null;
@@ -867,10 +877,14 @@ export function SessionNavPanel({
     [activeOlderFallback, fallbackTailRows],
   );
 
+  // Linked in-flight subagent rows (task/delegate_task without a toolResult
+  // yet) merge on top of the server list even when the server owns a
+  // timeline: mergeLinkedParentRows only appends rows whose tool_call_id is
+  // missing from the server list, so authoritative rows are untouched.
   const rawRows = useMemo(
     () =>
       resolvedScopeKey
-        ? activeChild || hasServerTimeline
+        ? activeChild
           ? serverRows
           : needsHermesFallbackMerge
             ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
@@ -879,7 +893,6 @@ export function SessionNavPanel({
     [
       resolvedScopeKey,
       activeChild,
-      hasServerTimeline,
       serverRows,
       needsHermesFallbackMerge,
       fallbackRows,
@@ -915,6 +928,15 @@ export function SessionNavPanel({
   const serverTotals = !query ? listQuery.data?.totals : undefined;
   const hiddenCount = serverTotals ? serverTotals.hidden_count : localHiddenCount;
   const savedBytes = serverTotals ? serverTotals.saved_bytes : localSavedBytes;
+  // B8: unscoped totals for the footer count label. The loaded list totals
+  // are authoritative when present; otherwise the unfiltered rows are.
+  const unscopedTotals = listQuery.data?.totals;
+  const totalEntries = unscopedTotals?.total_rows ?? rawRows.length;
+  const totalHidden = useMemo(
+    () => unscopedTotals?.hidden_count ?? rawRows.filter((r) => r.status === "hidden").length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unscopedTotals, rawRows],
+  );
   const entryCount =
     serverTotals && !needsHermesFallbackMerge && !needsLinkedTimeline
       ? serverTotals.total_rows
@@ -942,7 +964,7 @@ export function SessionNavPanel({
 
   const selectedRow = useMemo(() => {
     if (!selectedId) return null;
-    return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? null;
+    return rows.find((r, index) => outlineRowKey(r, index) === selectedId) ?? null;
   }, [rows, selectedId]);
 
   const listRef = useRef<any>(null);
@@ -1074,17 +1096,17 @@ export function SessionNavPanel({
         if (result.items.length > 0) {
           scrollDriverRef.current?.preparePrepend(listRef.current);
         }
-        setOlderServerState((prev) => {
-          const baseRows = prev?.sessionKey === capturedKey ? prev.rows : [];
-          return {
+        setOlderServerState((prev) =>
+          appendOlderServerPage({
+            prev,
             sessionKey: capturedKey,
-            rows: mergePagedRows(result.items, baseRows),
+            items: result.items,
             hasOlder: Boolean(result.has_older && result.next_before_index != null),
             nextBeforeIndex:
               typeof result.next_before_index === "number" ? result.next_before_index : null,
-            totalRows: result.totals?.total_rows ?? prev?.totalRows,
-          };
-        });
+            totalRows: result.totals?.total_rows,
+          }),
+        );
       } catch (err) {
         if (sessionViewKeyRef.current === capturedKey) {
           setNotice(err instanceof Error && err.message ? err.message : "Failed to load older items");
@@ -1636,7 +1658,9 @@ export function SessionNavPanel({
     : false;
 
   const handleRowPress = async (row: Row) => {
-    const rowKey = row.item_id ?? row.tool_call_id;
+    // Outline keys (not raw item ids): fallback rows share item_id null and
+    // often an empty tool_call_id, so raw ids collide across rows.
+    const rowKey = outlineRowKey(row, rows.indexOf(row));
     setSelectedId(rowKey);
     const shouldOpenPreview = shouldOpenPreviewDrawerOnRowPress({
       hasDocument,
@@ -1751,9 +1775,7 @@ export function SessionNavPanel({
       </View>
     ));
 
-  const activeRowKey = previewOpen
-    ? (selectedRow?.item_id ?? selectedRow?.tool_call_id ?? null)
-    : highlightedId;
+  const activeRowKey = previewOpen ? selectedId : highlightedId;
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
 
   const isResolvingSession = !childScope && effectiveFollowVisible && !followResolved;
@@ -1777,9 +1799,13 @@ export function SessionNavPanel({
   const capNotice = listQuery.data?.records_capped === true && !notice && !capabilityMessage && !displayOnly
     ? "Large session: oldest tool controls omitted"
     : null;
-  const noticeBar = notice || capabilityMessage || capNotice || displayOnly ? (
+  // B10: paused-adapter warning (P1-7 parity) renders as its own banner line
+  // above the generic capability notice; existing notices are unchanged.
+  const pausedNotice = selectPausedNotice(listQuery.data);
+  const noticeBar = notice || capabilityMessage || capNotice || pausedNotice || displayOnly ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
       {displayOnly ? <Text style={styles.noticeText}>subagent context is not managed</Text> : null}
+      {pausedNotice ? <Text style={styles.noticeText}>{pausedNotice}</Text> : null}
       {notice || capabilityMessage || capNotice ?
         <Text style={styles.noticeText}>{notice ?? capabilityMessage ?? capNotice}</Text> : null}
     </View>
@@ -1851,25 +1877,15 @@ export function SessionNavPanel({
     return (
       <View style={styles.screen}>
         {noticeBar}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.headerTitle}>Outline</Text>
-            <Text style={styles.headerAgent} numberOfLines={1}>
-              · {childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
-            </Text>
-          </View>
-          <View style={styles.headerRight}>{settingsButton}</View>
-        </View>
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 8 }}>
-          <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
-            No active session
-          </Text>
-          <Text
-            style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}
-          >
-            This agent has not started a session or has no recorded activity yet.
-          </Text>
-        </View>
+        <OutlineEmptyState
+          theme={theme}
+          styles={styles}
+          agentLabel={childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
+          error={runtimeError ?? null}
+          isRefreshing={isRefreshing}
+          onRefresh={() => void refreshOutline()}
+          settingsButton={settingsButton}
+        />
       </View>
     );
   }
@@ -1984,7 +2000,7 @@ export function SessionNavPanel({
                     item={item}
                     isSelected={Boolean(
                       activeRowKey &&
-                        item.children.some((c) => (c.item_id ?? c.tool_call_id) === activeRowKey),
+                        item.children.some((c) => outlineRowKey(c, rows.indexOf(c)) === activeRowKey),
                     )}
                     isExpanded={!!expandedGroups[item.groupId]}
                     isPending={pendingGroupId === item.groupId}
@@ -2006,7 +2022,7 @@ export function SessionNavPanel({
                   />
                 );
               }
-              const rowKey = item.row.item_id ?? item.row.tool_call_id;
+              const rowKey = item.key;
               const linked =
                 linkedChildrenByCallId.get(item.row.tool_call_id) ?? EMPTY_LINKED_CHILDREN;
               return (
@@ -2054,7 +2070,7 @@ export function SessionNavPanel({
               : "context — tokens"}
           </Text>
           <Text style={[styles.usageLabel, { textAlign: "right" }]} numberOfLines={1}>
-            {hiddenCount > 0 ? `${hiddenCount} hidden · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : `${entryCount} entries`}
+            {hiddenCount > 0 ? `${scopedCountLabel(hiddenCount, totalHidden, "hidden")} · saved ${savedTokens != null ? fmtTokens(savedTokens) : fmtBytes(savedBytes)}` : scopedCountLabel(entryCount, totalEntries, "entries")}
           </Text>
         </View>
       </View>

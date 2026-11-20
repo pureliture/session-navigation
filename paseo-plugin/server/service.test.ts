@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { acquireHermesToggleLock, inspectHermesPluginInstall, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
+import { acquireHermesToggleLock, inspectHermesPluginInstall, inspectHermesToggle, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
 import {
   Store,
   EngineError,
@@ -31,7 +32,13 @@ import {
 import { hermesFilterInvocation, loadHermesTimeline } from "./hermesHistory.ts";
 import { MAX_HISTORY_BYTES } from "./historyLimits.ts";
 import { bindAgents } from "./mapping.ts";
-import { MutationResultSchema } from "../shared/sessionNav.ts";
+import {
+  DbChoiceResultSchema,
+  ListResultSchema,
+  MutationResultSchema,
+  dbChoiceRpc,
+  type Row,
+} from "../shared/sessionNav.ts";
 
 const scope = "omp:default:sid:default";
 const cleanup: (() => void)[] = [];
@@ -593,6 +600,31 @@ test("scope counts are real and include zero-item registrations; absent/disabled
       })
     ).ok,
   ).toBe(true);
+});
+
+test("list propagates paused state and warning for disabled adapters (P1-7 parity)", async () => {
+  const { service, register } = fixture([], false);
+  const hermesScope = "hermes:default:paused-sid:unknown";
+  register(hermesScope, { hide: true, summarize: true, unhide: true }, 1, false);
+  const paused = await service.handle("list", { scope_key: hermesScope });
+  expect(paused.ok).toBe(true);
+  expect(paused.capabilities.state).toBe("adapter_disabled");
+  expect(paused.paused).toBe(true);
+  expect(paused.paused_warning).toContain("protection-only");
+  expect(paused.paused_warning).toContain("capabilities refresh on resume");
+
+  const ompScope = "omp:default:paused-sid:default";
+  register(ompScope, { hide: true, summarize: true, unhide: true }, 1, false);
+  const ompPaused = await service.handle("list", { scope_key: ompScope });
+  expect(ompPaused.paused).toBe(true);
+  expect(ompPaused.paused_warning).toContain("protection-only");
+
+  register(scope);
+  const ready = await service.handle("list", { scope_key: scope });
+  expect(ready.ok).toBe(true);
+  expect(ready.paused).toBeUndefined();
+  expect(ready.paused_warning).toBeUndefined();
+  expect(ListResultSchema.parse(ready).scope_key).toBe(scope);
 });
 
 test("Paseo upgrades a Hide through the owning session and never requeues an accepted summary", async () => {
@@ -2208,18 +2240,39 @@ test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-v
   // Fix tyche config for lock, commit, rollback, and SQLite transaction tests
   writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
 
-  // 2. Cooperative toggle lock fails closed even for aged locks (no time-based auto-unlink race),
-  //    blocks BOTH On and Off concurrent toggle writers, and exposes manual crash recovery guidance.
+  // 2. Stale lock recovery (P1-9): an aged lock whose owner process is dead is
+  //    recovered instead of deadlocking, while a live owner's lock still fails
+  //    closed for BOTH On and Off writers with manual crash recovery guidance.
   const lockPath = join(hermesRoot, ".session-navigation-toggle.lock");
-  const agedLockContent = JSON.stringify({
-    pid: 999999,
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 2147483647;
+  const staleLockContent = JSON.stringify({
+    pid: deadPid,
     startedAt: Date.now() - 300_000,
-    nonce: "other-long-running",
+    nonce: "crashed-previous-toggle",
   });
-  writeFileSync(lockPath, agedLockContent, "utf8");
+  writeFileSync(lockPath, staleLockContent, "utf8");
   const pastTime = new Date(Date.now() - 300_000);
   utimesSync(lockPath, pastTime, pastTime);
 
+  const recoveredOnRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(recoveredOnRes.ok).toBe(true);
+  expect(existsSync(lockPath)).toBe(false);
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", true));
+  // Reset the recovered toggle so later rollback assertions start from disabled.
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+  store.driver.run("DELETE FROM adapter_control WHERE adapter_id='hermes'");
+
+  // A live owner's lock still fails closed for BOTH On and Off writers.
+  const liveLockContent = JSON.stringify({
+    pid: process.pid,
+    startedAt: Date.now(),
+    nonce: "live-owner",
+  });
+  writeFileSync(lockPath, liveLockContent, "utf8");
   const lockedOnRes = await service.handle("session-nav.set-adapter-toggle", {
     adapter: "hermes",
     enabled: true,
@@ -2228,7 +2281,7 @@ test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-v
   expect(lockedOnRes.error).toBe("hermes_toggle_locked");
   expect(lockedOnRes.hermes.error).toContain(".session-navigation-toggle.lock");
   expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
-  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+  expect(readFileSync(lockPath, "utf8")).toBe(liveLockContent);
 
   const lockedOffRes = await service.handle("session-nav.set-adapter-toggle", {
     adapter: "hermes",
@@ -2237,7 +2290,7 @@ test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-v
   expect(lockedOffRes.ok).toBe(false);
   expect(lockedOffRes.error).toBe("hermes_toggle_locked");
   expect(lockedOffRes.hermes.error).toContain(".session-navigation-toggle.lock");
-  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+  expect(readFileSync(lockPath, "utf8")).toBe(liveLockContent);
   expect(store.getAdapterControl("hermes")).toBeNull();
   rmSync(lockPath);
 
@@ -2645,4 +2698,401 @@ test("history loader rejects files over the byte limit with history_too_large", 
   const reply = await call("list");
   expect(reply.ok).toBe(false);
   expect(reply.error).toBe("history_too_large");
+});
+
+test("msg: hide/unhide through the service gate survive oversized history via the stored unit", async () => {
+  const { home, store, call } = fixture();
+  const unitId = "msg:user:p0:deadbeefcafe";
+  // Seed the unit as a prior hide would have, then blow past the byte cap so
+  // every timeline load throws HistoryTooLargeError.
+  expect(
+    store.setMessageVisibility(scope, unitId, "user", sha256("hello"), 5, "hidden").ok,
+  ).toBe(true);
+  expect(
+    store.setMessageVisibility(scope, unitId, "user", sha256("hello"), 5, "visible").ok,
+  ).toBe(true);
+  truncateSync(join(home, ".omp/agent/sessions/project", "2026_sid.jsonl"), MAX_HISTORY_BYTES + 1);
+  const hidden = await call("hide", { item_id: unitId });
+  expect(hidden.ok).toBe(true);
+  expect(hidden.visibility).toBe("hidden");
+  const shown = await call("unhide", { item_id: unitId });
+  expect(shown.ok).toBe(true);
+  expect(shown.visibility).toBe("visible");
+  // Unknown msg: IDs still 404 instead of surfacing history_too_large.
+  expect((await call("hide", { item_id: "msg:user:p9:000000000000" })).error).toBe(
+    "not_found",
+  );
+  expect((await call("unhide", { item_id: "msg:user:p9:000000000000" })).error).toBe(
+    "not_found",
+  );
+});
+
+test("parent-scope Hermes mutations resolve the rotation-effective child scope", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, store, service, register } = fixture([], false);
+  const parentScope = "hermes:default:h-old:unknown";
+  const childScope = "hermes:default:h-new:unknown";
+  // Only the rotation child is registered: capabilities must resolve to it.
+  register(childScope);
+
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const hdb = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT, parent_session_id TEXT, started_at REAL);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        _compressed_summary INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    hdb.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)").run("h-old", "{}", null, 100);
+    hdb.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)").run("h-new", "{}", "h-old", 200);
+    const ins = hdb.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+    ins.run("h-new", "user", "current prompt", null, null, null);
+    const toolCall = (id: string, path: string) =>
+      JSON.stringify([{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path }) } }]);
+    ins.run("h-new", "assistant", "", null, toolCall("call_a", "a.txt"), null);
+    ins.run("h-new", "tool", "alpha output", "call_a", null, "read_file");
+    ins.run("h-new", "assistant", "", null, toolCall("call_b", "b.txt"), null);
+    ins.run("h-new", "tool", "beta output", "call_b", null, "read_file");
+  } finally {
+    hdb.close();
+  }
+
+  // list with the parent scope_key resolves the child chunk but echoes the
+  // requested parent scope_key for API compatibility.
+  const listed = await service.handle("list", { scope_key: parentScope });
+  expect(listed.ok).toBe(true);
+  expect(listed.scope_key).toBe(parentScope);
+  expect(listed.capabilities).toMatchObject({ state: "ready", hide: true });
+  expect(listed.items.map((row: Row) => row.tool_call_id)).toEqual(["", "call_a", "call_b"]);
+  const toolA = listed.items.find((row: Row) => row.tool_call_id === "call_a");
+  const toolB = listed.items.find((row: Row) => row.tool_call_id === "call_b");
+  const userMsg = listed.items.find((row: Row) => row.kind === "user");
+  expect(userMsg.item_id).toStartWith("msg:user:");
+
+  // Tool hide via the parent scope_key lands on the child session, not 404.
+  const hideA = await service.handle("hide", { scope_key: parentScope, item_id: toolA.item_id });
+  expect(hideA.ok).toBe(true);
+  expect(store.get(childScope, toolA.item_id)?.visibility).toBe("hidden");
+  expect(store.items(parentScope)).toHaveLength(0);
+  const unhideA = await service.handle("unhide", { scope_key: parentScope, item_id: toolA.item_id });
+  expect(unhideA.ok).toBe(true);
+  expect(store.get(childScope, toolA.item_id)?.visibility).toBe("visible");
+
+  // Message hide via the parent scope_key writes the unit under the child
+  // scope (where the Hermes middleware reads it), not the parent.
+  const hideMsg = await service.handle("hide", { scope_key: parentScope, item_id: userMsg.item_id });
+  expect(hideMsg.ok).toBe(true);
+  const childUnits = store.listUnits(childScope);
+  expect(childUnits.some((unit) => String(unit.unit_id) === userMsg.item_id && unit.visibility === "hidden")).toBe(true);
+  expect(store.listUnits(parentScope).some((unit) => String(unit.unit_id) === userMsg.item_id)).toBe(false);
+  const unhideMsg = await service.handle("unhide", { scope_key: parentScope, item_id: userMsg.item_id });
+  expect(unhideMsg.ok).toBe(true);
+
+  // Batch and manage mutations resolve the child scope as well.
+  const batched = await service.handle("hideBatch", {
+    scope_key: parentScope,
+    items: [{ item_id: toolA.item_id }, { item_id: toolB.item_id }],
+  });
+  expect(batched).toMatchObject({ ok: true, applied: 2, failed: 0 });
+  const managed = await service.handle("manage", {
+    scope_key: parentScope,
+    tool_call_ids: ["call_a"],
+    action: "hide",
+  });
+  expect(managed.ok).toBe(true);
+  expect(store.get(childScope, toolA.item_id)?.visibility).toBe("hidden");
+});
+
+test("Hermes toggle lock recovers stale dead-owner locks but keeps live locks", () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-toggle-lock-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const hermesRoot = join(home, ".hermes");
+  mkdirSync(hermesRoot, { recursive: true });
+  const lockPath = join(hermesRoot, ".session-navigation-toggle.lock");
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 2147483647;
+  writeFileSync(lockPath, JSON.stringify({ pid: deadPid, startedAt: Date.now() - 300_000, nonce: "stale" }), "utf8");
+  const recovered = acquireHermesToggleLock(home);
+  expect(recovered.ok).toBe(true);
+  if (recovered.ok) recovered.release();
+  expect(existsSync(lockPath)).toBe(false);
+
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now(), nonce: "live" }), "utf8");
+  expect(acquireHermesToggleLock(home)).toEqual({ ok: false, error: "hermes_toggle_locked" });
+});
+
+test("Hermes toggle journal write failure surfaces an error and cleans staged temp files", async () => {
+  const { home, service } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  mkdirSync(hermesRoot, { recursive: true });
+  const rootCfg = join(hermesRoot, "config.yaml");
+  writeFileSync(
+    rootCfg,
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: false\n",
+    "utf8",
+  );
+  const journalPath = join(hermesRoot, ".session-navigation-toggle.journal.json");
+
+  // Block the journal path after precheck so the post-stage journal write fails.
+  let stagedWrites = 0;
+  service.hermesWriteOptions = {
+    writeFileImpl: (targetPath, data, opts) => {
+      stagedWrites++;
+      if (stagedWrites === 1) mkdirSync(journalPath, { recursive: true });
+      writeFileSync(targetPath, data, opts);
+    },
+  };
+  const failed = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(failed.ok).toBe(false);
+  expect(stagedWrites).toBeGreaterThan(0);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: false");
+  // No staged *.tmp files leak and no half-written journal file exists.
+  const leftovers: string[] = [];
+  const scan = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (full !== journalPath) scan(full);
+      } else if (entry.name.endsWith(".tmp")) {
+        leftovers.push(full);
+      }
+    }
+  };
+  scan(hermesRoot);
+  expect(leftovers).toEqual([]);
+  rmSync(journalPath, { recursive: true, force: true });
+
+  // After clearing the blockage the toggle succeeds (lock was released).
+  service.hermesWriteOptions = undefined;
+  const recovered = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(recovered.ok).toBe(true);
+});
+
+test("parent-scope Hermes summarize resolves the rotation-effective child scope", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const home = mkdtempSync(join(tmpdir(), "paseo-parent-sum-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const store = new Store(new BunDriver(join(home, "state.sqlite3")));
+  cleanup.push(() => store.close());
+  const service = new PaseoService(store, home);
+  const parentScope = "hermes:default:sum-old:unknown";
+  const childScope = "hermes:default:sum-new:unknown";
+  store.register(childScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "test",
+  });
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const hdb = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT, parent_session_id TEXT, started_at REAL);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        _compressed_summary INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    hdb.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)").run("sum-old", "{}", null, 100);
+    hdb.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)").run("sum-new", "{}", "sum-old", 200);
+    hdb.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)").run(
+      "sum-new",
+      "assistant",
+      "",
+      null,
+      JSON.stringify([{ id: "call_s", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "s.txt" }) } }]),
+      null,
+    );
+    hdb.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)").run("sum-new", "tool", "summarizable output", "call_s", null, "read_file");
+  } finally {
+    hdb.close();
+  }
+  const listed = await service.handle("list", { scope_key: parentScope });
+  const tool = listed.items.find((row: Row) => row.tool_call_id === "call_s");
+  const summarized = await service.handle("hide", {
+    scope_key: parentScope,
+    item_id: tool.item_id,
+    mode: "summarize",
+  });
+  expect(summarized.ok).toBe(true);
+  const stored = store.get(childScope, tool.item_id);
+  expect(stored?.visibility).toBe("hidden");
+  expect(stored?.compaction_source).toBe("summarize_pending");
+  expect(store.items(parentScope)).toHaveLength(0);
+});
+
+test("manage on tool items succeeds without loading an oversized history; unknown ids stay bounded", async () => {
+  const big = fixture(toolMessages());
+  const stored = (await big.call("list")).items.find((item: Row) => item.tool_call_id === "c1");
+  expect(stored).toBeDefined();
+  // Seed the stored item first so manage can resolve it without the timeline.
+  expect((await big.call("hide", { item_id: stored.item_id })).ok).toBe(true);
+  // Blow past the byte cap so every timeline load throws HistoryTooLargeError.
+  truncateSync(join(big.home, ".omp/agent/sessions/project", "2026_sid.jsonl"), MAX_HISTORY_BYTES + 1);
+  const managed = await big.service.handle("manage", { scope_key: scope, tool_call_ids: ["c1"], action: "hide" });
+  expect(managed.ok).toBe(true);
+  expect(managed.items).toMatchObject([{ tool_call_id: "c1", ok: true }]);
+  // Unknown ids that need the timeline get a bounded per-item error, not a throw.
+  const missing = await big.service.handle("manage", { scope_key: scope, tool_call_ids: ["nope"], action: "hide" });
+  expect(missing.ok).toBe(false);
+  expect(missing.items).toMatchObject([{ tool_call_id: "nope", ok: false, error: "history_too_large" }]);
+});
+
+test("list replies validate against ListResultSchema and dbChoice requires a scope_key", async () => {
+  const { call } = fixture(toolMessages());
+  const listed = await call("list");
+  const parsed = ListResultSchema.parse(listed);
+  // The facade schema must not strip the resolved scope.
+  expect(parsed.scope_key).toBe(scope);
+  expect(parsed.items.length).toBeGreaterThan(0);
+  // dbChoice without a scope_key is rejected by the schema (the server
+  // requires 4 segments and answers invalid_scope).
+  expect(() => dbChoiceRpc.input.parse({ choice: "abort_request" })).toThrow();
+  const { service } = fixture();
+  const noScope = await service.handle("dbChoice", { choice: "abort_request" });
+  expect(noScope).toMatchObject({ ok: false, error: "invalid_scope" });
+  const okChoice = await call("dbChoice", { scope_key: scope, choice: "abort_request" });
+  expect(DbChoiceResultSchema.parse(okChoice)).toMatchObject({ ok: true });
+});
+
+test("batch abort surfaces unsafe_journal_mode and engine_protocol_incompatible with abort choices", async () => {
+  const first = fixture(toolMessages());
+  const row = (await first.call("list")).items.find((item: Row) => item.tool_call_id === "c1");
+  first.store.driver.exec("INSERT OR REPLACE INTO meta(key,value) VALUES ('engine_protocol_version','999')");
+  const batched = await first.service.handle("hideBatch", {
+    scope_key: scope,
+    items: [{ item_id: row.item_id }],
+  });
+  expect(batched).toMatchObject({
+    ok: false,
+    error: "engine_protocol_incompatible",
+    choices: ["abort_request", "send_original"],
+    applied: 0,
+    failed: 1,
+  });
+  expect(batched.items[0]).toMatchObject({ ok: false, error: "engine_protocol_incompatible" });
+
+  const second = fixture(toolMessages());
+  const secondRow = (await second.call("list")).items.find((item: Row) => item.tool_call_id === "c1");
+  second.store.driver.exec("PRAGMA journal_mode=WAL");
+  // Test seam: simulate a pre-WAL sqlite so the write gate rejects WAL mode.
+  const legacyStore = second.store as unknown as { sqliteVersion: string };
+  legacyStore.sqliteVersion = "3.0.0";
+  const walBatched = await second.service.handle("hideBatch", {
+    scope_key: scope,
+    items: [{ item_id: secondRow.item_id }],
+  });
+  expect(walBatched).toMatchObject({
+    ok: false,
+    error: "unsafe_journal_mode",
+    choices: ["abort_request", "send_original"],
+    applied: 0,
+    failed: 1,
+  });
+  expect(walBatched.items[0]).toMatchObject({ ok: false, error: "unsafe_journal_mode" });
+});
+
+test("bindAgents rejects colon scopes, matches ACP case-insensitively, and skips archived agents", () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-bind-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const agentsDir = join(home, ".paseo", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  const writeAgent = (name: string, agent: Record<string, unknown>) =>
+    writeFileSync(join(agentsDir, name), JSON.stringify(agent));
+  // Case-insensitive ACP transport/provider still binds.
+  writeAgent("upper.json", { id: "upper-agent", provider: "ACP", runtimeInfo: { sessionId: "s1", provider: "Acp" } });
+  // A hermes-* provider prefix alone is not ACP and must not bind.
+  writeAgent("pseudo.json", { id: "pseudo-agent", provider: "hermes-openai", runtimeInfo: { sessionId: "s2", provider: "hermes-openai" } });
+  // Colon scopes would forge scope_key segments: never bind.
+  writeAgent("colon.json", { id: "colon-agent", provider: "acp", runtimeInfo: { sessionId: "a:b", provider: "acp" } });
+  // Archived descriptors never overwrite live bindings.
+  writeAgent("archived.json", { id: "stale-agent", archived: true, provider: "acp", runtimeInfo: { sessionId: "s1", provider: "acp" } });
+  type Entry = { scope_key: string; items: number; capabilities: { state: string; unhide: boolean }; agent_id?: string };
+  const scopes: Entry[] = [
+    { scope_key: "hermes:default:s1:unknown", items: 0, capabilities: { state: "ready", unhide: true } },
+    { scope_key: "hermes:default:s2:unknown", items: 0, capabilities: { state: "ready", unhide: true } },
+  ];
+  bindAgents(home, scopes, join(home, ".paseo"));
+  expect(scopes.find((s) => s.scope_key === "hermes:default:s1:unknown")?.agent_id).toBe("upper-agent");
+  expect(scopes.find((s) => s.scope_key === "hermes:default:s2:unknown")?.agent_id).toBeUndefined();
+  expect(scopes.some((s) => s.scope_key.includes("a:b"))).toBe(false);
+});
+
+test("bindAgents sorts agent files and never scans the process CWD for empty PASEO_HOME", () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-bind-sort-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const agentsDir = join(home, ".paseo", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  // Later-sorting file wins deterministically.
+  writeFileSync(join(agentsDir, "b.json"), JSON.stringify({ id: "b-agent", provider: "acp", runtimeInfo: { sessionId: "s9", provider: "acp" } }));
+  writeFileSync(join(agentsDir, "a.json"), JSON.stringify({ id: "a-agent", provider: "acp", runtimeInfo: { sessionId: "s9", provider: "acp" } }));
+  type Entry = { scope_key: string; items: number; capabilities: { state: string; unhide: boolean }; agent_id?: string };
+  const scopes: Entry[] = [
+    { scope_key: "hermes:default:s9:unknown", items: 0, capabilities: { state: "ready", unhide: true } },
+  ];
+  bindAgents(home, scopes, join(home, ".paseo"));
+  expect(scopes[0].agent_id).toBe("b-agent");
+
+  // Empty PASEO_HOME falls back to the home dir, never the CWD: plant a
+  // decoy for a CWD-only session and prove it is not picked up.
+  const cwd = mkdtempSync(join(tmpdir(), "paseo-bind-cwd-"));
+  cleanup.push(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, "agents"), { recursive: true });
+  writeFileSync(join(cwd, "agents", "decoy.json"), JSON.stringify({ id: "decoy-agent", provider: "acp", runtimeInfo: { sessionId: "s-cwd-only", provider: "acp" } }));
+  const previousCwd = process.cwd();
+  process.chdir(cwd);
+  try {
+    const fresh: Entry[] = [
+      { scope_key: "hermes:default:s-cwd-only:unknown", items: 0, capabilities: { state: "ready", unhide: true } },
+    ];
+    bindAgents(home, fresh, "");
+    expect(fresh[0].agent_id).toBeUndefined();
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+test("dangling toggle symlinks are rejected and non-string YAML keys outside the target path are kept", () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-dangle-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  symlinkSync(join(home, ".hermes", "missing-target"), join(home, ".hermes", ".session-navigation-toggle.lock"));
+  const inspected = inspectHermesToggle(home);
+  expect(inspected.error ?? JSON.stringify(inspected)).toMatch(/unsafe_hermes_path/);
+
+  // Non-string keys in unrelated sections (numeric port keys) are valid YAML
+  // and must not fail as hermes_invalid_config_yaml.
+  const yaml = "ports:\n  8080: http\n";
+  expect(readHermesPluginEnabled(yaml)).toBe(false);
+  const patched = patchHermesConfigYaml(yaml, true);
+  expect(patched).toContain("session-navigation");
+  expect(patched).toContain("8080");
 });

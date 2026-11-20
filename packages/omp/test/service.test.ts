@@ -537,3 +537,81 @@ test("omp adapter_control off enters protection_only while allowing list_items a
   expect(afterRestore.patches).toEqual([]);
   expect(afterRestore.hidden_messages).toEqual(["msg:user:1"]);
 });
+
+test("manual hide then summarize upgrade preserves visibility, version and original", async () => {
+  const adapter = service();
+  await call(adapter, "prepare", { snapshot_id: "s1", records: [record("call-1")] });
+  const hidden = await call(adapter, "compact", { snapshot_id: "s1", tool_call_id: "call-1" });
+  expect(hidden.ok).toBe(true);
+  const before = adapter.store.get(sessionScope("a"), String(hidden.item_id))!;
+  expect(before.visibility).toBe("hidden");
+  const upgraded = await call(adapter, "manage", {
+    snapshot_id: "s1",
+    tool_call_ids: ["call-1"],
+    action: "summarize",
+    summaries: { "call-1": "Output row 000 details" },
+  });
+  expect(upgraded.ok).toBe(true);
+  const after = adapter.store.get(sessionScope("a"), String(hidden.item_id))!;
+  expect(after.visibility).toBe("hidden");
+  expect(after.version).toBe(before.version + 1);
+  expect(after.original).toBe(record("call-1").content);
+  expect(after.compacted).toContain("Output row 000 details");
+  expect(after.compaction_source).toBe("llm");
+  expect(after.content_sha256).toBe(before.content_sha256);
+  const restored = await call(adapter, "restore", { item_id: hidden.item_id });
+  expect(restored.ok).toBe(true);
+  expect(
+    (await call(adapter, "prepare", { snapshot_id: "s2", records: [record("call-1")] })).patches,
+  ).toEqual([]);
+});
+
+test("lone surrogates in arguments and content never become a fatal db_error", async () => {
+  const adapter = service();
+  const lone = `prefix ${String.fromCharCode(0xd800)} suffix`;
+  const args = { query: lone };
+  const rec = { ...record("call-s"), tool_name: "brain_memory_search", arguments: args };
+  const prepared = await call(adapter, "prepare", { snapshot_id: "s", records: [rec] });
+  expect(prepared.ok).toBe(true);
+  const compacted = await call(adapter, "compact", { snapshot_id: "s", tool_call_id: "call-s" });
+  expect(compacted.ok).toBe(true);
+  const stored = adapter.store.get(sessionScope("a"), String(compacted.item_id))!;
+  expect(stored.original).toBe(rec.content);
+  const folded = lone.replace(String.fromCharCode(0xd800), String.fromCharCode(0xfffd));
+  expect(stored.invocation_digest).toBe(
+    invocationDigest({ tool_name: "brain_memory_search", arguments: { query: folded } }),
+  );
+});
+
+test("object-valued display fields and non-string queries never throw", async () => {
+  const adapter = service();
+  const nested: Record<string, unknown> = Object.create(null);
+  nested.complex = true;
+  const rec = { ...record("call-o"), tool_name: "brain_memory_search", arguments: { query: nested } };
+  expect(await call(adapter, "prepare", { snapshot_id: "s", records: [rec] })).toMatchObject({ ok: true });
+  const managed = await call(adapter, "manage", {
+    snapshot_id: "s",
+    tool_call_ids: ["call-o"],
+    action: "hide",
+  });
+  expect(managed.ok).toBe(true);
+  expect((managed.items as any[])[0].hint ?? "").toBe("");
+  expect((await call(adapter, "list_items", { snapshot_id: "s", query: 42 })).ok).toBe(true);
+  expect(
+    ((await call(adapter, "list_items", { snapshot_id: "s", query: "Output row" })).items as any[]).length,
+  ).toBeGreaterThan(0);
+  expect(
+    ((await call(adapter, "list_items", { snapshot_id: "s" })).items as any[]).length,
+  ).toBeGreaterThan(0);
+});
+
+test("cyclic arguments degrade to unrecognized invocations without crashing", async () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  expect(ompInvocationArgs("brain_memory_search", cyclic)).toBeNull();
+  const shared = { leaf: 1 };
+  expect(ompInvocationArgs("brain_memory_search", { left: shared, right: shared })).toEqual({
+    left: { leaf: 1 },
+    right: { leaf: 1 },
+  });
+});

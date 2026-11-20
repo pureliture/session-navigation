@@ -32,3 +32,64 @@ jobs:
         with:
           python-version: "3.13"
       - run: python tools/sync_hermes_vendor.py --check
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest jsonschema
+      - run: python -m pytest tests/ tools/outline-smoke/test_seed_security.py -q
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # node --test is intentionally not used: node type-stripping rejects
+      # TS the compiler accepts (pre-existing, e.g. core store.ts). bun test
+      # is the supported runner for core/omp/paseo.
+      - name: core tests (bun)
+        run: bun test test
+        working-directory: packages/core
+      # OMP tests import paseo-plugin server sources (yaml, RPC schemas), so
+      # paseo deps must exist before the omp step runs.
+      - name: install paseo deps
+        run: npm ci
+        working-directory: paseo-plugin
+      - name: omp tests (bun)
+        run: |
+          bun install
+          bun run build
+          test -x node_modules/.bin/omp
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          bun test test
+        working-directory: packages/omp
+      - name: paseo tests (bun + node)
+        run: npm test
+        working-directory: paseo-plugin
+      # B12: the bun-parity pytest needs bun on PATH, so it runs in the js
+      # job (the python job has no bun). The grep enforces execution: a
+      # bun-missing skip fails the step instead of going green silently.
+      - name: bun-parity pytest (must execute, not skip)
+        run: |
+          pip install pytest
+          python -m pytest "tests/test_b2_b12_hermes.py::test_codex_strict_schema_parity_with_ts_hermes_history" -v 2>&1 | tee /tmp/bun-parity.log
+          grep -q "1 passed" /tmp/bun-parity.log
+      - name: typecheck (core, omp, paseo)
+        run: |
+          (cd packages/core && npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.9.3 && ./node_modules/.bin/tsc --noEmit)
+          (cd packages/omp && bun install && ./node_modules/.bin/tsc --noEmit)
+          (cd paseo-plugin && ./node_modules/.bin/tsc --noEmit)
+      - name: core conformance (python vs node/bun)
+        run: PYTHONPATH=src python tools/core_conformance.py

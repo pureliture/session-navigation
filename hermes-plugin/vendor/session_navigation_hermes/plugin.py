@@ -173,7 +173,11 @@ def register(ctx: Any) -> PluginState:
 
     # Optional host capability: freeze the human-supervision protocol into
     # each new session prompt. Absent API, disabled plugin, or a duplicate
-    # registration must never block tool/middleware registration.
+    # registration must never block tool/middleware registration. The host
+    # offers no unregister API and freezes sections per session, so a later
+    # transition to protection-only cannot retract this text here: the
+    # middleware dynamically disables it instead by stripping the section
+    # from outgoing provider payloads (see _strip_supervision_text).
     register_section = getattr(ctx, "register_system_prompt_section", None)
     if callable(register_section) and _is_effectively_enabled(state):
         try:

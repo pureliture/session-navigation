@@ -77,6 +77,7 @@ from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore, _extract_invocations, _extract_invocations_and_duplicates
 from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
+from session_navigation.db import DBError, DBFullError
 from session_navigation.policy import refusal_reason, is_destructive_command
 from session_navigation.reminders import BoundaryReminders
 from .allowlist import AdapterRejected, filter_invocation
@@ -198,7 +199,7 @@ def subagent_started(state: PluginState, **kwargs: Any) -> None:
     call = captured[1] if captured and (not captured[0] or captured[0] == parent.session_id) else None
     state.child_links[child.session_id] = dict(parent_scope=parent.scope_key(), tool_call_id=call, subagent_id=subagent)
     if _is_effectively_enabled(state):
-        _register_adapter(state, child, True)
+        _guarded_register(state, child, True)
 
 
 def _dump(payload: dict[str, Any]) -> str:
@@ -238,6 +239,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        _refresh_registration(state, scope)
         # hide_context is rule-based only: never pass the configured summarizer.
         result = _engine_compact(
             state.engine, state.store, scope, target.strip(),
@@ -247,7 +249,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             if matches and _cleanup_error(state, scope, matches[0]) is None:
                 ok_fb, err_fb, fb_item_id, _ = _apply_hide_for_manage(state, scope, matches[0])
                 if ok_fb and fb_item_id is not None:
-                    _register_adapter(state, scope, True)
+                    _guarded_register(state, scope, True)
                     stored_fb = state.engine.store.get(scope, fb_item_id)
                     return _dump({
                         "ok": True,
@@ -261,7 +263,7 @@ def make_hide_handler(state: PluginState) -> Callable[..., str]:
             if err == "db_error":
                 return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
             return _dump({"ok": False, "error": err})
-        _register_adapter(state, scope, True)
+        _guarded_register(state, scope, True)
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
@@ -289,6 +291,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        _refresh_registration(state, scope)
         if state.summarizer is not None and hasattr(state.summarizer, "current_scope_key"):
             state.summarizer.current_scope_key = scope.scope_key()
         result = _engine_summarize(
@@ -298,7 +301,7 @@ def make_summarize_handler(state: PluginState) -> Callable[..., str]:
             if err == "db_error":
                 return _dump({"ok": False, "error": err, "choices": ["abort_request", "send_original"]})
             return _dump({"ok": False, "error": err})
-        _register_adapter(state, scope, True)
+        _guarded_register(state, scope, True)
         original_bytes = 0
         if result.item is not None:
             original_bytes = len(result.item.original.encode("utf-8"))
@@ -324,6 +327,9 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        paused = not _is_effectively_enabled(state)
+        if not paused:
+            _refresh_registration(state, scope)
         if isinstance(args, dict) and args.get("view") == "candidates":
             limit = args.get("limit", 30)
             if type(limit) is not int or not 1 <= limit <= 200:
@@ -341,11 +347,24 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
                 if len(candidates) >= limit:
                     break
             return _dump({"ok": True, "items": candidates})
-        items = _engine_list(state.engine, scope, query)
+        try:
+            items = _engine_list(state.engine, scope, query)
+        except (DBError, DBFullError):
+            # A broken database (read-only/locked/full) must surface through
+            # the pending-error payload, not an unhandled throw that hides
+            # the db_error_pending path below.
+            state.db_error_pending = True
+            return _dump({"ok": False, "error": "db_error",
+                          "db_error_pending": True,
+                          "db_error_choices": ["abort_request", "send_original"]})
         scope_key = scope.scope_key()
-        live_ids = {
-            item.item_id for item in state.engine.store.items(scope)
-        }
+        try:
+            live_ids = {
+                item.item_id for item in state.engine.store.items(scope)
+            }
+        except (DBError, DBFullError):
+            state.db_error_pending = True
+            live_ids = set()
         state.presentations.prune(scope_key, live_ids)
         items = decorate_items(items, state.presentations.snapshot().get(scope_key, {}))
         state.presentations.record_view(scope_key, [
@@ -359,6 +378,13 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
             "ok": True, "count": len(items), "items": items,
             "compacted_count": compacted_count, "message": message,
         }
+        if paused:
+            payload["paused"] = True
+            payload["paused_warning"] = (
+                "adapter paused: hides/summaries are disabled, but stored hidden "
+                "items are still redacted from outgoing requests (protection-only); "
+                "capabilities refresh on resume."
+            )
         if state.db_error_pending:
             payload["db_error_pending"] = True
             payload["db_error_choices"] = ["abort_request", "send_original"]
@@ -614,6 +640,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         scope = scope_for(state, session_id)
         if scope is None:
             return _dump({"ok": False, "error": "not_found"})
+        _refresh_registration(state, scope)
         params = args if isinstance(args, dict) else {}
         want = params.get("tool_call_ids")
         if want is None or want == []:
@@ -776,7 +803,7 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
         applied_rows = [r for r in results if r["ok"]]
         applied = len(applied_rows)
         if applied > 0:
-            _register_adapter(state, scope, True)
+            _guarded_register(state, scope, True)
         failed = len(results) - applied
         total_post = sum(int(r.get("compacted_bytes", 0)) for r in applied_rows)
         total_pre = sum(int(r.get("original_bytes", 0)) for r in applied_rows)
@@ -795,14 +822,19 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
     return _track_mutation(state, manage_context)
 
 
-def _child_request(request: dict[str, Any]) -> dict[str, Any]:
-    request = copy.deepcopy(request)
-    if isinstance(request.get("tools"), list):
-        request["tools"] = [tool for tool in request["tools"]
-            if not isinstance(tool, dict) or
-            (tool.get("function", {}).get("name") if isinstance(tool.get("function"), dict) else tool.get("name")) not in TOOL_SCHEMAS]
-    if isinstance(request.get("instructions"), str):
+def _strip_supervision_text(request: dict[str, Any]) -> bool:
+    """Remove the static human-supervision guidance in place; return True if changed.
+
+    The host offers no section unregister API and freezes sections for the
+    session, so entering protection-only cannot retract already-rendered
+    guidance. Stripping our own static text from the outgoing provider
+    payload stops the model from being told to call tools that now answer
+    ``disabled``, without touching any other content.
+    """
+    changed = False
+    if isinstance(request.get("instructions"), str) and SUPERVISION_SECTION_TEXT in request["instructions"]:
         request["instructions"] = request["instructions"].replace(SUPERVISION_SECTION_TEXT, "")
+        changed = True
     for key in ("messages", "input"):
         messages = request.get(key)
         if not isinstance(messages, list):
@@ -812,13 +844,25 @@ def _child_request(request: dict[str, Any]) -> dict[str, Any]:
                 continue
             content = message.get("content")
             if isinstance(content, str):
-                message["content"] = content.replace(SUPERVISION_SECTION_TEXT, "")
+                if SUPERVISION_SECTION_TEXT in content:
+                    message["content"] = content.replace(SUPERVISION_SECTION_TEXT, "")
+                    changed = True
             elif isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    if isinstance(block, dict) and isinstance(block.get("text"), str) and SUPERVISION_SECTION_TEXT in block["text"]:
                         block["text"] = block["text"].replace(SUPERVISION_SECTION_TEXT, "")
-    return request
+                        changed = True
+    return changed
 
+
+def _child_request(request: dict[str, Any]) -> dict[str, Any]:
+    request = copy.deepcopy(request)
+    if isinstance(request.get("tools"), list):
+        request["tools"] = [tool for tool in request["tools"]
+            if not isinstance(tool, dict) or
+            (tool.get("function", {}).get("name") if isinstance(tool.get("function"), dict) else tool.get("name")) not in TOOL_SCHEMAS]
+    _strip_supervision_text(request)
+    return request
 
 def _protection_only_rewrite(
     state: PluginState,
@@ -878,6 +922,10 @@ def _protection_only_rewrite(
         request_out, applied, _ = apply_replacements(api_mode, request_out, plan_dicts)
     if hidden_messages:
         request_out = drop_messages(api_mode, request_out, hidden_messages)
+    # Protection-only dynamic-disable: the startup-registered section stays in
+    # the host prompt, so strip our own guidance from the outgoing copy. The
+    # model is no longer told to call tools that now answer `disabled`.
+    _strip_supervision_text(request_out)
     return {
         "request": request_out,
         "source": SOURCE,
@@ -892,23 +940,17 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
         try:
             if not _is_effectively_enabled(state):
                 scope = scope_for(state, kwargs.get("session_id", ""))
-                registration = state.engine.store.adapter_session(scope) if scope is not None else None
-                candidates = _scope_candidates(scope) if scope is not None else []
-                hidden_items: list[Any] = []
-                hidden_scopes: list[Scope] = []
-                seen_item_ids: set[str] = set()
-                hidden_messages: set[str] = set()
-                for cand in candidates:
-                    cand_items = [item for item in state.engine.store.items(cand) if item.visibility == "hidden"]
-                    if cand_items:
-                        hidden_scopes.append(cand)
-                        for item in cand_items:
-                            if item.item_id not in seen_item_ids:
-                                seen_item_ids.add(item.item_id)
-                                hidden_items.append(item)
-                    hidden_messages.update(state.engine.store.hidden_message_keys(cand))
-                if scope is not None and (registration is not None or hidden_items or hidden_messages):
-                    _register_adapter(state, scope, False)
+                try:
+                    registration, hidden_items, hidden_messages, hidden_scopes = _load_protection_state(state, scope)
+                except Exception as exc:
+                    # Reads failed: protection cannot see what is hidden, so
+                    # fail loudly (pending flag + raise) instead of blind.
+                    logger.error(
+                        "session-navigation middleware cannot load hidden state: %s",
+                        type(exc).__name__,
+                    )
+                    state.db_error_pending = True
+                    raise
                 request = kwargs.get("request")
                 child = bool(
                     scope is not None
@@ -918,15 +960,39 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                     request = _child_request(request)
                 if scope is not None and isinstance(request, dict) and (hidden_items or hidden_messages):
                     api_mode = kwargs.get("api_mode", "")
-                    return _protection_only_rewrite(
-                        state,
-                        scope,
-                        api_mode if isinstance(api_mode, str) else "",
-                        request,
-                        hidden_items,
-                        hidden_messages,
-                        hidden_scopes=hidden_scopes,
-                    )
+                    try:
+                        rewritten = _protection_only_rewrite(
+                            state,
+                            scope,
+                            api_mode if isinstance(api_mode, str) else "",
+                            request,
+                            hidden_items,
+                            hidden_messages,
+                            hidden_scopes=hidden_scopes,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "session-navigation middleware protection rewrite failed: %s",
+                            type(exc).__name__,
+                        )
+                        state.db_error_pending = True
+                        raise
+                    # Registration is bookkeeping: a write failure (read-only,
+                    # locked, disk-full) must not skip the rewrite above.
+                    if registration is not None or hidden_items or hidden_messages:
+                        _guarded_register(state, scope, False)
+                    return rewritten
+                if scope is not None and (registration is not None or hidden_items or hidden_messages):
+                    _guarded_register(state, scope, False)
+                if (
+                    scope is not None
+                    and not child
+                    and isinstance(request, dict)
+                ):
+                    stripped = copy.deepcopy(request)
+                    if _strip_supervision_text(stripped):
+                        return {"request": stripped, "source": SOURCE,
+                                "reason": "protection_only (supervision disabled)"}
                 if child and isinstance(request, dict):
                     return {"request": request, "source": SOURCE}
                 return None
@@ -950,9 +1016,22 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
             other_middlewares = state.count_middlewares()
             supported = api_mode in SUPPORTED_API_MODES
-            _register_adapter(state, scope, supported)
-            step = _engine_step(state.engine, state.store, scope, api_mode, request,
-                               publish_targets=supported, summarizer=state.summarizer)
+            # Registration is bookkeeping: guard its write so a read-only,
+            # locked, or full database cannot skip the rewrite below.
+            _guarded_register(state, scope, supported)
+            try:
+                step = _engine_step(state.engine, state.store, scope, api_mode, request,
+                                   publish_targets=supported, summarizer=state.summarizer)
+            except Exception as exc:
+                # Fail closed: the host sends the original request when
+                # middleware raises, so fall back to a protection-only rewrite
+                # from reads (which still work on read-only databases) instead.
+                logger.error(
+                    "session-navigation middleware step failed (%s); using protection-only fallback",
+                    type(exc).__name__,
+                )
+                state.db_error_pending = True
+                return _protection_only_fallback(state, scope, api_mode, request)
             if other_middlewares > 0 and isinstance(step.get("trace"), dict):
                 step["trace"]["other_middlewares"] = other_middlewares
             applied = step["applied"]
@@ -983,9 +1062,17 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             if isinstance(request_out, dict):
                 found = message_keys(api_mode, request_out)
                 store = state.engine.store
-                store.ensure_message_units(scope, [
-                    (key, role, hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text))
-                    for key, role, _index, text in found])
+                try:
+                    store.ensure_message_units(scope, [
+                        (key, role, hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text))
+                        for key, role, _index, text in found])
+                except Exception as exc:
+                    # Message-unit bookkeeping must not lose the rewrite above.
+                    logger.warning(
+                        "session-navigation message-unit write failed (%s); continuing with rewritten request",
+                        type(exc).__name__,
+                    )
+                    state.db_error_pending = True
                 hidden: set[str] = set()
                 for cand in _scope_candidates(scope):
                     hidden.update(store.hidden_message_keys(cand))
@@ -993,7 +1080,16 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                     request_out = drop_messages(api_mode, request_out, hidden)
                 users = [(index, text) for _key, role, index, text in message_keys(api_mode, request) if role == "user"]
                 if users and not child:
-                    entries = state.store.entries(scope.scope_key())
+                    try:
+                        entries = state.store.entries(scope.scope_key())
+                    except Exception as exc:
+                        # Reminder hints are enrichment only; never fail the turn.
+                        logger.warning(
+                            "session-navigation transcript read failed (%s); skipping reminder note",
+                            type(exc).__name__,
+                        )
+                        state.db_error_pending = True
+                        entries = []
                     candidates = []
                     for entry in reversed(entries):
                         if _cleanup_error(state, scope, entry) is not None:
@@ -1090,3 +1186,116 @@ def _register_adapter(state: PluginState, scope: Scope, projecting: bool) -> Non
         enabled=projecting,
         **state.child_links.get(scope.session_id, {}),
     )
+
+
+def _guarded_register(state: PluginState, scope: Scope, projecting: bool) -> bool:
+    """Best-effort adapter registration: bookkeeping must never break protection.
+
+    Returns True when the registration write landed. On failure (read-only,
+    locked, or full database) the error is logged and surfaced via
+    `db_error_pending` -- which the list handler reports with
+    abort/send-original choices -- instead of raising into the host, where it
+    would make the host send the original request unprotected.
+    """
+    try:
+        _register_adapter(state, scope, projecting)
+    except Exception as exc:
+        logger.warning(
+            "session-navigation registration write failed (%s); protection continues",
+            type(exc).__name__,
+        )
+        try:
+            state.db_error_pending = True
+        except Exception:
+            pass
+        return False
+    return True
+
+
+def _load_protection_state(
+    state: PluginState, scope: Scope | None
+) -> tuple[Any, list[Any], set[str], list[Scope]]:
+    """Read-only snapshot of hidden items/messages for fail-closed rewrites.
+
+    Reads only, so it stays usable on read-only databases. Raises on read
+    failure so the caller fails loudly instead of protecting blind.
+    """
+    registration = state.engine.store.adapter_session(scope) if scope is not None else None
+    candidates = _scope_candidates(scope) if scope is not None else []
+    hidden_items: list[Any] = []
+    hidden_scopes: list[Scope] = []
+    seen_item_ids: set[str] = set()
+    hidden_messages: set[str] = set()
+    for cand in candidates:
+        cand_items = [item for item in state.engine.store.items(cand) if item.visibility == "hidden"]
+        if cand_items:
+            hidden_scopes.append(cand)
+            for item in cand_items:
+                if item.item_id not in seen_item_ids:
+                    seen_item_ids.add(item.item_id)
+                    hidden_items.append(item)
+        hidden_messages.update(state.engine.store.hidden_message_keys(cand))
+    return registration, hidden_items, hidden_messages, hidden_scopes
+
+
+def _protection_only_fallback(
+    state: PluginState, scope: Scope, api_mode: str, request: dict[str, Any]
+) -> dict[str, Any]:
+    """Fail-closed fallback when a registration/step write fails.
+
+    The host sends the original request when middleware raises, so raising
+    here would leak hidden content. Recompute the protection-only rewrite from
+    reads instead (which still work on read-only databases). Only when nothing
+    is hidden is the original request returned, flagged pending so the list
+    handler surfaces the persistence failure loudly.
+    """
+    _registration, hidden_items, hidden_messages, hidden_scopes = _load_protection_state(state, scope)
+    if isinstance(request, dict) and (hidden_items or hidden_messages):
+        rewritten = _protection_only_rewrite(
+            state,
+            scope,
+            api_mode if isinstance(api_mode, str) else "",
+            request,
+            hidden_items,
+            hidden_messages,
+            hidden_scopes=hidden_scopes,
+        )
+        rewritten["pending"] = True
+        return rewritten
+    return {
+        "request": copy.deepcopy(request),
+        "source": SOURCE,
+        "reason": "db_error_persistence_failed_request_fail_open",
+        "pending": True,
+    }
+
+
+def _refresh_registration(state: PluginState, scope: Scope) -> bool:
+    """Recompute stored capabilities when effectively enabled but the row is stale.
+
+    A paused turn overwrites the registration with `projecting=False`; without
+    a refresh the row keeps capabilities False after resume until the next
+    registering turn, so capability reads (`adapter_can`) stay wrong with no
+    warning. Refresh once on resume so the next tool/list use heals the row
+    instead of waiting for a full middleware turn. No-op (no write) when
+    already fresh or while paused.
+    """
+    if not _is_effectively_enabled(state):
+        return False
+    try:
+        row = state.engine.store.adapter_session(scope)
+    except Exception:
+        return False
+    caps = row.get("capabilities") if isinstance(row, dict) else None
+    if not isinstance(caps, dict):
+        caps = {}
+    stale = (
+        not isinstance(row, dict)
+        or not row.get("enabled")
+        or caps.get("hide") is not True
+        or caps.get("unhide") is not True
+        or (state.summarizer is not None and caps.get("summarize") is not True)
+    )
+    if not stale:
+        return False
+    return _guarded_register(state, scope, True)

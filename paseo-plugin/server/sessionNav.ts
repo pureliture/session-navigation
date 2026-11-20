@@ -75,6 +75,19 @@ export function dbChoice(input: RpcInput<typeof dbChoiceRpc>) {
 }
 export async function getAdapterToggles(_input: RpcInput<typeof getAdapterTogglesRpc> = {}) {
   const reply = await request("getAdapterToggles", {});
+  // P1-8: never fabricate healthy-looking omp/hermes defaults over a
+  // worker/DB failure; surface the error with explicitly failed markers so
+  // the Settings screen shows an error state instead of healthy toggles.
+  if (!reply || reply.ok !== true) {
+    const error = typeof reply?.error === "string" && reply.error ? reply.error : "engine_error";
+    return {
+      ...(reply ?? {}),
+      ok: false,
+      error,
+      omp: { installed: false, enabled: false, error },
+      hermes: { installed: false, enabled: false, profileCount: 0, stateUnknown: true, error },
+    };
+  }
   return {
     omp: { installed: true, enabled: true },
     hermes: { installed: false, enabled: false, profileCount: 0 },
@@ -83,6 +96,18 @@ export async function getAdapterToggles(_input: RpcInput<typeof getAdapterToggle
 }
 export async function setAdapterToggle(input: RpcInput<typeof setAdapterToggleRpc>) {
   const reply = await request("setAdapterToggle", input);
+  // P1-8: never fabricate healthy-looking omp/hermes defaults over a
+  // worker/DB failure.
+  if (!reply || reply.ok !== true) {
+    const error = typeof reply?.error === "string" && reply.error ? reply.error : "engine_error";
+    return {
+      ...(reply ?? {}),
+      ok: false,
+      error,
+      omp: { installed: false, enabled: false, error },
+      hermes: { installed: false, enabled: false, profileCount: 0, stateUnknown: true, error },
+    };
+  }
   return {
     omp: { installed: true, enabled: true },
     hermes: { installed: false, enabled: false, profileCount: 0 },

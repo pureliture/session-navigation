@@ -117,6 +117,14 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
     profileCount: 0,
   };
 
+  // Worker/DB failures must surface instead of rendering fabricated healthy
+  // defaults: while the fetch is pending or failed there is no verified state.
+  const togglesLoadError = togglesQuery.error instanceof Error ? togglesQuery.error.message : null;
+  const togglesMissing = !togglesQuery.isPending && !toggles;
+  const togglesUnavailable = Boolean(togglesLoadError) || togglesMissing;
+  const togglesStatusMessage =
+    togglesLoadError ?? (togglesQuery.isPending && !toggles ? "Loading adapter settings…" : null) ??
+    (togglesMissing ? "Adapter settings unavailable." : null);
   const hermesStateUnknown = Boolean(
     hermes.stateUnknown ||
       (hermes.error && hermes.canDisable === false && !hermes.partialUpdate && !hermes.rolledBack),
@@ -142,6 +150,9 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
           `Profiles: ${hermes.profiles.map((p) => `${p.profile}=${p.enabled ? "on" : "off"}`).join(", ")}.`,
         );
       }
+      if (hermes.unverifiedScopes && hermes.unverifiedScopes.length > 0) {
+        hermesHintParts.push(`Unverified scopes: ${hermes.unverifiedScopes.join(", ")}.`);
+      }
       if (hermes.partialUpdate && hermes.rollbackFailedFiles && hermes.rollbackFailedFiles.length > 0) {
         hermesHintParts.push(
           `Partial update: rollback failed for ${hermes.rollbackFailedFiles.join(", ")}.`,
@@ -152,11 +163,13 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
       if (hermes.warning && (hermesStateUnknown || !hermes.protectionVerified || hermes.mixed || hermes.partialUpdate)) {
         hermesHintParts.push(hermes.warning);
       }
-      if (hermes.remediation && (hermes.partialUpdate || hermes.mixed || !hermes.warning)) {
+      // Remediation is actionable on its own: a warning must never hide it,
+      // even for non-mixed/partial states.
+      if (hermes.remediation) {
         hermesHintParts.push(hermes.remediation);
       }
+      }
     }
-  }
   const hermesHint = hermesHintParts.join(" ");
 
   const toggleError =
@@ -194,20 +207,23 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
     >
       <SettingsSection title="Agent Integration">
         <SettingsCard>
+          {togglesStatusMessage ? (
+            <Text style={{ color: theme.colors.statusDanger, fontSize: 11 }}>{togglesStatusMessage}</Text>
+          ) : null}
           <SettingsSwitch
             label="OMP"
-            hint={omp.error ? `${OMP_HINT} (${omp.error})` : OMP_HINT}
-            value={omp.enabled}
-            disabled={togglesQuery.isPending || !omp.installed || toggleMutation.isPending}
-            error={omp.error ?? (toggleMutation.variables?.adapter === "omp" ? toggleError : null)}
+            hint={omp.error ? `${OMP_HINT} (${omp.error})` : omp.statusText ? `${OMP_HINT} (${omp.statusText})` : OMP_HINT}
+            value={togglesUnavailable ? false : omp.enabled}
+            disabled={togglesQuery.isPending || togglesUnavailable || !omp.installed || toggleMutation.isPending}
+            error={togglesStatusMessage ?? omp.error ?? (toggleMutation.variables?.adapter === "omp" ? toggleError : null)}
             onValueChange={(enabled) => toggleMutation.mutate({ adapter: "omp", enabled })}
           />
           <SettingsSwitch
             label="Hermes"
             hint={hermesHint}
-            value={hermesStateUnknown ? false : hermes.enabled}
-            disabled={togglesQuery.isPending || !hermes.installed || toggleMutation.isPending || hermesStateUnknown}
-            error={hermesError}
+            value={togglesUnavailable ? false : hermesStateUnknown ? false : hermes.enabled}
+            disabled={togglesQuery.isPending || togglesUnavailable || !hermes.installed || toggleMutation.isPending || hermesStateUnknown}
+            error={togglesStatusMessage ?? hermesError}
             onValueChange={(enabled) => toggleMutation.mutate({ adapter: "hermes", enabled })}
           />
           {hermes.installed && (hermes.mixed || hermes.partialUpdate) ? (
@@ -219,7 +235,7 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
                   : "Align all Hermes profile config.yaml files and SQLite adapter_control to enabled."
               }
               actionLabel="Enable all profiles"
-              disabled={togglesQuery.isPending || toggleMutation.isPending}
+              disabled={togglesQuery.isPending || togglesUnavailable || toggleMutation.isPending}
               onPress={() => toggleMutation.mutate({ adapter: "hermes", enabled: true })}
             />
           ) : null}
@@ -245,12 +261,24 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
             hint="Also open the bottom raw-content preview drawer when clicking an outline row."
             value={values.openPreviewOnRowClick}
             disabled={settings.status !== "ready" || settings.saving}
+            error={outlineError}
             onValueChange={(openPreviewOnRowClick) => {
               if (settings.status === "ready") {
                 void settings.save({ ...values, openPreviewOnRowClick }, settings.revision);
               }
             }}
           />
+          {settings.status === "error" ? (
+            <SettingsAction
+              label="Outline settings unavailable"
+              hint={settings.error}
+              actionLabel="Reload settings"
+              disabled={settings.saving}
+              onPress={() => {
+                void settings.reload();
+              }}
+            />
+          ) : null}
           {isModified || settings.status === "invalid" ? (
             <SettingsAction
               label="Reset to defaults"

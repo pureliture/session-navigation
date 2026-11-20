@@ -99,6 +99,9 @@ export const ListTotalsSchema = z.object({
 
 export const ListResultSchema = z.object({
   ok: z.boolean(),
+  // B5: the service echoes the requested (parent) scope_key for API
+  // compatibility; the schema must not strip it.
+  scope_key: z.string().optional(),
   items: z.array(RowSchema),
   capabilities: CapabilitiesSchema.optional(),
   context: z
@@ -109,6 +112,9 @@ export const ListResultSchema = z.object({
     })
     .optional(),
   server_timeline: z.boolean().optional(),
+  // B10: paused adapter state (P1-7 parity). Additive: ready scopes omit both.
+  paused: z.boolean().optional(),
+  paused_warning: z.string().optional(),
   records_capped: z.boolean().optional(),
   timeline_read_error: z.string().optional(),
   has_older: z.boolean().optional(),
@@ -262,7 +268,10 @@ export const forkScopeRpc = defineRpc({
 export const dbChoiceRpc = defineRpc({
   name: "session-nav.db.choice",
   input: z.object({
-    scope_key: z.string().optional(),
+    // B5: the server requires a 4-segment scope_key (invalid_scope
+    // otherwise), so the schema requires it too instead of silently
+    // accepting calls that can never succeed.
+    scope_key: z.string(),
     choice: z.enum(["abort_request", "send_original"]),
   }),
   output: DbChoiceResultSchema,
@@ -354,4 +363,7 @@ export function scopeKeyFromWorkspace(
     branchScope: "default",
   });
 }
+// Cross-source compaction-summary identity (P1-3 contract, dependency-free
+// implementation so the worker bundle stays lean).
+export { summaryDedupeKey } from "./summaryDedupe";
 export type Row = z.infer<typeof RowSchema>;

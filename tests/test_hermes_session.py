@@ -220,3 +220,52 @@ def test_session_bounds_ttl_and_capacity():
     assert store.entries(scope_a.scope_key()) == []
     now[0] += 61.0
     assert store.entries(scope_b.scope_key()) == []
+
+
+def _multi_output_request(count: int, body_size: int) -> dict:
+    items = []
+    for i in range(count):
+        call_id = f"call_{i}"
+        items.append({"type": "function_call", "call_id": call_id, "name": "read_file",
+                      "arguments": json.dumps({"path": f"{i}.txt"})})
+        items.append({"type": "function_call_output", "call_id": call_id,
+                      "output": "x" * body_size})
+    return {"input": items}
+
+
+def test_history_bounds_match_host_history_limits():
+    """P1-11: Hermes caps stay identical to paseo host historyLimits."""
+    assert _session_mod.MAX_HISTORY_BYTES == 256 * 1024 * 1024
+    assert _session_mod.MAX_HISTORY_ROWS == 100_000
+    assert _session_mod.HistoryTooLargeError.code == "history_too_large"
+
+
+def test_record_request_truncates_oldest_first_to_history_bounds():
+    """P1-11: over-budget transcripts keep the newest results and flag drops."""
+    store = SessionTranscriptStore(max_history_rows=3, max_history_bytes=10**9)
+    kept, skipped, error = store.record_request(
+        "scope-rows", "codex_responses", _multi_output_request(5, 10))
+    assert error is None
+    assert [entry.call_id for entry in kept] == ["call_2", "call_3", "call_4"]
+    assert [entry["reason"] for entry in skipped] == ["history_too_large"] * 2
+    assert store.entries("scope-rows") == kept
+
+    store = SessionTranscriptStore(max_history_rows=10**9, max_history_bytes=25)
+    kept, skipped, error = store.record_request(
+        "scope-bytes", "codex_responses", _multi_output_request(5, 10))
+    assert error is None
+    total = sum(len(entry.content.encode("utf-8")) for entry in kept)
+    assert total <= 25
+    assert kept[-1].call_id == "call_4"  # newest always retained: stays protected
+    assert len(skipped) == 5 - len(kept)
+    assert {entry["reason"] for entry in skipped} == {"history_too_large"}
+    assert all(entry["host_handle"] for entry in skipped)
+
+
+def test_record_request_byte_cap_never_drops_the_newest_result():
+    """P1-11: a single oversized result is kept (dropping it would unprotect it)."""
+    store = SessionTranscriptStore(max_history_rows=10**9, max_history_bytes=4)
+    kept, skipped, error = store.record_request(
+        "scope-single", "codex_responses", _multi_output_request(1, 100))
+    assert error is None
+    assert len(kept) == 1 and skipped == []

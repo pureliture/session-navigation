@@ -11,7 +11,9 @@ import {
   groupRestoreIconKind,
   groupSubtitleText,
   isSummarizedRow,
+  outlineRowKey,
   rowMetric,
+  scopedCountLabel,
   truncateString,
   type OutlineRow,
 } from "./outlineGrouping";
@@ -27,6 +29,21 @@ describe("outlineGrouping", () => {
     test("formats KiB", () => {
       expect(fmtBytes(2048)).toBe("2.0 KiB");
       expect(fmtBytes(1536)).toBe("1.5 KiB");
+    });
+  });
+
+  describe("scopedCountLabel", () => {
+    test("unscoped counts keep the legacy plain label", () => {
+      expect(scopedCountLabel(200, 200, "entries")).toBe("200 entries");
+      expect(scopedCountLabel(3, 3, "hidden")).toBe("3 hidden");
+      expect(scopedCountLabel(0, 0, "entries")).toBe("0 entries");
+    });
+    test("narrowed scopes show active-of-total", () => {
+      expect(scopedCountLabel(3, 200, "entries")).toBe("3 of 200 entries");
+      expect(scopedCountLabel(1, 7, "hidden")).toBe("1 of 7 hidden");
+    });
+    test("merged rows above the total fall back to plain", () => {
+      expect(scopedCountLabel(210, 200, "entries")).toBe("210 entries");
     });
   });
 
@@ -188,6 +205,35 @@ describe("outlineGrouping", () => {
       expect(group.allHidden).toBe(false);
       expect(group.mixed).toBe(true);
       expect(group.hiddenCount).toBe(1);
+    });
+  });
+
+  describe("outlineRowKey", () => {
+    test("prefers item_id, then tool_call_id, then timeline_index", () => {
+      const base = { kind: "user", status: "visible", version: 1, tokens_display: "—" } as Row;
+      expect(outlineRowKey({ ...base, item_id: "a", tool_call_id: "b" }, 3)).toBe("a");
+      expect(outlineRowKey({ ...base, item_id: null, tool_call_id: "b" }, 3)).toBe("b");
+      expect(outlineRowKey({ ...base, item_id: null, tool_call_id: "", timeline_index: 42 }, 3)).toBe("timeline:42");
+      expect(outlineRowKey({ ...base, item_id: null, tool_call_id: "" }, 3)).toBe("row:3");
+    });
+
+    test("fallback rows without ids key uniquely instead of collapsing to an empty key", () => {
+      const fallback = (timeline_index: number, summary_line: string): Row => ({
+        item_id: null,
+        tool_call_id: "",
+        kind: "user",
+        tool_name: "user",
+        status: "visible",
+        version: 1,
+        tokens_display: "—",
+        timeline_index,
+        summary_line,
+      });
+      const groupedRows = buildGroupedRows([fallback(9000, "first"), fallback(9001, "second")], {}, {});
+      expect(groupedRows).toHaveLength(2);
+      const keys = groupedRows.map((item) => item.key);
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys.every((key) => key && key.length > 0)).toBe(true);
     });
   });
 });

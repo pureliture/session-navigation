@@ -126,3 +126,26 @@ test("SQLite lock waits in the actual worker leave the main loop responsive", as
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("soft status timeout neither kills the worker nor triggers cooldown", async () => {
+  const worker = new FakeWorker();
+  const client = new WorkerClient(":memory:", undefined, () => worker);
+  try {
+    // Delayed status response: the probe times out softly while the worker
+    // would still be busy in production.
+    const slow = client.request("adapter_status", {}, 20, undefined, {
+      invalidateOnTimeout: false,
+    });
+    expect((await slow).error).toBe("timeout");
+    expect(worker.terminated).toBe(false);
+    // A late status reply no longer matches the pending slot and is ignored.
+    worker.reply(0);
+    const next = client.request("prepare", {}, 1000);
+    await Promise.resolve();
+    expect(worker.requests).toHaveLength(2);
+    worker.reply(1);
+    expect((await next).ok).toBe(true);
+  } finally {
+    client.close();
+  }
+});

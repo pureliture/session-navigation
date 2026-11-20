@@ -120,6 +120,101 @@ export function resolveWorkspaceSessionState({ pinnedAgentId, trackedAgentId, ha
   return { mode: "chooser", effectiveAgentId: null, unavailablePin: false };
 }
 
+export function shortAgentLabel(title: string | undefined | null, agentId: string): string {
+  return title ?? agentId.slice(0, 8);
+}
+
+/**
+ * Workspace dropdown header text. `single-auto` with followVisible=false is
+ * an explicit pinned-by-default session — never "Follow visible session".
+ */
+export function workspaceHeaderText({
+  pinnedAgentId,
+  pinnedTitle,
+  mode,
+  hasDocument,
+  effectiveAgentId,
+  effectiveTitle,
+}: {
+  pinnedAgentId: string | null;
+  pinnedTitle?: string | null;
+  mode: "pinned" | "follow" | "single-auto" | "chooser";
+  hasDocument: boolean;
+  effectiveAgentId: string | null;
+  effectiveTitle?: string | null;
+}): string {
+  if (pinnedAgentId) {
+    return `Pinned · ${shortAgentLabel(pinnedTitle, pinnedAgentId)} ▾`;
+  }
+  if (mode === "chooser") {
+    return "Choose a session ▾";
+  }
+  if (mode === "single-auto" && effectiveAgentId) {
+    return `Session · ${shortAgentLabel(effectiveTitle, effectiveAgentId)} ▾`;
+  }
+  if (!hasDocument && effectiveAgentId) {
+    return `${mode === "single-auto" ? "Session" : "Following"} · ${shortAgentLabel(effectiveTitle, effectiveAgentId)} ▾`;
+  }
+  return "Follow visible session ▾";
+}
+
+export type WorkspaceTrackInput = {
+  rawFocusedId: string | null;
+  rawHasSignal: boolean;
+  membership: "accept" | "reject" | "unknown";
+  candidateAgentIds?: readonly string[];
+  panelWorkspaceId?: string;
+  /** workspaceLookup.data; undefined while the lookup is still loading. */
+  lookupWorkspaceId?: string | null;
+  lookupLoaded: boolean;
+  /** Stale selections from the previous workspace must never carry over. */
+  workspaceChanged: boolean;
+  lastValid: string | null;
+  tracked: string | null;
+};
+
+export type WorkspaceTrackOutput = {
+  lastValid: string | null;
+  tracked: string | null;
+};
+
+/**
+ * Pure tracking decision behind the workspace focus effect: accept/reject/
+ * unknown membership, a null focus signal, and workspace switches (which
+ * reset both the last-valid ref and the tracked session).
+ */
+export function nextWorkspaceTrackedAgent(input: WorkspaceTrackInput): WorkspaceTrackOutput {
+  const { rawFocusedId, rawHasSignal, membership, candidateAgentIds, panelWorkspaceId, lookupWorkspaceId, lookupLoaded, workspaceChanged } = input;
+  if (workspaceChanged) {
+    return { lastValid: null, tracked: null };
+  }
+  if (rawFocusedId === null) {
+    if (rawHasSignal) {
+      return { lastValid: null, tracked: null };
+    }
+    return { lastValid: input.lastValid, tracked: input.tracked };
+  }
+  if (membership === "accept") {
+    return { lastValid: rawFocusedId, tracked: rawFocusedId };
+  }
+  if (membership === "reject") {
+    return { lastValid: input.lastValid, tracked: input.lastValid };
+  }
+  if (!lookupLoaded) {
+    return { lastValid: input.lastValid, tracked: input.lastValid };
+  }
+  const resolved = acceptWorkspaceAgentId({
+    agentId: rawFocusedId,
+    workspaceCandidateIds: candidateAgentIds,
+    agentWorkspaceId: lookupWorkspaceId,
+    panelWorkspaceId,
+  });
+  if (resolved === "accept") {
+    return { lastValid: rawFocusedId, tracked: rawFocusedId };
+  }
+  return { lastValid: input.lastValid, tracked: input.lastValid };
+}
+
 export function acceptWorkspaceAgentId({ agentId, workspaceCandidateIds, agentWorkspaceId, panelWorkspaceId }: {
   agentId: string | null;
   workspaceCandidateIds?: readonly string[];

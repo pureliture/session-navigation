@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
+import type { PluginClientContext } from "@getpaseo/plugin/client";
 
 import { openSessionNavSettings, registerNavigation } from "./registration";
-
 test("registers panels, settings screen, command center entries, slash command, and cleanup", async () => {
   const panels: any[] = [], screens: any[] = [], commands: any[] = [], slashes: any[] = [], opened: any[] = [], settingsOpened: string[] = [], disposed: string[] = [];
   const capture = (kind: string, list: any[]) => (value: any) => { list.push({ ...value, context: value.context ?? kind }); return () => disposed.push(value.id ?? value.name); };
@@ -50,4 +50,38 @@ test("registers panels, settings screen, command center entries, slash command, 
     "open-session-nav-settings",
     "nav",
   ]);
+});
+
+test("command and slash handlers no-op on hosts without openSettings/openPanel", async () => {
+  const commands: Array<{ id: string; onSelect: (context?: unknown) => void }> = [];
+  const slashes: Array<{ onSubmit: (context?: unknown) => Promise<void> }> = [];
+  const client = {
+    addAgentPanel: () => () => {},
+    addWorkspacePanel: () => () => {},
+    addCommandCenterItem: (value: { id: string; onSelect: (context?: unknown) => void }) => {
+      commands.push(value);
+      return () => {};
+    },
+    addSlashCommand: (value: { onSubmit: (context?: unknown) => Promise<void> }) => {
+      slashes.push(value);
+      return () => {};
+    },
+  };
+  // Unchecked cast at the host boundary: the test double implements only the
+  // registration surface the client slice touches.
+  const hostClient = client as unknown as PluginClientContext;
+  registerNavigation(hostClient, () => null, () => null);
+  // openSettings/openPanel unsupported by the host: must not throw.
+  const settingsCmd = commands.find((cmd) => cmd.id === "open-session-nav-settings");
+  expect(() => settingsCmd?.onSelect({})).not.toThrow();
+  expect(() => settingsCmd?.onSelect(undefined)).not.toThrow();
+  const navCmd = commands.find((cmd) => cmd.id === "open-session-nav");
+  expect(() => navCmd?.onSelect({})).not.toThrow();
+  await slashes[0]?.onSubmit({});
+  // Supported hosts still open the panel/settings screen.
+  const opened: unknown[][] = [], settingsOpened: string[] = [];
+  navCmd?.onSelect({ openPanel: (...args: unknown[]) => opened.push(args) });
+  settingsCmd?.onSelect({ openSettings: (id: string) => settingsOpened.push(id) });
+  expect(opened).toEqual([["session-nav", { location: "explorer" }]]);
+  expect(settingsOpened).toEqual(["settings"]);
 });

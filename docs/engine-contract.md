@@ -138,7 +138,11 @@ semantics apply: `scope_key TEXT PRIMARY KEY`, `adapter_id TEXT`,
 `adapter_protocol INTEGER`, `capabilities TEXT`, `enabled INTEGER CHECK(0,1)`,
 `instance_id TEXT`, `last_seen REAL`. Capabilities is canonical JSON containing
 boolean `hide`, `summarize`, `unhide` keys. Unknown capability names grant nothing.
-
+It may also carry `protection_only: true` (the row redacts but never projects
+new hides) and `bundle_fingerprint`, the hex source fingerprint of the loaded
+bundle. The fingerprint bound is at most 128 UTF-16 code units (TypeScript
+`String.length` semantics; the Python side measures the same units, so both
+implementations accept exactly the same values).
 Capabilities JSON may additionally contain `linkage`, an object with nullable
 `parent_scope`, `tool_call_id` (the parent's delegation call) and `subagent_id`
 (the provider's child ID). This uses the existing extensible JSON column: no
@@ -147,6 +151,14 @@ link fields. Registration, scope listings and `childScopes(parent_scope)` /
 `child_scopes(parent_scope)` return these fields. Child lookup matches the exact
 parent scope, not a branch alias. Heartbeats preserve previously bound linkage
 when fields are omitted/null, including across process restart.
+
+`adapter_control` (`adapter_id TEXT PRIMARY KEY`, `enabled INTEGER NOT NULL
+CHECK(enabled IN (0,1))`, `revision INTEGER NOT NULL`, `updated_at REAL NOT
+NULL`) is the operator kill-switch per adapter. `set_adapter_control` /
+`setAdapterControl` bumps `revision` and syncs `adapter_sessions.enabled` for
+that adapter; reads go through `get_adapter_control` / `getAdapterControl`.
+`register_adapter` heartbeat writes also persist `protection_only` and
+`bundle_fingerprint` when the adapter reports them.
 
 Native child scopes retain normal host identity formats. OMP derives the parent
 native session from the child's `parentSession` transcript header, never the
@@ -180,7 +192,10 @@ Unhide of an already-hidden item remains allowed without a live registration.
 Do not copy registrations or target caches on fork; child adapters publish anew.
 
 Hermes advertises only supported request modes while enabled and projecting.
-Disabled/coexisting middleware revokes capabilities. Summarize is advertised only
+While disabled, capabilities report disabled: tools refuse mutations and the
+middleware applies only the protection-only rewrite. Coexisting middlewares do
+not revoke capabilities: the active rewrite still applies and their presence is
+only annotated in the trace (`other_middlewares`). Summarize is advertised only
 with a session summarizer; Hide needs no LLM. Profile and session are bound by the
 host callback. ACP launch/viewer processes alone must not advertise projection.
 

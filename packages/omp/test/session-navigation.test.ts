@@ -848,3 +848,195 @@ test("extension enters protection_only when omp adapter_control is off and still
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("adapter disabled mid-summarize falls back to the last safe snapshot", async () => {
+  let enabled = true;
+  const original = "original hidden content";
+  const compacted = "rule excerpt";
+  const sent: string[] = [];
+  const reply = await prepareRequest(
+    [{ call_id: "c", tool_name: "read", arguments: { path: "f" }, status: "ok", content: original }],
+    "s",
+    "t",
+    async (method, params: any) => {
+      sent.push(method);
+      if (method === "apply_summary" || method === "summary_failed") {
+        if (!enabled) return { ok: false, error: "adapter_disabled" };
+        return { ok: true };
+      }
+      return {
+        ok: true,
+        patches: [{ call_id: "c", sha256: "digest", text: compacted }],
+        // Like OmpService.prepare: no pending summaries while disabled.
+        pending_summaries: enabled ? [{ item_id: "item", content: original }] : [],
+        ...(enabled ? {} : { adapter_enabled: false }),
+      };
+    },
+    async () => {
+      enabled = false;
+      return "session summary";
+    },
+  );
+  expect(reply.ok).toBe(true);
+  expect(reply.patches?.[0]?.text).toBe(compacted);
+  expect(reply.patches?.[0]?.text).not.toBe(original);
+  expect(JSON.stringify(reply)).not.toContain(original);
+  expect(reply.adapter_enabled).toBe(false);
+  expect(sent).toEqual(["prepare", "apply_summary", "prepare"]);
+});
+
+test("adapter disabled mid-summarize stays fail-closed across chunks", async () => {
+  let enabled = true;
+  const records = Array.from({ length: 70 }, (_, index) => ({
+    call_id: `c${index}`,
+    tool_name: "read",
+    arguments: { path: "f" },
+    status: "ok",
+    content: `original content ${index}`,
+  }));
+  const sent: string[] = [];
+  let prepares = 0;
+  const reply = await prepareRequest(
+    records,
+    "s",
+    "t",
+    async (method, params: any) => {
+      sent.push(method);
+      if (method === "apply_summary" || method === "summary_failed") {
+        return enabled ? { ok: true } : { ok: false, error: "adapter_disabled" };
+      }
+      prepares += 1;
+      const chunk = params.records as any[];
+      return {
+        ok: true,
+        patches: chunk.map((record: any) => ({
+          call_id: record.call_id,
+          sha256: "digest",
+          text: `compacted ${record.call_id}`,
+        })),
+        // Like OmpService.prepare: no pending summaries while disabled.
+        pending_summaries:
+          prepares === 1 && enabled
+            ? [{ item_id: "item", content: "original content 0" }]
+            : [],
+        ...(enabled ? {} : { adapter_enabled: false }),
+      };
+    },
+    async () => {
+      enabled = false;
+      return "session summary";
+    },
+  );
+  expect(prepares).toBeGreaterThan(2);
+  expect(reply.ok).toBe(true);
+  expect(reply.patches).toHaveLength(70);
+  for (const patch of reply.patches as any[]) {
+    expect(patch.text).toBe(`compacted ${patch.call_id}`);
+  }
+  expect(JSON.stringify(reply)).not.toContain("original content");
+  expect(reply.adapter_enabled).toBe(false);
+  expect(sent.filter((method) => method === "prepare").length).toBeGreaterThan(2);
+});
+
+test("failed last snapshot after a mid-prepare disable is an explicit fatal error", async () => {
+  let seenPrepare = false;
+  const reply = await prepareRequest(
+    [{ call_id: "c", tool_name: "read", arguments: { path: "f" }, status: "ok", content: "original" }],
+    "s",
+    "t",
+    async (method) => {
+      if (method === "apply_summary" || method === "summary_failed")
+        return { ok: false, error: "adapter_disabled" };
+      if (method === "prepare" && !seenPrepare) {
+        seenPrepare = true;
+        return { ok: true, patches: [], pending_summaries: [{ item_id: "item", content: "original" }] };
+      }
+      return { ok: false, error: "timeout" };
+    },
+    async () => "session summary",
+  );
+  expect(reply).toEqual({ ok: false, error: "adapter_disabled", adapter_enabled: false });
+});
+
+test("cooldown, timeout and adapter_disabled abort headless instead of leaking originals", async () => {
+  for (const error of ["cooldown", "timeout", "adapter_disabled"]) {
+    const { events } = setup({ request: async () => ({ ok: false, error }), close: () => {} });
+    let aborted = false;
+    try {
+      await expect(
+        events.context({ messages: messages() }, { ...ctx, abort: () => { aborted = true; } }),
+      ).rejects.toThrow("aborted");
+      expect(aborted).toBe(true);
+    } finally {
+      await events.session_shutdown();
+    }
+  }
+});
+
+test("tools confirm the snapshot from the second context call, not the first", async () => {
+  const seen: { method: string; snapshot_id: unknown }[] = [];
+  let prepared = "";
+  const { events, tools } = setup({
+    request: async (method: string, params?: Record<string, unknown>) => {
+      seen.push({ method, snapshot_id: params?.snapshot_id });
+      if (method === "prepare") {
+        prepared = String(params?.snapshot_id ?? "");
+        return { ok: true, patches: [], pending_summaries: [] };
+      }
+      if (method === "adapter_status") return { ok: true, enabled: true };
+      if (!prepared || params?.snapshot_id !== prepared)
+        return { ok: false, error: "unconfirmed_snapshot" };
+      return { ok: true };
+    },
+    close: () => {},
+  });
+  const context = { sessionManager: { getSessionId: () => "second-snapshot" } };
+  const second = [
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-2", name: "read", arguments: { path: "other.txt" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-2",
+      toolName: "read",
+      content: [{ type: "text", text: longText }],
+      isError: false,
+      timestamp: 2,
+    },
+  ];
+  try {
+    await events.context({ messages: messages() }, context);
+    const firstToken = prepared;
+    expect(firstToken).not.toBe("");
+    await events.assistant_message(
+      { message: { role: "assistant", stopReason: "toolUse" } },
+      context,
+    );
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" }, context)).ok).toBe(true);
+    expect(seen.filter((s) => s.method === "compact").map((s) => s.snapshot_id)).toEqual([
+      firstToken,
+    ]);
+    await events.context({ messages: second }, context);
+    const secondToken = prepared;
+    expect(secondToken).not.toBe(firstToken);
+    // The first snapshot goes stale as soon as the second context call lands.
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" }, context)).error).toBe(
+      "unconfirmed_snapshot",
+    );
+    await events.assistant_message(
+      { message: { role: "assistant", stopReason: "toolUse" } },
+      context,
+    );
+    // Only the second snapshot is confirmed now; tools must carry its token.
+    expect((await execute(tools.hide_context, { tool_call_id: "call-2" }, context)).ok).toBe(true);
+    expect(seen.filter((s) => s.method === "compact").map((s) => s.snapshot_id)).toEqual([
+      firstToken,
+      secondToken,
+    ]);
+  } finally {
+    await events.session_shutdown();
+  }
+});

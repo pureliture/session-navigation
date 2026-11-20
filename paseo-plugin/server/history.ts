@@ -24,6 +24,12 @@ export type History = {
   chunkStart: number;
   /** Scope of the session actually loaded after following the rotation chain. */
   effectiveScope?: string;
+  /**
+   * True when this timeline authoritatively represents the latest chunk
+   * (source session/file matched), even when rows are empty. An empty
+   * authoritative chunk must NOT be backfilled with stale targets/items.
+   */
+  chunkAuthoritative?: boolean;
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
   recordsCapped?: boolean;
   readError?: string;
@@ -56,6 +62,9 @@ export function cloneTimeline(timeline: Timeline): Timeline {
       ...(timeline.history.effectiveScope
         ? { effectiveScope: timeline.history.effectiveScope }
         : {}),
+      ...(timeline.history.chunkAuthoritative !== undefined
+        ? { chunkAuthoritative: timeline.history.chunkAuthoritative }
+        : {}),
       ...(timeline.history.externalContext
         ? { externalContext: { ...timeline.history.externalContext } }
         : {}),
@@ -72,6 +81,25 @@ export function cloneTimeline(timeline: Timeline): Timeline {
   };
 }
 
+// History contract note (A3): readHistory() returns the FULL message array
+// with chunkStart pointing at the latest compaction boundary, while
+// loadTimeline() returns the SLICED latest-chunk view with chunkStart reset
+// to 0. Consumers that need token spans over full-history indices must use
+// readHistory(); consumers that render the outline must use loadTimeline().
+// The two shapes are kept deliberately distinct instead of unified because
+// measuredTokens() spans are computed against full-history indices.
+//
+// OMP compaction asymmetry (A3): OMP JSONL is an append-only tree and a
+// discarded branch can leave a stale compaction record behind. A linear scan
+// cannot reliably tell the winning branch, so parseHistoryFile keeps the
+// LAST compaction whose firstKeptEntryId still resolves instead of the
+// newest record unconditionally, and never falls back to the whole history
+// once a valid boundary exists. Full tree parsing is out of scope.
+//
+// Summary-row parity (A3, deferred): Hermes renders the latest
+// _compressed_summary row as a timeline row; OMP compaction records carry no
+// summary payload (only firstKeptEntryId), so there is no summary text to
+// render. OMP therefore exposes the boundary via chunkStart only.
 function parseHistoryFile(filename: string): History {
   const history: History = {
     messages: [],
@@ -81,7 +109,11 @@ function parseHistoryFile(filename: string): History {
   };
   const messageIndexById = new Map<string, number>();
   const entryIndexById = new Map<string, number>();
-  let latestKeptEntryId: string | undefined;
+  // A3: every compaction boundary is recorded with its claimed
+  // firstKeptEntryId; the effective chunkStart is the LAST compaction whose
+  // id still resolves. A later compaction with a missing/unresolvable id
+  // must not overwrite (and wipe) the last valid boundary.
+  const compactionClaims: Array<string | undefined> = [];
   const trackEntry = (id: unknown) => {
     if (typeof id === "string" && id) entryIndexById.set(id, history.messages.length);
   };
@@ -107,10 +139,9 @@ function parseHistoryFile(filename: string): History {
     if (["compaction", "branch_summary", "reset_boundary"].includes(data.type)) {
       history.boundaries.push(history.messages.length);
       if (data.type === "compaction")
-        latestKeptEntryId =
-          typeof data.firstKeptEntryId === "string"
-            ? data.firstKeptEntryId
-            : undefined;
+        compactionClaims.push(
+          typeof data.firstKeptEntryId === "string" ? data.firstKeptEntryId : undefined,
+        );
     } else if (data.type === "custom" && typeof data.data?.reminder === "string")
       history.injected.push([
         history.messages.length,
@@ -122,12 +153,13 @@ function parseHistoryFile(filename: string): History {
       history.messages.push(data);
     }
   }
-  if (latestKeptEntryId) {
-    const index =
-      messageIndexById.get(latestKeptEntryId) ??
-      entryIndexById.get(latestKeptEntryId);
-    // Unknown ids fall back to the full history instead of an empty outline.
-    history.chunkStart = index ?? 0;
+  for (const claimed of compactionClaims) {
+    if (!claimed) continue;
+    const index = messageIndexById.get(claimed) ?? entryIndexById.get(claimed);
+    // Unknown ids fall back to the full history instead of an empty outline,
+    // but only when no valid boundary was established before.
+    if (index === undefined) continue;
+    history.chunkStart = index;
   }
   return history;
 }
@@ -306,6 +338,9 @@ export function loadTimeline(
     return cloneTimeline(cached.timeline);
   }
   const history = parseHistoryFile(absPath);
+  // The history file was found, so this timeline authoritatively represents
+  // the latest chunk even when it yields zero rows (P1-2: never backfill).
+  history.chunkAuthoritative = true;
   if (history.chunkStart > 0) {
     const start = Math.min(history.chunkStart, history.messages.length);
     history.messages = history.messages.slice(start);
