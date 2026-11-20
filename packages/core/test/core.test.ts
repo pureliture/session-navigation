@@ -567,3 +567,166 @@ test("register preserves optional protection_only and bundle_fingerprint capabil
       bundle_fingerprint: "fp-ts-1234",
     });
   }));
+
+test("adapter_control rejects adapter ids containing ':'", () =>
+  database((store) => {
+    assert.throws(() => store.setAdapterControl("hermes:default", false), /invalid_adapter_registration/);
+    assert.throws(() => store.setAdapterControl(":", true), /invalid_adapter_registration/);
+    assert.equal(store.getAdapterControl("hermes:default"), null);
+    assert.throws(
+      () =>
+        store.register("hermes:default:s:default", {
+          adapter_id: "hermes:default",
+          adapter_protocol: 1,
+          capabilities: { hide: true, summarize: false, unhide: true },
+          enabled: true,
+          instance_id: "bad",
+        }),
+      /invalid_adapter_registration/,
+    );
+    store.register("hermes:default:s:default", {
+      adapter_id: "hermes",
+      adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true },
+      enabled: true,
+      instance_id: "good",
+    });
+    assert.equal(store.registration("hermes:default:s:default")?.adapter_id, "hermes");
+  }));
+
+test("adapter_control toggle matching is case-sensitive and prefix-exact", () =>
+  database((store) => {
+    const capabilities = { hide: true, summarize: false, unhide: true };
+    store.register("omp:default:lower:default", {
+      adapter_id: "omp", adapter_protocol: 1, capabilities, enabled: true, instance_id: "a",
+    });
+    store.register("OMP:default:upper:default", {
+      adapter_id: "OMP", adapter_protocol: 1, capabilities, enabled: true, instance_id: "b",
+    });
+    store.register("om:default:short:default", {
+      adapter_id: "om", adapter_protocol: 1, capabilities, enabled: true, instance_id: "c",
+    });
+    // LIKE is ASCII case-insensitive: under the old matching "omp" off would
+    // also disable "OMP:*" rows. instr() keeps them isolated.
+    store.setAdapterControl("omp", false);
+    assert.equal(store.registration("omp:default:lower:default")?.enabled, false);
+    assert.equal(store.registration("OMP:default:upper:default")?.enabled, true);
+    assert.equal(store.registration("om:default:short:default")?.enabled, true);
+    store.setAdapterControl("OMP", false);
+    assert.equal(store.registration("OMP:default:upper:default")?.enabled, false);
+    assert.equal(store.registration("omp:default:lower:default")?.enabled, false);
+    store.setAdapterControl("omp", true);
+    assert.equal(store.registration("omp:default:lower:default")?.enabled, true);
+    assert.equal(store.registration("OMP:default:upper:default")?.enabled, false);
+  }));
+
+test("control-on never resurrects sessions disabled for their own reasons", () =>
+  database((store) => {
+    const owner = {
+      adapter_id: "hermes", adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true },
+      enabled: true, instance_id: "i",
+    };
+    store.register("hermes:default:normal:unknown", owner);
+    // Unsupported api_mode equivalent: capabilities off, enabled false.
+    store.register("hermes:default:legacy:unknown", {
+      ...owner,
+      capabilities: { hide: false, summarize: false, unhide: false },
+      enabled: false,
+    });
+    store.setAdapterControl("hermes", false);
+    assert.equal(store.registration("hermes:default:normal:unknown")?.enabled, false);
+    assert.equal(store.registration("hermes:default:legacy:unknown")?.enabled, false);
+    store.setAdapterControl("hermes", true);
+    assert.equal(store.registration("hermes:default:normal:unknown")?.enabled, true);
+    assert.equal(store.registration("hermes:default:legacy:unknown")?.enabled, false);
+    assert.equal(store.can("hermes:default:legacy:unknown", "hide"), false);
+    // The marker is bookkeeping: never surfaced as a capability.
+    assert.deepEqual(store.registration("hermes:default:normal:unknown")?.capabilities, {
+      hide: true, summarize: false, unhide: true,
+    });
+    // A self-disable landing while control is on survives later toggles too.
+    store.register("hermes:default:normal:unknown", { ...owner, enabled: false });
+    store.setAdapterControl("hermes", false, 300);
+    store.setAdapterControl("hermes", true, 400);
+    assert.equal(store.registration("hermes:default:normal:unknown")?.enabled, false);
+    // A mirrored disable written while control is off still round-trips.
+    store.register("hermes:default:mirror:unknown", owner);
+    store.setAdapterControl("hermes", false, 500);
+    store.register("hermes:default:mirror:unknown", { ...owner, enabled: false });
+    store.setAdapterControl("hermes", true, 600);
+    assert.equal(store.registration("hermes:default:mirror:unknown")?.enabled, true);
+  }));
+
+test("register clamps stale enabled and mutations couple the control check", () =>
+  database((store) => {
+    const owner = {
+      adapter_id: "omp", adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true },
+      enabled: true, instance_id: "i",
+    };
+    store.register("omp:default:s:default", owner);
+    store.setAdapterControl("omp", false);
+    // A stale isAdapterEnabled()=true read must not commit enabled=true.
+    store.register("omp:default:s:default", { ...owner, enabled: true });
+    assert.equal(store.registration("omp:default:s:default")?.enabled, false);
+    assert.equal(store.can("omp:default:s:default", "hide"), false);
+    // Simulate a cross-connection race: enabled=true committed before control-off.
+    store.driver.run(
+      "INSERT INTO adapter_sessions VALUES (?,?,?,?,?,?,?) ON CONFLICT(scope_key) DO UPDATE SET enabled=excluded.enabled",
+      ["omp:default:s:default", "omp", 1, canonical({ hide: true, summarize: false, unhide: true }), 1, "i", 100],
+    );
+    assert.equal(store.registration("omp:default:s:default")?.enabled, true);
+    assert.equal(store.can("omp:default:s:default", "hide"), false);
+    assert.throws(
+      () => store.publishTargets("omp:default:s:default", [{ record: record("fresh", "race") }]),
+      (error: unknown) => error instanceof EngineError && error.code === "adapter_disabled",
+    );
+    assert.equal(store.targets("omp:default:s:default").length, 0);
+    store.setAdapterControl("omp", true);
+    assert.equal(store.can("omp:default:s:default", "hide"), true);
+    store.publishTargets("omp:default:s:default", [{ record: record("fresh", "race") }]);
+    assert.equal(store.targets("omp:default:s:default").length, 1);
+  }));
+
+test("adapter_control enforces 0/1 and bundle fingerprints count UTF-16 units", () =>
+  database((store) => {
+    const sql = store.driver.get(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='adapter_control'",
+    );
+    assert.match(String(sql?.sql), /CHECK \(enabled IN \(0, 1\)\)/);
+    assert.throws(() =>
+      store.driver.run("INSERT INTO adapter_control VALUES (?,?,?,?)", ["x", 2, 1, 0]),
+    );
+    // Bound is UTF-16 code units (String.length), matching Python _utf16_len.
+    const astral64 = "😀".repeat(64); // 64 code points, 128 UTF-16 units: accepted.
+    assert.equal(astral64.length, 128);
+    store.register("omp:default:fp:default", {
+      adapter_id: "omp", adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true, bundle_fingerprint: astral64 },
+      enabled: true, instance_id: "i",
+    });
+    assert.equal(
+      store.registration("omp:default:fp:default")?.capabilities.bundle_fingerprint,
+      astral64,
+    );
+    // 65 emoji are 65 code points but 130 UTF-16 units: rejected.
+    store.register("omp:default:fp2:default", {
+      adapter_id: "omp", adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true, bundle_fingerprint: "😀".repeat(65) },
+      enabled: true, instance_id: "i",
+    });
+    assert.equal(
+      store.registration("omp:default:fp2:default")?.capabilities.bundle_fingerprint,
+      undefined,
+    );
+    store.register("omp:default:fp3:default", {
+      adapter_id: "omp", adapter_protocol: 1,
+      capabilities: { hide: true, summarize: false, unhide: true, bundle_fingerprint: "x".repeat(129) },
+      enabled: true, instance_id: "i",
+    });
+    assert.equal(
+      store.registration("omp:default:fp3:default")?.capabilities.bundle_fingerprint,
+      undefined,
+    );
+  }));

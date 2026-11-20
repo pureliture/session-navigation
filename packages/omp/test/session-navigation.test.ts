@@ -972,3 +972,71 @@ test("cooldown, timeout and adapter_disabled abort headless instead of leaking o
     }
   }
 });
+
+test("tools confirm the snapshot from the second context call, not the first", async () => {
+  const seen: { method: string; snapshot_id: unknown }[] = [];
+  let prepared = "";
+  const { events, tools } = setup({
+    request: async (method: string, params?: Record<string, unknown>) => {
+      seen.push({ method, snapshot_id: params?.snapshot_id });
+      if (method === "prepare") {
+        prepared = String(params?.snapshot_id ?? "");
+        return { ok: true, patches: [], pending_summaries: [] };
+      }
+      if (method === "adapter_status") return { ok: true, enabled: true };
+      if (!prepared || params?.snapshot_id !== prepared)
+        return { ok: false, error: "unconfirmed_snapshot" };
+      return { ok: true };
+    },
+    close: () => {},
+  });
+  const context = { sessionManager: { getSessionId: () => "second-snapshot" } };
+  const second = [
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-2", name: "read", arguments: { path: "other.txt" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-2",
+      toolName: "read",
+      content: [{ type: "text", text: longText }],
+      isError: false,
+      timestamp: 2,
+    },
+  ];
+  try {
+    await events.context({ messages: messages() }, context);
+    const firstToken = prepared;
+    expect(firstToken).not.toBe("");
+    await events.assistant_message(
+      { message: { role: "assistant", stopReason: "toolUse" } },
+      context,
+    );
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" }, context)).ok).toBe(true);
+    expect(seen.filter((s) => s.method === "compact").map((s) => s.snapshot_id)).toEqual([
+      firstToken,
+    ]);
+    await events.context({ messages: second }, context);
+    const secondToken = prepared;
+    expect(secondToken).not.toBe(firstToken);
+    // The first snapshot goes stale as soon as the second context call lands.
+    expect((await execute(tools.hide_context, { tool_call_id: "call-1" }, context)).error).toBe(
+      "unconfirmed_snapshot",
+    );
+    await events.assistant_message(
+      { message: { role: "assistant", stopReason: "toolUse" } },
+      context,
+    );
+    // Only the second snapshot is confirmed now; tools must carry its token.
+    expect((await execute(tools.hide_context, { tool_call_id: "call-2" }, context)).ok).toBe(true);
+    expect(seen.filter((s) => s.method === "compact").map((s) => s.snapshot_id)).toEqual([
+      firstToken,
+      secondToken,
+    ]);
+  } finally {
+    await events.session_shutdown();
+  }
+});

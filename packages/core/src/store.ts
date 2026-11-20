@@ -67,6 +67,15 @@ export interface AdapterControl {
   revision: number;
   updated_at: number;
 }
+// B1.3: internal bookkeeping flag stored inside adapter_sessions.capabilities
+// JSON. Marks rows whose enabled=false was written by setAdapterControl(false)
+// so a later setAdapterControl(true) resurrects only those rows — never rows
+// disabled for their own reasons (e.g. unsupported api_mode registers with
+// enabled=false). Stripped from registration() output; never a capability.
+// Writers on both sides of the shared DB must preserve it: register() carries
+// it per the rules below, linkChildren() copies it, and control toggles own
+// it. (Python adapter_registry.py mirrors this contract.)
+const CONTROL_DISABLED_MARKER = "control_disabled";
 export class Store {
   readonly sqliteVersion: string;
   readonly driver: Driver;
@@ -343,12 +352,15 @@ export class Store {
     for (const key of scopeAliases(scopeKey(scope))) {
       const row = this.driver.get("SELECT * FROM adapter_sessions WHERE scope_key=?", [key]);
       if (row) {
-        const capabilities = JSON.parse(String(row.capabilities));
+        const stored = JSON.parse(String(row.capabilities)) as Record<string, unknown>;
+        const linkage = stored.linkage as Record<string, unknown> | undefined;
+        // The control-disabled marker is store bookkeeping, not a capability.
+        const { [CONTROL_DISABLED_MARKER]: _controlDisabled, ...capabilities } = stored;
         return {
           ...row,
-          parent_scope: capabilities.linkage?.parent_scope ?? null,
-          tool_call_id: capabilities.linkage?.tool_call_id ?? null,
-          subagent_id: capabilities.linkage?.subagent_id ?? null,
+          parent_scope: linkage?.parent_scope ?? null,
+          tool_call_id: linkage?.tool_call_id ?? null,
+          subagent_id: linkage?.subagent_id ?? null,
           scope_key: key,
           capabilities,
           enabled: !!row.enabled,
@@ -369,6 +381,13 @@ export class Store {
     return this.listScopes(parentScope);
   }
 
+  private rawCapabilities(scopeKeyValue: string): Record<string, any> {
+    const row = this.driver.get("SELECT capabilities FROM adapter_sessions WHERE scope_key=?", [
+      scopeKeyValue,
+    ]);
+    return row ? (JSON.parse(String(row.capabilities)) as Record<string, any>) : {};
+  }
+
   linkChildren(parentScope: string, toolCallId: string, subagentIds: string[]): void {
     if (!toolCallId || subagentIds.some((id) => typeof id !== "string" || !id))
       throw new EngineError("invalid_adapter_registration");
@@ -376,6 +395,10 @@ export class Store {
       const parent = this.registration(parentScope);
       if (!parent) throw new EngineError("adapter_not_detected");
       const caps = { ...parent.capabilities } as Record<string, any>;
+      // registration() strips the control-disabled marker; carry it over so
+      // linking never resurrects-or-orphans control-disabled rows (B1.3).
+      if (this.rawCapabilities(parent.scope_key ?? parentScope)[CONTROL_DISABLED_MARKER] === true)
+        caps[CONTROL_DISABLED_MARKER] = true;
       const pending = { ...caps.pending_children };
       for (const id of subagentIds) {
         const children = this.childScopes(parentScope).filter((row) => row.subagent_id === id);
@@ -384,6 +407,8 @@ export class Store {
           const capabilities = { ...child.capabilities, linkage: {
             parent_scope: parentScope, subagent_id: id, tool_call_id: toolCallId,
           } };
+          if (this.rawCapabilities(child.scope_key ?? "")[CONTROL_DISABLED_MARKER] === true)
+            (capabilities as Record<string, any>)[CONTROL_DISABLED_MARKER] = true;
           this.driver.run("UPDATE adapter_sessions SET capabilities=? WHERE scope_key=?", [canonical(capabilities), child.scope_key!]);
         }
       }
@@ -394,12 +419,17 @@ export class Store {
 
   can(scope: ScopeLike, capability: "hide" | "summarize" | "unhide"): boolean {
     const registration = this.registration(scope);
-    return (
-      !!registration &&
-      registration.enabled &&
-      registration.adapter_protocol === adapterProtocol &&
-      registration.capabilities[capability] === true
-    );
+    if (
+      !registration ||
+      !registration.enabled ||
+      registration.adapter_protocol !== adapterProtocol ||
+      registration.capabilities[capability] !== true
+    ) {
+      return false;
+    }
+    // B1.4: consult the control row on every check instead of trusting a
+    // caller-side isAdapterEnabled() read; an absent row means enabled.
+    return this.getAdapterControl(registration.adapter_id)?.enabled ?? true;
   }
 
   register(
@@ -409,6 +439,15 @@ export class Store {
   ): boolean {
     const key = scopeKey(scope);
     const adapterRegistration = registration;
+    // B1.1: ':' would create an unused control row shadowing real sessions
+    // (e.g. "hermes:default" matching "hermes:default:*"); reject it here
+    // instead of relying on the scope-prefix check below.
+    if (
+      typeof adapterRegistration.adapter_id !== "string" ||
+      adapterRegistration.adapter_id.includes(":")
+    ) {
+      throw new EngineError("invalid_adapter_registration");
+    }
     if (!adapterRegistration.instance_id || key.split(":")[0] !== adapterRegistration.adapter_id) {
       throw new EngineError("invalid_adapter_registration");
     }
@@ -429,16 +468,31 @@ export class Store {
       capabilitiesBase.protection_only = true;
     }
     const bundleFp = adapterRegistration.capabilities.bundle_fingerprint;
+    // B1.6: length is UTF-16 code units (String.length), matching Python
+    // adapter_registry._utf16_len. Real fingerprints are ASCII hex digests
+    // where code points and code units coincide.
     if (typeof bundleFp === "string" && bundleFp && bundleFp.length <= 128) {
       capabilitiesBase.bundle_fingerprint = bundleFp;
     }
     return this.transaction(() => {
+      // B1.4: re-read adapter_control inside the write transaction so a stale
+      // caller-side isAdapterEnabled() cannot commit enabled=true after a
+      // concurrent control-off (BEGIN IMMEDIATE serializes control writers).
+      const controlRow = this.driver.get("SELECT enabled FROM adapter_control WHERE adapter_id=?", [
+        adapterRegistration.adapter_id,
+      ]);
+      const controlOn = !controlRow || !!controlRow.enabled;
+      const storedEnabled = Boolean(adapterRegistration.enabled) && controlOn;
       const previousRegistration = this.driver.get(
         "SELECT * FROM adapter_sessions WHERE scope_key=?",
         [key],
       );
       const priorCaps = previousRegistration ? JSON.parse(String(previousRegistration.capabilities)) : {};
       const prior = priorCaps.linkage;
+      // B1.3: a disable while control is off keeps the existing marker (the
+      // write mirrors control); a disable while control is on is self-caused
+      // and clears it so a later control-on cannot resurrect the session.
+      const nextMarker = !storedEnabled && !controlOn && priorCaps[CONTROL_DISABLED_MARKER] === true;
       const parent = adapterRegistration.parent_scope ?? prior?.parent_scope;
       const subagent = adapterRegistration.subagent_id ?? prior?.subagent_id ?? null;
       const parentRow = parent ? this.driver.get("SELECT capabilities FROM adapter_sessions WHERE scope_key=?", [parent]) : undefined;
@@ -446,6 +500,7 @@ export class Store {
       const pendingCall = subagent ? parentCaps.pending_children?.[subagent] : undefined;
       const capabilitiesJson = canonical({ ...capabilitiesBase,
         ...(priorCaps.pending_children ? { pending_children: priorCaps.pending_children } : {}),
+        ...(nextMarker ? { [CONTROL_DISABLED_MARKER]: true } : {}),
         ...(parent ? { linkage: {
         parent_scope: parent,
         tool_call_id: adapterRegistration.tool_call_id ?? prior?.tool_call_id ?? pendingCall ?? null,
@@ -461,7 +516,7 @@ export class Store {
         previousRegistration.adapter_id === adapterRegistration.adapter_id &&
         previousRegistration.adapter_protocol === adapterRegistration.adapter_protocol &&
         previousRegistration.capabilities === capabilitiesJson &&
-        !!previousRegistration.enabled === adapterRegistration.enabled &&
+        !!previousRegistration.enabled === storedEnabled &&
         previousRegistration.instance_id === adapterRegistration.instance_id &&
         now - Number(previousRegistration.last_seen) < 300
       ) {
@@ -485,7 +540,7 @@ export class Store {
           adapterRegistration.adapter_id,
           adapterRegistration.adapter_protocol,
           capabilitiesJson,
-          Number(adapterRegistration.enabled),
+          Number(storedEnabled),
           adapterRegistration.instance_id,
           now,
         ],
@@ -525,6 +580,15 @@ export class Store {
         JSON.parse(String(owner.capabilities)).hide !== true
       ) {
         throw new EngineError("adapter_unavailable");
+      }
+      // B1.4: couple the control check to the publishing transaction. The
+      // owner row may carry a stale enabled=true committed before a
+      // concurrent control-off; fail closed instead of publishing.
+      const control = this.driver.get("SELECT enabled FROM adapter_control WHERE adapter_id=?", [
+        String(owner.adapter_id),
+      ]);
+      if (control && !control.enabled) {
+        throw new EngineError("adapter_disabled");
       }
       for (const { record: record, omitted = {} } of targets) {
         const invocationJson = canonical(record.invocation);
@@ -887,7 +951,9 @@ export class Store {
   }
 
   setAdapterControl(adapterId: string, enabled: boolean, now = this.clock()): AdapterControl {
-    if (typeof adapterId !== "string" || !adapterId.trim()) {
+    // B1.1: ':' would create an unused row that shadows real sessions
+    // (e.g. "hermes:default" matching "hermes:default:*" rows); reject it.
+    if (typeof adapterId !== "string" || !adapterId.trim() || adapterId.includes(":")) {
       throw new EngineError("invalid_adapter_registration");
     }
     const id = adapterId.trim();
@@ -906,11 +972,44 @@ export class Store {
            updated_at=excluded.updated_at`,
         [id, Number(flag), revision, now],
       );
-      const escapedId = id.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-      this.driver.run(
-        "UPDATE adapter_sessions SET enabled=? WHERE adapter_id=? OR scope_key LIKE ? ESCAPE '\\'",
-        [Number(flag), id, `${escapedId}:%`],
-      );
+      // B1.2: LIKE is ASCII case-insensitive ("OMP" would match "omp:*" rows).
+      // instr() compares case-sensitively, so adapter_id=? matches exactly
+      // and instr(scope_key, ?)=1 matches only the "<id>:" scope prefix.
+      const match: [string, string] = [id, `${id}:`];
+      if (!flag) {
+        // B1.3: mark only the rows this call actually flips. Rows already
+        // disabled for their own reasons (unsupported api_mode, pause) keep
+        // no marker, so the next control-on leaves them disabled.
+        const rows = this.driver.all(
+          "SELECT scope_key, enabled, capabilities FROM adapter_sessions WHERE adapter_id=? OR instr(scope_key, ?)=1",
+          match,
+        );
+        for (const row of rows) {
+          if (!row.enabled) continue;
+          const caps = JSON.parse(String(row.capabilities)) as { [key: string]: Json };
+          caps[CONTROL_DISABLED_MARKER] = true;
+          this.driver.run(
+            "UPDATE adapter_sessions SET enabled=?, capabilities=? WHERE scope_key=?",
+            [0, canonical(caps), String(row.scope_key)],
+          );
+        }
+      } else {
+        // B1.3: resurrect only rows the control-off path marked. Rows
+        // disabled for their own reasons carry no marker and stay disabled.
+        const rows = this.driver.all(
+          "SELECT scope_key, capabilities FROM adapter_sessions WHERE adapter_id=? OR instr(scope_key, ?)=1",
+          match,
+        );
+        for (const row of rows) {
+          const caps = JSON.parse(String(row.capabilities)) as { [key: string]: Json };
+          if (caps[CONTROL_DISABLED_MARKER] !== true) continue;
+          delete caps[CONTROL_DISABLED_MARKER];
+          this.driver.run(
+            "UPDATE adapter_sessions SET enabled=?, capabilities=? WHERE scope_key=?",
+            [1, canonical(caps), String(row.scope_key)],
+          );
+        }
+      }
       return {
         adapter_id: id,
         enabled: flag,
