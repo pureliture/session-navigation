@@ -33,6 +33,7 @@ let currentToggleData: AdapterTogglesResult = {
 const invalidatedKeys: any[] = [];
 const setQueryDataCalls: Array<{ key: any; data: any }> = [];
 let nextToggleResultOverride: AdapterTogglesResult | null = null;
+let togglesQueryError: Error | null = null;
 
 mock.module("react-native", () => ({
   View: "View",
@@ -92,6 +93,13 @@ mock.module("@tanstack/react-query", () => ({
   }),
   useQuery: (opts: { queryKey: any; queryFn: () => Promise<any> }) => {
     void opts;
+    if (togglesQueryError) {
+      return {
+        data: undefined,
+        isPending: false,
+        error: togglesQueryError,
+      };
+    }
     return {
       data: currentToggleData,
       isPending: false,
@@ -168,6 +176,7 @@ afterEach(() => {
   invalidatedKeys.length = 0;
   setQueryDataCalls.length = 0;
   nextToggleResultOverride = null;
+  togglesQueryError = null;
   currentToggleData = {
     ok: true,
     omp: { installed: true, enabled: true, statusText: "Active" },
@@ -490,5 +499,46 @@ describe("Outline settings & Session Navigation SettingsScreen", () => {
     );
     expect(recoverButtons).toHaveLength(1);
     expect(recoverButtons[0].props.disabled).toBe(false);
+  });
+  test("SettingsScreen surfaces adapter fetch failures instead of fabricating healthy defaults", async () => {
+    // Dynamic import: mock.module registrations above must apply before the
+    // screen module loads (same pattern as the other SettingsScreen tests).
+    const { SettingsScreen } = await import("./settingsScreen");
+    setUseOutlineSettingsOverride(() => ({
+      status: "ready",
+      revision: "rev-1",
+      values: { followVisibleSession: true, openPreviewOnRowClick: false },
+      saving: false,
+      saveError: null,
+      save: async () => true,
+      reset: async () => true,
+      reload: async () => {},
+    }));
+
+    // Simulate a worker/DB failure on the initial toggles fetch.
+    togglesQueryError = new Error("db_error");
+    try {
+      const tree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+      const joined = collectText(tree).join("\n");
+      // The failure is surfaced, not swallowed…
+      expect(joined).toContain("db_error");
+      // …and no fabricated healthy state is shown: both toggles render
+      // disabled with a forced-off value.
+      const switches = findAll(tree, (el) => el.type === "Switch");
+      expect(switches).toHaveLength(4);
+      for (const sw of switches.slice(0, 2)) {
+        expect(sw.props.value).toBe(false);
+        expect(sw.props.disabled).toBe(true);
+      }
+    } finally {
+      togglesQueryError = null;
+    }
+
+    // A recovered fetch renders verified state again.
+    const recoveredTree = expandTree(SettingsScreen({ theme: TEST_THEME }));
+    expect(collectText(recoveredTree).join("\n")).not.toContain("db_error");
+    const recoveredSwitches = findAll(recoveredTree, (el) => el.type === "Switch");
+    expect(recoveredSwitches[0].props.value).toBe(true);
+    expect(recoveredSwitches[0].props.disabled).toBe(false);
   });
 });

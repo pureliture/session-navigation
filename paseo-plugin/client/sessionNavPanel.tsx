@@ -32,9 +32,11 @@ import {
   fmtTokenCount,
   fmtTokens,
   groupMutationItems,
+  outlineRowKey,
   type OutlineRow,
 } from "./outlineGrouping";
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
+import { appendOlderServerPage, shouldInvalidateOlderServerPage } from "./outlinePaging";
 import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
 import { outlineRefreshQueryKeys } from "./outlineRefresh";
 import { OutlineScrollDriver } from "./outlineScroll";
@@ -838,20 +840,30 @@ export function SessionNavPanel({
 
   const listTotalsRows = listQuery.data?.totals?.total_rows;
   const listHasOlder = listQuery.data?.has_older;
-  const serverOlderInvalidated = Boolean(
-    olderServerState &&
-      olderServerState.sessionKey === sessionViewKey &&
-      listQuery.data !== undefined &&
-      (!listHasOlder ||
-        (typeof listTotalsRows === "number" &&
-          typeof olderServerState.totalRows === "number" &&
-          listTotalsRows < olderServerState.totalRows)),
-  );
+  const serverOlderInvalidated = shouldInvalidateOlderServerPage({
+    state: olderServerState,
+    sessionKey: sessionViewKey,
+    // While the tail is still loading there is no new evidence: keep older pages.
+    tailHasOlder: listQuery.data === undefined ? true : Boolean(listHasOlder),
+    tailTotalRows: typeof listTotalsRows === "number" ? listTotalsRows : undefined,
+    searchActive: Boolean(query),
+  });
   useEffect(() => {
     if (serverOlderInvalidated) {
       setOlderServerState(null);
     }
   }, [serverOlderInvalidated]);
+
+  // Search replaces the visible list: clear paged older pages instead of
+  // re-merging them when the query is cleared.
+  useEffect(() => {
+    if (!query) return;
+    setOlderServerState(null);
+    setOlderFallbackState(null);
+    setIsLoadingOlderServer(false);
+    setIsLoadingOlderFallback(false);
+    loadingOlderKeyRef.current = null;
+  }, [query]);
 
   const activeOlderServer =
     olderServerState?.sessionKey === sessionViewKey && !serverOlderInvalidated ? olderServerState : null;
@@ -942,7 +954,7 @@ export function SessionNavPanel({
 
   const selectedRow = useMemo(() => {
     if (!selectedId) return null;
-    return rows.find((r) => (r.item_id ?? r.tool_call_id) === selectedId) ?? null;
+    return rows.find((r, index) => outlineRowKey(r, index) === selectedId) ?? null;
   }, [rows, selectedId]);
 
   const listRef = useRef<any>(null);
@@ -1074,17 +1086,17 @@ export function SessionNavPanel({
         if (result.items.length > 0) {
           scrollDriverRef.current?.preparePrepend(listRef.current);
         }
-        setOlderServerState((prev) => {
-          const baseRows = prev?.sessionKey === capturedKey ? prev.rows : [];
-          return {
+        setOlderServerState((prev) =>
+          appendOlderServerPage({
+            prev,
             sessionKey: capturedKey,
-            rows: mergePagedRows(result.items, baseRows),
+            items: result.items,
             hasOlder: Boolean(result.has_older && result.next_before_index != null),
             nextBeforeIndex:
               typeof result.next_before_index === "number" ? result.next_before_index : null,
-            totalRows: result.totals?.total_rows ?? prev?.totalRows,
-          };
-        });
+            totalRows: result.totals?.total_rows,
+          }),
+        );
       } catch (err) {
         if (sessionViewKeyRef.current === capturedKey) {
           setNotice(err instanceof Error && err.message ? err.message : "Failed to load older items");
@@ -1636,7 +1648,9 @@ export function SessionNavPanel({
     : false;
 
   const handleRowPress = async (row: Row) => {
-    const rowKey = row.item_id ?? row.tool_call_id;
+    // Outline keys (not raw item ids): fallback rows share item_id null and
+    // often an empty tool_call_id, so raw ids collide across rows.
+    const rowKey = outlineRowKey(row, rows.indexOf(row));
     setSelectedId(rowKey);
     const shouldOpenPreview = shouldOpenPreviewDrawerOnRowPress({
       hasDocument,
@@ -1751,9 +1765,7 @@ export function SessionNavPanel({
       </View>
     ));
 
-  const activeRowKey = previewOpen
-    ? (selectedRow?.item_id ?? selectedRow?.tool_call_id ?? null)
-    : highlightedId;
+  const activeRowKey = previewOpen ? selectedId : highlightedId;
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
 
   const isResolvingSession = !childScope && effectiveFollowVisible && !followResolved;
@@ -1984,7 +1996,7 @@ export function SessionNavPanel({
                     item={item}
                     isSelected={Boolean(
                       activeRowKey &&
-                        item.children.some((c) => (c.item_id ?? c.tool_call_id) === activeRowKey),
+                        item.children.some((c) => outlineRowKey(c, rows.indexOf(c)) === activeRowKey),
                     )}
                     isExpanded={!!expandedGroups[item.groupId]}
                     isPending={pendingGroupId === item.groupId}
@@ -2006,7 +2018,7 @@ export function SessionNavPanel({
                   />
                 );
               }
-              const rowKey = item.row.item_id ?? item.row.tool_call_id;
+              const rowKey = item.key;
               const linked =
                 linkedChildrenByCallId.get(item.row.tool_call_id) ?? EMPTY_LINKED_CHILDREN;
               return (

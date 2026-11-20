@@ -201,7 +201,7 @@ describe("fallbackTimeline", () => {
     expect(merged[0].timeline_index).toBe(5);
   });
 
-  test("mergeHermesTimelineRows does not duplicate a compaction summary present in both sources", () => {
+  test("mergeHermesTimelineRows keeps the managed server copy of a duplicated compaction summary", () => {
     const parent = "hermes:atlas:session:unknown";
     const text =
       "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below.";
@@ -212,7 +212,7 @@ describe("fallbackTimeline", () => {
         kind: "user",
         tool_name: "user",
         status: "visible",
-        version: 1,
+        version: 3,
         tokens_display: "—",
         timeline_index: 5,
         summary_line: text,
@@ -235,7 +235,94 @@ describe("fallbackTimeline", () => {
     ];
     const merged = mergeHermesTimelineRows(serverRows, timelineRows, [], parent);
     expect(merged).toHaveLength(1);
-    expect(merged[0].item_id).toBeNull();
+    // The managed server copy wins so hide/unhide metadata survives the merge.
+    expect(merged[0]).toMatchObject({ item_id: "srv-summary", version: 3, status: "visible" });
+  });
+
+  test("mergeHermesTimelineRows dedupes a compaction summary across agent-vs-user kinds (FN)", () => {
+    const parent = "hermes:atlas:session:unknown";
+    const text = "[Compaction] Earlier turns were compacted into the summary below.";
+    const serverRows: Row[] = [
+      {
+        item_id: "srv-summary",
+        tool_call_id: "",
+        kind: "user",
+        tool_name: "user",
+        status: "hidden",
+        version: 2,
+        tokens_display: "—",
+        timeline_index: 5,
+        summary_line: text,
+        message_text: text,
+      },
+    ];
+    const timelineRows: Row[] = [
+      {
+        item_id: "compaction-42",
+        tool_call_id: "",
+        kind: "agent",
+        tool_name: "compaction",
+        status: "visible",
+        version: 1,
+        tokens_display: "—",
+        timeline_index: 9000,
+        summary_line: text,
+        message_text: text,
+      },
+    ];
+    const merged = mergeHermesTimelineRows(serverRows, timelineRows, [], parent);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ item_id: "srv-summary", status: "hidden", version: 2 });
+  });
+
+  test("mergeHermesTimelineRows preserves distinct rows sharing a long common prefix (FP)", () => {
+    const parent = "hermes:atlas:session:unknown";
+    const prefix = `x${"a".repeat(150)}`;
+    const shared = `${prefix} identical suffix`;
+    const distinct = `${prefix} different suffix`;
+    const serverRows: Row[] = [
+      {
+        item_id: "srv-same",
+        tool_call_id: "",
+        kind: "user",
+        tool_name: "user",
+        status: "visible",
+        version: 1,
+        tokens_display: "—",
+        timeline_index: 5,
+        summary_line: shared,
+        message_text: shared,
+      },
+      {
+        item_id: "srv-distinct",
+        tool_call_id: "",
+        kind: "user",
+        tool_name: "user",
+        status: "visible",
+        version: 1,
+        tokens_display: "—",
+        timeline_index: 6,
+        summary_line: distinct,
+        message_text: distinct,
+      },
+    ];
+    const timelineRows: Row[] = [
+      {
+        item_id: "fb-same",
+        tool_call_id: "",
+        kind: "user",
+        tool_name: "user",
+        status: "visible",
+        version: 1,
+        tokens_display: "—",
+        timeline_index: 9000,
+        summary_line: shared,
+        message_text: shared,
+      },
+    ];
+    const merged = mergeHermesTimelineRows(serverRows, timelineRows, [], parent);
+    // True duplicate collapses to the managed copy; the prefix-sharing row survives.
+    expect(merged.map((row) => row.item_id).sort()).toEqual(["srv-distinct", "srv-same"]);
   });
 
 

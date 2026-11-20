@@ -369,6 +369,52 @@ test("virtual window text anchors seek when native and outline identities differ
     document: doc, now: () => clock, afterLoad: async () => { clock += 100; render(); },
   })).toBe(true);
 });
+test("latest-chunk target from a pre-compaction viewport sweeps down through an unmounted gap", async () => {
+  const root = new Element({ "data-testid": "agent-chat-scroll" });
+  const doc = new Element().add(root);
+  const label = (i: number) => `unique prompt ${String(i).padStart(3, "0")}`;
+  const rows = Array.from({ length: 101 }, (_, i) => ({ ...row(`outline-${i}`, "user"), summary_line: label(i) }));
+  root.scrollHeight = 10100;
+  root.clientHeight = 500;
+  const extent = root.scrollHeight - root.clientHeight;
+  root.scrollTop = 0;
+  let clock = 0;
+  const target = rows[90];
+  const targetNode = new Element({ "data-history-row-id": target.item_id!, "data-index": "90" }, target.summary_line);
+  const render = () => {
+    root.children = [];
+    if (root.scrollTop < 1500) {
+      // Pre-compaction viewport: older rows mounted with identities.
+      const first = Math.floor(root.scrollTop / 100);
+      for (let i = first; i <= Math.min(89, first + 4); i++) {
+        root.add(new Element({ "data-history-row-id": rows[i].item_id!, "data-index": String(i) }, rows[i].summary_line));
+      }
+    } else if (root.scrollTop < extent - 500) {
+      // Fast-scroll gap: the virtualizer shows skeletons without row identities.
+      const first = Math.floor(root.scrollTop / 100);
+      for (let i = 0; i < 5; i++) root.add(new Element({ "data-index": String(first + i) }));
+    } else {
+      // Latest chunk mounted: the target is on screen with its identity.
+      for (let i = 86; i <= 89; i++) {
+        root.add(new Element({ "data-history-row-id": rows[i].item_id!, "data-index": String(i) }, rows[i].summary_line));
+      }
+      root.add(targetNode);
+    }
+  };
+  render();
+  let notice = false;
+  const tops: number[] = [root.scrollTop];
+  expect(await scrollToMessageInChat(target, rows, {
+    document: doc, now: () => clock,
+    afterLoad: async () => { clock += 100; tops.push(root.scrollTop); render(); },
+    onNotFound: () => { notice = true; },
+  })).toBe(true);
+  expect(notice).toBe(false);
+  expect(targetNode.scrolled).toBe(true);
+  // The sweep keeps moving toward the newer target and never retreats upward.
+  expect(tops.every((top, i) => i === 0 || top >= tops[i - 1])).toBe(true);
+  expect(tops[tops.length - 1]).toBeGreaterThanOrEqual(extent - 500);
+});
 
 test("no history progress waits for the generous timeout, not an idle two-second window", async () => {
   const f = fixture();

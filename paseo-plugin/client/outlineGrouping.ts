@@ -63,6 +63,20 @@ export function utf8ByteLength(text: string): number {
   return text ? UTF8_ENCODER.encode(text).byteLength : 0;
 }
 
+/**
+ * Stable React key for an outline row. Fallback (hermes/linked) rows have
+ * `item_id: null` and often an empty `tool_call_id`, so `item_id ??
+ * tool_call_id` collapses many rows to the same `""` key (duplicate-key
+ * warnings, multi-row highlight). Fall back to `timeline_index`, then to the
+ * row position, so every row keys uniquely.
+ */
+export function outlineRowKey(row: Row, index: number): string {
+  if (row.item_id) return row.item_id;
+  if (row.tool_call_id) return row.tool_call_id;
+  if (typeof row.timeline_index === "number") return `timeline:${row.timeline_index}`;
+  return `row:${index}`;
+}
+
 const LEADING_REASONING_BLOCK = /^\s*💭\s*\*\*Reasoning:\*\*\s*\r?\n```[^\n]*\r?\n([\s\S]*?)\r?\n```(?:\s*\r?\n)*/u;
 const SYSTEM_BLOCK_RE =
   /<system-reminder>[\s\S]*?<\/system-reminder>|<system-notice>[\s\S]*?<\/system-notice>/gu;
@@ -206,11 +220,12 @@ export function buildGroupedRows(
 ): OutlineRow[] {
   const result: OutlineRow[] = [];
   let currentGroupTools: Row[] = [];
+  let currentGroupFirstIndex = 0;
 
   const flushGroup = () => {
     if (currentGroupTools.length === 0) return;
     const first = currentGroupTools[0];
-    const groupId = `group:${first.item_id ?? first.tool_call_id}`;
+    const groupId = `group:${outlineRowKey(first, currentGroupFirstIndex)}`;
     const hiddenChildren = currentGroupTools.filter((r) => r.status === "hidden");
     const hiddenCount = hiddenChildren.length;
     const totalBytes = currentGroupTools.reduce((sum, r) => sum + effectiveRowBytes(r), 0);
@@ -273,8 +288,8 @@ export function buildGroupedRows(
 
     const isExpanded = !!expandedGroups[groupId];
     if (isExpanded) {
-      for (const child of currentGroupTools) {
-        const childKey = child.item_id ?? child.tool_call_id;
+      for (const [childOffset, child] of currentGroupTools.entries()) {
+        const childKey = outlineRowKey(child, currentGroupFirstIndex + childOffset);
         result.push({
           key: `child:${childKey}`,
           type: "child",
@@ -287,24 +302,25 @@ export function buildGroupedRows(
     currentGroupTools = [];
   };
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const kind =
       row.kind ?? (row.tool_name === "user" ? "user" : row.tool_name === "assistant" ? "assistant" : "tool");
     if (kind === "user") {
       flushGroup();
       result.push({
-        key: row.item_id ?? row.tool_call_id,
+        key: outlineRowKey(row, index),
         type: "user",
         row,
       });
     } else if (kind === "assistant" || kind === "agent") {
       flushGroup();
       result.push({
-        key: row.item_id ?? row.tool_call_id,
+        key: outlineRowKey(row, index),
         type: "assistant",
         row,
       });
     } else {
+      if (currentGroupTools.length === 0) currentGroupFirstIndex = index;
       currentGroupTools.push(row);
     }
   }

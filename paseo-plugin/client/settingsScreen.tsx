@@ -117,6 +117,14 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
     profileCount: 0,
   };
 
+  // Worker/DB failures must surface instead of rendering fabricated healthy
+  // defaults: while the fetch is pending or failed there is no verified state.
+  const togglesLoadError = togglesQuery.error instanceof Error ? togglesQuery.error.message : null;
+  const togglesMissing = !togglesQuery.isPending && !toggles;
+  const togglesUnavailable = Boolean(togglesLoadError) || togglesMissing;
+  const togglesStatusMessage =
+    togglesLoadError ?? (togglesQuery.isPending && !toggles ? "Loading adapter settings…" : null) ??
+    (togglesMissing ? "Adapter settings unavailable." : null);
   const hermesStateUnknown = Boolean(
     hermes.stateUnknown ||
       (hermes.error && hermes.canDisable === false && !hermes.partialUpdate && !hermes.rolledBack),
@@ -194,20 +202,23 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
     >
       <SettingsSection title="Agent Integration">
         <SettingsCard>
+          {togglesStatusMessage ? (
+            <Text style={{ color: theme.colors.statusDanger, fontSize: 11 }}>{togglesStatusMessage}</Text>
+          ) : null}
           <SettingsSwitch
             label="OMP"
             hint={omp.error ? `${OMP_HINT} (${omp.error})` : OMP_HINT}
-            value={omp.enabled}
-            disabled={togglesQuery.isPending || !omp.installed || toggleMutation.isPending}
-            error={omp.error ?? (toggleMutation.variables?.adapter === "omp" ? toggleError : null)}
+            value={togglesUnavailable ? false : omp.enabled}
+            disabled={togglesQuery.isPending || togglesUnavailable || !omp.installed || toggleMutation.isPending}
+            error={togglesStatusMessage ?? omp.error ?? (toggleMutation.variables?.adapter === "omp" ? toggleError : null)}
             onValueChange={(enabled) => toggleMutation.mutate({ adapter: "omp", enabled })}
           />
           <SettingsSwitch
             label="Hermes"
             hint={hermesHint}
-            value={hermesStateUnknown ? false : hermes.enabled}
-            disabled={togglesQuery.isPending || !hermes.installed || toggleMutation.isPending || hermesStateUnknown}
-            error={hermesError}
+            value={togglesUnavailable ? false : hermesStateUnknown ? false : hermes.enabled}
+            disabled={togglesQuery.isPending || togglesUnavailable || !hermes.installed || toggleMutation.isPending || hermesStateUnknown}
+            error={togglesStatusMessage ?? hermesError}
             onValueChange={(enabled) => toggleMutation.mutate({ adapter: "hermes", enabled })}
           />
           {hermes.installed && (hermes.mixed || hermes.partialUpdate) ? (
@@ -219,7 +230,7 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
                   : "Align all Hermes profile config.yaml files and SQLite adapter_control to enabled."
               }
               actionLabel="Enable all profiles"
-              disabled={togglesQuery.isPending || toggleMutation.isPending}
+              disabled={togglesQuery.isPending || togglesUnavailable || toggleMutation.isPending}
               onPress={() => toggleMutation.mutate({ adapter: "hermes", enabled: true })}
             />
           ) : null}

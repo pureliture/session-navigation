@@ -868,10 +868,16 @@ function seekMountedWindow(
     const maxMountedOrder = Math.max(...mountedOrders);
     if (targetOrder < minMountedOrder) {
       older = true;
+      bounds.sweepDirection = "up";
     } else if (targetOrder > maxMountedOrder) {
+      // Remember a newer target so later seeks with an unrecognizable window
+      // (virtualizer skeletons) keep sweeping down instead of defaulting up
+      // and reporting "Not loaded in chat" for latest-chunk rows.
       older = false;
+      bounds.sweepDirection = "down";
     } else {
       older = targetOrder < (minMountedOrder + maxMountedOrder) / 2;
+      bounds.sweepDirection = older ? "up" : "down";
     }
   } else if (position >= extent - 4) {
     // At the bottom with nothing recognizable mounted, the target is older.
@@ -881,14 +887,23 @@ function seekMountedWindow(
     older = true;
     bounds.sweepDirection = "up";
   } else if (position <= 4) {
-    // At the top with nothing recognizable mounted: older history may still be
-    // pageable (virtualizer + relay). Keep sweeping up so seekMountedWindow
-    // returns needOlder; only flip down when the paginator proves the top edge
-    // is exhausted (position stays 0 AND no spinner/progress follows).
-    if (!bounds.sweepDirection) bounds.sweepDirection = "up";
+    // At the top with nothing recognizable mounted, the target direction is
+    // unknown — but a target in the newer half of the outline sits below the
+    // oldest edge, so sweep down instead of paging older forever.
+    if (!bounds.sweepDirection) {
+      bounds.sweepDirection =
+        targetIndex >= 0 && targetIndex >= rows.length / 2 ? "down" : "up";
+    }
     if (bounds.sweepDirection === "down" && bounds.triedUpEdge) {
+      // The paginator proved the top edge exhausted while sweeping down.
+      older = false;
+    } else if (bounds.sweepDirection === "down") {
       older = false;
     } else {
+      // At the top with nothing recognizable mounted: older history may still be
+      // pageable (virtualizer + relay). Keep sweeping up so seekMountedWindow
+      // returns needOlder; only flip down when the paginator proves the top edge
+      // is exhausted (position stays 0 AND no spinner/progress follows).
       older = true;
       bounds.sweepDirection = "up";
     }

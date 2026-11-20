@@ -11,6 +11,7 @@ import {
   groupRestoreIconKind,
   groupSubtitleText,
   isSummarizedRow,
+  outlineRowKey,
   rowMetric,
   truncateString,
   type OutlineRow,
@@ -188,6 +189,35 @@ describe("outlineGrouping", () => {
       expect(group.allHidden).toBe(false);
       expect(group.mixed).toBe(true);
       expect(group.hiddenCount).toBe(1);
+    });
+  });
+
+  describe("outlineRowKey", () => {
+    test("prefers item_id, then tool_call_id, then timeline_index", () => {
+      const base = { kind: "user", status: "visible", version: 1, tokens_display: "—" } as Row;
+      expect(outlineRowKey({ ...base, item_id: "a", tool_call_id: "b" }, 3)).toBe("a");
+      expect(outlineRowKey({ ...base, item_id: null, tool_call_id: "b" }, 3)).toBe("b");
+      expect(outlineRowKey({ ...base, item_id: null, tool_call_id: "", timeline_index: 42 }, 3)).toBe("timeline:42");
+      expect(outlineRowKey({ ...base, item_id: null, tool_call_id: "" }, 3)).toBe("row:3");
+    });
+
+    test("fallback rows without ids key uniquely instead of collapsing to an empty key", () => {
+      const fallback = (timeline_index: number, summary_line: string): Row => ({
+        item_id: null,
+        tool_call_id: "",
+        kind: "user",
+        tool_name: "user",
+        status: "visible",
+        version: 1,
+        tokens_display: "—",
+        timeline_index,
+        summary_line,
+      });
+      const groupedRows = buildGroupedRows([fallback(9000, "first"), fallback(9001, "second")], {}, {});
+      expect(groupedRows).toHaveLength(2);
+      const keys = groupedRows.map((item) => item.key);
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys.every((key) => key && key.length > 0)).toBe(true);
     });
   });
 });

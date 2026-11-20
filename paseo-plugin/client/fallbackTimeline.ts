@@ -433,9 +433,37 @@ export function mergeHermesTimelineRows(
     if (row.tool_call_id) managedByCallId.set(row.tool_call_id, row);
   }
   const consumed = new Set<string>();
+  // Count fallback message identities first; each managed server row consumes
+  // at most one fallback copy of the same message. The managed copy is kept
+  // (it carries item_id/version/status) and the display-only fallback copy is
+  // suppressed below. Count-based consumption — not a global key set — keeps
+  // distinct rows that merely share a text prefix.
+  const timelineMessageCounts = new Map<string, number>();
+  for (const tRow of timeline) {
+    const key = messageDedupeKey(tRow);
+    if (key) timelineMessageCounts.set(key, (timelineMessageCounts.get(key) ?? 0) + 1);
+  }
+  const suppressedTimelineCopies = new Map<string, number>();
+  for (const row of rows) {
+    const key = messageDedupeKey(row);
+    if (!key) continue;
+    const remaining =
+      (timelineMessageCounts.get(key) ?? 0) - (suppressedTimelineCopies.get(key) ?? 0);
+    if (remaining > 0) suppressedTimelineCopies.set(key, (suppressedTimelineCopies.get(key) ?? 0) + 1);
+  }
+  const consumeSuppressedCopy = (key: string | null): boolean => {
+    if (!key) return false;
+    const remaining = suppressedTimelineCopies.get(key) ?? 0;
+    if (remaining <= 0) return false;
+    suppressedTimelineCopies.set(key, remaining - 1);
+    return true;
+  };
   const merged: Row[] = [];
   for (const tRow of timeline) {
     if (tRow.kind === "user" || tRow.kind === "assistant" || tRow.kind === "agent") {
+      // A managed server copy exists: keep it (metadata preserved) and drop
+      // this display-only duplicate.
+      if (consumeSuppressedCopy(messageDedupeKey(tRow))) continue;
       merged.push({ ...tRow, item_id: null, manageable: false });
       continue;
     }
@@ -454,15 +482,8 @@ export function mergeHermesTimelineRows(
       });
     }
   }
-  const timelineMessageKeys = new Set(
-    timeline
-      .map(messageDedupeKey)
-      .filter((key): key is string => key !== null),
-  );
   const unmatched = rows.filter((row) => {
     if (row.tool_call_id && consumed.has(row.tool_call_id)) return false;
-    const key = messageDedupeKey(row);
-    if (key && timelineMessageKeys.has(key)) return false;
     return true;
   });
   const matchedFloor = merged.reduce<number | null>((floor, row) => {
@@ -482,17 +503,23 @@ export function mergeHermesTimelineRows(
   return [...head, ...merged, ...tail];
 }
 
+function messageDedupeBucket(row: Row): "message" | null {
+  // Compaction summaries and chat messages share one identity bucket: the
+  // server may store a summary as kind "user" while the fallback window
+  // renders the same text as kind "agent" (or vice versa). Kind-prefixed keys
+  // miss that match (false negative) and show the summary twice.
+  if (row.tool_name === "compaction") return "message";
+  if (row.kind === "user" || row.kind === "assistant" || row.kind === "agent") return "message";
+  return null;
+}
+
 function messageDedupeKey(row: Row): string | null {
-  if (
-    row.kind !== "user" &&
-    row.kind !== "assistant" &&
-    row.kind !== "agent" &&
-    row.tool_name !== "compaction"
-  )
-    return null;
-  const text = String(row.message_text ?? row.summary_line ?? "").trim().slice(0, 120);
+  if (!messageDedupeBucket(row)) return null;
+  // Full normalized text: a 120-char prefix collides for distinct rows that
+  // share a long common prefix (false positive) and deletes legitimate rows.
+  const text = String(row.message_text ?? row.summary_line ?? "").replace(/\s+/gu, " ").trim();
   if (!text) return null;
-  return `${row.kind}\0${text}`;
+  return `message\0${text}`;
 }
 
 function rowMergeKey(row: Row): string | null {
