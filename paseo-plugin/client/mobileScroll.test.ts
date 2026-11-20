@@ -4,10 +4,20 @@ import { fmtBytePair } from "./outlineGrouping";
 
 const MockScrollView = "ScrollView";
 mock.module("react-native", () => ({
+  // Superset shared with outlineRows.test.ts and settings.test.ts: bun shares
+  // mock registrations across test files in one run, so every mock for this
+  // specifier must satisfy every consumer (settingsScreen needs Switch;
+  // TextInput/Linking/Platform harden against scheduling order). The real
+  // react-native/index.js exposes these as getters, which static named-export
+  // detection cannot see, so a mock missing any of them fails in CI.
   View: "View",
   Text: "Text",
   Pressable: "Pressable",
   ScrollView: MockScrollView,
+  Switch: "Switch",
+  TextInput: "TextInput",
+  Linking: "Linking",
+  Platform: "Platform",
 }));
 import { OutlineScrollDriver, type OutlineScrollListHandle } from "./outlineScroll";
 import { hasDomDocument, resolveWorkspaceSessionState } from "./sessionFollowing";

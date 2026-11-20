@@ -1,11 +1,16 @@
 import { describe, expect, mock, test } from "bun:test";
 
 mock.module("react-native", () => ({
+  // Superset shared with mobileScroll.test.ts and settings.test.ts (see note
+  // there): every mock for this specifier must satisfy every consumer.
   View: "View",
   Text: "Text",
   Pressable: "Pressable",
   ScrollView: "ScrollView",
   Switch: "Switch",
+  TextInput: "TextInput",
+  Linking: "Linking",
+  Platform: "Platform",
 }));
 
 mock.module("@getpaseo/plugin/client/ui", () => ({

@@ -38,11 +38,16 @@ let nextToggleResultOverride: AdapterTogglesResult | null = null;
 let togglesQueryError: Error | null = null;
 
 mock.module("react-native", () => ({
+  // Superset shared with mobileScroll.test.ts and outlineRows.test.ts (see
+  // note there): every mock for this specifier must satisfy every consumer.
   View: "View",
   Text: "Text",
   Pressable: "Pressable",
   ScrollView: "ScrollView",
   Switch: "Switch",
+  TextInput: "TextInput",
+  Linking: "Linking",
+  Platform: "Platform",
 }));
 
 mock.module("@getpaseo/plugin/client/ui", () => ({
