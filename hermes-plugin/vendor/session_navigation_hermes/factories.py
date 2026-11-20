@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
+import re
 import copy
 import hashlib
 import json
@@ -84,7 +85,7 @@ from .allowlist import AdapterRejected, filter_invocation
 from session_navigation.engine import SessionNavigationEngine
 from session_navigation.transport import Summarizer, SummarizerError
 from .llm import CtxLlmSummarizer
-from .schemas import ADAPTER_ID, BRANCH_SCOPE, SOURCE, TOOL_SCHEMAS, SUPERVISION_SECTION_TEXT
+from .schemas import ADAPTER_ID, BRANCH_SCOPE, MANAGE_TOOL, SOURCE, TOOL_SCHEMAS, SUPERVISION_SECTION_ID, SUPERVISION_SECTION_TEXT
 logger = logging.getLogger(__name__)
 
 
@@ -855,6 +856,126 @@ def _strip_supervision_text(request: dict[str, Any]) -> bool:
     return changed
 
 
+
+_SUPERVISION_FRAME_RE = re.compile(
+    r"## Plugin Context: " + re.escape(SUPERVISION_SECTION_ID) +
+    r"\n<!-- hermes-plugin-section-chars:(\d+) -->\n\n"
+)
+
+
+def _strip_stale_supervision_sections(text: str) -> str:
+    """Remove an outdated framed supervision section from a request copy.
+
+    Hermes freezes prompt sections into persisted sessions. Existing sessions
+    can therefore carry an older module version of this same section; leaving
+    it in place would dilute the newer cleanup contract. Only the exact frame
+    emitted by Hermes is recognized; user/tool text containing the heading is
+    not modified.
+    """
+    chunks: list[str] = []
+    cursor = 0
+    for match in _SUPERVISION_FRAME_RE.finditer(text):
+        length = int(match.group(1))
+        end = match.end() + length
+        if end <= len(text) and text[match.end():end] == SUPERVISION_SECTION_TEXT:
+            continue
+        chunks.append(text[cursor:match.start()])
+        cursor = end
+    chunks.append(text[cursor:])
+    return "".join(chunks)
+
+def _can_add_supervision(request: dict[str, Any], api_mode: str, turn_id: Any) -> bool:
+    """Only steer supported requests that expose the cleanup tool or its bridge."""
+    if api_mode not in SUPPORTED_API_MODES:
+        return False
+    if isinstance(turn_id, str) and turn_id.endswith(":side_question"):
+        return False
+    choice = request.get("tool_choice")
+    if choice == "none" or (isinstance(choice, dict) and choice.get("type") == "none"):
+        return False
+    if isinstance(choice, dict) and choice.get("type") == "function":
+        function = choice.get("function")
+        name = function.get("name") if isinstance(function, dict) else choice.get("name")
+        if isinstance(name, str) and name not in ("manage_context", "tool_call"):
+            return False
+    tools = request.get("tools")
+    if not isinstance(tools, list):
+        return False
+    names = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        name = function.get("name") if isinstance(function, dict) else tool.get("name")
+        if isinstance(name, str):
+            names.add(name)
+    return MANAGE_TOOL in names or {"tool_describe", "tool_call"}.issubset(names)
+
+
+def _ensure_supervision_text(request: dict[str, Any], api_mode: str) -> dict[str, Any]:
+    """Add or refresh guidance on the outgoing system prompt, not session history."""
+    if api_mode == "codex_responses":
+        instructions = request.get("instructions", "")
+        if not isinstance(instructions, str):
+            return request
+        if SUPERVISION_SECTION_TEXT in instructions:
+            return request
+        instructions = _strip_stale_supervision_sections(instructions)
+        messages = request.get("input")
+    else:
+        messages = request.get("messages")
+    if not isinstance(messages, list):
+        return request
+
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and SUPERVISION_SECTION_TEXT in content:
+            return request
+        if isinstance(content, list) and SUPERVISION_SECTION_TEXT in "".join(
+            block.get("text", "") for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ):
+            return request
+
+    updated = dict(request)
+    if api_mode == "codex_responses":
+        updated["instructions"] = (
+            f"{instructions}\n\n{SUPERVISION_SECTION_TEXT}" if instructions else SUPERVISION_SECTION_TEXT
+        )
+        return updated
+
+    updated_messages = list(messages)
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
+            continue
+        content = message.get("content")
+        updated_message = dict(message)
+        if isinstance(content, str):
+            normalized = _strip_stale_supervision_sections(content)
+            updated_message["content"] = (
+                f"{normalized}\n\n{SUPERVISION_SECTION_TEXT}" if normalized else SUPERVISION_SECTION_TEXT
+            )
+        elif isinstance(content, list):
+            updated_content = []
+            for block in content:
+                if not isinstance(block, dict) or not isinstance(block.get("text"), str):
+                    updated_content.append(block)
+                    continue
+                updated_block = dict(block)
+                updated_block["text"] = _strip_stale_supervision_sections(block["text"])
+                updated_content.append(updated_block)
+            updated_message["content"] = [*updated_content, {"type": "text", "text": SUPERVISION_SECTION_TEXT}]
+        else:
+            continue
+        updated_messages[index] = updated_message
+        updated["messages"] = updated_messages
+        return updated
+    updated["messages"] = [{"role": "system", "content": SUPERVISION_SECTION_TEXT}, *updated_messages]
+    return updated
+
+
 def _child_request(request: dict[str, Any]) -> dict[str, Any]:
     request = copy.deepcopy(request)
     if isinstance(request.get("tools"), list):
@@ -1153,6 +1274,8 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                             request_out["messages"].append({"role": "user", "content": note})
                         elif isinstance(request_out.get("input"), list):
                             request_out["input"].append({"role": "user", "content": [{"type": "input_text", "text": note}]})
+                if not child and _can_add_supervision(request_out, api_mode, kwargs.get("turn_id")):
+                    request_out = _ensure_supervision_text(request_out, api_mode)
             return {
                 "request": request_out,
                 "source": SOURCE,

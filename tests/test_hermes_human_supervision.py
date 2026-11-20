@@ -1,6 +1,7 @@
 """A-plan supervision contracts; local requests only, no agent/provider calls."""
 from __future__ import annotations
 import os, tempfile, gc, pytest
+import copy
 
 import json
 
@@ -216,6 +217,143 @@ def test_section_registration_degrades_without_api_or_when_disabled():
     assert disabled.sections == []
 
 
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_existing_session_gets_supervision_once_without_mutating_request(mode, deferred):
+    section = plugin.SUPERVISION_SECTION_TEXT
+    names = ("tool_describe", "tool_call") if deferred else ("manage_context",)
+    if mode == "chat_completions":
+        request = {
+            "messages": [{"role": "developer", "content": "Existing system prompt."},
+                         {"role": "user", "content": "Continue the existing session."}],
+            "tools": [{"type": "function", "function": {"name": name}} for name in names],
+        }
+    else:
+        request = {
+            "instructions": "Existing system prompt.",
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "Continue the existing session."}]}],
+            "tools": [{"type": "function", "name": name} for name in names],
+        }
+    original = copy.deepcopy(request)
+    middleware = plugin.make_middleware(_state())
+    result = middleware(request=request, session_id="existing-session", api_mode=mode, turn_id="turn-1")
+    outgoing = result["request"]
+    system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+    assert system == "Existing system prompt.\n\n" + section
+    assert request == original
+
+    # A provider retry or a host that already included the section must not
+    # receive a second copy, and the request's conversation must stay intact.
+    retry = middleware(request=outgoing, session_id="existing-session", api_mode=mode, turn_id="turn-1")
+    retry_system = retry["request"]["messages"][0]["content"] if mode == "chat_completions" else retry["request"]["instructions"]
+    assert retry_system.count(section) == 1
+    if mode == "chat_completions":
+        assert retry["request"]["messages"][1:] == original["messages"][1:]
+    else:
+        assert retry["request"]["input"] == original["input"]
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_new_session_with_host_guidance_is_not_duplicated(mode):
+    section = plugin.SUPERVISION_SECTION_TEXT
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "system", "content": [{"type": "text", "text": section}]},
+                                {"role": "user", "content": "Start."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": section, "input": [{"type": "message", "role": "user", "content": "Start."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+    original = copy.deepcopy(request)
+    result = plugin.make_middleware(_state())(request=request, session_id="new-session", api_mode=mode)
+    assert result["request"] == original
+    assert request == original
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("case", ["no_tools", "incomplete_bridge", "tool_choice_none", "other_forced_tool", "side_question"])
+def test_requests_without_available_cleanup_do_not_gain_supervision(mode, case):
+    names = ("tool_describe",) if case == "incomplete_bridge" else ("manage_context",)
+    tools = ([{"type": "function", "function": {"name": name}} for name in names]
+             if mode == "chat_completions" else [{"type": "function", "name": name} for name in names])
+    request = ({"messages": [{"role": "system", "content": "Base."}, {"role": "user", "content": "Continue."}]}
+               if mode == "chat_completions" else
+               {"instructions": "Base.", "input": [{"type": "message", "role": "user", "content": "Continue."}]})
+    if case != "no_tools":
+        request["tools"] = tools
+    if case == "tool_choice_none":
+        request["tool_choice"] = "none"
+    if case == "other_forced_tool":
+        request["tool_choice"] = {"type": "function", "function": {"name": "read_file"}}
+    turn_id = "turn-1:side_question" if case == "side_question" else "turn-1"
+    original = copy.deepcopy(request)
+    result = plugin.make_middleware(_state())(request=request, session_id="existing-session", api_mode=mode, turn_id=turn_id)
+    assert result["request"] == original
+    assert request == original
+
+
+def test_user_quoting_guidance_does_not_replace_system_guidance():
+    section = plugin.SUPERVISION_SECTION_TEXT
+    request = {"messages": [{"role": "system", "content": "Base."}, {"role": "user", "content": section}],
+               "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    result = plugin.make_middleware(_state())(request=request, session_id="quoted-session", api_mode="chat_completions")
+    assert result["request"]["messages"][0]["content"] == "Base.\n\n" + section
+    assert result["request"]["messages"][1]["content"] == section
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
+    section = plugin.SUPERVISION_SECTION_TEXT
+    body = "A safe result row.\n" * 2500
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "system", "content": "Existing system prompt."},
+                {"role": "user", "content": "Read the file."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": [{"type": "function", "function": {"name": "manage_context"}}],
+        }
+    else:
+        request = {
+            "instructions": "Existing system prompt.",
+            "input": [
+                {"type": "message", "role": "user", "content": "Read the file."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": [{"type": "function", "name": "manage_context"}],
+        }
+    original = copy.deepcopy(request)
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="large-existing", api_mode=mode)["request"]
+    system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+    conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
+    reminder = conversation[-1]["content"]
+    if isinstance(reminder, list):
+        reminder = reminder[0]["text"]
+    assert system == "Existing system prompt.\n\n" + section
+    assert "[context-navigation] eligible=1" in reminder
+    assert "call-big" in reminder
+    assert request == original
+
+
+def test_codex_system_input_guidance_is_not_duplicated_into_instructions():
+    section = plugin.SUPERVISION_SECTION_TEXT
+    request = {
+        "instructions": "Base.",
+        "input": [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": section}]},
+            {"type": "message", "role": "user", "content": "Continue."},
+        ],
+        "tools": [{"type": "function", "name": "manage_context"}],
+    }
+    result = plugin.make_middleware(_state())(request=request, session_id="input-system", api_mode="codex_responses")
+    assert result["request"] == request
+
+
 def test_tool_descriptions_route_human_list_and_restore_requests():
     sections = plugin.TOOL_SCHEMAS
     list_desc = sections["list_context_items"]["description"]
@@ -266,12 +404,36 @@ def test_numeric_reference_out_of_range_and_after_new_list():
     _list(state)
     bad = _restore(state, "9")
     assert bad["ok"] is False and bad["error"] == "unknown_display_number"
-
     stale = _restore(state, "1")
     assert stale["ok"] is True
     _list(state)  # fresh view: nothing compacted, no numbers
     missing = _restore(state, "1")
     assert missing["ok"] is False and missing["error"] == "unknown_display_number"
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_stale_frozen_supervision_section_is_replaced(mode):
+    stale = (
+        "## Plugin Context: session-navigation.human-supervision\n"
+        "<!-- hermes-plugin-section-chars:40 -->\n\n"
+        "Old cleanup guidance without tool calls."
+    )
+    section = plugin.SUPERVISION_SECTION_TEXT
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "developer", "content": "Base.\n\n" + stale},
+                                {"role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": "Base.\n\n" + stale,
+                   "input": [{"type": "message", "role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+    original = copy.deepcopy(request)
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="stale-section", api_mode=mode)["request"]
+    system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+    assert "Old cleanup guidance" not in system
+    assert system.endswith(section)
+    assert system.count(section) == 1
+    assert request == original
 
 
 def test_numeric_reference_keeps_working_after_a_restore():
