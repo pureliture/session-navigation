@@ -22,9 +22,46 @@ export function resolveChildScope(tab: SessionTab | null, parentScope: string | 
   return children.length === 1 ? children[0] : null;
 }
 
+
 export function childrenForCall(scopes: readonly ChildScope[], parentScope: string, callId: string): ChildScope[] {
-  return scopes.filter((scope) => scope.parent_scope === parentScope && scope.tool_call_id === callId && !!scope.subagent_id &&
+  const exact = scopes.filter((scope) => scope.parent_scope === parentScope && scope.tool_call_id === callId && !!scope.subagent_id &&
     ["omp", "hermes"].includes(scope.scope_key.split(":")[0]) && scope.scope_key !== parentScope);
+  // Legacy behavior wins: an exact parent_scope match never falls through.
+  if (exact.length > 0) return exact;
+  // After a Hermes rotation the panel still addresses the pre-rotation parent
+  // (h-old) while new subagents register under the rotation child (h-new).
+  // Fall back to same-profile Hermes parents so inline links keep working.
+  // Matching still requires the exact tool_call_id + subagent_id, and every
+  // merged row stays display-only (manageable=false), so a newer
+  // non-rotation child can never hijack mutations — only add an inline link.
+  if (!parentScope.startsWith("hermes:")) return exact;
+  const profile = parentScope.split(":")[1] ?? "";
+  if (!profile) return exact;
+  const prefix = `hermes:${profile}:`;
+  return scopes.filter((scope) =>
+    scope.tool_call_id === callId && !!scope.subagent_id &&
+    ["omp", "hermes"].includes(scope.scope_key.split(":")[0]) && scope.scope_key !== parentScope &&
+    typeof scope.parent_scope === "string" &&
+    scope.parent_scope.startsWith(prefix));
+}
+
+/**
+ * True when a linked subagent child owns a tool row the server list does not
+ * contain — including rotation-moved children (parent_scope h-new) while the
+ * panel addresses h-old. Independent of `server_timeline`, so in-flight
+ * task/delegate_task rows stay visible even when the server owns a timeline.
+ */
+export function hasMissingLinkedChildren(
+  items: readonly { tool_call_id?: string | null }[],
+  scopes: readonly ChildScope[],
+  parentScope: string,
+): boolean {
+  return scopes.some((scope) => {
+    const callId = scope.tool_call_id;
+    if (typeof callId !== "string" || callId.length === 0) return false;
+    if (items.some((row) => row.tool_call_id === callId)) return false;
+    return childrenForCall(scopes, parentScope, callId).length > 0;
+  });
 }
 
 export async function subagentMainTarget(tab: SessionTab | null, parentId: (id: string) => Promise<string | null>): Promise<{

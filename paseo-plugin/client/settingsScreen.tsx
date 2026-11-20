@@ -150,6 +150,9 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
           `Profiles: ${hermes.profiles.map((p) => `${p.profile}=${p.enabled ? "on" : "off"}`).join(", ")}.`,
         );
       }
+      if (hermes.unverifiedScopes && hermes.unverifiedScopes.length > 0) {
+        hermesHintParts.push(`Unverified scopes: ${hermes.unverifiedScopes.join(", ")}.`);
+      }
       if (hermes.partialUpdate && hermes.rollbackFailedFiles && hermes.rollbackFailedFiles.length > 0) {
         hermesHintParts.push(
           `Partial update: rollback failed for ${hermes.rollbackFailedFiles.join(", ")}.`,
@@ -160,11 +163,13 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
       if (hermes.warning && (hermesStateUnknown || !hermes.protectionVerified || hermes.mixed || hermes.partialUpdate)) {
         hermesHintParts.push(hermes.warning);
       }
-      if (hermes.remediation && (hermes.partialUpdate || hermes.mixed || !hermes.warning)) {
+      // Remediation is actionable on its own: a warning must never hide it,
+      // even for non-mixed/partial states.
+      if (hermes.remediation) {
         hermesHintParts.push(hermes.remediation);
       }
+      }
     }
-  }
   const hermesHint = hermesHintParts.join(" ");
 
   const toggleError =
@@ -207,7 +212,7 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
           ) : null}
           <SettingsSwitch
             label="OMP"
-            hint={omp.error ? `${OMP_HINT} (${omp.error})` : OMP_HINT}
+            hint={omp.error ? `${OMP_HINT} (${omp.error})` : omp.statusText ? `${OMP_HINT} (${omp.statusText})` : OMP_HINT}
             value={togglesUnavailable ? false : omp.enabled}
             disabled={togglesQuery.isPending || togglesUnavailable || !omp.installed || toggleMutation.isPending}
             error={togglesStatusMessage ?? omp.error ?? (toggleMutation.variables?.adapter === "omp" ? toggleError : null)}
@@ -256,12 +261,24 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
             hint="Also open the bottom raw-content preview drawer when clicking an outline row."
             value={values.openPreviewOnRowClick}
             disabled={settings.status !== "ready" || settings.saving}
+            error={outlineError}
             onValueChange={(openPreviewOnRowClick) => {
               if (settings.status === "ready") {
                 void settings.save({ ...values, openPreviewOnRowClick }, settings.revision);
               }
             }}
           />
+          {settings.status === "error" ? (
+            <SettingsAction
+              label="Outline settings unavailable"
+              hint={settings.error}
+              actionLabel="Reload settings"
+              disabled={settings.saving}
+              onPress={() => {
+                void settings.reload();
+              }}
+            />
+          ) : null}
           {isModified || settings.status === "invalid" ? (
             <SettingsAction
               label="Reset to defaults"

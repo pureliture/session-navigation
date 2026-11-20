@@ -1,7 +1,8 @@
 import type { PluginAgentPanelProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
 import { memo } from "react";
-import { Pressable, Text, View } from "react-native";
+import type { ReactNode } from "react";
+import { Pressable, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import type { Row } from "../shared/sessionNav";
 import { actionAllowed, type Capabilities } from "./capabilities";
 import type { ChildScope } from "./subagents";
@@ -585,3 +586,82 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
     </View>
   );
 });
+
+export type OutlineEmptyStateStyles = {
+  screen: StyleProp<ViewStyle>;
+  header: StyleProp<ViewStyle>;
+  headerLeft: StyleProp<ViewStyle>;
+  headerTitle: StyleProp<TextStyle>;
+  headerAgent: StyleProp<TextStyle>;
+  headerRight: StyleProp<ViewStyle>;
+  iconBtn: StyleProp<ViewStyle>;
+  iconBtnText: StyleProp<TextStyle>;
+  list: StyleProp<ViewStyle>;
+  emptyContainer: StyleProp<ViewStyle>;
+  emptyText: StyleProp<TextStyle>;
+  errorText: StyleProp<TextStyle>;
+};
+
+export type OutlineEmptyStateTheme = {
+  colors: {
+    foregroundMuted: string;
+  };
+};
+
+/**
+ * Empty/error outline header. Always offers Refresh (even with zero rows or
+ * a failed list fetch) and surfaces the list error instead of a bare empty
+ * state.
+ */
+export function OutlineEmptyState({
+  theme,
+  styles,
+  agentLabel,
+  error,
+  isRefreshing,
+  onRefresh,
+  settingsButton,
+}: {
+  theme: OutlineEmptyStateTheme;
+  styles: OutlineEmptyStateStyles;
+  agentLabel: string;
+  error: string | null;
+  isRefreshing: boolean;
+  onRefresh: () => void;
+  settingsButton: ReactNode;
+}) {
+  return (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.headerTitle}>Outline</Text>
+          <Text style={styles.headerAgent} numberOfLines={1}>
+            · {agentLabel}
+          </Text>
+        </View>
+        <View style={styles.headerRight}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh outline"
+            accessibilityState={{ disabled: isRefreshing }}
+            style={styles.iconBtn}
+            disabled={isRefreshing}
+            onPress={onRefresh}
+          >
+            <Text style={styles.iconBtnText}>{isRefreshing ? "…" : "↻"}</Text>
+          </Pressable>
+          {settingsButton}
+        </View>
+      </View>
+      <View style={[styles.list, styles.emptyContainer]}>
+        <Text style={styles.emptyText}>No active session</Text>
+        <Text
+          style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}
+        >
+          This agent has not started a session or has no recorded activity yet.
+        </Text>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      </View>
+    </View>
+  );
+}

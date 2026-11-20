@@ -8,7 +8,7 @@ import { listScopesRpc } from "../shared/sessionNav";
 import { demandedWorkspaceAgents, readHostFocus, subscribeHostFocus } from "./hostCompat";
 import { resolveOutlineSettingsValues, useOutlineSettings } from "./outlineSettingsHook";
 import { openSessionNavSettings } from "./registration";
-import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, resolveWorkspaceSessionState } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, nextWorkspaceTrackedAgent, resolveWorkspaceSessionState, workspaceHeaderText } from "./sessionFollowing";
 import { SessionNavPanel } from "./sessionNavPanel";
 import { listWorkspaceAgents } from "./workspaceAgents";
 import { defaultWorkspaceState, selectWorkspaceAgent, workspaceTabSchema } from "./workspaceState";
@@ -78,40 +78,31 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
 
   const lastValidRef = useRef<string | null>(null);
   const [trackedAgentId, setTrackedAgentId] = useState<string | null>(null);
+  // Stale focus from the previous workspace must never carry over: reset the
+  // last-valid/tracked selection when the panel moves workspaces.
+  const [prevWorkspaceId, setPrevWorkspaceId] = useState(props.workspaceId);
+  const workspaceChanged = prevWorkspaceId !== props.workspaceId;
+  if (workspaceChanged) {
+    setPrevWorkspaceId(props.workspaceId);
+  }
   useEffect(() => {
-    if (rawFocusedId === null) {
-      if (rawHasSignal) {
-        lastValidRef.current = null;
-        setTrackedAgentId(null);
-      }
-      return;
-    }
-    if (membership === "accept") {
-      lastValidRef.current = rawFocusedId;
-      setTrackedAgentId(rawFocusedId);
-      return;
-    }
-    if (membership === "reject") {
-      setTrackedAgentId(lastValidRef.current);
-      return;
-    }
-    if (workspaceLookup.data === undefined) {
-      setTrackedAgentId(lastValidRef.current);
-      return;
-    }
-    const resolved = acceptWorkspaceAgentId({
-      agentId: rawFocusedId,
-      workspaceCandidateIds: candidateAgentIds,
-      agentWorkspaceId: workspaceLookup.data,
+    const next = nextWorkspaceTrackedAgent({
+      rawFocusedId,
+      rawHasSignal,
+      membership,
+      candidateAgentIds,
       panelWorkspaceId: props.workspaceId,
+      lookupWorkspaceId: workspaceLookup.data ?? null,
+      lookupLoaded: workspaceLookup.data !== undefined,
+      workspaceChanged,
+      lastValid: workspaceChanged ? null : lastValidRef.current,
+      tracked: trackedAgentId,
     });
-    if (resolved === "accept") {
-      lastValidRef.current = rawFocusedId;
-      setTrackedAgentId(rawFocusedId);
-    } else {
-      setTrackedAgentId(lastValidRef.current);
+    lastValidRef.current = next.lastValid;
+    if (next.tracked !== trackedAgentId) {
+      setTrackedAgentId(next.tracked);
     }
-  }, [rawFocusedId, rawHasSignal, membership, candidateAgentIds, props.workspaceId, workspaceLookup.data]);
+  }, [rawFocusedId, rawHasSignal, membership, candidateAgentIds, props.workspaceId, workspaceLookup.data, workspaceChanged, trackedAgentId]);
 
   const boundSessions = useMemo(
     () => boundRootSessions(scopesQuery.data ?? [], candidateAgentIds),
@@ -134,13 +125,14 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
   });
 
   const effectiveSelected = agents.data?.find((agent) => agent.id === resolution.effectiveAgentId);
-  const headerText = state.agentId
-    ? `Pinned · ${selected?.title ?? state.agentId.slice(0, 8)} ▾`
-    : resolution.mode === "chooser"
-      ? "Choose a session ▾"
-      : !hasDocument && resolution.effectiveAgentId
-        ? `${resolution.mode === "single-auto" ? "Session" : "Following"} · ${effectiveSelected?.title ?? resolution.effectiveAgentId.slice(0, 8)} ▾`
-        : "Follow visible session ▾";
+  const headerText = workspaceHeaderText({
+    pinnedAgentId: state.agentId,
+    pinnedTitle: selected?.title,
+    mode: resolution.mode,
+    hasDocument,
+    effectiveAgentId: resolution.effectiveAgentId,
+    effectiveTitle: effectiveSelected?.title,
+  });
 
   const showChooser = choosing || resolution.mode === "chooser";
   const showFollowOption = followVisibleSession && (hasDocument || hostFocus.supported || explicitActiveSupported);

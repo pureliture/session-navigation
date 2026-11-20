@@ -345,4 +345,49 @@ describe("fallbackTimeline", () => {
       [3, "visible"],
     ]);
   });
+  test("mergeLinkedParentRows appends rotation-moved in-flight rows on top of a server timeline", () => {
+    // server_timeline=true case: the server list is authoritative, but an
+    // in-flight delegate_task without a toolResult only exists in the chat
+    // timeline. It merges as a display-only row; owned rows are untouched.
+    const oldParent = "hermes:default:session-old:unknown";
+    const newParent = "hermes:default:session-new:unknown";
+    const scopes = [
+      {
+        scope_key: "hermes:default:child:unknown",
+        parent_scope: newParent,
+        tool_call_id: "call-del",
+        subagent_id: "sa-1",
+      },
+    ];
+    const owned: Row = {
+      item_id: "item_1",
+      tool_call_id: "call-read",
+      kind: "tool",
+      tool_name: "read_file",
+      status: "visible",
+      version: 1,
+      tokens_display: "—",
+      manageable: true,
+    };
+    const inFlight: Row = {
+      item_id: "call-del",
+      tool_call_id: "call-del",
+      kind: "tool",
+      tool_name: "execute",
+      status: "visible",
+      version: 1,
+      tokens_display: "—",
+      manageable: false,
+    };
+    expect(mergeLinkedParentRows([owned], [inFlight], scopes, oldParent)).toEqual([
+      owned,
+      { ...inFlight, item_id: null, manageable: false, tool_name: "delegate_task" },
+    ]);
+    // Once the toolResult lands and the server owns the row, nothing merges.
+    expect(mergeLinkedParentRows([owned, { ...inFlight, item_id: "item_2", manageable: true }], [inFlight], scopes, oldParent)).toEqual([
+      owned,
+      { ...inFlight, item_id: "item_2", manageable: true },
+    ]);
+  });
 });
+

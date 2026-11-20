@@ -23,7 +23,7 @@ import { cancelChatNavigation, parseRgb, scrollToMessageInChat, visibleChatValue
 import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
-import { childrenForCall, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
+import { childrenForCall, hasMissingLinkedChildren, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
 import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import {
   buildGroupedRows,
@@ -37,7 +37,7 @@ import {
 } from "./outlineGrouping";
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
 import { appendOlderServerPage, shouldInvalidateOlderServerPage } from "./outlinePaging";
-import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem } from "./outlineRows";
+import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem, OutlineEmptyState } from "./outlineRows";
 import { outlineRefreshQueryKeys } from "./outlineRefresh";
 import { OutlineScrollDriver } from "./outlineScroll";
 import {
@@ -794,15 +794,9 @@ export function SessionNavPanel({
   const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
   const needsLinkedTimeline =
     listQuery.data !== undefined &&
-    !hasServerTimeline &&
     !activeChild &&
     !!resolvedScopeKey &&
-    scopes.some(
-      (scope) =>
-        scope.parent_scope === resolvedScopeKey &&
-        scope.tool_call_id &&
-        !listQuery.data?.items.some((row) => row.tool_call_id === scope.tool_call_id),
-    );
+    hasMissingLinkedChildren(listQuery.data.items, scopes, resolvedScopeKey);
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
@@ -879,10 +873,14 @@ export function SessionNavPanel({
     [activeOlderFallback, fallbackTailRows],
   );
 
+  // Linked in-flight subagent rows (task/delegate_task without a toolResult
+  // yet) merge on top of the server list even when the server owns a
+  // timeline: mergeLinkedParentRows only appends rows whose tool_call_id is
+  // missing from the server list, so authoritative rows are untouched.
   const rawRows = useMemo(
     () =>
       resolvedScopeKey
-        ? activeChild || hasServerTimeline
+        ? activeChild
           ? serverRows
           : needsHermesFallbackMerge
             ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
@@ -891,7 +889,6 @@ export function SessionNavPanel({
     [
       resolvedScopeKey,
       activeChild,
-      hasServerTimeline,
       serverRows,
       needsHermesFallbackMerge,
       fallbackRows,
@@ -1863,25 +1860,15 @@ export function SessionNavPanel({
     return (
       <View style={styles.screen}>
         {noticeBar}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.headerTitle}>Outline</Text>
-            <Text style={styles.headerAgent} numberOfLines={1}>
-              · {childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
-            </Text>
-          </View>
-          <View style={styles.headerRight}>{settingsButton}</View>
-        </View>
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 8 }}>
-          <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
-            No active session
-          </Text>
-          <Text
-            style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}
-          >
-            This agent has not started a session or has no recorded activity yet.
-          </Text>
-        </View>
+        <OutlineEmptyState
+          theme={theme}
+          styles={styles}
+          agentLabel={childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
+          error={runtimeError ?? null}
+          isRefreshing={isRefreshing}
+          onRefresh={() => void refreshOutline()}
+          settingsButton={settingsButton}
+        />
       </View>
     );
   }
