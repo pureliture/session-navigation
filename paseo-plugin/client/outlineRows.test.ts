@@ -14,9 +14,10 @@ mock.module("react-native", () => ({
 }));
 
 mock.module("@getpaseo/plugin/client/ui", () => ({
-  // Superset of the settings.test.ts UI mock: bun shares mock registrations
+  // Superset shared with settings.test.ts: bun shares mock registrations
   // across test files in one run, so every mock for this specifier must
-  // satisfy every consumer (Icon here, Settings* in settingsScreen).
+  // satisfy every consumer (Icon here, Settings* in settingsScreen,
+  // TextInput in sessionNavPanel) regardless of scheduling.
   Icon: undefined,
   Loading: undefined,
   ScrollView: undefined,
@@ -24,6 +25,7 @@ mock.module("@getpaseo/plugin/client/ui", () => ({
   SettingsCard: undefined,
   SettingsSection: undefined,
   SettingsSwitch: undefined,
+  TextInput: undefined,
 }));
 
 const { OutlineEmptyState } = await import("./outlineRows");

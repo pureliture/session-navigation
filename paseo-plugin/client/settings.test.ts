@@ -51,12 +51,16 @@ mock.module("react-native", () => ({
 }));
 
 mock.module("@getpaseo/plugin/client/ui", () => ({
+  // Superset shared with outlineRows.test.ts (see note there): every mock
+  // for this specifier must satisfy every consumer regardless of scheduling.
+  Icon: undefined,
   Loading: undefined,
   ScrollView: undefined,
   SettingsAction: undefined,
   SettingsCard: undefined,
   SettingsSection: undefined,
   SettingsSwitch: undefined,
+  TextInput: undefined,
 }));
 
 mock.module("@getpaseo/plugin/client", () => ({
