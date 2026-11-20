@@ -6,6 +6,11 @@ request and the compact/list/restore handlers read it by scope + tool call ID.
 
 Bounds: at most `max_sessions` scopes; an optional `max_results_per_session`
 limits results per scope. Entries older than `ttl_seconds` expire on access.
+The retained per-scope transcript is additionally bounded by
+`MAX_HISTORY_BYTES` / `MAX_HISTORY_ROWS` (mirroring the host history limits):
+over-budget history truncates oldest-first so the newest results -- the ones
+protection must still see -- are kept. The adapter cannot abort a turn, so
+truncation (fail-closed for what is retained) wins over raising.
 """
 
 from __future__ import annotations
@@ -15,6 +20,19 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .payload import find_tool_results
+
+# Retained-transcript bounds, kept identical to the host history limits
+# (`paseo-plugin/server/historyLimits.ts`) so both sides fail at the same
+# scale instead of one side OOMing where the other errors.
+MAX_HISTORY_BYTES = 256 * 1024 * 1024
+MAX_HISTORY_ROWS = 100_000
+
+
+class HistoryTooLargeError(Exception):
+    """Retained Hermes transcript exceeds the history bounds."""
+
+    code = "history_too_large"
+
 
 TimeFunc = Callable[[], float]
 
@@ -53,11 +71,15 @@ class SessionTranscriptStore:
         max_results_per_session: int | None = None,
         ttl_seconds: int = 86400,
         time_func: TimeFunc | None = None,
+        max_history_bytes: int | None = MAX_HISTORY_BYTES,
+        max_history_rows: int | None = MAX_HISTORY_ROWS,
     ) -> None:
         self.max_sessions = max_sessions
         self.max_results_per_session = max_results_per_session
         self.ttl_seconds = ttl_seconds
         self._now: TimeFunc = time_func or time.time
+        self.max_history_bytes = max_history_bytes
+        self.max_history_rows = max_history_rows
         self._sessions: dict[str, _SessionEntry] = {}
 
     def __len__(self) -> int:
@@ -118,12 +140,43 @@ class SessionTranscriptStore:
             for item in skipped
         ]
         kept = stored if self.max_results_per_session is None else stored[-self.max_results_per_session:]
+        kept, bound_dropped = self._apply_history_bounds(kept)
+        for dropped in bound_dropped:
+            skipped_dicts.append(
+                {"host_handle": dict(dropped.host_handle), "reason": HistoryTooLargeError.code}
+            )
         self._sessions[scope_key] = _SessionEntry(
             api_mode=api_mode, updated_at=self._now(), results=kept)
         while len(self._sessions) > self.max_sessions:
             oldest = min(self._sessions, key=lambda k: self._sessions[k].updated_at)
             del self._sessions[oldest]
         return kept, skipped_dicts, None
+
+    def _apply_history_bounds(
+        self, kept: list[StoredResult]
+    ) -> tuple[list[StoredResult], list[StoredResult]]:
+        """Truncate oldest-first to the history bounds; return (kept, dropped).
+
+        Newest entries are retained so protection still sees the results most
+        likely to reappear in later requests. At least the newest entry is
+        always kept: dropping it would silently unprotect it.
+        """
+        dropped: list[StoredResult] = []
+        if self.max_history_rows is not None and len(kept) > self.max_history_rows:
+            if self.max_history_rows <= 0:
+                return [], list(kept)
+            cut = len(kept) - self.max_history_rows
+            dropped.extend(kept[:cut])
+            kept = kept[cut:]
+        if self.max_history_bytes is not None:
+            total = sum(len(item.content.encode("utf-8")) for item in kept)
+            cut = 0
+            while len(kept) - cut > 1 and total > self.max_history_bytes:
+                total -= len(kept[cut].content.encode("utf-8"))
+                cut += 1
+            dropped.extend(kept[:cut])
+            kept = kept[cut:]
+        return kept, dropped
 
     def lookup(self, scope_key: str, tool_call_id: str) -> list[StoredResult]:
         """Return stored entries for one call ID, empty when absent/expired."""

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 import time
 from pathlib import Path
 from typing import Any
@@ -262,19 +263,60 @@ init_schema = create_schema
 ensure_schema = create_schema
 
 
+def _harden_permissions(path: Path) -> None:
+    """Strip group/other permission bits from the DB and its sidecars.
++
+    The hardening never ADDS access: a read-only database stays read-only
+    (owner-write is never granted). Descriptor-based (`fchmod`/`fstat`) so a
+    path swap between stat and chmod (TOCTOU) cannot redirect the change onto
+    another file; symlinks are skipped outright (`O_NOFOLLOW`). WAL/SHM and
+    rollback-journal sidecars get the same treatment when present. Best
+    effort throughout: filesystems without chmod/fchmod support are ignored.
+    """
+    targets = [path] + [path.parent / (path.name + suffix)
+               for suffix in ("-wal", "-shm", "-journal")]
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    fchmod = getattr(os, "fchmod", None)
+    for target in targets:
+        fd = None
+        try:
+            try:
+                fd = os.open(os.fspath(target), os.O_RDONLY | nofollow)
+            except OSError:
+                # Missing file, symlink (TOCTOU-safe skip), or no access.
+                continue
+            try:
+                mode = stat.S_IMODE(os.fstat(fd).st_mode)
+            except OSError:
+                continue
+            stripped = mode & ~0o077
+            if stripped == mode:
+                continue
+            try:
+                if fchmod is not None:
+                    fchmod(fd, stripped)
+                else:  # pragma: no cover - platforms without fchmod.
+                    os.chmod(os.fspath(target), stripped)
+            except OSError:
+                continue
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
 def open_db(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
     """Open and configure a SQLite connection, creating parent dirs and schema."""
     resolved = resolve_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(resolved), timeout=30, check_same_thread=False, factory=EngineConnection)
     try:
-        os.chmod(resolved, 0o600)
-    except OSError:
-        # Best effort: not every filesystem supports chmod.
-        pass
-    conn.execute("PRAGMA busy_timeout=30000")
-    try:
+        # Reject future contracts BEFORE any filesystem or configuration write.
         check_protocol(conn)
+        _harden_permissions(resolved)
+        conn.execute("PRAGMA busy_timeout=30000")
         _configure_connection(conn, resolved)
         # Concurrent first-open: serialize on BEGIN IMMEDIATE and verify ALL
         # tables (meta-first scripts commit mid-way; meta presence alone is
