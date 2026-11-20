@@ -234,7 +234,7 @@ _SCHEMA_SQL = """
 
         CREATE TABLE IF NOT EXISTS adapter_control (
             adapter_id TEXT PRIMARY KEY,
-            enabled INTEGER NOT NULL,
+            enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
             revision INTEGER NOT NULL,
             updated_at REAL NOT NULL
         );

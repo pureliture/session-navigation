@@ -213,11 +213,22 @@ async def collapse(cdp):
       Element.prototype.scrollTo=function(...args){{window.__smoke.calls.push({{args,tag:this.tagName}});return original.apply(this,args)}};
       window.__smoke.observer=new MutationObserver(()=>{{if(Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…'))window.__smoke.loading=true}});
       window.__smoke.observer.observe(document.body,{{subtree:true,childList:true,characterData:true}});a.style.display='none';s.dispatchEvent(new Event('scroll',{{bubbles:true}}));window.__smoke.ancestor=a;window.__smoke.scroller=s}})()""")
-    await asyncio.sleep(.5)
-    await cdp.js("window.__smoke.ancestor.style.display=window.__smoke.old;window.__smoke.scroller.dispatchEvent(new Event('scroll',{bubbles:true}))")
-    await asyncio.sleep(3)
-    after = await metrics(cdp)
-    observed = await cdp.js("(()=>{let x=window.__smoke;let r={calls:x.calls,loading:x.loading||Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…')};x.observer.disconnect();x.restore();return r})()")
+    after = None
+    observed = {"calls": [], "loading": False}
+    try:
+        await asyncio.sleep(.5)
+        await cdp.js("window.__smoke.ancestor.style.display=window.__smoke.old;window.__smoke.scroller.dispatchEvent(new Event('scroll',{bubbles:true}))")
+        await asyncio.sleep(3)
+        after = await metrics(cdp)
+        observed = await cdp.js("(()=>{let x=window.__smoke;return{calls:x.calls,loading:x.loading||Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…')}})()")
+    finally:
+        # Always detach the observer and restore scrollTo, even when the
+        # scenario above throws: a leaked monkeypatch would corrupt later
+        # scenarios running in the same page.
+        try:
+            await cdp.js("(()=>{let x=window.__smoke||{};try{x.observer&&x.observer.disconnect()}catch(e){}try{x.restore&&x.restore()}catch(e){}})()")
+        except Exception:
+            pass
     return {'pass': bool(after and abs(after['top']-before['top']) <= 50 and not observed['loading'] and not observed['calls']), 'before': before, 'after': after, **observed}
 
 
@@ -308,7 +319,14 @@ def main():
         offer = parse_qs(parsed.fragment).get('offer', [''])[0]
         try: relay_server = json.loads(base64.urlsafe_b64decode(offer + '=' * (-len(offer) % 4)))['serverId']
         except (ValueError, KeyError): pass
-    sandbox = '127.0.0.1:17680' in args.url or relay_server == 'srv_CpjeCUf0pYTl'
+    # Match the URL authority (host + port), not a substring: a relay/token
+    # URL merely mentioning 127.0.0.1:17680 must not flip sandbox paths.
+    try:
+        url_host, url_port = parsed.hostname or "", parsed.port
+    except ValueError:
+        url_host, url_port = "", None
+    sandbox = ((url_host in ("127.0.0.1", "localhost", "::1") and url_port == 17680)
+               or relay_server == 'srv_CpjeCUf0pYTl')
     args.is_sandbox = sandbox
     if sandbox and not args.paseo_home: args.paseo_home = '/tmp/paseo-sandbox/home'
     if sandbox and (parsed.path in ('', '/') or relay_server):

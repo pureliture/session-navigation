@@ -77,6 +77,7 @@ from .presentation import PresentationRegistry, decorate_items
 from .session import SessionTranscriptStore, _extract_invocations, _extract_invocations_and_duplicates
 from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
+from session_navigation.db import DBError, DBFullError
 from session_navigation.policy import refusal_reason, is_destructive_command
 from session_navigation.reminders import BoundaryReminders
 from .allowlist import AdapterRejected, filter_invocation
@@ -346,11 +347,24 @@ def make_list_handler(state: PluginState) -> Callable[..., str]:
                 if len(candidates) >= limit:
                     break
             return _dump({"ok": True, "items": candidates})
-        items = _engine_list(state.engine, scope, query)
+        try:
+            items = _engine_list(state.engine, scope, query)
+        except (DBError, DBFullError):
+            # A broken database (read-only/locked/full) must surface through
+            # the pending-error payload, not an unhandled throw that hides
+            # the db_error_pending path below.
+            state.db_error_pending = True
+            return _dump({"ok": False, "error": "db_error",
+                          "db_error_pending": True,
+                          "db_error_choices": ["abort_request", "send_original"]})
         scope_key = scope.scope_key()
-        live_ids = {
-            item.item_id for item in state.engine.store.items(scope)
-        }
+        try:
+            live_ids = {
+                item.item_id for item in state.engine.store.items(scope)
+            }
+        except (DBError, DBFullError):
+            state.db_error_pending = True
+            live_ids = set()
         state.presentations.prune(scope_key, live_ids)
         items = decorate_items(items, state.presentations.snapshot().get(scope_key, {}))
         state.presentations.record_view(scope_key, [
@@ -808,14 +822,19 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
     return _track_mutation(state, manage_context)
 
 
-def _child_request(request: dict[str, Any]) -> dict[str, Any]:
-    request = copy.deepcopy(request)
-    if isinstance(request.get("tools"), list):
-        request["tools"] = [tool for tool in request["tools"]
-            if not isinstance(tool, dict) or
-            (tool.get("function", {}).get("name") if isinstance(tool.get("function"), dict) else tool.get("name")) not in TOOL_SCHEMAS]
-    if isinstance(request.get("instructions"), str):
+def _strip_supervision_text(request: dict[str, Any]) -> bool:
+    """Remove the static human-supervision guidance in place; return True if changed.
+
+    The host offers no section unregister API and freezes sections for the
+    session, so entering protection-only cannot retract already-rendered
+    guidance. Stripping our own static text from the outgoing provider
+    payload stops the model from being told to call tools that now answer
+    ``disabled``, without touching any other content.
+    """
+    changed = False
+    if isinstance(request.get("instructions"), str) and SUPERVISION_SECTION_TEXT in request["instructions"]:
         request["instructions"] = request["instructions"].replace(SUPERVISION_SECTION_TEXT, "")
+        changed = True
     for key in ("messages", "input"):
         messages = request.get(key)
         if not isinstance(messages, list):
@@ -825,13 +844,25 @@ def _child_request(request: dict[str, Any]) -> dict[str, Any]:
                 continue
             content = message.get("content")
             if isinstance(content, str):
-                message["content"] = content.replace(SUPERVISION_SECTION_TEXT, "")
+                if SUPERVISION_SECTION_TEXT in content:
+                    message["content"] = content.replace(SUPERVISION_SECTION_TEXT, "")
+                    changed = True
             elif isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    if isinstance(block, dict) and isinstance(block.get("text"), str) and SUPERVISION_SECTION_TEXT in block["text"]:
                         block["text"] = block["text"].replace(SUPERVISION_SECTION_TEXT, "")
-    return request
+                        changed = True
+    return changed
 
+
+def _child_request(request: dict[str, Any]) -> dict[str, Any]:
+    request = copy.deepcopy(request)
+    if isinstance(request.get("tools"), list):
+        request["tools"] = [tool for tool in request["tools"]
+            if not isinstance(tool, dict) or
+            (tool.get("function", {}).get("name") if isinstance(tool.get("function"), dict) else tool.get("name")) not in TOOL_SCHEMAS]
+    _strip_supervision_text(request)
+    return request
 
 def _protection_only_rewrite(
     state: PluginState,
@@ -891,6 +922,10 @@ def _protection_only_rewrite(
         request_out, applied, _ = apply_replacements(api_mode, request_out, plan_dicts)
     if hidden_messages:
         request_out = drop_messages(api_mode, request_out, hidden_messages)
+    # Protection-only dynamic-disable: the startup-registered section stays in
+    # the host prompt, so strip our own guidance from the outgoing copy. The
+    # model is no longer told to call tools that now answer `disabled`.
+    _strip_supervision_text(request_out)
     return {
         "request": request_out,
         "source": SOURCE,
@@ -949,6 +984,15 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                     return rewritten
                 if scope is not None and (registration is not None or hidden_items or hidden_messages):
                     _guarded_register(state, scope, False)
+                if (
+                    scope is not None
+                    and not child
+                    and isinstance(request, dict)
+                ):
+                    stripped = copy.deepcopy(request)
+                    if _strip_supervision_text(stripped):
+                        return {"request": stripped, "source": SOURCE,
+                                "reason": "protection_only (supervision disabled)"}
                 if child and isinstance(request, dict):
                     return {"request": request, "source": SOURCE}
                 return None

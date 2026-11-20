@@ -44,12 +44,15 @@ def target_cwd() -> str:
     return str(Path.home() / "Projects")
 
 def project_dir_key() -> str:
+    # Derive the paseo agents directory name from the real checkout path
+    # without assuming a hardcoded "Users-" prefix or separator style: older
+    # checkouts used dashes, newer ones underscores. The first variant that
+    # exists on disk wins; otherwise fall back to dashes.
     parts = Path(target_cwd()).parts[1:]
-    keys = ("-".join(parts), "Users-" + "_".join(parts))
-    for key in keys:
+    for key in ("-".join(parts), "_".join(parts)):
         if (real_home() / ".paseo" / "agents" / key).is_dir():
             return key
-    return keys[0]
+    return "-".join(parts)
 
 EXPECTED_HERMES_MESSAGES = 1089
 EXPECTED_HERMES_SESSIONS = 1

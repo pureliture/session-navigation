@@ -32,3 +32,50 @@ jobs:
         with:
           python-version: "3.13"
       - run: python tools/sync_hermes_vendor.py --check
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest jsonschema
+      - run: python -m pytest tests/ tools/outline-smoke/test_seed_security.py -q
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # node --test is intentionally not used: node type-stripping rejects
+      # TS the compiler accepts (pre-existing, e.g. core store.ts). bun test
+      # is the supported runner for core/omp/paseo.
+      - name: core tests (bun)
+        run: bun test test
+        working-directory: packages/core
+      - name: omp tests (bun)
+        run: |
+          bun install
+          bun test test
+        working-directory: packages/omp
+      - name: paseo tests (bun + node)
+        run: |
+          npm ci
+          npm test
+        working-directory: paseo-plugin
+      - name: typecheck (core, omp, paseo)
+        run: |
+          (cd packages/core && npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.9.3 && ./node_modules/.bin/tsc --noEmit)
+          (cd packages/omp && bun install && ./node_modules/.bin/tsc --noEmit)
+          (cd paseo-plugin && ./node_modules/.bin/tsc --noEmit)
+      - name: core conformance (python vs node/bun)
+        run: PYTHONPATH=src python tools/core_conformance.py
