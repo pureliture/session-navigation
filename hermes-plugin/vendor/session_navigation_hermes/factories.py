@@ -1042,21 +1042,17 @@ def _ensure_supervision_text(request: dict[str, Any], api_mode: str) -> dict[str
 
     if api_mode == "codex_responses":
         instructions = updated.get("instructions")
+        result = dict(updated)
         if isinstance(instructions, str):
-            result = dict(updated)
             result["instructions"] = (
                 f"{instructions}\n\n{SUPERVISION_SECTION_TEXT}"
                 if instructions else SUPERVISION_SECTION_TEXT
             )
-            return result
-        messages = updated.get("input")
-        if not isinstance(messages, list):
-            return updated
-        result = dict(updated)
-        result["input"] = [
-            {"role": "developer", "content": [{"type": "input_text", "text": SUPERVISION_SECTION_TEXT}]},
-            *messages,
-        ]
+        else:
+            # Hermes converts the first system message into `instructions` before
+            # middleware runs. A developer-role item in `input` would be rejected
+            # by the Codex preflight, so this fallback must set `instructions`.
+            result["instructions"] = SUPERVISION_SECTION_TEXT
         return result
 
     messages = updated.get("messages")

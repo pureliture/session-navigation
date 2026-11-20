@@ -562,6 +562,7 @@ def test_disabled_child_and_protection_only_remove_framed_supervision(mode):
         request = {"instructions": "Base.\n\n" + framed,
                    "input": [{"type": "message", "role": "user", "content": "Continue."}],
                    "tools": [{"type": "function", "name": "manage_context"}]}
+    original = copy.deepcopy(request)
 
     def system(outgoing):
         return outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
@@ -580,6 +581,25 @@ def test_disabled_child_and_protection_only_remove_framed_supervision(mode):
     assert child is not None
     assert section not in system(child["request"])
     assert "## Plugin Context:" not in system(child["request"])
+    assert request == original
+
+
+@pytest.mark.parametrize("case", ["missing", "not_string"])
+def test_codex_without_usable_instructions_sets_instructions_not_input_role(case):
+    section = plugin.SUPERVISION_SECTION_TEXT
+    request = {
+        "input": [{"type": "message", "role": "user", "content": "Continue."}],
+        "tools": [{"type": "function", "name": "manage_context"}],
+    }
+    if case == "not_string":
+        request["instructions"] = {"unexpected": "shape"}
+    original = copy.deepcopy(request)
+    outgoing = plugin.make_middleware(_state())(
+        request=request, session_id="codex-no-instructions", api_mode="codex_responses")["request"]
+    assert outgoing["instructions"] == section
+    assert outgoing["input"] == original["input"]
+    assert not any(item.get("role") == "developer" for item in outgoing["input"])
+    assert request == original
 
 
 def test_protection_only_rewrite_removes_framed_supervision():
