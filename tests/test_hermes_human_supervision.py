@@ -12,9 +12,28 @@ SESSION = "human-supervision-session"
 
 
 def _state(**overrides):
-    return plugin.PluginState(
-        is_enabled=lambda: True, count_middlewares=lambda: 0, **overrides,
-    )
+    defaults = {"is_enabled": lambda: True, "count_middlewares": lambda: 0}
+    defaults.update(overrides)
+    return plugin.PluginState(**defaults)
+
+
+def _frame(content: str, *, section_id: str | None = None, chars: int | None = None) -> str:
+    section_id = section_id or plugin.SUPERVISION_SECTION_ID
+    declared = len(content) if chars is None else chars
+    return (f"## Plugin Context: {section_id}\n"
+            f"<!-- hermes-plugin-section-chars:{declared} -->\n\n{content}")
+
+
+def _container(*sections: str) -> str:
+    if not sections:
+        return ""
+    return ("<!-- hermes-plugin-sections:start -->\n"
+            + "\n\n".join(sections)
+            + "\n<!-- hermes-plugin-sections:end -->")
+
+
+def _stale_guidance() -> str:
+    return _container(_frame("Old cleanup guidance without tool calls."))
 
 
 def _body(label="sample"):
@@ -413,11 +432,7 @@ def test_numeric_reference_out_of_range_and_after_new_list():
 
 @pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
 def test_stale_frozen_supervision_section_is_replaced(mode):
-    stale = (
-        "## Plugin Context: session-navigation.human-supervision\n"
-        "<!-- hermes-plugin-section-chars:40 -->\n\n"
-        "Old cleanup guidance without tool calls."
-    )
+    stale = _stale_guidance()
     section = plugin.SUPERVISION_SECTION_TEXT
     if mode == "chat_completions":
         request = {"messages": [{"role": "developer", "content": "Base.\n\n" + stale},
@@ -434,6 +449,148 @@ def test_stale_frozen_supervision_section_is_replaced(mode):
     assert system.endswith(section)
     assert system.count(section) == 1
     assert request == original
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_lookalike_frame_outside_canonical_container_is_preserved(mode):
+    lookalike = _frame("Old cleanup guidance without tool calls.")
+    section = plugin.SUPERVISION_SECTION_TEXT
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "developer", "content": "Base.\n\n" + lookalike},
+                                {"role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": "Base.\n\n" + lookalike,
+                   "input": [{"type": "message", "role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="lookalike-section", api_mode=mode)["request"]
+    system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+    assert lookalike in system
+    assert system.endswith(section)
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_malformed_frame_keeps_following_prompt_text(mode):
+    malformed = _container(_frame("Old cleanup guidance without tool calls.", chars=9999))
+    section = plugin.SUPERVISION_SECTION_TEXT
+    system_text = "Base.\n\n" + malformed + "\n\nTail after frame."
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "developer", "content": system_text},
+                                {"role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": system_text,
+                   "input": [{"type": "message", "role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="malformed-section", api_mode=mode)["request"]
+    system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+    assert "Old cleanup guidance" in system
+    assert "Tail after frame." in system
+    assert system.count(section) == 1
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_stale_and_current_guidance_coexist_only_current_survives(mode):
+    stale = _stale_guidance()
+    section = plugin.SUPERVISION_SECTION_TEXT
+    system_text = "Base.\n\n" + stale + "\n\n" + section
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "developer", "content": system_text},
+                                {"role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": system_text,
+                   "input": [{"type": "message", "role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="stale-and-current", api_mode=mode)["request"]
+    system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+    assert "Old cleanup guidance" not in system
+    assert system.count(section) == 1
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_stale_guidance_in_system_or_developer_slots_is_removed(mode):
+    stale = _stale_guidance()
+    section = plugin.SUPERVISION_SECTION_TEXT
+    stale_message = {"role": "developer" if mode == "chat_completions" else "system",
+                     "content": [{"type": "text", "text": "Prefix. " + stale}]}
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "system", "content": "Base."}, stale_message,
+                                {"role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": "Base.", "input": [stale_message,
+                   {"type": "message", "role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+    original = copy.deepcopy(request)
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="stale-slots", api_mode=mode)["request"]
+    slot = outgoing["messages"][1] if mode == "chat_completions" else outgoing["input"][0]
+    assert "Old cleanup guidance" not in json.dumps(slot, ensure_ascii=False)
+    if mode == "chat_completions":
+        assert outgoing["messages"][0]["content"].endswith(section)
+    else:
+        assert outgoing["instructions"].endswith(section)
+    assert request == original
+
+
+@pytest.mark.parametrize("case", ["allowed_tools_no_cleanup", "allowed_tools_with_cleanup"])
+def test_allowed_tools_choice_controls_supervision(case):
+    section = plugin.SUPERVISION_SECTION_TEXT
+    tools = [{"type": "function", "function": {"name": "manage_context"}},
+             {"type": "function", "function": {"name": "read_file"}}]
+    allowed = ["read_file"] if case == "allowed_tools_no_cleanup" else ["manage_context"]
+    request = {"messages": [{"role": "system", "content": "Base."},
+                            {"role": "user", "content": "Continue."}],
+               "tools": tools,
+               "tool_choice": {"type": "allowed_tools",
+                               "tools": [{"type": "function", "function": {"name": name}} for name in allowed]}}
+    outgoing = plugin.make_middleware(_state())(
+        request=request, session_id="allowed-tools", api_mode="chat_completions")["request"]
+    system = outgoing["messages"][0]["content"]
+    assert (section in system) is (case == "allowed_tools_with_cleanup")
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_disabled_child_and_protection_only_remove_framed_supervision(mode):
+    framed = _container(_frame(plugin.SUPERVISION_SECTION_TEXT))
+    section = plugin.SUPERVISION_SECTION_TEXT
+    if mode == "chat_completions":
+        request = {"messages": [{"role": "developer", "content": "Base.\n\n" + framed},
+                                {"role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "function": {"name": "manage_context"}}]}
+    else:
+        request = {"instructions": "Base.\n\n" + framed,
+                   "input": [{"type": "message", "role": "user", "content": "Continue."}],
+                   "tools": [{"type": "function", "name": "manage_context"}]}
+
+    def system(outgoing):
+        return outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
+
+    disabled_state = _state(is_enabled=lambda: False)
+    disabled = plugin.make_middleware(disabled_state)(
+        request=request, session_id="disabled-framed", api_mode=mode)
+    assert disabled is not None
+    assert section not in system(disabled["request"])
+    assert "## Plugin Context:" not in system(disabled["request"])
+
+    child_state = _state()
+    child_state.child_links["child-framed"] = {"parent_scope": "hermes:default:parent"}
+    child = plugin.make_middleware(child_state)(
+        request=request, session_id="child-framed", api_mode=mode)
+    assert child is not None
+    assert section not in system(child["request"])
+    assert "## Plugin Context:" not in system(child["request"])
+
+
+def test_protection_only_rewrite_removes_framed_supervision():
+    framed = _container(_frame(plugin.SUPERVISION_SECTION_TEXT))
+    state = _state(is_enabled=lambda: False)
+    scope = plugin.scope_for(state, SESSION)
+    request = {"messages": [{"role": "developer", "content": "Base.\n\n" + framed},
+                            {"role": "user", "content": "Continue."}]}
+    factories = hermes_adapter().factories
+    outgoing = factories._protection_only_rewrite(
+        state, scope, "chat_completions", request, [], set())["request"]
 
 
 def test_numeric_reference_keeps_working_after_a_restore():

@@ -823,19 +823,102 @@ def make_manage_handler(state: PluginState) -> Callable[..., str]:
     return _track_mutation(state, manage_context)
 
 
-def _strip_supervision_text(request: dict[str, Any]) -> bool:
-    """Remove the static human-supervision guidance in place; return True if changed.
+_PLUGIN_SECTIONS_START = "<!-- hermes-plugin-sections:start -->"
+_PLUGIN_SECTIONS_END = "<!-- hermes-plugin-sections:end -->"
+_MAX_PLUGIN_SECTION_CHARS = 4000
+_PLUGIN_SECTION_FRAME_RE = re.compile(
+    r"^## Plugin Context: (?P<id>[a-z0-9][a-z0-9._-]{0,127})\n"
+    r"<!-- hermes-plugin-section-chars:(?P<chars>[0-9]{1,4}) -->\n\n",
+    re.MULTILINE,
+)
 
-    The host offers no section unregister API and freezes sections for the
-    session, so entering protection-only cannot retract already-rendered
-    guidance. Stripping our own static text from the outgoing provider
-    payload stops the model from being told to call tools that now answer
-    ``disabled``, without touching any other content.
-    """
-    changed = False
-    if isinstance(request.get("instructions"), str) and SUPERVISION_SECTION_TEXT in request["instructions"]:
-        request["instructions"] = request["instructions"].replace(SUPERVISION_SECTION_TEXT, "")
-        changed = True
+
+def _format_plugin_sections(sections: list[tuple[str, str]]) -> str:
+    """Mirror Hermes' canonical plugin-section container exactly."""
+    if not sections:
+        return ""
+    blocks = [
+        f"## Plugin Context: {section_id}\n"
+        f"<!-- hermes-plugin-section-chars:{len(content)} -->\n\n{content}"
+        for section_id, content in sections
+    ]
+    return f"{_PLUGIN_SECTIONS_START}\n" + "\n\n".join(blocks) + f"\n{_PLUGIN_SECTIONS_END}"
+
+
+def _parse_plugin_container(container: str) -> list[tuple[str, str, int, int]] | None:
+    """Parse only a byte-exact Hermes container; malformed blocks fail open."""
+    if not (container.startswith(f"{_PLUGIN_SECTIONS_START}\n")
+            and container.endswith(f"\n{_PLUGIN_SECTIONS_END}")):
+        return None
+    parsed: list[tuple[str, str, int, int]] = []
+    expected = len(_PLUGIN_SECTIONS_START) + 1
+    for match in _PLUGIN_SECTION_FRAME_RE.finditer(container):
+        if match.start() != expected:
+            return None
+        length = int(match.group("chars"))
+        end = match.end() + length
+        if length > _MAX_PLUGIN_SECTION_CHARS or end > len(container) - len(_PLUGIN_SECTIONS_END) - 1:
+            return None
+        parsed.append((match.group("id"), container[match.end():end], match.start(), end))
+        expected = end + 2
+    if not parsed or container[parsed[-1][3]:] != f"\n{_PLUGIN_SECTIONS_END}":
+        return None
+    if _format_plugin_sections([(item[0], item[1]) for item in parsed]) != container:
+        return None
+    return parsed
+
+
+def _plugin_containers(text: str):
+    """Yield verified (start, end, sections) spans for canonical containers."""
+    cursor = 0
+    while True:
+        start = text.find(_PLUGIN_SECTIONS_START, cursor)
+        if start < 0:
+            return
+        end = text.find(_PLUGIN_SECTIONS_END, start + len(_PLUGIN_SECTIONS_START))
+        if end < 0:
+            return
+        end += len(_PLUGIN_SECTIONS_END)
+        parsed = _parse_plugin_container(text[start:end])
+        if parsed is not None:
+            yield start, end, parsed
+        cursor = start + len(_PLUGIN_SECTIONS_START)
+
+
+def _strip_supervision_frames(text: str, *, remove_current: bool) -> str:
+    """Remove only framed sections owned by this plugin from verified containers."""
+    replacements: list[tuple[int, int, str]] = []
+    for start, end, sections in _plugin_containers(text):
+        kept: list[tuple[str, str]] = []
+        removed = False
+        for section_id, content, _frame_start, _frame_end in sections:
+            if section_id == SUPERVISION_SECTION_ID and (
+                    remove_current or content != SUPERVISION_SECTION_TEXT):
+                removed = True
+            else:
+                kept.append((section_id, content))
+        if removed:
+            replacements.append((start, end, _format_plugin_sections(kept)))
+    for start, end, replacement in reversed(replacements):
+        text = text[:start] + replacement + text[end:]
+    return text
+
+
+def _strip_stale_supervision_sections(text: str) -> str:
+    """Remove an outdated canonical frame, keeping the current guidance intact."""
+    return _strip_supervision_frames(text, remove_current=False)
+
+
+def _has_supervision_text(text: str) -> bool:
+    """True when the current static guidance appears verbatim in this text."""
+    return SUPERVISION_SECTION_TEXT in text
+
+
+def _iter_system_texts(request: dict[str, Any]):
+    """Yield system/developer text slots that may carry prompt guidance."""
+    instructions = request.get("instructions")
+    if isinstance(instructions, str):
+        yield instructions
     for key in ("messages", "input"):
         messages = request.get(key)
         if not isinstance(messages, list):
@@ -845,44 +928,89 @@ def _strip_supervision_text(request: dict[str, Any]) -> bool:
                 continue
             content = message.get("content")
             if isinstance(content, str):
-                if SUPERVISION_SECTION_TEXT in content:
-                    message["content"] = content.replace(SUPERVISION_SECTION_TEXT, "")
-                    changed = True
+                yield content
             elif isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict) and isinstance(block.get("text"), str) and SUPERVISION_SECTION_TEXT in block["text"]:
-                        block["text"] = block["text"].replace(SUPERVISION_SECTION_TEXT, "")
-                        changed = True
-    return changed
+                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                        yield block["text"]
 
 
-
-_SUPERVISION_FRAME_RE = re.compile(
-    r"## Plugin Context: " + re.escape(SUPERVISION_SECTION_ID) +
-    r"\n<!-- hermes-plugin-section-chars:(\d+) -->\n\n"
-)
-
-
-def _strip_stale_supervision_sections(text: str) -> str:
-    """Remove an outdated framed supervision section from a request copy.
-
-    Hermes freezes prompt sections into persisted sessions. Existing sessions
-    can therefore carry an older module version of this same section; leaving
-    it in place would dilute the newer cleanup contract. Only the exact frame
-    emitted by Hermes is recognized; user/tool text containing the heading is
-    not modified.
-    """
-    chunks: list[str] = []
-    cursor = 0
-    for match in _SUPERVISION_FRAME_RE.finditer(text):
-        length = int(match.group(1))
-        end = match.end() + length
-        if end <= len(text) and text[match.end():end] == SUPERVISION_SECTION_TEXT:
+def _transform_system_texts(request: dict[str, Any], transform) -> dict[str, Any]:
+    """Return a shallow copy with transformed system/developer text slots."""
+    updated = dict(request)
+    changed = False
+    instructions = request.get("instructions")
+    if isinstance(instructions, str):
+        transformed = transform(instructions)
+        if transformed != instructions:
+            updated["instructions"] = transformed
+            changed = True
+    for key in ("messages", "input"):
+        messages = request.get(key)
+        if not isinstance(messages, list):
             continue
-        chunks.append(text[cursor:match.start()])
-        cursor = end
-    chunks.append(text[cursor:])
-    return "".join(chunks)
+        updated_messages = list(messages)
+        messages_changed = False
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
+                continue
+            content = message.get("content")
+            transformed_message = dict(message)
+            if isinstance(content, str):
+                transformed = transform(content)
+                if transformed != content:
+                    transformed_message["content"] = transformed
+                    messages_changed = True
+            elif isinstance(content, list):
+                transformed_content = list(content)
+                content_changed = False
+                for block_index, block in enumerate(content):
+                    if not isinstance(block, dict) or not isinstance(block.get("text"), str):
+                        continue
+                    transformed = transform(block["text"])
+                    if transformed != block["text"]:
+                        transformed_content[block_index] = {**block, "text": transformed}
+                        content_changed = True
+                if content_changed:
+                    transformed_message["content"] = transformed_content
+                    messages_changed = True
+            if messages_changed and updated_messages[index] is message:
+                updated_messages[index] = transformed_message
+        if messages_changed:
+            updated[key] = updated_messages
+            changed = True
+    return updated if changed else request
+
+
+def _strip_supervision_text(request: dict[str, Any]) -> bool:
+    """Remove every rendered form of our guidance in place; return changed."""
+    def strip(text: str) -> str:
+        return _strip_supervision_frames(text, remove_current=True).replace(
+            SUPERVISION_SECTION_TEXT, "")
+
+    updated = _transform_system_texts(request, strip)
+    if updated is request:
+        return False
+    request.clear()
+    request.update(updated)
+    return True
+
+
+def _tool_names(items: Any) -> set[str]:
+    """Collect tool names from flat or nested tool/allowed_tools lists."""
+    names: set[str] = set()
+    if not isinstance(items, list):
+        return names
+    for item in items:
+        if isinstance(item, str):
+            names.add(item)
+        elif isinstance(item, dict):
+            function = item.get("function")
+            name = function.get("name") if isinstance(function, dict) else item.get("name")
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
 
 def _can_add_supervision(request: dict[str, Any], api_mode: str, turn_id: Any) -> bool:
     """Only steer supported requests that expose the cleanup tool or its bridge."""
@@ -896,84 +1024,68 @@ def _can_add_supervision(request: dict[str, Any], api_mode: str, turn_id: Any) -
     if isinstance(choice, dict) and choice.get("type") == "function":
         function = choice.get("function")
         name = function.get("name") if isinstance(function, dict) else choice.get("name")
-        if isinstance(name, str) and name not in ("manage_context", "tool_call"):
+        if isinstance(name, str) and name not in (MANAGE_TOOL, "tool_call"):
             return False
-    tools = request.get("tools")
-    if not isinstance(tools, list):
-        return False
-    names = set()
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        function = tool.get("function")
-        name = function.get("name") if isinstance(function, dict) else tool.get("name")
-        if isinstance(name, str):
-            names.add(name)
+    if isinstance(choice, dict) and choice.get("type") == "allowed_tools":
+        allowed = _tool_names(choice.get("tools"))
+        if not (MANAGE_TOOL in allowed or {"tool_describe", "tool_call"}.issubset(allowed)):
+            return False
+    names = _tool_names(request.get("tools"))
     return MANAGE_TOOL in names or {"tool_describe", "tool_call"}.issubset(names)
 
 
 def _ensure_supervision_text(request: dict[str, Any], api_mode: str) -> dict[str, Any]:
-    """Add or refresh guidance on the outgoing system prompt, not session history."""
-    if api_mode == "codex_responses":
-        instructions = request.get("instructions", "")
-        if not isinstance(instructions, str):
-            return request
-        if SUPERVISION_SECTION_TEXT in instructions:
-            return request
-        instructions = _strip_stale_supervision_sections(instructions)
-        messages = request.get("input")
-    else:
-        messages = request.get("messages")
-    if not isinstance(messages, list):
-        return request
-
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and SUPERVISION_SECTION_TEXT in content:
-            return request
-        if isinstance(content, list) and SUPERVISION_SECTION_TEXT in "".join(
-            block.get("text", "") for block in content
-            if isinstance(block, dict) and isinstance(block.get("text"), str)
-        ):
-            return request
-
-    updated = dict(request)
-    if api_mode == "codex_responses":
-        updated["instructions"] = (
-            f"{instructions}\n\n{SUPERVISION_SECTION_TEXT}" if instructions else SUPERVISION_SECTION_TEXT
-        )
+    """Add current guidance to the outgoing system text, never to session history."""
+    updated = _transform_system_texts(request, _strip_stale_supervision_sections)
+    if any(_has_supervision_text(text) for text in _iter_system_texts(updated)):
         return updated
 
+    if api_mode == "codex_responses":
+        instructions = updated.get("instructions")
+        if isinstance(instructions, str):
+            result = dict(updated)
+            result["instructions"] = (
+                f"{instructions}\n\n{SUPERVISION_SECTION_TEXT}"
+                if instructions else SUPERVISION_SECTION_TEXT
+            )
+            return result
+        messages = updated.get("input")
+        if not isinstance(messages, list):
+            return updated
+        result = dict(updated)
+        result["input"] = [
+            {"role": "developer", "content": [{"type": "input_text", "text": SUPERVISION_SECTION_TEXT}]},
+            *messages,
+        ]
+        return result
+
+    messages = updated.get("messages")
+    if not isinstance(messages, list):
+        return updated
     updated_messages = list(messages)
     for index, message in enumerate(messages):
         if not isinstance(message, dict) or message.get("role") not in ("system", "developer"):
             continue
         content = message.get("content")
-        updated_message = dict(message)
+        transformed_message = dict(message)
         if isinstance(content, str):
-            normalized = _strip_stale_supervision_sections(content)
-            updated_message["content"] = (
-                f"{normalized}\n\n{SUPERVISION_SECTION_TEXT}" if normalized else SUPERVISION_SECTION_TEXT
+            transformed_message["content"] = (
+                f"{content}\n\n{SUPERVISION_SECTION_TEXT}" if content else SUPERVISION_SECTION_TEXT
             )
         elif isinstance(content, list):
-            updated_content = []
-            for block in content:
-                if not isinstance(block, dict) or not isinstance(block.get("text"), str):
-                    updated_content.append(block)
-                    continue
-                updated_block = dict(block)
-                updated_block["text"] = _strip_stale_supervision_sections(block["text"])
-                updated_content.append(updated_block)
-            updated_message["content"] = [*updated_content, {"type": "text", "text": SUPERVISION_SECTION_TEXT}]
+            transformed_message["content"] = [
+                *content,
+                {"type": "text", "text": SUPERVISION_SECTION_TEXT},
+            ]
         else:
             continue
-        updated_messages[index] = updated_message
-        updated["messages"] = updated_messages
-        return updated
-    updated["messages"] = [{"role": "system", "content": SUPERVISION_SECTION_TEXT}, *updated_messages]
-    return updated
+        updated_messages[index] = transformed_message
+        result = dict(updated)
+        result["messages"] = updated_messages
+        return result
+    result = dict(updated)
+    result["messages"] = [{"role": "system", "content": SUPERVISION_SECTION_TEXT}, *updated_messages]
+    return result
 
 
 def _child_request(request: dict[str, Any]) -> dict[str, Any]:
