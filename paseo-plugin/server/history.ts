@@ -24,6 +24,12 @@ export type History = {
   chunkStart: number;
   /** Scope of the session actually loaded after following the rotation chain. */
   effectiveScope?: string;
+  /**
+   * True when this timeline authoritatively represents the latest chunk
+   * (source session/file matched), even when rows are empty. An empty
+   * authoritative chunk must NOT be backfilled with stale targets/items.
+   */
+  chunkAuthoritative?: boolean;
   externalContext?: { used_tokens: number; max_tokens: number | null; source: string };
   recordsCapped?: boolean;
   readError?: string;
@@ -55,6 +61,9 @@ export function cloneTimeline(timeline: Timeline): Timeline {
       chunkStart: timeline.history.chunkStart,
       ...(timeline.history.effectiveScope
         ? { effectiveScope: timeline.history.effectiveScope }
+        : {}),
+      ...(timeline.history.chunkAuthoritative !== undefined
+        ? { chunkAuthoritative: timeline.history.chunkAuthoritative }
         : {}),
       ...(timeline.history.externalContext
         ? { externalContext: { ...timeline.history.externalContext } }
@@ -306,6 +315,9 @@ export function loadTimeline(
     return cloneTimeline(cached.timeline);
   }
   const history = parseHistoryFile(absPath);
+  // The history file was found, so this timeline authoritatively represents
+  // the latest chunk even when it yields zero rows (P1-2: never backfill).
+  history.chunkAuthoritative = true;
   if (history.chunkStart > 0) {
     const start = Math.min(history.chunkStart, history.messages.length);
     history.messages = history.messages.slice(start);

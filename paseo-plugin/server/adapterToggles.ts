@@ -10,6 +10,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
@@ -768,6 +769,60 @@ function assertNonSymlinkIfExists(filePath: string, realRoot: string): void {
   }
 }
 
+// A toggle lock older than this with a verifiably dead owner is treated as
+// stale (previous process crashed) and recovered instead of deadlocking
+// every future toggle (P1-9).
+const TOGGLE_LOCK_STALE_MS = 120_000;
+
+interface ToggleLockPayload {
+  pid?: unknown;
+  startedAt?: unknown;
+  nonce?: unknown;
+}
+
+function isToggleLockPayload(value: unknown): value is ToggleLockPayload {
+  return !!value && typeof value === "object";
+}
+
+function isLockOwnerAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && "code" in err && err.code === "ESRCH") return false;
+    // EPERM and friends mean a process exists but cannot be signaled.
+    return true;
+  }
+}
+
+function readToggleLockPayload(lockPath: string): ToggleLockPayload | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(lockPath, "utf8"));
+    return isToggleLockPayload(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isToggleLockStale(lockPath: string, now: number): boolean {
+  const payload = readToggleLockPayload(lockPath);
+  const startedAt = payload && typeof payload.startedAt === "number" ? payload.startedAt : null;
+  let ageMs: number | null =
+    startedAt !== null && Number.isFinite(startedAt) ? now - startedAt : null;
+  if (ageMs === null) {
+    try {
+      ageMs = now - statSync(lockPath).mtimeMs;
+    } catch {
+      return false;
+    }
+  }
+  if (ageMs < TOGGLE_LOCK_STALE_MS) return false;
+  // Only steal the lock when its owner is verifiably gone; a live owner
+  // keeps the lock even when old.
+  return !isLockOwnerAlive(payload?.pid);
+}
+
 function acquireToggleLock(realRoot: string): () => void {
   const lockPath = join(realRoot, TOGGLE_LOCK_NAME);
   const nonce = randomUUID();
@@ -801,7 +856,21 @@ function acquireToggleLock(realRoot: string): () => void {
         throw statErr;
       }
     }
-    throw new Error("hermes_toggle_locked");
+    // P1-9: recover a stale lock left by a crashed toggle instead of
+    // deadlocking; a live owner keeps the lock and still fails here.
+    if (!isToggleLockStale(lockPath, Date.now())) {
+      throw new Error("hermes_toggle_locked");
+    }
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      throw new Error("hermes_toggle_locked");
+    }
+    try {
+      fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+    } catch {
+      throw new Error("hermes_toggle_locked");
+    }
   }
 
   let ownedStat: ReturnType<typeof fstatSync>;
@@ -861,8 +930,19 @@ function writeToggleJournal(realRoot: string, journal: ToggleJournal): void {
     realRoot,
     `.session-navigation-toggle.journal.${process.pid}.${Date.now()}.${randomUUID().slice(0, 8)}.tmp`,
   );
-  writeFileSync(tmpPath, JSON.stringify(journal, null, 2), { encoding: "utf8", mode: 0o600 });
-  renameSync(tmpPath, journalPath);
+  // P1-9: a failed journal write (disk full, permissions, racing journal
+  // path) must not leak the temp file.
+  try {
+    writeFileSync(tmpPath, JSON.stringify(journal, null, 2), { encoding: "utf8", mode: 0o600 });
+    renameSync(tmpPath, journalPath);
+  } catch (err) {
+    try {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    } catch {
+      /* best-effort temp cleanup */
+    }
+    throw err;
+  }
 }
 
 function removeToggleJournal(realRoot: string): void {
@@ -1323,7 +1403,23 @@ export function setHermesToggleAcrossProfiles(
         committed: false,
       })),
     };
-    writeToggleJournal(realRoot, journal);
+    // P1-9: a journal write failure must surface as an error and clean up
+    // staged temp files instead of throwing with temps leaked.
+    try {
+      writeToggleJournal(realRoot, journal);
+    } catch (err) {
+      cleanupTempFiles(staged);
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "hermes_journal_write_failed",
+        updatedFiles: [],
+        rolledBack: false,
+        partialUpdate: false,
+        rolledBackFiles: [],
+        rollbackFailedFiles: [],
+        profiles: readProfileStates(targets),
+      };
+    }
 
     const rollbackCommitted = (committedItems: readonly StagedTarget[], failureError?: string) => {
       const rolledBackFiles: string[] = [];

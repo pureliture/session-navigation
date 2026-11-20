@@ -354,4 +354,7 @@ export function scopeKeyFromWorkspace(
     branchScope: "default",
   });
 }
+// Cross-source compaction-summary identity (P1-3 contract, dependency-free
+// implementation so the worker bundle stays lean).
+export { summaryDedupeKey } from "./summaryDedupe";
 export type Row = z.infer<typeof RowSchema>;

@@ -1,3 +1,4 @@
+import { summaryDedupeKey } from "../shared/sessionNav.ts";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +14,7 @@ import {
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
 import { hasHermesSession } from "./hermesHistory.ts";
 import { loadTimeline } from "./history.ts";
+import { HistoryTooLargeError, MAX_HISTORY_ROWS } from "./historyLimits.ts";
 import { PaseoService } from "./service.ts";
 
 const cleanup: (() => void)[] = [];
@@ -480,4 +482,167 @@ test("PaseoService.list excludes pre-compaction store items/targets from rows, t
   expect(page.items.map((r: any) => r.timeline_index)).toEqual([0]);
   expect(page.has_older).toBe(false);
   expect(page.next_before_index).toBeNull();
+});
+
+test("Hermes msg: unit IDs count pre-summary slots so pN matches the full active payload", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("p0-sess", "{}");
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  );
+  const preUser = "pre-summary question";
+  const preAssistant = "pre-summary answer";
+  insMsg.run("p0-sess", "user", preUser, 0);
+  insMsg.run("p0-sess", "assistant", preAssistant, 0);
+  const summaryText = "[CONTEXT COMPACTION] compacted context";
+  insMsg.run("p0-sess", "user", summaryText, 1);
+  const latestText = "latest question after summary";
+  insMsg.run("p0-sess", "user", latestText, 0);
+
+  const tl = loadTimeline(home, "hermes:default:p0-sess:unknown");
+  expect(tl.rows.map((r) => r.summary_line)).toEqual([summaryText, latestText]);
+  // The pre-summary user (p0) and assistant (p1) keep their payload slots, so
+  // the latest chunk resumes at p2 instead of colliding with pre-summary p0.
+  expect(tl.rows[0].item_id).toBe(`msg:user:p2:${sha256(summaryText).slice(0, 12)}`);
+  expect(tl.rows[1].item_id).toBe(`msg:user:p3:${sha256(latestText).slice(0, 12)}`);
+});
+
+test("Hermes multi-compaction chunk starts at the latest summary, not the first", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("multi-sess", "{}");
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  );
+  insMsg.run("multi-sess", "user", "first chunk prompt", 0);
+  insMsg.run("multi-sess", "user", "[CONTEXT COMPACTION] first summary", 1);
+  insMsg.run("multi-sess", "user", "second chunk prompt", 0);
+  insMsg.run("multi-sess", "user", "[CONTEXT COMPACTION] second summary", 1);
+  insMsg.run("multi-sess", "assistant", "latest reply", 0);
+
+  const tl = loadTimeline(home, "hermes:default:multi-sess:unknown");
+  expect(tl.rows.map((r) => r.summary_line)).toEqual([
+    "[CONTEXT COMPACTION] second summary",
+    "latest reply",
+  ]);
+});
+
+test("Hermes duplicate compaction summaries collapse across kinds with metadata preserved", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("dup-sum-sess", "{}");
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, compacted, _compressed_summary) VALUES (?, ?, ?, ?, ?)",
+  );
+  const summaryText = "[CONTEXT COMPACTION] carried summary";
+  insMsg.run("dup-sum-sess", "user", "old prompt", 0, 0);
+  // Flagged summary stored compacted (hist_ ID, unmanageable) ...
+  insMsg.run("dup-sum-sess", "user", summaryText, 1, 1);
+  // ... and carried a second time as a plain assistant message.
+  insMsg.run("dup-sum-sess", "assistant", summaryText, 0, 0);
+
+  const tl = loadTimeline(home, "hermes:default:dup-sum-sess:unknown");
+  const summaryRows = tl.rows.filter((r) => r.summary_line === summaryText);
+  expect(summaryRows).toHaveLength(1);
+  // Metadata preserved: the manageable msg: ID wins over the hist_ fallback.
+  expect(summaryRows[0].manageable).toBe(true);
+  expect(summaryRows[0].item_id).toStartWith("msg:assistant:");
+});
+
+test("Hermes distinct long messages sharing a prefix never dedupe", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("prefix-sess", "{}");
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  );
+  const sharedPrefix = "x".repeat(130);
+  insMsg.run("prefix-sess", "user", `${sharedPrefix} alpha tail`, 0);
+  insMsg.run("prefix-sess", "user", `${sharedPrefix} beta tail`, 0);
+
+  const tl = loadTimeline(home, "hermes:default:prefix-sess:unknown");
+  expect(tl.rows).toHaveLength(2);
+  expect(new Set(tl.rows.map((r) => r.item_id)).size).toBe(2);
+});
+
+test("summaryDedupeKey ignores kind and matches full text, not prefixes", () => {
+  const a = "x".repeat(200) + " one";
+  const b = "x".repeat(200) + " two";
+  expect(summaryDedupeKey(a)).toBe(summaryDedupeKey(a));
+  expect(summaryDedupeKey(a)).not.toBe(summaryDedupeKey(b));
+});
+
+test("Hermes oversized chunk fails fast with history_too_large via pre-count guard", () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("big-sess", "{}");
+  db.exec("BEGIN");
+  try {
+    const insMsg = db.prepare("INSERT INTO messages (session_id, role, content, active) VALUES (?, ?, ?, ?)");
+    for (let i = 0; i < MAX_HISTORY_ROWS + 1; i++) insMsg.run("big-sess", "user", "x", 1);
+  } finally {
+    db.exec("COMMIT");
+  }
+  let code: string | undefined;
+  try {
+    loadTimeline(home, "hermes:default:big-sess:unknown");
+  } catch (err) {
+    code = err instanceof HistoryTooLargeError ? err.code : `unexpected:${String(err)}`;
+  }
+  expect(code).toBe("history_too_large");
+});
+
+test("empty valid Hermes chunk is authoritative and never resurrects stale targets", async () => {
+  const home = tempHome();
+  const db = hermesDb(home);
+  db.prepare("INSERT INTO sessions (id, model_config) VALUES (?, ?)").run("empty-sess", "{}");
+  // Only an inactive row: the latest chunk is valid but empty.
+  db.prepare("INSERT INTO messages (session_id, role, content, active) VALUES (?, ?, ?, ?)").run(
+    "empty-sess",
+    "user",
+    "inactive old prompt",
+    0,
+  );
+
+  const hScope = "hermes:default:empty-sess:unknown";
+  const direct = loadTimeline(home, hScope);
+  expect(direct.rows).toEqual([]);
+  expect(direct.history.chunkAuthoritative).toBe(true);
+
+  const store = new Store(new BunDriver(join(home, "state.sqlite3")));
+  cleanup.push(() => store.close());
+  store.register(hScope, {
+    adapter_id: "hermes",
+    adapter_protocol: 1,
+    capabilities: { hide: true, summarize: true, unhide: true },
+    enabled: true,
+    instance_id: "test",
+  });
+  const staleContent = "stale pre-chunk output ".repeat(40);
+  const staleInv = { tool_name: "read_file", arguments: { path: "stale.txt" } };
+  store.publishTargets(hScope, [
+    {
+      record: {
+        call_id: "call_stale",
+        content: staleContent,
+        content_sha256: sha256(staleContent),
+        invocation: staleInv,
+        invocation_digest: invocationDigest(staleInv),
+        result_position: 0,
+        status: "ok",
+      },
+    },
+  ]);
+
+  const service = new PaseoService(store, home);
+  const listed = await service.handle("list", { scope_key: hScope });
+  expect(listed.ok).toBe(true);
+  expect(listed.items).toEqual([]);
+  expect(listed.totals).toEqual({
+    total_rows: 0,
+    manageable_count: 0,
+    hidden_count: 0,
+    saved_bytes: 0,
+  });
 });

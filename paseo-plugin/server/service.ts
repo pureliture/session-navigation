@@ -400,13 +400,18 @@ export class PaseoService {
         return { ok: true };
       }
       if (method === "list") {
-        const result = this.list(scope, input.query, {
-          limit: typeof input.limit === "number" ? input.limit : undefined,
-          before_index:
-            typeof input.before_index === "number"
-              ? input.before_index
-              : undefined,
-        });
+        const result = this.list(
+          scope,
+          input.query,
+          {
+            limit: typeof input.limit === "number" ? input.limit : undefined,
+            before_index:
+              typeof input.before_index === "number"
+                ? input.before_index
+                : undefined,
+          },
+          scope,
+        );
         if (this.decisions.get(scope) === "send_original")
           this.decisions.set(scope, "abort_request");
         else this.decisions.delete(scope);
@@ -419,6 +424,7 @@ export class PaseoService {
           choices: ["abort_request", "send_original"],
         };
       if (method === "fork") {
+        const effective = this.effectiveScope(scope);
         const destination =
           typeof input.dst_scope_key === "string"
             ? this.resolveScope(input.dst_scope_key)
@@ -427,17 +433,20 @@ export class PaseoService {
         if (denied) return denied;
         if (
           this.store
-            .items(scope)
+            .items(effective)
             .some((item) => item.compaction_source === "summarize_pending")
         ) {
           const deniedSummary = this.gate(destination, "summarize");
           if (deniedSummary) return deniedSummary;
         }
-        return { ok: true, counts: this.store.fork(scope, destination) };
+        return { ok: true, counts: this.store.fork(effective, destination) };
       }
+      // P0-1: mutations resolve the rotation-effective scope once so hide /
+      // unhide / batch / manage act on the child session that owns the latest
+      // chunk instead of 404ing against the requested parent scope.
       if (method === "hide" || method === "unhide")
         return await this.mutate(
-          scope,
+          this.effectiveScope(scope),
           input.item_id,
           method,
           input.mode ?? "hide",
@@ -445,11 +454,11 @@ export class PaseoService {
         );
       if (method === "hideBatch" || method === "unhideBatch")
         return await this.batch(
-          scope,
+          this.effectiveScope(scope),
           input,
           method === "hideBatch" ? "hide" : "unhide",
         );
-      if (method === "manage") return await this.manage(scope, input);
+      if (method === "manage") return await this.manage(this.effectiveScope(scope), input);
       return { ok: false, error: "unknown_method" };
     } catch (error) {
       return this.failure(error);
@@ -468,6 +477,36 @@ export class PaseoService {
         ),
       ) ?? scope
     );
+  }
+
+  /**
+   * Resolve the rotation-effective scope (P0-1). Hermes sessions rotate
+   * parent -> child; the panel keeps sending the parent scope_key, so the
+   * server resolves the child scope that owns the latest chunk and uses it
+   * consistently for items, message-unit writes, targets, capabilities,
+   * aliases and gates. The requested parent scope_key stays API-compatible
+   * (replies still echo it); only server-side state uses the effective scope.
+   * Non-Hermes scopes resolve to themselves without extra I/O.
+   */
+  private effectiveScope(scope: string): string {
+    if (!scope.startsWith("hermes:")) return scope;
+    return this.resolvedTimeline(scope).scope;
+  }
+
+  private resolvedTimeline(scope: string) {
+    const items = this.store.items(scope);
+    const units = this.store.listUnits(scope);
+    const timeline = this.timeline(scope, items, units);
+    const effective = timeline.history.effectiveScope;
+    if (!effective || effective === scope) return { scope, items, units, timeline };
+    const effectiveItems = this.store.items(effective);
+    const effectiveUnits = this.store.listUnits(effective);
+    return {
+      scope: effective,
+      items: effectiveItems,
+      units: effectiveUnits,
+      timeline: this.timeline(effective, effectiveItems, effectiveUnits),
+    };
   }
 
   private failure(error: unknown): Reply {
@@ -588,6 +627,11 @@ export class PaseoService {
     const timeline = loadTimeline(this.home, scope, storedItems, storedUnits);
     if (
       timeline.rows.length > 0 ||
+      // P1-2: an empty but authoritative latest chunk (matched session/file)
+      // is valid and must NOT be backfilled with stale targets. Only a
+      // genuinely missing timeline (no session, no file, no read) falls
+      // through to the legacy targets resurrection below.
+      timeline.history.chunkAuthoritative === true ||
       (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope)
     )
       return timeline;
@@ -652,16 +696,15 @@ export class PaseoService {
     scope: string,
     query = "",
     paging?: { limit?: number; before_index?: number },
+    requestedScope?: string,
   ): Reply {
-    let items = this.store.items(scope);
-    let rawUnits = this.store.listUnits(scope);
-    let timeline = this.timeline(scope, items, rawUnits);
-    const effectiveScope = timeline.history.effectiveScope;
-    if (effectiveScope && effectiveScope !== scope) {
-      items = this.store.items(effectiveScope);
-      rawUnits = this.store.listUnits(effectiveScope);
-      timeline = this.timeline(scope, items, rawUnits);
-    }
+    // P0-1/P1-4: resolve the rotation-effective scope once and load its
+    // items/units/timeline a single time (no same-key cache thrash).
+    const resolved = this.resolvedTimeline(scope);
+    const effectiveScope = resolved.scope;
+    const items = resolved.items;
+    const rawUnits = resolved.units;
+    const timeline = resolved.timeline;
     const stored = new Map(items.map((item) => [item.item_id, item]));
     const units = new Map(
       rawUnits.map((unit) => [String(unit.unit_id), unit]),
@@ -820,9 +863,12 @@ export class PaseoService {
     }
     return {
       ok: true,
-      scope_key: scope,
+      // P0-1: echo the requested (parent) scope_key for API compatibility;
+      // all state above (items, units, capabilities, gates) uses the
+      // rotation-effective scope.
+      scope_key: requestedScope ?? scope,
       items: pageItems,
-      capabilities: this.capabilities(scope),
+      capabilities: this.capabilities(effectiveScope),
       server_timeline: timeline.rows.length > 0,
       has_older: hasOlder,
       next_before_index: nextBeforeIndex,

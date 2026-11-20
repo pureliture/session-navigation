@@ -12,6 +12,7 @@ import {
 } from "../../packages/core/src/index.ts";
 import { cloneTimeline, formatToolSummary, preview, summaryLine, type History, type Timeline } from "./history.ts";
 import { HistoryTooLargeError, MAX_HISTORY_ROWS } from "./historyLimits.ts";
+import { summaryDedupeKey } from "../shared/summaryDedupe.ts";
 
 export type HermesExtendedRecord = RecordInput & { options_omitted?: boolean };
 
@@ -432,6 +433,45 @@ export function hasHermesSession(home: string, profile: string, sessionId: strin
   return false;
 }
 
+type HermesActiveRow = {
+  role: string;
+  content: string | null;
+  codex_message_items: string | null;
+};
+
+/**
+ * Count the payload message slots a DB row occupies (P0-2). This mirrors the
+ * emission logic in loadHermesTimeline exactly: user rows always consume one
+ * slot, assistant rows consume one slot per message sub-item (codex) or one
+ * slot for plain/codex-mode content, and tool rows consume none. Positions
+ * are counted over the FULL active row array so msg: unit IDs match the
+ * payload.py full-payload p{N} numbering even when the chunk slice drops
+ * pre-summary rows. The `compacted` flag only affects display, not numbering.
+ */
+function countHermesMessageSlots(row: HermesActiveRow, isCodexMode: boolean): number {
+  if (row.role === "user") return 1;
+  if (row.role !== "assistant") return 0;
+  if (typeof row.codex_message_items === "string" && row.codex_message_items.trim()) {
+    try {
+      const items: unknown = JSON.parse(row.codex_message_items);
+      if (Array.isArray(items) && items.length > 0) {
+        let slots = 0;
+        for (const it of items) {
+          if (!it || typeof it !== "object") continue;
+          const entry = it as { type?: unknown; role?: unknown };
+          if ((entry.type ?? "message") !== "message" || entry.role !== "assistant") continue;
+          slots += 1;
+        }
+        if (slots > 0) return slots;
+      }
+    } catch {
+      // Fall through to content-based counting, mirroring emission.
+    }
+  }
+  if (isCodexMode) return typeof row.content === "string" && row.content.length > 0 ? 1 : 0;
+  return 1;
+}
+
 export function loadHermesTimeline(
   home: string,
   scope: string,
@@ -551,6 +591,16 @@ export function loadHermesTimeline(
         }
       }
 
+      // P1-4: pre-count guard runs before materializing the whole session so
+      // an oversized chunk fails fast with history_too_large instead of OOMing.
+      const activeCount = db
+        .prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND active = 1")
+        .get(targetSessionId) as { n?: number } | undefined;
+      if ((activeCount?.n ?? 0) > MAX_HISTORY_ROWS) {
+        throw new HistoryTooLargeError(
+          `hermes session chunk exceeds ${MAX_HISTORY_ROWS} active rows (${activeCount?.n})`,
+        );
+      }
       const rawDbRows = db
         .prepare(
           `SELECT id, role, content, tool_call_id, tool_calls, tool_name,
@@ -572,7 +622,9 @@ export function loadHermesTimeline(
         compacted: number;
         _compressed_summary: number;
       }>;
-      const summaryIndex = rawDbRows.findIndex((row) => Number(row._compressed_summary ?? 0) === 1);
+      // P1-1: when several compactions exist, the latest summary wins; rows
+      // before it belong to prior chunks.
+      const summaryIndex = rawDbRows.findLastIndex((row) => Number(row._compressed_summary ?? 0) === 1);
       const chunkStart = summaryIndex > 0 ? summaryIndex : 0;
       const dbRows = chunkStart > 0 ? rawDbRows.slice(chunkStart) : rawDbRows;
       if (dbRows.length > MAX_HISTORY_ROWS) {
@@ -672,7 +724,52 @@ export function loadHermesTimeline(
       const rows: Record<string, any>[] = [];
       let totalRecordBytes = 0;
       let recordsCapped = false;
+      // P0-2: msg: unit IDs follow payload.py full-payload p{N} numbering, so
+      // slots are counted over the full active row array (including rows
+      // before the compaction slice); pre-summary messages keep their slots.
+      const preChunkCodexMode = apiMode === "codex_responses";
       let msgPos = 0;
+      for (let pre = 0; pre < chunkStart; pre++) {
+        msgPos += countHermesMessageSlots(rawDbRows[pre], preChunkCodexMode);
+      }
+      // P1-3: collapse duplicate compaction summaries (same full text as the
+      // flagged _compressed_summary row) instead of showing them twice. Only
+      // summary text participates; distinct messages never merge.
+      const lastSummaryRawIndex = summaryIndex;
+      let canonicalSummaryKey: string | null = null;
+      let canonicalSummaryRowIndex = -1;
+      const emitMessageRow = (
+        row: Record<string, any>,
+        fullText: string,
+        isFlaggedSummary: boolean,
+      ): void => {
+        if (isFlaggedSummary && canonicalSummaryKey === null) {
+          canonicalSummaryKey = summaryDedupeKey(fullText);
+          canonicalSummaryRowIndex = rows.length;
+          rows.push(row);
+          return;
+        }
+        if (canonicalSummaryKey !== null && summaryDedupeKey(fullText) === canonicalSummaryKey) {
+          const kept = rows[canonicalSummaryRowIndex];
+          if (kept) {
+            if (row.manageable && !kept.manageable) {
+              rows[canonicalSummaryRowIndex] = row;
+            } else {
+              kept.manageable = Boolean(kept.manageable || row.manageable);
+              if (
+                typeof kept.item_id === "string" &&
+                kept.item_id.startsWith("hist_") &&
+                typeof row.item_id === "string" &&
+                row.item_id.startsWith("msg:")
+              ) {
+                kept.item_id = row.item_id;
+              }
+            }
+          }
+          return;
+        }
+        rows.push(row);
+      };
 
       for (let index = dbRows.length - 1; index >= 0; index--) {
         const row = dbRows[index];
@@ -723,19 +820,25 @@ export function loadHermesTimeline(
             const rawApi = row.api_content !== null ? row.api_content : (row.content ?? "");
             const wireContent = isCodexMode ? [{ text: rawApi, type: "input_text" }] : rawApi;
             rowId = resolveMsgUnitId("user", msgPos, wireContent);
-            msgPos += 1;
           }
+          // Slot counting covers the full active array (P0-2); only the unit
+          // ID stays gated on the row being uncompacted.
+          msgPos += 1;
           if (displayText.trim()) {
-            rows.push({
-              item_id: rowId,
-              tool_call_id: "",
-              kind: "user",
-              tool_name: "user",
-              summary_line: summaryLine(displayText),
-              message_text: preview(displayText),
-              bytes_size: bytes(displayText),
-              manageable: isUncompacted,
-            });
+            emitMessageRow(
+              {
+                item_id: rowId,
+                tool_call_id: "",
+                kind: "user",
+                tool_name: "user",
+                summary_line: summaryLine(displayText),
+                message_text: preview(displayText),
+                bytes_size: bytes(displayText),
+                manageable: isUncompacted,
+              },
+              displayText,
+              chunkStart + index === lastSummaryRawIndex,
+            );
           }
           return;
         }
@@ -766,19 +869,23 @@ export function loadHermesTimeline(
                   let rowId = `hist_ast_${row.id}_${subIdx}`;
                   if (isUncompacted) {
                     rowId = resolveMsgUnitId("assistant", msgPos, ic);
-                    msgPos += 1;
                   }
+                  msgPos += 1;
                   if (text.trim()) {
-                    rows.push({
-                      item_id: rowId,
-                      tool_call_id: "",
-                      kind: "assistant",
-                      tool_name: "assistant",
-                      summary_line: summaryLine(text),
-                      message_text: preview(text),
-                      bytes_size: bytes(text),
-                      manageable: isUncompacted,
-                    });
+                    emitMessageRow(
+                      {
+                        item_id: rowId,
+                        tool_call_id: "",
+                        kind: "assistant",
+                        tool_name: "assistant",
+                        summary_line: summaryLine(text),
+                        message_text: preview(text),
+                        bytes_size: bytes(text),
+                        manageable: isUncompacted,
+                      },
+                      text,
+                      chunkStart + index === lastSummaryRawIndex,
+                    );
                   }
                 }
               }
@@ -794,19 +901,23 @@ export function loadHermesTimeline(
                 if (isUncompacted) {
                   const wireContent = [{ text, type: "output_text" }];
                   rowId = resolveMsgUnitId("assistant", msgPos, wireContent);
-                  msgPos += 1;
                 }
+                msgPos += 1;
                 if (text.trim()) {
-                  rows.push({
-                    item_id: rowId,
-                    tool_call_id: "",
-                    kind: "assistant",
-                    tool_name: "assistant",
-                    summary_line: summaryLine(text),
-                    message_text: preview(text),
-                    bytes_size: bytes(text),
-                    manageable: isUncompacted,
-                  });
+                  emitMessageRow(
+                    {
+                      item_id: rowId,
+                      tool_call_id: "",
+                      kind: "assistant",
+                      tool_name: "assistant",
+                      summary_line: summaryLine(text),
+                      message_text: preview(text),
+                      bytes_size: bytes(text),
+                      manageable: isUncompacted,
+                    },
+                    text,
+                    chunkStart + index === lastSummaryRawIndex,
+                  );
                 }
               }
             } else {
@@ -825,19 +936,23 @@ export function loadHermesTimeline(
               let rowId = `hist_ast_${row.id}`;
               if (isUncompacted) {
                 rowId = resolveMsgUnitId("assistant", msgPos, wireContent);
-                msgPos += 1;
               }
+              msgPos += 1;
               if (text.trim()) {
-                rows.push({
-                  item_id: rowId,
-                  tool_call_id: "",
-                  kind: "assistant",
-                  tool_name: "assistant",
-                  summary_line: summaryLine(text),
-                  message_text: preview(text),
-                  bytes_size: bytes(text),
-                  manageable: isUncompacted,
-                });
+                emitMessageRow(
+                  {
+                    item_id: rowId,
+                    tool_call_id: "",
+                    kind: "assistant",
+                    tool_name: "assistant",
+                    summary_line: summaryLine(text),
+                    message_text: preview(text),
+                    bytes_size: bytes(text),
+                    manageable: isUncompacted,
+                  },
+                  text,
+                  chunkStart + index === lastSummaryRawIndex,
+                );
               }
             }
           }
@@ -881,6 +996,10 @@ export function loadHermesTimeline(
         injected: [],
         chunkStart: 0,
         effectiveScope,
+        // The session matched, so this timeline authoritatively represents
+        // the latest chunk even when it yields zero rows (P1-2: never
+        // backfill an empty valid chunk with stale targets/items).
+        chunkAuthoritative: true,
         ...(usedTokens
           ? {
               externalContext: {

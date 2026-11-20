@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { acquireHermesToggleLock, inspectHermesPluginInstall, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
@@ -31,7 +32,7 @@ import {
 import { hermesFilterInvocation, loadHermesTimeline } from "./hermesHistory.ts";
 import { MAX_HISTORY_BYTES } from "./historyLimits.ts";
 import { bindAgents } from "./mapping.ts";
-import { MutationResultSchema } from "../shared/sessionNav.ts";
+import { MutationResultSchema, type Row } from "../shared/sessionNav.ts";
 
 const scope = "omp:default:sid:default";
 const cleanup: (() => void)[] = [];
@@ -2208,18 +2209,39 @@ test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-v
   // Fix tyche config for lock, commit, rollback, and SQLite transaction tests
   writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
 
-  // 2. Cooperative toggle lock fails closed even for aged locks (no time-based auto-unlink race),
-  //    blocks BOTH On and Off concurrent toggle writers, and exposes manual crash recovery guidance.
+  // 2. Stale lock recovery (P1-9): an aged lock whose owner process is dead is
+  //    recovered instead of deadlocking, while a live owner's lock still fails
+  //    closed for BOTH On and Off writers with manual crash recovery guidance.
   const lockPath = join(hermesRoot, ".session-navigation-toggle.lock");
-  const agedLockContent = JSON.stringify({
-    pid: 999999,
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 2147483647;
+  const staleLockContent = JSON.stringify({
+    pid: deadPid,
     startedAt: Date.now() - 300_000,
-    nonce: "other-long-running",
+    nonce: "crashed-previous-toggle",
   });
-  writeFileSync(lockPath, agedLockContent, "utf8");
+  writeFileSync(lockPath, staleLockContent, "utf8");
   const pastTime = new Date(Date.now() - 300_000);
   utimesSync(lockPath, pastTime, pastTime);
 
+  const recoveredOnRes = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(recoveredOnRes.ok).toBe(true);
+  expect(existsSync(lockPath)).toBe(false);
+  expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", true));
+  // Reset the recovered toggle so later rollback assertions start from disabled.
+  writeFileSync(atlasCfg, makeCfg("atlas", false), "utf8");
+  writeFileSync(tycheCfg, makeCfg("tyche", false), "utf8");
+  store.driver.run("DELETE FROM adapter_control WHERE adapter_id='hermes'");
+
+  // A live owner's lock still fails closed for BOTH On and Off writers.
+  const liveLockContent = JSON.stringify({
+    pid: process.pid,
+    startedAt: Date.now(),
+    nonce: "live-owner",
+  });
+  writeFileSync(lockPath, liveLockContent, "utf8");
   const lockedOnRes = await service.handle("session-nav.set-adapter-toggle", {
     adapter: "hermes",
     enabled: true,
@@ -2228,7 +2250,7 @@ test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-v
   expect(lockedOnRes.error).toBe("hermes_toggle_locked");
   expect(lockedOnRes.hermes.error).toContain(".session-navigation-toggle.lock");
   expect(readFileSync(atlasCfg, "utf8")).toBe(makeCfg("atlas", false));
-  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+  expect(readFileSync(lockPath, "utf8")).toBe(liveLockContent);
 
   const lockedOffRes = await service.handle("session-nav.set-adapter-toggle", {
     adapter: "hermes",
@@ -2237,7 +2259,7 @@ test("multi-profile Hermes On toggle uses cooperative lock, crash journal, pre-v
   expect(lockedOffRes.ok).toBe(false);
   expect(lockedOffRes.error).toBe("hermes_toggle_locked");
   expect(lockedOffRes.hermes.error).toContain(".session-navigation-toggle.lock");
-  expect(readFileSync(lockPath, "utf8")).toBe(agedLockContent);
+  expect(readFileSync(lockPath, "utf8")).toBe(liveLockContent);
   expect(store.getAdapterControl("hermes")).toBeNull();
   rmSync(lockPath);
 
@@ -2645,4 +2667,162 @@ test("history loader rejects files over the byte limit with history_too_large", 
   const reply = await call("list");
   expect(reply.ok).toBe(false);
   expect(reply.error).toBe("history_too_large");
+});
+
+test("parent-scope Hermes mutations resolve the rotation-effective child scope", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, store, service, register } = fixture([], false);
+  const parentScope = "hermes:default:h-old:unknown";
+  const childScope = "hermes:default:h-new:unknown";
+  // Only the rotation child is registered: capabilities must resolve to it.
+  register(childScope);
+
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const hdb = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, model_config TEXT, parent_session_id TEXT, started_at REAL);
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        _compressed_summary INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    hdb.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)").run("h-old", "{}", null, 100);
+    hdb.prepare("INSERT INTO sessions (id, model_config, parent_session_id, started_at) VALUES (?, ?, ?, ?)").run("h-new", "{}", "h-old", 200);
+    const ins = hdb.prepare("INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name) VALUES (?, ?, ?, ?, ?, ?)");
+    ins.run("h-new", "user", "current prompt", null, null, null);
+    const toolCall = (id: string, path: string) =>
+      JSON.stringify([{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path }) } }]);
+    ins.run("h-new", "assistant", "", null, toolCall("call_a", "a.txt"), null);
+    ins.run("h-new", "tool", "alpha output", "call_a", null, "read_file");
+    ins.run("h-new", "assistant", "", null, toolCall("call_b", "b.txt"), null);
+    ins.run("h-new", "tool", "beta output", "call_b", null, "read_file");
+  } finally {
+    hdb.close();
+  }
+
+  // list with the parent scope_key resolves the child chunk but echoes the
+  // requested parent scope_key for API compatibility.
+  const listed = await service.handle("list", { scope_key: parentScope });
+  expect(listed.ok).toBe(true);
+  expect(listed.scope_key).toBe(parentScope);
+  expect(listed.capabilities).toMatchObject({ state: "ready", hide: true });
+  expect(listed.items.map((row: Row) => row.tool_call_id)).toEqual(["", "call_a", "call_b"]);
+  const toolA = listed.items.find((row: Row) => row.tool_call_id === "call_a");
+  const toolB = listed.items.find((row: Row) => row.tool_call_id === "call_b");
+  const userMsg = listed.items.find((row: Row) => row.kind === "user");
+  expect(userMsg.item_id).toStartWith("msg:user:");
+
+  // Tool hide via the parent scope_key lands on the child session, not 404.
+  const hideA = await service.handle("hide", { scope_key: parentScope, item_id: toolA.item_id });
+  expect(hideA.ok).toBe(true);
+  expect(store.get(childScope, toolA.item_id)?.visibility).toBe("hidden");
+  expect(store.items(parentScope)).toHaveLength(0);
+  const unhideA = await service.handle("unhide", { scope_key: parentScope, item_id: toolA.item_id });
+  expect(unhideA.ok).toBe(true);
+  expect(store.get(childScope, toolA.item_id)?.visibility).toBe("visible");
+
+  // Message hide via the parent scope_key writes the unit under the child
+  // scope (where the Hermes middleware reads it), not the parent.
+  const hideMsg = await service.handle("hide", { scope_key: parentScope, item_id: userMsg.item_id });
+  expect(hideMsg.ok).toBe(true);
+  const childUnits = store.listUnits(childScope);
+  expect(childUnits.some((unit) => String(unit.unit_id) === userMsg.item_id && unit.visibility === "hidden")).toBe(true);
+  expect(store.listUnits(parentScope).some((unit) => String(unit.unit_id) === userMsg.item_id)).toBe(false);
+  const unhideMsg = await service.handle("unhide", { scope_key: parentScope, item_id: userMsg.item_id });
+  expect(unhideMsg.ok).toBe(true);
+
+  // Batch and manage mutations resolve the child scope as well.
+  const batched = await service.handle("hideBatch", {
+    scope_key: parentScope,
+    items: [{ item_id: toolA.item_id }, { item_id: toolB.item_id }],
+  });
+  expect(batched).toMatchObject({ ok: true, applied: 2, failed: 0 });
+  const managed = await service.handle("manage", {
+    scope_key: parentScope,
+    tool_call_ids: ["call_a"],
+    action: "hide",
+  });
+  expect(managed.ok).toBe(true);
+  expect(store.get(childScope, toolA.item_id)?.visibility).toBe("hidden");
+});
+
+test("Hermes toggle lock recovers stale dead-owner locks but keeps live locks", () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-toggle-lock-"));
+  cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const hermesRoot = join(home, ".hermes");
+  mkdirSync(hermesRoot, { recursive: true });
+  const lockPath = join(hermesRoot, ".session-navigation-toggle.lock");
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid ?? 2147483647;
+  writeFileSync(lockPath, JSON.stringify({ pid: deadPid, startedAt: Date.now() - 300_000, nonce: "stale" }), "utf8");
+  const recovered = acquireHermesToggleLock(home);
+  expect(recovered.ok).toBe(true);
+  if (recovered.ok) recovered.release();
+  expect(existsSync(lockPath)).toBe(false);
+
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now(), nonce: "live" }), "utf8");
+  expect(acquireHermesToggleLock(home)).toEqual({ ok: false, error: "hermes_toggle_locked" });
+});
+
+test("Hermes toggle journal write failure surfaces an error and cleans staged temp files", async () => {
+  const { home, service } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  mkdirSync(hermesRoot, { recursive: true });
+  const rootCfg = join(hermesRoot, "config.yaml");
+  writeFileSync(
+    rootCfg,
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: false\n",
+    "utf8",
+  );
+  const journalPath = join(hermesRoot, ".session-navigation-toggle.journal.json");
+
+  // Block the journal path after precheck so the post-stage journal write fails.
+  let stagedWrites = 0;
+  service.hermesWriteOptions = {
+    writeFileImpl: (targetPath, data, opts) => {
+      stagedWrites++;
+      if (stagedWrites === 1) mkdirSync(journalPath, { recursive: true });
+      writeFileSync(targetPath, data, opts);
+    },
+  };
+  const failed = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(failed.ok).toBe(false);
+  expect(stagedWrites).toBeGreaterThan(0);
+  expect(readFileSync(rootCfg, "utf8")).toContain("enabled: false");
+  // No staged *.tmp files leak and no half-written journal file exists.
+  const leftovers: string[] = [];
+  const scan = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (full !== journalPath) scan(full);
+      } else if (entry.name.endsWith(".tmp")) {
+        leftovers.push(full);
+      }
+    }
+  };
+  scan(hermesRoot);
+  expect(leftovers).toEqual([]);
+  rmSync(journalPath, { recursive: true, force: true });
+
+  // After clearing the blockage the toggle succeeds (lock was released).
+  service.hermesWriteOptions = undefined;
+  const recovered = await service.handle("session-nav.set-adapter-toggle", {
+    adapter: "hermes",
+    enabled: true,
+  });
+  expect(recovered.ok).toBe(true);
 });
