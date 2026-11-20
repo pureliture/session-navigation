@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { supportedSqliteVersion } from "../src/sqlite-runtime.ts";
 
 // A developer may have a SQLite-selecting launcher; exercise the raw OMP
 // entrypoint when checking an unsupported host runtime.
-const omp = process.env.SESSION_NAVIGATION_OMP_UNWRAPPED ?? Bun.which("omp");
+const localOmpBin = resolve(import.meta.dir, "../node_modules/.bin/omp");
+const omp =
+  process.env.SESSION_NAVIGATION_OMP_UNWRAPPED ??
+  Bun.which("omp") ??
+  (existsSync(localOmpBin) ? localOmpBin : null);
 const env = { ...process.env };
 delete env.BUN_OPTIONS;
 const probe = Bun.spawnSync({

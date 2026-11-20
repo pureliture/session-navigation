@@ -62,15 +62,21 @@ jobs:
       - name: core tests (bun)
         run: bun test test
         working-directory: packages/core
+      # OMP tests import paseo-plugin server sources (yaml, RPC schemas), so
+      # paseo deps must exist before the omp step runs.
+      - name: install paseo deps
+        run: npm ci
+        working-directory: paseo-plugin
       - name: omp tests (bun)
         run: |
           bun install
+          bun run build
+          test -x node_modules/.bin/omp
+          export PATH="$PWD/node_modules/.bin:$PATH"
           bun test test
         working-directory: packages/omp
       - name: paseo tests (bun + node)
-        run: |
-          npm ci
-          npm test
+        run: npm test
         working-directory: paseo-plugin
       - name: typecheck (core, omp, paseo)
         run: |

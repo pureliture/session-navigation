@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const omp = Bun.which("omp");
+// Prefer a global omp, but fall back to the devDependency binary so the test
+// runs after a plain `bun install` (e.g. in CI, where omp is not on PATH).
+const localOmpBin = resolve(import.meta.dir, "../node_modules/.bin/omp");
+const omp = Bun.which("omp") ?? (existsSync(localOmpBin) ? localOmpBin : null);
 test("packed OMP package projects original, hidden and restored outgoing requests", async () => {
   const dir = mkdtempSync(join(tmpdir(), "session-nav-e2e-"));
   const fixture = join(dir, "fixture.txt");
