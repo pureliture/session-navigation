@@ -602,6 +602,15 @@ test("scope counts are real and include zero-item registrations; absent/disabled
   ).toBe(true);
 });
 
+test("unregistered Hermes sessions stay blocked when no verified host adapter exists", async () => {
+  const { service } = fixture(toolMessages(), false);
+  const unregistered = "hermes:default:unregistered:unknown";
+  const listed = await service.handle("list", { scope_key: unregistered });
+  expect(listed.capabilities.state).toBe("adapter_not_detected");
+  expect(listed.capabilities.hide).toBe(false);
+  expect(listed.capabilities.summarize).toBe(false);
+});
+
 test("list propagates paused state and warning for disabled adapters (P1-7 parity)", async () => {
   const { service, register } = fixture([], false);
   const hermesScope = "hermes:default:paused-sid:unknown";

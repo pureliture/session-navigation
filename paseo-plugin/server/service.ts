@@ -24,6 +24,7 @@ import { manualHideItem } from "./manualHide.ts";
 import { HistoryTooLargeError } from "./historyLimits.ts";
 import {
   acquireHermesToggleLock,
+  inspectHermesPluginInstall,
   inspectHermesToggle,
   setHermesToggleAcrossProfiles,
   type HermesRuntimeInspectionContext,
@@ -101,6 +102,7 @@ export class PaseoService {
   readonly engine: Engine;
   private readonly decisions = new Map<string, string>();
   hermesWriteOptions?: HermesWriteOptions;
+  private hermesHostCheck?: { at: number; valid: boolean; profiles: string[] };
   constructor(
     readonly store: Store,
     readonly home = homedir(),
@@ -119,18 +121,27 @@ export class PaseoService {
         ? "omp"
         : null;
     const control = adapterId ? this.store.getAdapterControl(adapterId) : null;
-    const state =
-      !registration || scope.startsWith("pi:")
-        ? "adapter_not_detected"
-        : registration.adapter_protocol !== 1
-          ? "incompatible_protocol"
-          : !registration.enabled || (control !== null && !control.enabled)
-            ? "adapter_disabled"
-            : "ready";
+    const hostVerified = !registration && adapterId === "hermes" && this.hermesHostProtectionReady(scope);
+    let state: Capabilities["state"];
+    if (control !== null && !control.enabled) {
+      state = "adapter_disabled";
+    } else if (registration) {
+      state = registration.adapter_protocol !== 1 || !registration.enabled
+        ? registration.adapter_protocol !== 1 ? "incompatible_protocol" : "adapter_disabled"
+        : "ready";
+    } else if (hostVerified) {
+      // A session that has not sent an LLM request since gateway startup has
+      // no registration row yet. A verified, enabled host installation is
+      // enough to permit hidden-state writes; the adapter applies them on the
+      // next request.
+      state = "ready";
+    } else {
+      state = "adapter_not_detected";
+    }
     return {
       display: true,
-      hide: state === "ready" && this.store.can(scope, "hide"),
-      summarize: state === "ready" && this.store.can(scope, "summarize"),
+      hide: state === "ready" && (hostVerified || this.store.can(scope, "hide")),
+      summarize: state === "ready" && (hostVerified || this.store.can(scope, "summarize")),
       unhide:
         this.store.items(scope).some((item) => item.visibility === "hidden") ||
         this.store.hiddenMessages(scope).length > 0,
@@ -147,6 +158,29 @@ export class PaseoService {
             }
           : {}),
     };
+  }
+
+  private hermesHostProtectionReady(scope: string): boolean {
+    const profile = scope.split(":")[1] || "default";
+    const now = Date.now();
+    if (!this.hermesHostCheck || now - this.hermesHostCheck.at > 2000) {
+      const install = inspectHermesPluginInstall(this.home);
+      const status = inspectHermesToggle(this.home, this.store.getAdapterControl("hermes")?.enabled);
+      this.hermesHostCheck = {
+        at: now,
+        valid: Boolean(
+          install.pluginInstalled &&
+          install.protectionSupportedOnDisk &&
+          status.installed &&
+          status.enabled &&
+          !status.stateUnknown &&
+          !status.error &&
+          (status.enabledProfileCount ?? 0) > 0,
+        ),
+        profiles: (status.profiles ?? []).filter((entry) => entry.enabled).map((entry) => entry.profile),
+      };
+    }
+    return this.hermesHostCheck.valid && this.hermesHostCheck.profiles.includes(profile);
   }
 
   private hermesRuntimeContext(): HermesRuntimeInspectionContext {
@@ -226,6 +260,7 @@ export class PaseoService {
   }
 
   setAdapterToggle(input: Record<string, any>): Reply {
+    this.hermesHostCheck = undefined;
     const adapter = input?.adapter;
     const enabled = input?.enabled;
     if ((adapter !== "omp" && adapter !== "hermes") || typeof enabled !== "boolean") {
