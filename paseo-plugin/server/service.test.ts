@@ -602,6 +602,34 @@ test("scope counts are real and include zero-item registrations; absent/disabled
   ).toBe(true);
 });
 
+test("unregistered Hermes sessions stay blocked when no verified host adapter exists", async () => {
+  const { service } = fixture(toolMessages(), false);
+  const unregistered = "hermes:default:unregistered:unknown";
+  const listed = await service.handle("list", { scope_key: unregistered });
+  expect(listed.capabilities.state).toBe("adapter_not_detected");
+  expect(listed.capabilities.hide).toBe(false);
+  expect(listed.capabilities.summarize).toBe(false);
+});
+
+test("unregistered Hermes sessions with a verified host adapter expose capabilities", async () => {
+  const { home, service } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  mkdirSync(hermesRoot, { recursive: true });
+  writeFileSync(
+    join(hermesRoot, "config.yaml"),
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n",
+    "utf8",
+  );
+  installRepoHermesPlugin(home);
+  const unregistered = "hermes:default:fresh:unknown";
+  const listed = await service.handle("list", { scope_key: unregistered });
+  expect(listed.capabilities).toMatchObject({
+    state: "ready",
+    hide: true,
+    summarize: true,
+  });
+});
+
 test("list propagates paused state and warning for disabled adapters (P1-7 parity)", async () => {
   const { service, register } = fixture([], false);
   const hermesScope = "hermes:default:paused-sid:unknown";
@@ -1858,6 +1886,22 @@ test("list RPC supports limit + before_index cursor pagination, preserves contig
   const searchRes = await call("list", { query: "First prompt", limit: 2 });
   expect(searchRes.items.map((r: any) => r.timeline_index)).toEqual([0]);
   expect(searchRes.has_older).toBe(false);
+});
+
+test("default list returns all rows without an artificial page limit", async () => {
+  const messages: Message[] = Array.from({ length: 175 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    timestamp: index + 1,
+    content: [{ type: "text", text: `Row ${index}` }],
+  }));
+  const { call } = fixture(messages);
+  const result = await call("list");
+  expect(result.ok).toBe(true);
+  expect(result.items).toHaveLength(175);
+  expect(result.items[0].timeline_index).toBe(0);
+  expect(result.items[174].timeline_index).toBe(174);
+  expect(result.has_older).toBe(false);
+  expect(result.next_before_index).toBeNull();
 });
 
 function installRepoHermesPlugin(home: string): string {
