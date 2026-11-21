@@ -138,6 +138,7 @@ Publication and registry/catalog approval are separate steps; see
   `msg:*` prompt/response hide/unhide parity, manageable `terminal`/`read_file`/`search_files`
   records with `options_omitted`, and `_usage_anchor` context token totals (keeping ACP
   timeline merge only as a fallback when no local `state.db` is present).
+- Show the full Paseo Outline history from the list RPC and full cached Hermes/fallback timelines instead of a 150-row tail plus older-page merge. Restore `hide`/`summarize` capabilities for unregistered Hermes sessions when a verified, enabled host adapter is installed on disk, while keeping registered sessions and adapter-off states on the existing gates.
 - Close remaining OMP/Hermes/Paseo parity gaps (#1–#6): expand Hermes and OMP
   manageable tool allowlists (including `web_search`, `web_extract`, `execute_code`,
   `eval`, `vision_analyze`, `skill_view`, `tool_describe`, browser/Paseo inspection
