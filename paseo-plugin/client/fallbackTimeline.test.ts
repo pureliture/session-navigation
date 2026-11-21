@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Row } from "../shared/sessionNav";
-import {
-  buildFallbackTimelineRows,
-  mergeHermesTimelineRows,
-  mergeLinkedParentRows,
-  mergePagedRows,
-} from "./fallbackTimeline";
+import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows } from "./fallbackTimeline";
 
 describe("fallbackTimeline", () => {
   test("buildFallbackTimelineRows converts user, assistant, tool, todo, error, compaction, and plugin entries", () => {
@@ -201,6 +196,21 @@ describe("fallbackTimeline", () => {
     expect(merged[0].timeline_index).toBe(5);
   });
 
+  test("mergeHermesTimelineRows keeps unmatched rows ahead of a full fallback", () => {
+    const parent = "hermes:atlas:session:unknown";
+    const serverRows: Row[] = [
+      { item_id: "srv-old", tool_call_id: "call-old", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 5 },
+      { item_id: "srv-new", tool_call_id: "call-new", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 700 },
+    ];
+    const timelineRows: Row[] = [
+      { item_id: "fb-user", tool_call_id: "", kind: "user", tool_name: "user", status: "visible", version: 1, tokens_display: "—", timeline_index: 0, summary_line: "hello" },
+      { item_id: "fb-new", tool_call_id: "call-new", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 1 },
+    ];
+    const merged = mergeHermesTimelineRows(serverRows, timelineRows, [], parent, true);
+    expect(merged.map((row) => row.item_id)).toEqual(["srv-old", null, "srv-new"]);
+    expect(merged[0].timeline_index).toBe(5);
+  });
+
   test("mergeHermesTimelineRows keeps the managed server copy of a duplicated compaction summary", () => {
     const parent = "hermes:atlas:session:unknown";
     const text =
@@ -325,26 +335,6 @@ describe("fallbackTimeline", () => {
     expect(merged.map((row) => row.item_id).sort()).toEqual(["srv-distinct", "srv-same"]);
   });
 
-
-  test("mergePagedRows deduplicates overlapping timeline_index boundaries and preserves newer row freshness", () => {
-    const older: Row[] = [
-      { item_id: "r0", tool_call_id: "", kind: "user", status: "visible", version: 1, tokens_display: "—", timeline_index: 0 },
-      { item_id: "r1", tool_call_id: "c1", kind: "tool", status: "visible", version: 1, tokens_display: "—", timeline_index: 1 },
-      { item_id: "r2", tool_call_id: "c2", kind: "tool", status: "visible", version: 1, tokens_display: "—", timeline_index: 2 },
-    ];
-    const newer: Row[] = [
-      { item_id: "r1", tool_call_id: "c1", kind: "tool", status: "hidden", version: 2, tokens_display: "—", timeline_index: 1 },
-      { item_id: "r2", tool_call_id: "c2", kind: "tool", status: "visible", version: 1, tokens_display: "—", timeline_index: 2 },
-      { item_id: "r3", tool_call_id: "", kind: "assistant", status: "visible", version: 1, tokens_display: "—", timeline_index: 3 },
-    ];
-    const merged = mergePagedRows(older, newer);
-    expect(merged.map((r) => [r.timeline_index, r.status])).toEqual([
-      [0, "visible"],
-      [1, "hidden"],
-      [2, "visible"],
-      [3, "visible"],
-    ]);
-  });
   test("mergeLinkedParentRows appends rotation-moved in-flight rows on top of a server timeline", () => {
     // server_timeline=true case: the server list is authoritative, but an
     // in-flight delegate_task without a toolResult only exists in the chat

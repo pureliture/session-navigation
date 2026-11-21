@@ -1860,6 +1860,22 @@ test("list RPC supports limit + before_index cursor pagination, preserves contig
   expect(searchRes.has_older).toBe(false);
 });
 
+test("default list returns all rows without an artificial page limit", async () => {
+  const messages: Message[] = Array.from({ length: 175 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    timestamp: index + 1,
+    content: [{ type: "text", text: `Row ${index}` }],
+  }));
+  const { call } = fixture(messages);
+  const result = await call("list");
+  expect(result.ok).toBe(true);
+  expect(result.items).toHaveLength(175);
+  expect(result.items[0].timeline_index).toBe(0);
+  expect(result.items[174].timeline_index).toBe(174);
+  expect(result.has_older).toBe(false);
+  expect(result.next_before_index).toBeNull();
+});
+
 function installRepoHermesPlugin(home: string): string {
   const targetVendor = join(home, ".hermes/plugins/session-navigation/vendor");
   mkdirSync(join(home, ".hermes/plugins/session-navigation"), { recursive: true });
