@@ -611,6 +611,25 @@ test("unregistered Hermes sessions stay blocked when no verified host adapter ex
   expect(listed.capabilities.summarize).toBe(false);
 });
 
+test("unregistered Hermes sessions with a verified host adapter expose capabilities", async () => {
+  const { home, service } = fixture([], false);
+  const hermesRoot = join(home, ".hermes");
+  mkdirSync(hermesRoot, { recursive: true });
+  writeFileSync(
+    join(hermesRoot, "config.yaml"),
+    "plugins:\n  entries:\n    session-navigation:\n      settings:\n        enabled: true\n",
+    "utf8",
+  );
+  installRepoHermesPlugin(home);
+  const unregistered = "hermes:default:fresh:unknown";
+  const listed = await service.handle("list", { scope_key: unregistered });
+  expect(listed.capabilities).toMatchObject({
+    state: "ready",
+    hide: true,
+    summarize: true,
+  });
+});
+
 test("list propagates paused state and warning for disabled adapters (P1-7 parity)", async () => {
   const { service, register } = fixture([], false);
   const hermesScope = "hermes:default:paused-sid:unknown";
