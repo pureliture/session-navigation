@@ -424,6 +424,7 @@ export function mergeHermesTimelineRows(
   timeline: Row[],
   scopes: readonly ChildScope[],
   parentScope: string,
+  fullTimeline = false,
 ): Row[] {
   if (!parentScope.startsWith("hermes:") || timeline.length === 0) {
     return mergeLinkedParentRows(rows, timeline, scopes, parentScope);
@@ -490,8 +491,10 @@ export function mergeHermesTimelineRows(
     if (typeof row.timeline_index !== "number") return floor;
     return floor === null ? row.timeline_index : Math.min(floor, row.timeline_index);
   }, null);
-  // Unmatched server rows are older history outside the fallback window; keep them
-  // ahead of the merged tail so upward paging visibly prepends instead of appending.
+  // With a 150-row tail, unmatched managed rows were older than the window and
+  // belonged ahead of it. A full fallback keeps that ordering instead of
+  // pushing unmatched rows after the entire history.
+  if (fullTimeline) return [...unmatched, ...merged];
   const head =
     matchedFloor === null
       ? unmatched
@@ -520,64 +523,4 @@ function messageDedupeKey(row: Row): string | null {
   const text = String(row.message_text ?? row.summary_line ?? "").replace(/\s+/gu, " ").trim();
   if (!text) return null;
   return `message\0${text}`;
-}
-
-function rowMergeKey(row: Row): string | null {
-  if (typeof row.timeline_index === "number") return `idx:${row.timeline_index}`;
-  if (row.item_id) return `item:${row.item_id}`;
-  if (row.tool_call_id) return `call:${row.tool_call_id}`;
-  return null;
-}
-
-export function mergePagedRows(
-  olderRows: readonly Row[],
-  newerRows: readonly Row[],
-): Row[] {
-  if (olderRows.length === 0) return [...newerRows];
-  if (newerRows.length === 0) return [...olderRows];
-  const newerByKey = new Map<string, Row>();
-  const newerItemIds = new Set<string>();
-  const newerCallIds = new Set<string>();
-  let minNewerTimelineIndex = Infinity;
-  for (const row of newerRows) {
-    const key = rowMergeKey(row);
-    if (key) newerByKey.set(key, row);
-    if (row.item_id) newerItemIds.add(row.item_id);
-    if (row.tool_call_id) newerCallIds.add(row.tool_call_id);
-    if (typeof row.timeline_index === "number" && row.timeline_index < minNewerTimelineIndex) {
-      minNewerTimelineIndex = row.timeline_index;
-    }
-  }
-  const seenKeys = new Set<string>();
-  const merged: Row[] = [];
-  for (const row of olderRows) {
-    if (
-      typeof row.timeline_index === "number" &&
-      Number.isFinite(minNewerTimelineIndex) &&
-      row.timeline_index >= minNewerTimelineIndex
-    ) {
-      continue;
-    }
-    const key = rowMergeKey(row);
-    if (key && newerByKey.has(key)) continue;
-    if (row.item_id && newerItemIds.has(row.item_id)) continue;
-    if (!row.item_id && row.tool_call_id && newerCallIds.has(row.tool_call_id)) continue;
-    if (key) {
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-    }
-    merged.push(row);
-  }
-  for (const row of newerRows) {
-    const key = rowMergeKey(row);
-    if (key) {
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-    }
-    merged.push(row);
-  }
-  if (merged.every((r) => typeof r.timeline_index === "number")) {
-    merged.sort((a, b) => (a.timeline_index ?? 0) - (b.timeline_index ?? 0));
-  }
-  return merged;
 }

@@ -36,9 +36,10 @@ import {
   scopedCountLabel,
   type OutlineRow,
 } from "./outlineGrouping";
-import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows, mergePagedRows } from "./fallbackTimeline";
-import { appendOlderServerPage, shouldInvalidateOlderServerPage } from "./outlinePaging";
+import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows } from "./fallbackTimeline";
+import { readTimelineHistory } from "./timelineHistory";
 import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem, OutlineEmptyState } from "./outlineRows";
+import { outlineListInput } from "./outlineListInput";
 import { outlineRefreshQueryKeys } from "./outlineRefresh";
 import { OutlineScrollDriver } from "./outlineScroll";
 import {
@@ -59,13 +60,6 @@ const DEFAULT_TAB_STATE: PanelTabState = {
 };
 
 const SUMMARY_QUEUED_NOTICE = "Summary queued — runs on next prompt";
-const OUTLINE_PAGE_SIZE = 150;
-const OUTLINE_PREPEND_THRESHOLD_PX = 160;
-type FallbackTimelineCursor = NonNullable<
-  Awaited<
-    ReturnType<ReturnType<ReturnType<typeof usePaseo>["agents"]["ref"]>["timeline"]["refetch"]>
-  >["startCursor"]
->;
 
 const ScrollView = UiScrollView ?? RnScrollView;
 const TextInput = UiTextInput ?? RnTextInput;
@@ -422,48 +416,9 @@ export function SessionNavPanel({
   const sessionViewKeyRef = useRef(sessionViewKey);
   sessionViewKeyRef.current = sessionViewKey;
 
-  const [olderServerState, setOlderServerState] = useState<{
-    sessionKey: string;
-    rows: Row[];
-    hasOlder: boolean;
-    nextBeforeIndex: number | null;
-    totalRows?: number;
-  } | null>(null);
-  const [olderFallbackState, setOlderFallbackState] = useState<{
-    sessionKey: string;
-    rows: Row[];
-    hasOlder: boolean;
-    startCursor: FallbackTimelineCursor | null;
-  } | null>(null);
-  const [isLoadingOlderServer, setIsLoadingOlderServer] = useState(false);
-  const [isLoadingOlderFallback, setIsLoadingOlderFallback] = useState(false);
-  const loadingOlderKeyRef = useRef<string | null>(null);
-  const refreshOlderRef = useRef<(() => Promise<void>) | null>(null);
-
-  const patchOlderServerRows = useCallback(
-    (updates: Map<string, Partial<Row>>) => {
-      if (updates.size === 0) return;
-      const capturedKey = sessionViewKeyRef.current;
-      setOlderServerState((prev) => {
-        if (!prev || prev.sessionKey !== capturedKey) return prev;
-        let changed = false;
-        const nextRows = prev.rows.map((row) => {
-          if (!row.item_id) return row;
-          const patch = updates.get(row.item_id);
-          if (!patch) return row;
-          changed = true;
-          return { ...row, ...patch };
-        });
-        return changed ? { ...prev, rows: nextRows } : prev;
-      });
-    },
-    [],
-  );
-
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "scopes"] });
-    void refreshOlderRef.current?.();
   };
 
 
@@ -537,15 +492,6 @@ export function SessionNavPanel({
       if (!onMutationError(r)) {
         setNotice(mode === "summarize" ? SUMMARY_QUEUED_NOTICE : null);
         if (row.status !== "hidden") notePending([row], -1);
-        if (r.ok && row.item_id) {
-          const patch: Partial<Row> = r.item ?? {
-            status: r.status ?? "hidden",
-            visibility: r.visibility ?? "hidden",
-            ...(typeof r.version === "number" ? { version: r.version } : {}),
-            ...(mode === "summarize" ? { summary_pending: true } : {}),
-          };
-          patchOlderServerRows(new Map([[row.item_id, patch]]));
-        }
       }
     },
     onError: (err, _vars, context) => {
@@ -576,15 +522,6 @@ export function SessionNavPanel({
       if (!onMutationError(r)) {
         setNotice(null);
         notePending([row], 1);
-        if (r.ok && row.item_id) {
-          const patch: Partial<Row> = r.item ?? {
-            status: r.status ?? "unhidden",
-            visibility: r.visibility ?? "visible",
-            ...(typeof r.version === "number" ? { version: r.version } : {}),
-            summary_pending: false,
-          };
-          patchOlderServerRows(new Map([[row.item_id, patch]]));
-        }
       }
     },
     onError: (err) => {
@@ -685,21 +622,7 @@ export function SessionNavPanel({
         if (failedIds.size > 0) rollbackItems(failedIds);
       }
       const applied = new Set(resultItems.filter((item) => item.ok).map((item) => item.item_id));
-      const olderPatches = new Map<string, Partial<Row>>();
-      for (const resItem of resultItems) {
-        if (!resItem.ok || !resItem.item_id) continue;
-        olderPatches.set(resItem.item_id, {
-          ...(resItem.status ? { status: resItem.status } : {}),
-          ...(resItem.visibility ? { visibility: resItem.visibility } : {}),
-          ...(typeof resItem.version === "number" ? { version: resItem.version } : {}),
-          ...(action === "unhide"
-            ? { summary_pending: false }
-            : action === "summarize"
-              ? { summary_pending: true }
-              : {}),
-        });
-      }
-      patchOlderServerRows(olderPatches);
+
       notePending(
         rows.filter((r) => r.item_id && applied.has(r.item_id) && (action === "unhide") === (r.status === "hidden")),
         action === "unhide" ? 1 : -1,
@@ -739,23 +662,17 @@ export function SessionNavPanel({
   const listQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      if (!resolvedScopeKey) {
+      if (!scopeKey) {
         return {
           items: [] as Row[],
           context: undefined,
           capabilities: undefined,
           server_timeline: false,
           records_capped: false,
-          has_older: false,
-          next_before_index: null as number | null,
           totals: undefined,
         };
       }
-      const result = await listRpc({
-        scope_key: scopeKey,
-        query: query || undefined,
-        ...(query ? {} : { limit: OUTLINE_PAGE_SIZE }),
-      });
+      const result = await listRpc(outlineListInput(scopeKey, query));
       if (!result.ok) {
         if (result.error === "db_error") setDbErrorOpen(true);
         throw new Error(result.error ?? "list_failed");
@@ -766,11 +683,8 @@ export function SessionNavPanel({
         capabilities: result.capabilities,
         server_timeline: Boolean(result.server_timeline),
         records_capped: Boolean((result as Record<string, unknown>).records_capped),
-        // B10: paused-adapter banner state (P1-7 parity).
         paused: result.paused === true,
         paused_warning: typeof result.paused_warning === "string" ? result.paused_warning : undefined,
-        has_older: Boolean(result.has_older),
-        next_before_index: typeof result.next_before_index === "number" ? result.next_before_index : null,
         totals: result.totals,
       };
     },
@@ -804,23 +718,16 @@ export function SessionNavPanel({
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
-      if (!agentId || !paseo?.agents) {
-        return { rows: [] as Row[], hasOlder: false, startCursor: null as FallbackTimelineCursor | null };
-      }
+      if (!agentId || !paseo?.agents) return { rows: [] as Row[], complete: true };
       try {
-        const page = await paseo.agents.ref(agentId).timeline.refetch({
-          direction: "tail",
-          limit: OUTLINE_PAGE_SIZE,
-          projection: "canonical",
+        const history = await queryClient.fetchQuery({
+          queryKey: ["paseo-agent-timeline-history", agentId],
+          staleTime: (entry) => (entry.state.data?.complete ? 10_000 : 0),
+          queryFn: () => readTimelineHistory(paseo.agents.ref(agentId).timeline, { allowPartial: true }),
         });
-        if (page.error) throw new Error(page.error);
-        return {
-          rows: buildFallbackTimelineRows(page.entries),
-          hasOlder: Boolean(page.hasOlder && page.startCursor),
-          startCursor: page.startCursor ?? null,
-        };
+        return { rows: buildFallbackTimelineRows(history.entries), complete: history.complete };
       } catch {
-        return { rows: [] as Row[], hasOlder: false, startCursor: null as FallbackTimelineCursor | null };
+        return { rows: [] as Row[], complete: false };
       }
     },
     enabled:
@@ -836,46 +743,11 @@ export function SessionNavPanel({
     void queryClient.invalidateQueries({ queryKey: ["session-nav", "list"] });
   }, [scopeKey, queryClient]);
 
-  const listTotalsRows = listQuery.data?.totals?.total_rows;
-  const listHasOlder = listQuery.data?.has_older;
-  const serverOlderInvalidated = shouldInvalidateOlderServerPage({
-    state: olderServerState,
-    sessionKey: sessionViewKey,
-    // While the tail is still loading there is no new evidence: keep older pages.
-    tailHasOlder: listQuery.data === undefined ? true : Boolean(listHasOlder),
-    tailTotalRows: typeof listTotalsRows === "number" ? listTotalsRows : undefined,
-    searchActive: Boolean(query),
-  });
-  useEffect(() => {
-    if (serverOlderInvalidated) {
-      setOlderServerState(null);
-    }
-  }, [serverOlderInvalidated]);
+  const serverRows = listQuery.data?.items ?? [];
+  const fallbackComplete = fallbackTimelineQuery.data?.complete === true;
 
-  // Search replaces the visible list: clear paged older pages instead of
-  // re-merging them when the query is cleared.
-  useEffect(() => {
-    if (!query) return;
-    setOlderServerState(null);
-    setOlderFallbackState(null);
-    setIsLoadingOlderServer(false);
-    setIsLoadingOlderFallback(false);
-    loadingOlderKeyRef.current = null;
-  }, [query]);
 
-  const activeOlderServer =
-    olderServerState?.sessionKey === sessionViewKey && !serverOlderInvalidated ? olderServerState : null;
-  const activeOlderFallback = olderFallbackState?.sessionKey === sessionViewKey ? olderFallbackState : null;
-  const serverTailRows = listQuery.data?.items ?? [];
-  const serverRows = useMemo(
-    () => (!query && activeOlderServer ? mergePagedRows(activeOlderServer.rows, serverTailRows) : serverTailRows),
-    [query, activeOlderServer, serverTailRows],
-  );
-  const fallbackTailRows = fallbackTimelineQuery.data?.rows ?? [];
-  const fallbackRows = useMemo(
-    () => (activeOlderFallback ? mergePagedRows(activeOlderFallback.rows, fallbackTailRows) : fallbackTailRows),
-    [activeOlderFallback, fallbackTailRows],
-  );
+  const fallbackRows = fallbackTimelineQuery.data?.rows ?? [];
 
   // Linked in-flight subagent rows (task/delegate_task without a toolResult
   // yet) merge on top of the server list even when the server owns a
@@ -887,7 +759,7 @@ export function SessionNavPanel({
         ? activeChild
           ? serverRows
           : needsHermesFallbackMerge
-            ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
+            ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey, fallbackComplete)
             : mergeLinkedParentRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
         : fallbackRows,
     [
@@ -896,6 +768,7 @@ export function SessionNavPanel({
       serverRows,
       needsHermesFallbackMerge,
       fallbackRows,
+      fallbackComplete,
       scopes,
     ],
   );
@@ -978,62 +851,9 @@ export function SessionNavPanel({
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
   scrollDriverRef.current.syncSession(sessionViewKey, isOutlineListMounted);
 
-  refreshOlderRef.current = async () => {
-    const capturedKey = sessionViewKeyRef.current;
-    if (!resolvedScopeKey || !olderServerState || olderServerState.sessionKey !== capturedKey || olderServerState.rows.length === 0) {
-      return;
-    }
-    const minIdx = olderServerState.rows.reduce(
-      (min, r) => (typeof r.timeline_index === "number" ? Math.min(min, r.timeline_index) : min),
-      Infinity,
-    );
-    const maxIdx = olderServerState.rows.reduce(
-      (max, r) => (typeof r.timeline_index === "number" ? Math.max(max, r.timeline_index) : max),
-      -1,
-    );
-    if (!Number.isFinite(minIdx) || maxIdx < minIdx) return;
-    const collected: Row[] = [];
-    let cursor = maxIdx + 1;
-    let hasOlderFlag = olderServerState.hasOlder;
-    let nextBefore: number | null = olderServerState.nextBeforeIndex;
-    let refreshedTotalRows = olderServerState.totalRows;
-    while (cursor > minIdx) {
-      const span = Math.min(2000, Math.max(OUTLINE_PAGE_SIZE, cursor - minIdx));
-      const res = await listRpc({
-        scope_key: resolvedScopeKey,
-        limit: span,
-        before_index: cursor,
-      });
-      if (sessionViewKeyRef.current !== capturedKey || !res.ok || res.items.length === 0) return;
-      if (typeof res.totals?.total_rows === "number") {
-        refreshedTotalRows = res.totals.total_rows;
-      }
-      collected.unshift(...res.items);
-      const firstIdx = res.items[0]?.timeline_index;
-      if (typeof firstIdx !== "number" || firstIdx <= minIdx || !res.has_older || res.next_before_index == null) {
-        hasOlderFlag = Boolean(res.has_older && res.next_before_index != null);
-        nextBefore = typeof res.next_before_index === "number" ? res.next_before_index : null;
-        break;
-      }
-      cursor = res.next_before_index;
-    }
-    if (sessionViewKeyRef.current !== capturedKey || collected.length === 0) return;
-    setOlderServerState((prev) => {
-      if (!prev || prev.sessionKey !== capturedKey) return prev;
-      return {
-        sessionKey: capturedKey,
-        rows: mergePagedRows(collected, []),
-        hasOlder: hasOlderFlag,
-        nextBeforeIndex: nextBefore,
-        totalRows: refreshedTotalRows ?? prev.totalRows,
-      };
-    });
-  };
-
-  const isLoadingOlder = isLoadingOlderServer || isLoadingOlderFallback;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshOutline = useCallback(async () => {
-    if (isRefreshing || isLoadingOlder) return;
+    if (isRefreshing) return;
     setIsRefreshing(true);
     try {
       cancelChatNavigation();
@@ -1043,9 +863,6 @@ export function SessionNavPanel({
       setPreviewOpen(false);
       setExpandedGroups({});
       setPendingGroupId(null);
-      setOlderServerState(null);
-      setOlderFallbackState(null);
-      loadingOlderKeyRef.current = null;
       scrollDriverRef.current?.resetTransient();
       await Promise.all(
         outlineRefreshQueryKeys(agentId).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
@@ -1053,155 +870,12 @@ export function SessionNavPanel({
     } finally {
       setIsRefreshing(false);
     }
-  }, [agentId, isLoadingOlder, isRefreshing, queryClient]);
-  const canLoadOlderServer =
-    !query &&
-    !!resolvedScopeKey &&
-    (activeOlderServer
-      ? activeOlderServer.hasOlder && activeOlderServer.nextBeforeIndex !== null
-      : Boolean(listQuery.data?.has_older && listQuery.data?.next_before_index != null));
-  const canLoadOlderFallback =
-    !query &&
-    !activeChild &&
-    !!agentId &&
-    (!resolvedScopeKey || needsHermesFallbackMerge || needsLinkedTimeline) &&
-    (activeOlderFallback
-      ? activeOlderFallback.hasOlder && activeOlderFallback.startCursor !== null
-      : Boolean(fallbackTimelineQuery.data?.hasOlder && fallbackTimelineQuery.data?.startCursor));
-  const hasOlderItems = canLoadOlderServer || canLoadOlderFallback;
-
-  const loadOlderOutlinePage = useCallback(async () => {
-    if (query || isLoadingOlder) return;
-    const capturedKey = sessionViewKeyRef.current;
-    if (canLoadOlderServer && resolvedScopeKey) {
-      const beforeIdx = activeOlderServer
-        ? activeOlderServer.nextBeforeIndex
-        : (listQuery.data?.next_before_index ?? null);
-      if (beforeIdx === null || beforeIdx <= 0) return;
-      const dedupeKey = `srv:${capturedKey}:${beforeIdx}`;
-      if (loadingOlderKeyRef.current === dedupeKey) return;
-      loadingOlderKeyRef.current = dedupeKey;
-      setIsLoadingOlderServer(true);
-      try {
-        const result = await listRpc({
-          scope_key: resolvedScopeKey,
-          limit: OUTLINE_PAGE_SIZE,
-          before_index: beforeIdx,
-        });
-        if (sessionViewKeyRef.current !== capturedKey) return;
-        if (!result.ok) {
-          setNotice(result.error ?? "Failed to load older items");
-          return;
-        }
-        if (result.items.length > 0) {
-          scrollDriverRef.current?.preparePrepend(listRef.current);
-        }
-        setOlderServerState((prev) =>
-          appendOlderServerPage({
-            prev,
-            sessionKey: capturedKey,
-            items: result.items,
-            hasOlder: Boolean(result.has_older && result.next_before_index != null),
-            nextBeforeIndex:
-              typeof result.next_before_index === "number" ? result.next_before_index : null,
-            totalRows: result.totals?.total_rows,
-          }),
-        );
-      } catch (err) {
-        if (sessionViewKeyRef.current === capturedKey) {
-          setNotice(err instanceof Error && err.message ? err.message : "Failed to load older items");
-        }
-      } finally {
-        if (loadingOlderKeyRef.current === dedupeKey) loadingOlderKeyRef.current = null;
-        setIsLoadingOlderServer(false);
-      }
-      return;
-    }
-    if (canLoadOlderFallback && agentId && paseo?.agents) {
-      const cursor = activeOlderFallback
-        ? activeOlderFallback.startCursor
-        : (fallbackTimelineQuery.data?.startCursor ?? null);
-      if (!cursor) return;
-      const dedupeKey = `fb:${capturedKey}:${cursor.epoch}:${cursor.seq}`;
-      if (loadingOlderKeyRef.current === dedupeKey) return;
-      loadingOlderKeyRef.current = dedupeKey;
-      setIsLoadingOlderFallback(true);
-      try {
-        const page = await paseo.agents.ref(agentId).timeline.refetch({
-          direction: "before",
-          cursor,
-          limit: OUTLINE_PAGE_SIZE,
-          projection: "canonical",
-        });
-        if (sessionViewKeyRef.current !== capturedKey) return;
-        if (page.error) {
-          setNotice(page.error);
-          return;
-        }
-        const stalled =
-          !page.entries.length ||
-          (page.startCursor &&
-            page.startCursor.epoch === cursor.epoch &&
-            page.startCursor.seq >= cursor.seq);
-        const olderRows = buildFallbackTimelineRows(page.entries);
-        if (olderRows.length > 0) {
-          scrollDriverRef.current?.preparePrepend(listRef.current);
-        }
-        setOlderFallbackState((prev) => {
-          const baseRows = prev?.sessionKey === capturedKey ? prev.rows : [];
-          return {
-            sessionKey: capturedKey,
-            rows: mergePagedRows(olderRows, baseRows),
-            hasOlder: !stalled && Boolean(page.hasOlder && page.startCursor),
-            startCursor: stalled ? null : (page.startCursor ?? null),
-          };
-        });
-      } catch (err) {
-        if (sessionViewKeyRef.current === capturedKey) {
-          setNotice(err instanceof Error && err.message ? err.message : "Failed to load older items");
-        }
-      } finally {
-        if (loadingOlderKeyRef.current === dedupeKey) loadingOlderKeyRef.current = null;
-        setIsLoadingOlderFallback(false);
-      }
-    }
-  }, [
-    query,
-    isLoadingOlder,
-    canLoadOlderServer,
-    canLoadOlderFallback,
-    resolvedScopeKey,
-    activeOlderServer,
-    listQuery.data?.next_before_index,
-    listRpc,
-    agentId,
-    paseo,
-    activeOlderFallback,
-    fallbackTimelineQuery.data?.startCursor,
-  ]);
+  }, [agentId, isRefreshing, queryClient]);
 
   const handleOutlineScroll = (ev: any) => {
-    const prevTop = scrollDriverRef.current?.scroller.getLastScrollTop() ?? 0;
     scrollDriverRef.current?.handleScrollEvent(ev);
-    const top = ev?.nativeEvent?.contentOffset?.y;
-    const sh = ev?.nativeEvent?.contentSize?.height;
-    const ch = ev?.nativeEvent?.layoutMeasurement?.height;
-    const scroller = scrollDriverRef.current?.scroller;
-    if (
-      typeof top === "number" &&
-      top <= OUTLINE_PREPEND_THRESHOLD_PX &&
-      // Synthetic scroll events from a display:none-collapsed layout report top 0;
-      // never treat those as user upward intent.
-      typeof sh === "number" && sh > 0 &&
-      typeof ch === "number" && ch > 0 &&
-      hasOlderItems &&
-      !isLoadingOlder &&
-      !query &&
-      (!scroller?.isStuckToBottom() || scroller?.isUserScrolledUp() || prevTop > OUTLINE_PREPEND_THRESHOLD_PX)
-    ) {
-      void loadOlderOutlinePage();
-    }
   };
+
 
   if (needsHermesFallbackMerge && !fallbackTimelineQuery.isFetching && fallbackTimelineQuery.data !== undefined) {
     hermesSettledKeyRef.current = sessionViewKey;
@@ -1255,11 +929,6 @@ export function SessionNavPanel({
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
-    setOlderServerState(null);
-    setOlderFallbackState(null);
-    setIsLoadingOlderServer(false);
-    setIsLoadingOlderFallback(false);
-    loadingOlderKeyRef.current = null;
     scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
@@ -1376,23 +1045,6 @@ export function SessionNavPanel({
       },
       listContent: {
         flexGrow: 1,
-      },
-      loadingOlderPill: {
-        position: "absolute" as const,
-        top: 6,
-        alignSelf: "center" as const,
-        zIndex: 5,
-        paddingHorizontal: 10,
-        paddingVertical: 3,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface1,
-      },
-      loadingOlderText: {
-        color: theme.colors.foregroundMuted,
-        fontSize: 10,
-        fontWeight: "600" as const,
       },
       emptyContainer: {
         flex: 1,
@@ -1920,9 +1572,9 @@ export function SessionNavPanel({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Refresh outline"
-            accessibilityState={{ disabled: isRefreshing || isLoadingOlder }}
+            accessibilityState={{ disabled: isRefreshing }}
             style={[styles.iconBtn, isRefreshing ? styles.iconBtnActive : null]}
-            disabled={isRefreshing || isLoadingOlder}
+            disabled={isRefreshing}
             onPress={() => void refreshOutline()}
           >
             <Text style={[styles.iconBtnText, isRefreshing ? styles.iconBtnTextActive : null]}>
@@ -1965,11 +1617,6 @@ export function SessionNavPanel({
             onWheel: (ev: any) => scrollDriverRef.current?.handleWheel(ev),
           } as Record<string, unknown>)}
         >
-          {isLoadingOlder ? (
-            <View pointerEvents="none" style={styles.loadingOlderPill}>
-              <Text style={styles.loadingOlderText}>Loading older items…</Text>
-            </View>
-          ) : null}
           <ScrollView
             ref={listRef}
             key={sessionViewKey || "outline-list"}
