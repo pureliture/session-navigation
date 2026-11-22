@@ -28,6 +28,22 @@ Do this in the intended Hermes profile. Host activation and the plugin's
 session after enabling. Fully restart Hermes **and its gateway** after updating:
 a reload cannot replace already imported Python modules.
 
+For ACP/Paseo sessions, Hermes does not use the top-level `toolsets` list. Add
+the plugin toolset to the ACP platform explicitly:
+
+```yaml
+platform_toolsets:
+  acp:
+    - hermes-acp
+    - session_navigation
+```
+
+Without that entry Hermes falls back to the built-in `hermes-acp` composite,
+which does not contain `manage_context`, `hide_context`, `summarize_context`,
+`list_context_items`, or `unhide_context`, so the model correctly reports that
+cleanup tools are unavailable. Existing ACP sessions do not gain new tools
+retroactively; start a new ACP session after changing the list.
+
 The catalog distribution unit is `hermes-plugin/`, selected with
 `subdir: hermes-plugin` at the pinned repository SHA. It contains only the
 manifest, loader, MIT LICENSE and vendor Python packages. The adapter's runtime

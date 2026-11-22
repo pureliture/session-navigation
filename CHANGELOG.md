@@ -12,6 +12,10 @@ Publication and registry/catalog approval are separate steps; see
 - Prepare Paseo reviewed-registry slug `pureliture/session-navigation` and
   the Hermes `session-navigation` catalog entry, pinned to a reviewed full SHA
   with `subdir: hermes-plugin`.
+- For ACP/Paseo sessions, add `session_navigation` to
+  `platform_toolsets.acp`. Hermes ignores the top-level `toolsets` list for
+  ACP and otherwise exposes only the built-in `hermes-acp` composite, which
+  has no context-cleanup tools.
 - Retire the standalone Python CLI and OMP Python daemon. OMP and Paseo use
   the bundled TypeScript core and need no Python installation. Hermes keeps
   the Python engine and synchronized vendor mirror.
