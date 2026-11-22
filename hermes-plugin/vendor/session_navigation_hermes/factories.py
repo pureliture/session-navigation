@@ -1372,10 +1372,15 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                                 break
                             after_tool = True
                     turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
-                    note = state.reminders.note(scope.scope_key(), turn,
+                    note, reminder_reason, reminder_total, reminder_bytes = state.reminders.note_with_reason(scope.scope_key(), turn,
                         estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
                         kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates,
                         after_tool=after_tool, step_key=seq_len)
+                    if note is None:
+                        logger.debug(
+                            "session-navigation cleanup reminder suppressed: reason=%s eligible=%d bytes=%d",
+                            reminder_reason, reminder_total, reminder_bytes,
+                        )
                     if note:
                         request_out = copy.deepcopy(request_out)
                         if api_mode == "chat_completions":

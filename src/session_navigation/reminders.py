@@ -66,8 +66,34 @@ class BoundaryReminders:
         after_tool: bool = True,
         step_key: int | None = None,
     ) -> str | None:
-        if not turn:
-            return None
+        judged, _, _, _ = self.note_with_reason(
+            session,
+            turn,
+            _tokens,
+            _window,
+            candidates,
+            eligible_bytes=eligible_bytes,
+            after_tool=after_tool,
+            step_key=step_key,
+        )
+        return judged
+
+    def note_with_reason(
+        self,
+        session: str,
+        turn: str,
+        _tokens: int,
+        _window: int | None,
+        candidates: list[dict[str, Any]],
+        eligible_bytes: int | None = None,
+        after_tool: bool = True,
+        step_key: int | None = None,
+    ) -> tuple[str | None, str, int, int]:
+        """Judge once and report why the boundary note fired or not.
+
+        Returns ``(note, reason, eligible_count, eligible_bytes)``. ``reason``
+        is stable for tests and logs; ``note()`` keeps the old contract.
+        """
         total = len(candidates)
         total_bytes = (
             0
@@ -82,6 +108,8 @@ class BoundaryReminders:
                 )
             )
         )
+        if not turn:
+            return None, "empty_turn", total, total_bytes
         state = self._state(session)
         is_new_turn = state.turn != turn
         delta = total_bytes - state.watermark
@@ -100,7 +128,7 @@ class BoundaryReminders:
                 state.last_fired_step = None
             if total_bytes < state.unfired_credit:
                 state.unfired_credit = total_bytes
-            return None
+            return None, "suppressed_unhide_growth", total, total_bytes
 
         if delta < 0:
             state.unfired_credit = 0
@@ -127,15 +155,18 @@ class BoundaryReminders:
                     state.intra_credit = 0
                     state.notes_in_wave = 0
                     state.last_fired_step = None
-        if (
-            not after_tool
-            or total <= 0
-            or total_bytes < WORTHWHILE_BYTES
-            or state.unfired_credit < WORTHWHILE_BYTES
-            or state.notes_in_wave >= MAX_NOTES_PER_WAVE
-            or (step_key is not None and state.last_fired_step == step_key)
-        ):
-            return None
+        if not after_tool:
+            return None, "not_after_tool", total, total_bytes
+        if total <= 0:
+            return None, "no_candidates", total, total_bytes
+        if total_bytes < WORTHWHILE_BYTES:
+            return None, "below_worthwhile_bytes", total, total_bytes
+        if state.unfired_credit < WORTHWHILE_BYTES:
+            return None, "below_unfired_credit", total, total_bytes
+        if state.notes_in_wave >= MAX_NOTES_PER_WAVE:
+            return None, "wave_cap_reached", total, total_bytes
+        if step_key is not None and state.last_fired_step == step_key:
+            return None, "step_already_fired", total, total_bytes
 
         state.fired_in_turn = True
         state.notes_in_wave += 1
@@ -184,4 +215,4 @@ class BoundaryReminders:
             "(skip list_context_items unless IDs were omitted; hide=rules, summarize=session LLM, auto=LLM/rules); then send one complete final answer with all facts/values "
             "(never write the answer twice or say 'reported above'/'see above'). Rows:[id,tool,path/command,bytes,turn]."
         )
-        return header + ("\n" + "\n".join(rows) if rows else "")
+        return header + ("\n" + "\n".join(rows) if rows else ""), "fired", total, total_bytes
