@@ -52,9 +52,13 @@ accepted summary without another call, and retries factual validation once.
 A failed upgrade returns an error and preserves the existing Hide replacement.
 
 Originals, replacements and mutation state are stored in the local SQLite state
-file; only outgoing request copies change. Unhide restores the original without
-rerunning the host tool. The local state file must be shared with a local Paseo
-panel for that panel to manage the session; there is no cross-machine sync.
+file; only outgoing request copies change. When the middleware adds an eligible
+`[context-navigation]` note, it also sets `tool_choice` to `manage_context` for
+that one outgoing request if the tool is available and no other tool is
+explicitly forced. The stored history and the next request are unchanged.
+Unhide restores the original without rerunning the host tool. The local state
+file must be shared with a local Paseo panel for that panel to manage the
+session; there is no cross-machine sync.
 Treat stored originals/backups as sensitive data. Hide is not secure erasure.
 The plugin does not add telemetry, read credential files, execute shell commands,
 or install software while handling a session.

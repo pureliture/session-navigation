@@ -32,6 +32,7 @@ Publication and registry/catalog approval are separate steps; see
 
 ### Summaries and safety
 
+- Force `manage_context` on the single outgoing request that carries an eligible `[context-navigation]` note when the tool is available, so Hermes models that ignore the advisory note still perform the cleanup call. Requests without a note, requests with another explicitly forced tool, and request history are unchanged.
 - Send the whole original tool result to Summarize, including facts beyond
   character 12,000. Enforce a **32,768-byte UTF-8 source cap** and return
   `input_too_large` rather than silently truncating the source.
