@@ -79,6 +79,30 @@ Treat stored originals/backups as sensitive data. Hide is not secure erasure.
 The plugin does not add telemetry, read credential files, execute shell commands,
 or install software while handling a session.
 
+### Cleanup cadence and active sessions
+
+Cleanup is deliberately batched, not periodic. A boundary note is considered on
+an outgoing request only after tool results are present, the latest boundary is
+a tool result rather than a cleanup tool, and the eligible results account for
+at least 32 KiB of new or unfired bytes. At most four notes are emitted per
+wave, and repeated requests with the same step are suppressed. Rule-based hides
+therefore appear in uneven batches: a long tool-heavy turn can hide many items
+at once, while a short or cleanup-ended turn hides none.
+
+Tool availability is fixed when an ACP session is created. Changing
+`platform_toolsets.acp`, enabling the plugin, or installing an updated plugin
+does not add tools to sessions that are already open. Start a new ACP session
+after any of those changes. Fully restart Hermes and its gateway after updating
+plugin files because imported Python modules are not replaced by a plugin
+reload.
+
+If a session reports `'manage_context' is not available in this session`, the
+session started without the `session_navigation` toolset. Check that profile's
+`platform_toolsets.acp`, then open a new ACP session. If tool calls are missing
+despite an available toolset, verify that the running gateway loaded the
+installed plugin version and inspect the boundary-reminder suppression reason
+in debug logs.
+
 ### Pausing Hermes, runtime verification, and multi-profile toggles
 
 - **DB-control-only Pause (Off)**: Pausing Hermes via Paseo Settings updates
