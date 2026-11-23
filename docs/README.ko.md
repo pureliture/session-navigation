@@ -120,15 +120,18 @@ paseo plugin add pureliture/session-navigation
 레지스트리 승인 전에는 게시된 npm 버전을 직접 지정합니다.
 
 ```bash
-paseo plugin add npm:@pureliture/session-navigation-paseo@0.1.0
+paseo plugin add npm:@tkdgur1756/session-navigation-paseo@0.1.0
 ```
 
-이 문서는 게시·승인이 완료됐다는 뜻이 아닙니다. npm 게시 전에는 검토한 SHA로 Git 폴더를
-설치하거나 소스 체크아웃을 사용하세요. UI의 기존 상태를 보존하기 위해 내부 ID는
-`paseo-plugin`으로 유지합니다. Hide/Summarize에는 세션 호스트의 어댑터가 필요합니다.
+이 문서는 게시·승인이 완료됐다는 뜻이 아닙니다. npm 게시 전에는 소스 체크아웃에서
+의존성을 설치한 후 플러그인 디렉터리를 사용하세요. Git 폴더 직접 설치는 필요한
+`yaml` 런타임 의존성을 설치하지 않으므로 지원하지 않습니다. UI의 기존 상태를
+보존하기 위해 내부 ID는 `paseo-plugin`으로 유지합니다. Hide/Summarize에는 세션
+호스트의 어댑터가 필요합니다.
 
 ```bash
-paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref <REVIEWED_SHA>
+(cd paseo-plugin && npm ci)
+paseo plugin add "$PWD/paseo-plugin"
 paseo plugin ls
 ```
 
@@ -140,13 +143,13 @@ Explorer의 **+ → Session navigation**을 선택하면 데스크톱, 모바일
 Bun 최소 요구 버전은 검증된 최저 버전인 **1.4.4**입니다. npm 게시 후:
 
 ```bash
-omp plugin install @pureliture/session-navigation-omp@0.1.0
+omp plugin install @tkdgur1756/session-navigation-omp@0.1.0
 ```
 
 게시 전 개발 설치는 `bun run packages/omp/build.ts` 후
 `omp plugin install "$PWD/packages/omp"`로 합니다. OMP 18.18.3은 로컬 tarball을
-직접 받지 않습니다. 패킹한 `pureliture-session-navigation-omp-0.1.0.tgz`는
-해당 프로필의 `~/.omp/plugins`에서 `bun add /absolute/path/to/pureliture-session-navigation-omp-0.1.0.tgz`로
+직접 받지 않습니다. 패킹한 `tkdgur1756-session-navigation-omp-0.1.0.tgz`는
+해당 프로필의 `~/.omp/plugins`에서 `bun add /absolute/path/to/tkdgur1756-session-navigation-omp-0.1.0.tgz`로
 설치하고 OMP를 재시작하세요. Python과 별도 core 게시물은 필요하지 않습니다.
 
 이전 Python-spawning 사본인 **`~/.omp/agent/extensions/session-navigation.ts`를 모든 해당
@@ -305,8 +308,8 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 
 세 호스트의 준비 버전은 **0.1.0**입니다. 아래 경로는 게시·승인 완료를 주장하지 않습니다.
 
-- **OMP:** npm `@pureliture/session-navigation-omp@0.1.0`.
-- **Paseo:** npm `@pureliture/session-navigation-paseo@0.1.0` 게시 후 검토 레지스트리
+- **OMP:** npm `@tkdgur1756/session-navigation-omp@0.1.0`.
+- **Paseo:** npm `@tkdgur1756/session-navigation-paseo@0.1.0` 게시 후 검토 레지스트리
   `pureliture/session-navigation`으로 제출합니다. MIT LICENSE와 내장 Worker가 tarball에 포함됩니다.
 - **Hermes:** 공식 카탈로그에서 `subdir: hermes-plugin`과 **40자리 SHA**를 고정합니다.
   다섯 도구, `post_api_request`/`subagent_start` 훅,

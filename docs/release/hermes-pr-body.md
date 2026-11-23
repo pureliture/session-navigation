@@ -9,6 +9,9 @@ Canonical engine/adapter sources remain in `src/session_navigation/` and
 The runtime adapter equivalent is `vendor/session_navigation_hermes/` within
 that subdirectory. No duplicate editable adapter tree is shipped.
 
+Do not submit until the forced `manage_context` tool choice respects explicit
+user requests to wait or restore without breaking automatic cleanup.
+
 ## Purpose and declared surfaces
 
 Reversible request-side context management: deterministic Hide, active-session-model

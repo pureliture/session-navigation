@@ -7,8 +7,8 @@ Publication and registry/catalog approval are separate steps; see
 
 ### Distribution and migration
 
-- Prepare public npm packages `@pureliture/session-navigation-omp` and
-  `@pureliture/session-navigation-paseo`, both version 0.1.0.
+- Prepare public npm packages `@tkdgur1756/session-navigation-omp` and
+  `@tkdgur1756/session-navigation-paseo`, both version 0.1.0.
 - Prepare Paseo reviewed-registry slug `pureliture/session-navigation` and
   the Hermes `session-navigation` catalog entry, pinned to a reviewed full SHA
   with `subdir: hermes-plugin`.
@@ -36,7 +36,6 @@ Publication and registry/catalog approval are separate steps; see
 
 ### Summaries and safety
 
-- Force `manage_context` on the single outgoing request that carries an eligible `[context-navigation]` note when the tool is available, so Hermes models that ignore the advisory note still perform the cleanup call. Requests without a note, requests with another explicitly forced tool, and request history are unchanged.
 - Send the whole original tool result to Summarize, including facts beyond
   character 12,000. Enforce a **32,768-byte UTF-8 source cap** and return
   `input_too_large` rather than silently truncating the source.

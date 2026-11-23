@@ -8,11 +8,14 @@ packages, opened a release PR, or contacted either registry/catalog.
 
 - [ ] Merge the reviewed release-preparation changes first; use an up-to-date,
   clean checkout of that merged commit, not a disposable task branch.
-- [ ] Confirm npm ownership/authentication for the `@pureliture` scope with
+- [ ] Confirm npm ownership/authentication for the `@tkdgur1756` scope with
   `npm whoami`; do not paste tokens into logs or commit npm credentials.
 - [ ] Requirements: Bun >=1.4.4; Node >=22.13; verified hosts OMP 18.18.3 and
   Paseo 0.15.3; Hermes >=0.20.1 (API floor, not old-version live acceptance).
 - [ ] Back up state and follow the README's daemon-retirement migration.
+- [ ] Before publishing Hermes, resolve the conflict between forced
+  `manage_context` tool choice and explicit user requests to wait or restore.
+  Verify both user control and automatic cleanup with the intended ACP model.
 
 ```sh
 git fetch origin main
@@ -47,8 +50,9 @@ hermes plugins validate --install-deps "$PWD/hermes-plugin"
 
 - [ ] Investigate any generated-source drift; do not publish stale workers.
 - [ ] Inspect both npm tarballs: LICENSE, manifest/entrypoints, bundled OMP
-  `dist/extension.js` + `dist/worker.js`, Paseo `server/worker-source.ts`,
-  imported local runtime files; no node_modules, scratch, credentials or bytecode.
+  `dist/extension.js` + `dist/worker.js`, Paseo `server/worker-source.ts` and
+  `npm-shrinkwrap.json`, imported local runtime files; no node_modules, scratch,
+  credentials or bytecode.
 - [ ] Keep `@session-navigation/core` private/bundled; do not publish it.
 - [ ] Verify source/vendor parity and fresh wheel plugin-root/engine/adapter
   imports in an isolated venv. The Python suite includes that packaging smoke.
@@ -68,18 +72,18 @@ hermes plugins validate --install-deps "$PWD/hermes-plugin"
 Publish the exact inspected tarballs, not a second uninspected build:
 
 ```sh
-npm publish "$RELEASE_DIR/pureliture-session-navigation-omp-0.1.0.tgz" --access public
-npm publish "$RELEASE_DIR/pureliture-session-navigation-paseo-0.1.0.tgz" --access public
-npm view @pureliture/session-navigation-omp@0.1.0 dist.integrity
-npm view @pureliture/session-navigation-paseo@0.1.0 dist.integrity
-omp plugin install @pureliture/session-navigation-omp@0.1.0
+npm publish "$RELEASE_DIR/tkdgur1756-session-navigation-omp-0.1.0.tgz" --access public
+npm publish "$RELEASE_DIR/tkdgur1756-session-navigation-paseo-0.1.0.tgz" --access public
+npm view @tkdgur1756/session-navigation-omp@0.1.0 dist.integrity
+npm view @tkdgur1756/session-navigation-paseo@0.1.0 dist.integrity
+omp plugin install @tkdgur1756/session-navigation-omp@0.1.0
 ```
 
 Restart OMP and confirm `omp plugin list` and the five tools. In the disposable
 Paseo daemon configuration set top-level `pluginsEnabled: true`, restart, then:
 
 ```sh
-paseo plugin add npm:@pureliture/session-navigation-paseo@0.1.0
+paseo plugin add npm:@tkdgur1756/session-navigation-paseo@0.1.0
 paseo plugin ls
 ```
 

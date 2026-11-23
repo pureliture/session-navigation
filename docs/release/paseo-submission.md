@@ -10,7 +10,7 @@ Categories; include the remaining notes in the issue or review PR. Reference:
 ## Form fields
 
 - **Title:** Session navigation
-- **Source:** `npm:@pureliture/session-navigation-paseo@0.1.0`
+- **Source:** `npm:@tkdgur1756/session-navigation-paseo@0.1.0`
   (publish this exact public package first).
 - **Categories:** Sidebar (primary), Utils.
 - **Requested registry ID:** `pureliture/session-navigation`.
@@ -28,9 +28,10 @@ Categories; include the remaining notes in the issue or review PR. Reference:
 The runtime manifest ID remains `paseo-plugin` to preserve existing installed
 state. It is independent of the requested registry ID and npm package name.
 The package includes MIT LICENSE, its icon, runtime TypeScript sources and
-the generated embedded Node worker. It has no installed runtime dependencies;
-Paseo-provided libraries are development dependencies. No preparation command,
-runtime package download, Python, or unpublished workspace package is needed.
+the generated embedded Node worker. Its pinned runtime dependency `yaml` is
+installed with the npm package; Paseo-provided libraries are development
+dependencies. No preparation command, runtime package download, Python, or
+unpublished workspace package is needed.
 
 Requirements: Paseo >=0.15.3 (verified 0.15.3), Node >=22.13 on the daemon,
 and top-level `pluginsEnabled: true` in daemon configuration followed by restart.
@@ -60,10 +61,9 @@ original may be sent to the active host model/provider for Summarize.
 Local storage does not imply all content remains local.
 
 No telemetry, credential-file access, automatic package installation or
-cross-machine state sync is added. Child tab following uses guarded Paseo
-0.15.3 UI internals because that version lacks a public child-target SDK API;
-unsupported/ambiguous identities fail closed to inline/display-only behavior.
-Unmanaged children say **subagent context is not managed**.
+cross-machine state sync is added. The outline follows main sessions only;
+subagent child rows, inline outlines and Open tab actions are not displayed.
+Active-tab following uses guarded Paseo UI internals on supported versions.
 
 After approval, verify `paseo plugin add pureliture/session-navigation` and
 a `running` status. Until then, the direct public npm source is the supported

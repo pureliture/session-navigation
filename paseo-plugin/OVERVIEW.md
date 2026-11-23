@@ -73,9 +73,9 @@ directly from `~/.hermes/.../state.db` in read-only mode (`adapter_targets` and 
 timeline back up remote or unmapped sessions).
 Manage requires explicit tool-call IDs; it never chooses cleanup targets automatically.
 
-For source changes, run `npm ci`, `npm run build`, `npm run typecheck` and `npm test`
-in `paseo-plugin/`. Commit the regenerated `server/worker-source.ts`; git-folder and
-npm installations need neither sibling workspace packages nor a build tool at runtime.
+The npm package includes its worker and installs the pinned `yaml` runtime
+dependency; neither a sibling workspace package nor Python is needed. A source
+checkout needs its dependencies installed before loading the plugin.
 
 The panel itself does not require an account or separate API key. Session-model
 summarization may send the selected original tool output to the model provider

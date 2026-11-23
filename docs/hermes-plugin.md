@@ -164,8 +164,8 @@ Registered surfaces:
 - Hooks: `post_api_request`, `subagent_start`.
 - Middleware: `llm_request`, `tool_request`.
 - Optional system-prompt supervision section and `/nav` command.
-- Child scopes stay separate; missing/unsupported child registration is shown
-  as **subagent context is not managed** in Paseo.
+- Child scopes remain separate for session binding; Paseo's outline does not
+  display subagent child rows or open child tabs.
 
 ## Admission and private dependencies
 

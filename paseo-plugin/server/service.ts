@@ -150,7 +150,7 @@ export class PaseoService {
         ? {
             hint: scope.startsWith("hermes:")
               ? "Install and enable the Session Navigation Hermes adapter."
-              : "Install and enable @pureliture/session-navigation-omp in the session host.",
+              : "Install and enable @tkdgur1756/session-navigation-omp in the session host.",
           }
         : state === "adapter_disabled" && scope.startsWith("hermes:")
           ? {
