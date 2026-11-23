@@ -125,16 +125,8 @@ describe("fallbackTimeline", () => {
     });
   });
 
-  test("mergeLinkedParentRows and mergeHermesTimelineRows handle linked children and chronological merging", () => {
+  test("mergeHermesTimelineRows preserves chronological order while upgrading matching tool calls to manageable items", () => {
     const parent = "hermes:default:parent:unknown";
-    const scopes = [
-      {
-        scope_key: "hermes:default:child:unknown",
-        parent_scope: parent,
-        tool_call_id: "call-del",
-        subagent_id: "sa-1",
-      },
-    ];
     const managed: Row = {
       item_id: "item_1",
       tool_call_id: "call-read",
@@ -161,7 +153,7 @@ describe("fallbackTimeline", () => {
         item_id: "call-del",
         tool_call_id: "call-del",
         kind: "tool",
-        tool_name: "execute",
+        tool_name: "delegate_task",
         status: "visible",
         version: 1,
         tokens_display: "—",
@@ -169,20 +161,19 @@ describe("fallbackTimeline", () => {
       },
     ];
 
-    expect(mergeLinkedParentRows([managed], timeline, scopes, parent)).toEqual([
-      managed,
-      { ...timeline[2], item_id: null, manageable: false, tool_name: "delegate_task" },
-    ]);
-
-    const merged = mergeHermesTimelineRows([managed], timeline, scopes, parent);
+    const merged = mergeHermesTimelineRows([managed], timeline, [], parent);
     expect(merged).toEqual([
       { ...timeline[0], item_id: null, manageable: false },
       managed,
-      { ...timeline[2], item_id: null, manageable: false, tool_name: "delegate_task" },
+      { ...timeline[2], item_id: null, manageable: false },
     ]);
+    // Consumer-visible regression: the merged outline keeps the parent
+    // delegate_task row with its own tool name; no subagent child rows are
+    // fabricated and no "Open tab" affordance exists in the merge output.
+    expect(merged.filter((row) => row.tool_name === "delegate_task")).toHaveLength(1);
   });
   test("mergeHermesTimelineRows keeps unmatched older server rows ahead of the merged tail", () => {
-    const parent = "hermes:atlas:session:unknown";
+    const parent = "hermes:default:parent:unknown";
     const serverRows: Row[] = [
       { item_id: "srv-old", tool_call_id: "call-old", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 5 },
       { item_id: "srv-new", tool_call_id: "call-new", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 700 },
@@ -197,7 +188,7 @@ describe("fallbackTimeline", () => {
   });
 
   test("mergeHermesTimelineRows keeps unmatched rows ahead of a full fallback", () => {
-    const parent = "hermes:atlas:session:unknown";
+    const parent = "hermes:default:parent:unknown";
     const serverRows: Row[] = [
       { item_id: "srv-old", tool_call_id: "call-old", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 5 },
       { item_id: "srv-new", tool_call_id: "call-new", kind: "tool", tool_name: "terminal", status: "visible", version: 1, tokens_display: "—", timeline_index: 700 },
@@ -212,7 +203,7 @@ describe("fallbackTimeline", () => {
   });
 
   test("mergeHermesTimelineRows keeps the managed server copy of a duplicated compaction summary", () => {
-    const parent = "hermes:atlas:session:unknown";
+    const parent = "hermes:default:parent:unknown";
     const text =
       "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below.";
     const serverRows: Row[] = [
@@ -250,7 +241,7 @@ describe("fallbackTimeline", () => {
   });
 
   test("mergeHermesTimelineRows dedupes a compaction summary across agent-vs-user kinds (FN)", () => {
-    const parent = "hermes:atlas:session:unknown";
+    const parent = "hermes:default:parent:unknown";
     const text = "[Compaction] Earlier turns were compacted into the summary below.";
     const serverRows: Row[] = [
       {
@@ -286,7 +277,7 @@ describe("fallbackTimeline", () => {
   });
 
   test("mergeHermesTimelineRows preserves distinct rows sharing a long common prefix (FP)", () => {
-    const parent = "hermes:atlas:session:unknown";
+    const parent = "hermes:default:parent:unknown";
     const prefix = `x${"a".repeat(150)}`;
     const shared = `${prefix} identical suffix`;
     const distinct = `${prefix} different suffix`;
@@ -335,6 +326,105 @@ describe("fallbackTimeline", () => {
     expect(merged.map((row) => row.item_id).sort()).toEqual(["srv-distinct", "srv-same"]);
   });
 
+  test("mergeLinkedParentRows appends linked in-flight parents and ignores everything else", () => {
+    const parent = "omp:default:parent:default";
+    const scopes = [{ scope_key: "omp:default:child:default", parent_scope: parent, tool_call_id: "call-live", subagent_id: "Bird" }];
+    const owned: Row = {
+      item_id: "item_1", tool_call_id: "call-done", kind: "tool", tool_name: "delegate_task",
+      status: "visible", version: 2, tokens_display: "—", manageable: true,
+    };
+    const timeline: Row[] = [
+      { ...owned, item_id: "call-done", manageable: false, version: 1 },
+      {
+        item_id: "call-live", tool_call_id: "call-live", kind: "tool", tool_name: "delegate_task",
+        status: "visible", version: 1, tokens_display: "—", manageable: false, summary_line: "subagent: Bird",
+      },
+      {
+        item_id: "call-plain", tool_call_id: "call-plain", kind: "tool", tool_name: "run_command",
+        status: "visible", version: 1, tokens_display: "—", manageable: false,
+      },
+      {
+        item_id: "u1", tool_call_id: "", kind: "user", tool_name: "user",
+        status: "visible", version: 1, tokens_display: "—", summary_line: "hello",
+      },
+    ];
+    const merged = mergeLinkedParentRows([owned], timeline, scopes, parent);
+    // Owned rows keep identity; only the linked live delegate_task appends as
+    // display-only with its original OMP tool name. Unlinked tools and user
+    // rows never merge here. No child rows are fabricated.
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toBe(owned);
+    expect(merged[1]).toMatchObject({
+      tool_call_id: "call-live", tool_name: "delegate_task", item_id: null, manageable: false,
+    });
+  });
+
+  test("mergeLinkedParentRows never resurrects unlinked past tools", () => {
+    const parent = "omp:default:parent:default";
+    const serverRows: Row[] = Array.from({ length: 150 }, (_, idx) => ({
+      item_id: `msg:${idx}`, tool_call_id: "", kind: "user", tool_name: "user",
+      status: "visible", version: 1, tokens_display: "—", summary_line: `prompt ${idx}`,
+    }));
+    const oldTools: Row[] = Array.from({ length: 1000 }, (_, idx) => ({
+      item_id: `old-${idx}`, tool_call_id: `old-${idx}`, kind: "tool", tool_name: "run_command",
+      status: "visible", version: 1, tokens_display: "—", manageable: false, timeline_index: idx,
+    }));
+    // No linked children anywhere: 150 user rows in, 150 rows out. A fail-open
+    // merge would return 1150 rows here.
+    expect(mergeLinkedParentRows(serverRows, oldTools, [], parent)).toEqual(serverRows);
+  });
+
+  test("mergeLinkedParentRows appends earlier in-progress calls when a later call persists first", () => {
+    const parent = "omp:default:parent:default";
+    const scopes = [{ scope_key: "omp:default:child:default", parent_scope: parent, tool_call_id: "call-1", subagent_id: "Bird" }];
+    const laterOwned: Row = {
+      item_id: "item_2", tool_call_id: "call-2", kind: "tool", tool_name: "run_command",
+      status: "visible", version: 1, tokens_display: "—", manageable: true,
+    };
+    // Concurrent execution: call-2 finished and persisted while call-1 (lower
+    // sequence, no result yet) is still running. The linked condition has no
+    // recency floor, so the earlier call still appends with its own name.
+    const timeline: Row[] = [
+      {
+        item_id: "call-1", tool_call_id: "call-1", kind: "tool", tool_name: "delegate_task",
+        status: "visible", version: 1, tokens_display: "—", manageable: false, timeline_index: 5,
+      },
+      { ...laterOwned, item_id: "call-2", manageable: false, timeline_index: 9000 },
+    ];
+    const merged = mergeLinkedParentRows([laterOwned], timeline, scopes, parent);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toBe(laterOwned);
+    expect(merged[1]).toMatchObject({ tool_call_id: "call-1", tool_name: "delegate_task", item_id: null, manageable: false });
+  });
+
+  test("mergeLinkedParentRows appends linked rows on an empty server, with or without sequences", () => {
+    const parent = "omp:default:parent:default";
+    const scopes = [{ scope_key: "omp:default:child:default", parent_scope: parent, tool_call_id: "call-live", subagent_id: "Bird" }];
+    const live: Row = {
+      item_id: "call-live", tool_call_id: "call-live", kind: "tool", tool_name: "task",
+      status: "visible", version: 1, tokens_display: "—", manageable: false,
+    };
+    const plain: Row = {
+      item_id: "call-plain", tool_call_id: "call-plain", kind: "tool", tool_name: "run_command",
+      status: "visible", version: 1, tokens_display: "—", manageable: false,
+    };
+    expect(mergeLinkedParentRows([], [live, plain], scopes, parent)).toEqual([
+      { ...live, item_id: null, manageable: false },
+    ]);
+    expect(mergeLinkedParentRows([], [], scopes, parent)).toEqual([]);
+  });
+
+  test("linked delegate calls missing from adapter targets are display-only timeline rows, never fabricated targets", () => {
+    const parent = "hermes:default:parent:unknown";
+    const scopes = [{ scope_key: "hermes:default:child:unknown", parent_scope: parent, tool_call_id: "delegate", subagent_id: "sa-1" }];
+    const row: Row = { tool_call_id: "delegate", item_id: "native", kind: "tool", tool_name: "execute", status: "visible", version: 1, tokens_display: "—" };
+    expect(mergeLinkedParentRows([], [row], scopes, parent)).toEqual([{ ...row, item_id: null, tool_name: "delegate_task", manageable: false }]);
+    expect(mergeLinkedParentRows([row], [row], scopes, parent)).toEqual([row]);
+    expect(mergeLinkedParentRows([], [], scopes, parent)).toEqual([]);
+    expect(mergeLinkedParentRows([], [row], [], parent)).toEqual([]);
+    expect(mergeLinkedParentRows([], [{ ...row, tool_call_id: "unrelated" }], scopes, parent)).toEqual([]);
+  });
+
   test("mergeLinkedParentRows appends rotation-moved in-flight rows on top of a server timeline", () => {
     // server_timeline=true case: the server list is authoritative, but an
     // in-flight delegate_task without a toolResult only exists in the chat
@@ -378,6 +468,30 @@ describe("fallbackTimeline", () => {
       owned,
       { ...inFlight, item_id: "item_2", manageable: true },
     ]);
+  });
+
+  test("mergeLinkedParentRows appends linked unpersisted parents older than any tail window", () => {
+    const parent = "omp:default:parent:default";
+    const scopes = [{ scope_key: "omp:default:child:default", parent_scope: parent, tool_call_id: "call-long", subagent_id: "Bird" }];
+    // A long-running linked call started 1001 timeline entries ago and still
+    // has no toolResult; everything newer already persisted. The linked
+    // condition has no recency window, so the old call still appends.
+    const serverRows: Row[] = Array.from({ length: 1001 }, (_, idx) => ({
+      item_id: `item_${idx}`, tool_call_id: `call-new-${idx}`, kind: "tool", tool_name: "run_command",
+      status: "visible", version: 1, tokens_display: "—", manageable: true, timeline_index: idx,
+    }));
+    const newer: Row[] = serverRows.map((row, idx) => ({
+      ...row, item_id: row.tool_call_id, manageable: false, timeline_index: 100 + idx,
+    }));
+    const oldLinked: Row = {
+      item_id: "call-long", tool_call_id: "call-long", kind: "tool", tool_name: "delegate_task",
+      status: "visible", version: 1, tokens_display: "—", manageable: false, timeline_index: 5,
+    };
+    const merged = mergeLinkedParentRows(serverRows, [oldLinked, ...newer], scopes, parent);
+    expect(merged).toHaveLength(1002);
+    expect(merged[1001]).toMatchObject({
+      tool_call_id: "call-long", tool_name: "delegate_task", item_id: null, manageable: false,
+    });
   });
 });
 

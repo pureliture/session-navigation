@@ -64,7 +64,7 @@ export function utf8ByteLength(text: string): number {
 }
 
 /**
- * Stable React key for an outline row. Fallback (hermes/linked) rows have
+ * Stable React key for an outline row. Fallback (hermes) rows have
  * `item_id: null` and often an empty `tool_call_id`, so `item_id ??
  * tool_call_id` collapses many rows to the same `""` key (duplicate-key
  * warnings, multi-row highlight). Fall back to `timeline_index`, then to the

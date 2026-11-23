@@ -245,21 +245,17 @@ manage_context({tool_call_ids: ["selected-id-1", "selected-id-2"], action: "hide
 
 ### Subagent support
 
-| Provider | Paseo outline and controls |
-| --- | --- |
-| OMP via Paseo | Child tab following and expandable inline child outlines under the parent task; Hide/Unhide/Summarize use each child's scope and capabilities. **Open tab** focuses or opens the native child tab. |
-| Hermes via ACP | Expandable inline child outlines under `delegate_task`, with child-scoped Hide/Unhide/Summarize. No native child tab. Selecting a child row highlights it without navigating. |
-| Others, e.g. OpenCode Go; unregistered children | Display-only main outline and **subagent context is not managed**. Selecting a row opens the main agent and scrolls there. |
+The outline follows main sessions only. It does not render subagent child
+rows, inline child outlines, or **Open tab** actions. Parent `delegate_task`
+rows remain as ordinary tool rows with the parent's Hide/Unhide/Summarize
+controls. Subagent scopes stay registered server-side for session binding,
+but no subagent UI is offered.
 
-Active-session tracking on mobile/compact layouts and child-tab identification/opening
-rely on guarded **Paseo 0.15.3 runtime/UI internals** isolated in `client/hostCompat.ts`.
-Known untested host versions, ambiguous/malformed tabs, or missing registrations fall
-back safely to the session chooser or parent/inline outlines. Paseo-spawned subagents
-that register their own adapter scope display their own outline rather than their
-parent's. When version metadata is absent on web, the guarded DOM shape is required; no
-public SDK active-tab or child-target API exists in 0.15.3. If opening a child tab
-fails, the inline outline remains available. Children have separate state; navigation
-tools/guidance/reminders are not exposed to them by default.
+Active-session tracking on mobile/compact layouts
+relies on guarded **Paseo 0.15.3 runtime/UI internals** isolated in `client/hostCompat.ts`.
+Known untested host versions or ambiguous/malformed tabs fall
+back safely to the session chooser. When version metadata is absent on web, the guarded DOM shape is required; no
+public SDK active-tab API exists in 0.15.3.
 See [backend evidence](docs/subagent-backend-verification.md).
 
 - Original host history remains intact; only the request copy changes. **Hide is not a permanent deletion or secret-erasure feature.**

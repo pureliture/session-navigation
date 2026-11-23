@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import { Pressable, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import type { Row } from "../shared/sessionNav";
 import { actionAllowed, type Capabilities } from "./capabilities";
-import type { ChildScope } from "./subagents";
 import {
   groupBadgeText,
   groupEyeAction,
@@ -33,7 +32,7 @@ export const SUMMARIZE_SVG =
 export const SUMMARIZE_SLASHED_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 2.5v5.2"/><path d="m5.7 5.2 2.8 2.8 2.8-2.8"/><path d="M3 12h11.5"/><path d="M8.5 21.5v-5.2"/><path d="m5.7 18.8 2.8-2.8 2.8 2.8"/><path d="M18.5 2.5 19.6 5.4 22.5 6.5 19.6 7.6 18.5 10.5 17.4 7.6 14.5 6.5 17.4 5.4Z"/><path d="m2 2 20 20"/></svg>';
 
-export const EMPTY_LINKED_CHILDREN: readonly ChildScope[] = [];
+
 
 export function ActionSvgIcon({
   kind,
@@ -85,18 +84,15 @@ export type MemoGroupBlockProps = {
   isSelected: boolean;
   isExpanded: boolean;
   isPending: boolean;
-  displayOnly: boolean;
   resolvedScopeKey: string | null;
   capabilities: Capabilities | undefined;
   compact: boolean;
   hasDocument: boolean;
   theme: PluginAgentPanelProps["theme"];
   styles: any;
-  linkedChildren: readonly ChildScope[];
   onPressRow: (row: Row) => void;
   onToggleGroup: (groupId: string, currentlyExpanded: boolean) => void;
   onGroupBatch: (group: Extract<OutlineRow, { type: "group" }>, action: "hide" | "summarize" | "unhide") => void;
-  renderLinkedChildren?: (children: readonly ChildScope[]) => any;
 };
 
 export const MemoGroupBlock = memo(function MemoGroupBlock({
@@ -104,18 +100,15 @@ export const MemoGroupBlock = memo(function MemoGroupBlock({
   isSelected,
   isExpanded,
   isPending,
-  displayOnly,
   resolvedScopeKey,
   capabilities,
   compact,
   hasDocument,
   theme,
   styles,
-  linkedChildren,
   onPressRow,
   onToggleGroup,
   onGroupBatch,
-  renderLinkedChildren,
 }: MemoGroupBlockProps) {
   const eyeAction = groupEyeAction(group);
   const noRemainingManageableVisible = group.allHidden || group.allManageableHidden;
@@ -185,7 +178,7 @@ export const MemoGroupBlock = memo(function MemoGroupBlock({
           </View>
 
           <View style={styles.rowRightWrap}>
-            {!displayOnly && resolvedScopeKey && group.children.some((row) => actionAllowed(row, capabilities, row.status === "hidden" ? "unhide" : "hide") || actionAllowed(row, capabilities, "summarize")) ? (
+            {resolvedScopeKey && group.children.some((row) => actionAllowed(row, capabilities, row.status === "hidden" ? "unhide" : "hide") || actionAllowed(row, capabilities, "summarize")) ? (
               <View style={[styles.actionsContainer, isPending ? { opacity: 0.5 } : null]}>
                 {noRemainingManageableVisible ? (
                   <Pressable
@@ -258,7 +251,6 @@ export const MemoGroupBlock = memo(function MemoGroupBlock({
           </Text>
         </View>
       </Pressable>
-      {!isExpanded && linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
     </View>
   );
 });
@@ -268,7 +260,6 @@ export type MemoRowProps = {
   isSelected: boolean;
   isExpanded: boolean;
   isPending: boolean;
-  displayOnly: boolean;
   resolvedScopeKey: string | null;
   capabilities: Capabilities | undefined;
   lastActionMode: "hide" | "summarize" | undefined;
@@ -276,13 +267,11 @@ export type MemoRowProps = {
   hasDocument: boolean;
   theme: PluginAgentPanelProps["theme"];
   styles: any;
-  linkedChildren: readonly ChildScope[];
   onPressRow: (row: Row) => void;
   onToggleGroup: (groupId: string, currentlyExpanded: boolean) => void;
   onHideRow: (row: Row, mode: "hide" | "summarize") => void;
   onUnhideRow: (row: Row) => void;
   onGroupBatch: (group: Extract<OutlineRow, { type: "group" }>, action: "hide" | "summarize" | "unhide") => void;
-  renderLinkedChildren?: (children: readonly ChildScope[]) => any;
 };
 
 function formatShortCallId(callId: string): string {
@@ -294,7 +283,6 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
   isSelected,
   isExpanded,
   isPending,
-  displayOnly,
   resolvedScopeKey,
   capabilities,
   lastActionMode,
@@ -302,16 +290,14 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
   hasDocument,
   theme,
   styles,
-  linkedChildren,
   onPressRow,
   onToggleGroup,
   onHideRow,
   onUnhideRow,
   onGroupBatch,
-  renderLinkedChildren,
 }: MemoRowProps) {
   const renderMessageHideToggle = (row: Row) => {
-    if (displayOnly || !resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
+    if (!resolvedScopeKey || !row.item_id?.startsWith("msg:")) return null;
     const hidden = row.status === "hidden";
     const iconSize = compact ? 13 : 14;
     return (
@@ -347,7 +333,7 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
   };
 
   const renderToolActionButtons = (row: Row, isHidden: boolean, summarized: boolean, iconSize: number) => {
-    if (displayOnly || !resolvedScopeKey || row.manageable === false) return null;
+    if (!resolvedScopeKey || row.manageable === false) return null;
     return (
       <View style={styles.actionsContainer}>
         {isHidden ? (
@@ -416,18 +402,15 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
         isSelected={isSelected}
         isExpanded={isExpanded}
         isPending={isPending}
-        displayOnly={displayOnly}
         resolvedScopeKey={resolvedScopeKey}
         capabilities={capabilities}
         compact={compact}
         hasDocument={hasDocument}
         theme={theme}
         styles={styles}
-        linkedChildren={linkedChildren}
         onPressRow={onPressRow}
         onToggleGroup={onToggleGroup}
         onGroupBatch={onGroupBatch}
-        renderLinkedChildren={renderLinkedChildren}
       />
     );
   }
@@ -465,7 +448,6 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
               {renderMessageSnippet(row, "(empty prompt)")}
             </View>
           </Pressable>
-          {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
         </View>
       );
     }
@@ -508,7 +490,6 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
               {renderMessageSnippet(row, "(empty response)")}
             </View>
           </Pressable>
-          {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
         </View>
       );
     }
@@ -582,7 +563,6 @@ export const MemoOutlineRowItem = memo(function MemoOutlineRowItem({
           )}
         </View>
       </Pressable>
-      {linkedChildren.length > 0 && renderLinkedChildren ? renderLinkedChildren(linkedChildren) : null}
     </View>
   );
 });

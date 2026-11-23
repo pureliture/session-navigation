@@ -10,10 +10,9 @@ Session navigation **아웃라인 본체**의 수동 검증을 재현 가능하�
 
 - **본 문서 = 아웃라인 본체 QA.** 세션 목록/아웃라인 행의 클릭 이동, 상단 older 페이징,
   display:none 리텐션, 헤더 ↻ 리프레시, 실시간 추적을 다룬다.
-- [`docs/subagent-panel-verification.md`](subagent-panel-verification.md) = **서브에이전트 전용**
-  (Step 6c). Paseo 패널의 자식 아웃라인, 부모-자식 링크, inline 확장, Hide/Unhide 같은
-  자식 스코프 동작을 검증한다. 자식 세션의 바인딩/스코프/오프너 문제는 그 문서로 분류하고,
-  여기서는 다루지 않는다.
+- [`docs/subagent-panel-verification.md`](subagent-panel-verification.md) = **서브에이전트 전용 검증 기록(보관용).**
+  2026-11-23 제거 전 Step 6c의 Paseo 패널 자식 아웃라인 검증을 기록한다. 현재 아웃라인은
+  메인 세션만 표시하며 자식 행·inline 확장·Open tab을 제공하지 않는다.
 - [`docs/spec.md`](spec.md) D10·Outline rows가 UI 배치/행 정책의 기준이며,
   [`docs/README.ko.md`](README.ko.md)가 사용자용 진입 경로 기준이다.
 
@@ -115,9 +114,8 @@ CDP 실화면 DOM 덤프로 확인). 기대 결과의 수치·ID는 아래 4절�
 1. `setSelectedId(rowKey)`.
 2. 프리뷰 열림 결정 → `setHighlightedId`, 필요 시 `openPreviewDrawer()`.
 3. `hasDocument`가 없으면 종료(패널만 갱신).
-4. active child면 OMP 자식 탭 오픈 후 `visibleOnly` 스크롤(자식 문제는 subagent 문서로 분류).
-5. displayOnly면 `navigation.openAgent`로 메인 탭을 연 뒤 스크롤.
-6. 일반 경로는 `scrollToMessageInChat` 호출. `onStart`가 지난 `Not loaded in chat` 노티스를
+4. (2026-11-23 제거됨) 자식 탭 오픈·displayOnly 분기는 삭제됐다. 모든 행은 메인 세션 기준으로 스크롤한다.
+5. 일반 경로는 `scrollToMessageInChat` 호출. `onStart`가 지난 `Not loaded in chat` 노티스를
    지우고, `onNotFound`가 같은 리터럴을 다시 세팅한다.
 `chatNavigation.ts` 내부 순서: identity 매칭 → 마운트 윈도우/행 노드 탐색 → `getHistory` →
 60s deadline 루프에서 `seekMountedWindow` 반복 → 대상 노드 스크롤 또는 실패 콜백.

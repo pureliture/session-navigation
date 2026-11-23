@@ -395,7 +395,6 @@ export function buildFallbackTimelineRows(entries: readonly any[]): Row[] {
   }
   return result;
 }
-
 export function mergeLinkedParentRows(
   rows: Row[],
   timeline: Row[],

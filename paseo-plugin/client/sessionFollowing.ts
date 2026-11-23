@@ -228,15 +228,11 @@ export function acceptWorkspaceAgentId({ agentId, workspaceCandidateIds, agentWo
   return "unknown";
 }
 
-export function selectMainOrFallbackAgent({ tab, managed, fallback, followVisible, resolvedTarget, lastMainAgentId }: {
+export function selectMainOrFallbackAgent({ tab, followVisible, resolvedTarget }: {
   tab: SessionTab | null;
-  managed: boolean;
-  fallback: { agentId: string | null; subagent: boolean };
   followVisible: boolean;
   resolvedTarget: string | null;
-  lastMainAgentId: string | null;
-}): { agentId: string | null; subagentFallback: boolean; inView: boolean } {
-  const useFallback = fallback.subagent && !managed;
-  const agentId = tab?.kind === "provider_subagent" ? tab.parentAgentId : useFallback ? (fallback.agentId ?? lastMainAgentId) : tab?.kind === "agent" && followVisible ? tab.agentId : resolvedTarget;
-  return { agentId, subagentFallback: useFallback, inView: !!agentId || useFallback };
+}): { agentId: string | null; inView: boolean } {
+  const agentId = tab?.kind === "agent" && followVisible ? tab.agentId : resolvedTarget;
+  return { agentId, inView: !!agentId };
 }

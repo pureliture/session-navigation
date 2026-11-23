@@ -254,20 +254,17 @@ manage_context({tool_call_ids: ["선택한-id-1", "선택한-id-2"], action: "hi
 
 ### Subagent 지원
 
-| 제공자 | Paseo outline 및 조작 |
-| --- | --- |
-| Paseo의 OMP | 자식 탭을 따라가며 부모 task 아래에서도 자식 outline을 펼칠 수 있습니다. Hide/Unhide/Summarize는 자식별 scope와 capability를 사용합니다. **Open tab**으로 네이티브 자식 탭을 열거나 선택합니다. |
-| ACP의 Hermes | `delegate_task` 아래에서 자식 outline을 펼쳐 Hide/Unhide/Summarize를 사용합니다. 네이티브 자식 탭은 없으며 자식 행 선택은 강조만 합니다. |
-| OpenCode Go 등 기타 제공자, 미등록 자식 | 읽기 전용 main outline과 **subagent context is not managed** 안내를 표시합니다. 행을 선택하면 main agent를 열고 해당 위치로 이동합니다. |
+아웃라인은 메인 세션만 따라갑니다. 서브에이전트 자식 행, 인라인 자식 아웃라인,
+**Open tab** 동작을 표시하지 않습니다. 부모 `delegate_task` 행은 부모의
+Hide/Unhide/Summarize 조작을 그대로 사용하는 일반 도구 행으로 남습니다.
+서브에이전트 scope는 세션 바인딩을 위해 서버에 계속 등록되지만, 서브에이전트 UI는 제공하지 않습니다.
 
-모바일/컴팩트 활성 세션 추적과 자식 탭 식별·열기는 `client/hostCompat.ts`에 격리된
-**Paseo 0.15.3 런타임/UI 내부 구조**에 의존합니다. 확인되지 않은 호스트 버전, 모호하거나
-잘못된 탭 정보, 미등록 자식은 세션 선택기나 부모/inline outline 등 안전한 fallback으로
-전환합니다. 자체 어댑터 scope가 등록된 Paseo 생성 서브에이전트는 부모가 아닌 자신의
-outline을 표시합니다. 웹에서 버전 메타데이터가 없으면 엄격한 DOM 구조 검사를 적용하며,
-0.15.3 공개 SDK에는 활성 탭·자식 탭 식별 API가 없습니다. 탭 열기가 실패해도 inline outline은
-계속 사용할 수 있습니다. 자식은 별도 상태를 사용하며 기본적으로 navigation 도구·지침·
-reminder를 받지 않습니다. [백엔드 검증 근거](subagent-backend-verification.md)를 참고하세요.
+모바일/컴팩트 활성 세션 추적은 `client/hostCompat.ts`에 격리된
+**Paseo 0.15.3 런타임/UI 내부 구조**에 의존합니다. 확인되지 않은 호스트 버전이나 모호하거나
+잘못된 탭 정보는 세션 선택기 등 안전한 fallback으로
+전환합니다. 웹에서 버전 메타데이터가 없으면 엄격한 DOM 구조 검사를 적용하며,
+0.15.3 공개 SDK에는 활성 탭 식별 API가 없습니다.
+[백엔드 검증 근거](subagent-backend-verification.md)를 참고하세요.
 
 ## 구조
 

@@ -268,16 +268,17 @@ test("acceptWorkspaceAgentId guards against cross-workspace leaks", () => {
   expect(acceptWorkspaceAgentId({ agentId: "a" })).toBe("accept");
 });
 
-test("managed Paseo subagents stay on the child while unmanaged children fall back to the parent", () => {
-  expect(selectMainOrFallbackAgent({ tab: { kind: "agent", agentId: "child-omp" }, managed: true,
-    fallback: { agentId: "parent-omp", subagent: true }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
-    .toEqual({ agentId: "child-omp", subagentFallback: false, inView: true });
-  expect(selectMainOrFallbackAgent({ tab: { kind: "agent", agentId: "child-omp" }, managed: false,
-    fallback: { agentId: "parent-omp", subagent: true }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
-    .toEqual({ agentId: "parent-omp", subagentFallback: true, inView: true });
-  expect(selectMainOrFallbackAgent({ tab: { kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" }, managed: false,
-    fallback: { agentId: null, subagent: false }, followVisible: true, resolvedTarget: "target", lastMainAgentId: null }))
-    .toEqual({ agentId: "parent", subagentFallback: false, inView: true });
+test("visible-session follow tracks the focused agent tab and falls back to the resolved target", () => {
+  expect(selectMainOrFallbackAgent({ tab: { kind: "agent", agentId: "agent-1" },
+    followVisible: true, resolvedTarget: "target" }))
+    .toEqual({ agentId: "agent-1", inView: true });
+  expect(selectMainOrFallbackAgent({ tab: null, followVisible: true, resolvedTarget: "target" }))
+    .toEqual({ agentId: "target", inView: true });
+  expect(selectMainOrFallbackAgent({ tab: { kind: "agent", agentId: "agent-1" },
+    followVisible: false, resolvedTarget: "pinned" }))
+    .toEqual({ agentId: "pinned", inView: true });
+  expect(selectMainOrFallbackAgent({ tab: null, followVisible: true, resolvedTarget: null }))
+    .toEqual({ agentId: null, inView: false });
 });
 
 test("workspace header names the single-auto session instead of Follow visible session", () => {

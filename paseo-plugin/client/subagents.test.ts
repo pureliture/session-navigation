@@ -1,133 +1,25 @@
 import { expect, test } from "bun:test";
-import { focusedSessionTab, parseSessionTab } from "./hostCompat";
-import { selectMainOrFallbackAgent } from "./sessionFollowing";
-import { childrenForCall, hasMissingLinkedChildren, mergeHermesTimelineRows, mergeLinkedParentRows, resolveChildScope, scopeForAgent, subagentMainTarget } from "./subagents";
-import type { Row } from "../shared/sessionNav";
+import { childrenForCall, hasMissingLinkedChildren, linkedTimelineFetchNeeded, scopeForAgent } from "./subagents";
 
-test("linked delegate calls missing from adapter targets are display-only timeline rows, never fabricated targets", () => {
-  const parent = "hermes:default:parent:unknown";
-  const scopes = [{ scope_key: "hermes:default:child:unknown", parent_scope: parent, tool_call_id: "delegate", subagent_id: "sa-1" }];
-  const row: Row = { tool_call_id: "delegate", item_id: "native", kind: "tool", tool_name: "execute", status: "visible", version: 1, tokens_display: "—" };
-  expect(mergeLinkedParentRows([], [row], scopes, parent)).toEqual([{ ...row, item_id: null, tool_name: "delegate_task", manageable: false }]);
-  expect(mergeLinkedParentRows([row], [row], scopes, parent)).toEqual([row]);
-  expect(mergeLinkedParentRows([], [], scopes, parent)).toEqual([]);
-  expect(mergeLinkedParentRows([], [row], [], parent)).toEqual([]);
-  expect(mergeLinkedParentRows([], [{ ...row, tool_call_id: "unrelated" }], scopes, parent)).toEqual([]);
-});
-
-test("mergeHermesTimelineRows preserves chronological User/Assistant rows while upgrading matching tool calls to manageable SQLite items", () => {
-  const scope = "hermes:atlas:local-123:unknown";
-  const managedTool: Row = {
-    item_id: "item_abc",
-    tool_call_id: "call_1",
-    kind: "tool",
-    tool_name: "terminal",
-    status: "visible",
-    version: 1,
-    tokens_display: "—",
-    manageable: true,
-    bytes_size: 4096,
-    summary_line: "kubectl get pods",
-  };
-  const timeline: Row[] = [
-    { item_id: "u1", tool_call_id: "u1", kind: "user", tool_name: "user", status: "visible", version: 1, tokens_display: "—", summary_line: "상태 확인해줘" },
-    { item_id: "call_1", tool_call_id: "call_1", kind: "tool", tool_name: "execute", status: "visible", version: 1, tokens_display: "—", manageable: false },
-    { item_id: "call_2", tool_call_id: "call_2", kind: "tool", tool_name: "agent_message", status: "visible", version: 1, tokens_display: "—", manageable: false },
-    { item_id: "a1", tool_call_id: "a1", kind: "assistant", tool_name: "assistant", status: "visible", version: 1, tokens_display: "—", summary_line: "**정상입니다.**" },
-  ];
-  const merged = mergeHermesTimelineRows([managedTool], timeline, [], scope);
-  expect(merged).toHaveLength(4);
-  expect(merged[0]).toMatchObject({ kind: "user", item_id: null, manageable: false, summary_line: "상태 확인해줘" });
-  expect(merged[1]).toEqual(managedTool);
-  expect(merged[2]).toMatchObject({ kind: "tool", tool_call_id: "call_2", item_id: null, manageable: false });
-  expect(merged[3]).toMatchObject({ kind: "assistant", item_id: null, manageable: false, summary_line: "**정상입니다.**" });
-});
-
-test("scope binding is exact and refuses ambiguous or unsupported provider children", () => {
-  const tab = { kind: "provider_subagent", parentAgentId: "parent", subagentId: "Bird" } as const;
+test("scope binding is exact and refuses ambiguous matches", () => {
   const parent = { scope_key: "omp:default:parent:default", agent_id: "parent" };
   const child = { scope_key: "omp:default:child:default", parent_scope: parent.scope_key, subagent_id: "Bird", tool_call_id: "task-call" };
   const scopes = [parent, child];
   expect(scopeForAgent(scopes, "parent")).toBe(parent.scope_key);
   expect(scopeForAgent([...scopes, { ...parent, scope_key: "omp:default:other:default" }], "parent")).toBeNull();
   expect(scopeForAgent([], "missing")).toBeNull();
-  expect(resolveChildScope(tab, parent.scope_key, scopes)).toEqual(child);
-  expect(resolveChildScope(tab, parent.scope_key, [parent])).toBeNull();
-  expect(resolveChildScope(tab, parent.scope_key, [...scopes, { ...child, scope_key: "omp:default:duplicate:default" }])).toBeNull();
-  expect(resolveChildScope({ ...tab, subagentId: "Other" }, parent.scope_key, scopes)).toBeNull();
-  expect(resolveChildScope({ kind: "unresolved_subagent" }, parent.scope_key, scopes)).toBeNull();
-  expect(resolveChildScope(tab, "opencode:default:parent:default", scopes)).toBeNull();
+  expect(scopeForAgent([{ scope_key: "pi:default:agent-1:default" }], "agent-1")).toBe("pi:default:agent-1:default");
+  expect(scopeForAgent([{ scope_key: "paseo:default:agent-1:default" }], "agent-1")).toBe("paseo:default:agent-1:default");
+});
+
+test("childrenForCall matches exact linked calls and refuses anything else", () => {
+  const parent = { scope_key: "omp:default:parent:default", agent_id: "parent" };
+  const child = { scope_key: "omp:default:child:default", parent_scope: parent.scope_key, subagent_id: "Bird", tool_call_id: "task-call" };
+  const scopes = [parent, child];
   expect(childrenForCall(scopes, parent.scope_key, "task-call")).toEqual([child]);
   expect(childrenForCall(scopes, parent.scope_key, "unrelated")).toEqual([]);
   const hermes = { ...child, scope_key: "hermes:default:child:unknown", parent_scope: "hermes:default:parent:unknown" };
   expect(childrenForCall([hermes], hermes.parent_scope, "task-call")).toEqual([hermes]);
-});
-
-const providerTab = "workspace-tab-provider_subagent_36_c7e0cdbf-afd3-4fec-8d4f-028d234bdf09_13_AmusedWarbler";
-test("reads the live OMP provider-internal tab without treating its child ID as a Paseo agent", () => {
-  expect(parseSessionTab(providerTab)).toEqual({ kind: "provider_subagent", parentAgentId: "c7e0cdbf-afd3-4fec-8d4f-028d234bdf09", subagentId: "AmusedWarbler" });
-  expect(parseSessionTab("workspace-tab-provider_subagent_3_a_b_3_c_d")).toEqual({ kind: "provider_subagent", parentAgentId: "a_b", subagentId: "c_d" });
-  expect(parseSessionTab("workspace-tab-agent_child")).toEqual({ kind: "agent", agentId: "child" });
-});
-
-test.each(["", "workspace-tab-agent_", "workspace-tab-files", "workspace-tab-provider_subagent_0__1_c",
-  "workspace-tab-provider_subagent_01_a_1_c", "workspace-tab-provider_subagent_5_a_1_c", "workspace-tab-provider_subagent_1_a_1_c_trailing",
-  "workspace-tab-provider_subagent_99999999999999999999_a_1_c"])("refuses malformed or non-session targets: %s", (value) => {
-  expect(parseSessionTab(value)).toBeNull();
-});
-
-test("focused tab discovery ignores mounted hidden tabs and never guesses ambiguous panes", () => {
-  const node = (id: string, visible = true) => ({ getAttribute: () => id, getClientRects: () => visible ? [{}] : [] });
-  const doc = (nodes: any[]) => ({ querySelectorAll: () => nodes });
-  expect(focusedSessionTab(doc([node("workspace-tab-agent_other", false), node(providerTab)]))?.kind).toBe("provider_subagent");
-  expect(focusedSessionTab(doc([node("workspace-tab-agent_a"), node(providerTab)]))).toEqual({ kind: "unresolved_subagent" });
-  expect(focusedSessionTab(doc([node("workspace-tab-provider_subagent_invalid")]))).toEqual({ kind: "unresolved_subagent" });
-  expect(focusedSessionTab(doc([]))).toBeNull();
-  expect(focusedSessionTab(undefined)).toBeNull();
-});
-
-test("provider child fallback resolves the actual parent's root, not a previous visible or pinned agent", async () => {
-  const calls: string[] = [];
-  expect(await subagentMainTarget({ kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" }, async (id) => {
-    calls.push(id); return id === "parent" ? "main" : null;
-  })).toEqual({ agentId: "main", subagent: true });
-  expect(calls).toEqual(["parent", "main"]);
-});
-
-test("SDK child snapshots follow parentAgentId while ordinary main, empty and non-session tabs retain normal following", async () => {
-  expect(await subagentMainTarget({ kind: "agent", agentId: "child" }, async (id) => id === "child" ? "main" : null))
-    .toEqual({ agentId: "main", subagent: true });
-  expect(await subagentMainTarget({ kind: "agent", agentId: "main" }, async () => null)).toEqual({ agentId: null, subagent: false });
-  expect(await subagentMainTarget(null, async () => { throw new Error("must not load"); })).toEqual({ agentId: null, subagent: false });
-  expect(await subagentMainTarget({ kind: "unresolved_subagent" }, async () => { throw new Error("must not guess"); }))
-    .toEqual({ agentId: null, subagent: true });
-});
-
-test("missing parents and cycles fail closed instead of displaying another scope", async () => {
-  const tab = { kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" } as const;
-  expect(await subagentMainTarget(tab, async () => { throw new Error("offline"); })).toEqual({ agentId: null, subagent: true });
-  expect(await subagentMainTarget(tab, async (id) => id === "parent" ? "other" : "parent")).toEqual({ agentId: null, subagent: true });
-});
-
-test("Paseo-orchestrated OMP subagents with their own registered scope keep their own outline instead of parent fallback", async () => {
-  const tab = { kind: "agent", agentId: "paseo-omp-child" } as const;
-  const scopes = [
-    { scope_key: "omp:default:parent-sid:default", agent_id: "paseo-omp-parent" },
-    { scope_key: "omp:default:child-sid:default", agent_id: "paseo-omp-child" },
-  ];
-  const fallback = await subagentMainTarget(tab, async (id) => (id === "paseo-omp-child" ? "paseo-omp-parent" : null));
-  expect(fallback).toEqual({ agentId: "paseo-omp-parent", subagent: true });
-  const managed = scopes.some((scope) => scope.agent_id === tab.agentId);
-  const routedManaged = selectMainOrFallbackAgent({
-    tab,
-    managed,
-    fallback,
-    followVisible: true,
-    resolvedTarget: null,
-    lastMainAgentId: "previous",
-  });
-  expect(routedManaged).toEqual({ agentId: "paseo-omp-child", subagentFallback: false, inView: true });
-  expect(scopeForAgent(scopes, routedManaged.agentId ?? "")).toBe("omp:default:child-sid:default");
 });
 
 test("rotation fallback matches h-new subagent children while the panel addresses h-old", () => {
@@ -159,4 +51,19 @@ test("hasMissingLinkedChildren ignores server-owned rows and rotation-moved in-f
   // No linked children at all.
   expect(hasMissingLinkedChildren([], [], oldParent)).toBe(false);
   expect(hasMissingLinkedChildren([], [{ scope_key: "hermes:default:x:unknown", parent_scope: oldParent }], oldParent)).toBe(false);
+});
+
+test("linkedTimelineFetchNeeded fetches only for resolved scopes with server-missing linked rows", () => {
+  const scope = "omp:default:parent:default";
+  const linked = [{ scope_key: "omp:default:child:default", parent_scope: scope, tool_call_id: "call-1", subagent_id: "Bird" }];
+  // Linked call missing from the server list: fetch the merge source.
+  expect(linkedTimelineFetchNeeded(true, scope, [], linked)).toBe(true);
+  // No linked targets: ordinary server sessions trigger no additional reads.
+  expect(linkedTimelineFetchNeeded(true, scope, [], [])).toBe(false);
+  expect(linkedTimelineFetchNeeded(true, scope, [{ tool_call_id: "other" }], linked)).toBe(true);
+  // Server already owns every linked row.
+  expect(linkedTimelineFetchNeeded(true, scope, [{ tool_call_id: "call-1" }], linked)).toBe(false);
+  // List not loaded or scope unresolved: nothing to merge against.
+  expect(linkedTimelineFetchNeeded(false, scope, [], linked)).toBe(false);
+  expect(linkedTimelineFetchNeeded(true, null, [], linked)).toBe(false);
 });
