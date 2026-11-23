@@ -52,13 +52,13 @@ OMP와 DeepSeek Flash를 사용해 작은 API를 검토하는 Paseo 세션입니
 **대화 위치로 이동:** outline의 행을 선택하면 첫 프롬프트를 포함한 해당 메시지로 이동합니다.
 [MP4 보기](media/outline-jump.mp4).
 
-![Jump from the health-check review back to the first prompt](media/outline-jump.gif)
+https://github.com/user-attachments/assets/c62c89f8-5fa4-42bb-9558-c8e1d401f289
 
 **완료한 도구 그룹 숨기기와 복원:** 하단에 다음 요청의 예상 감소량을 표시합니다.
 Unhide는 도구를 다시 실행하지 않고 원본을 복원합니다. `next ≈`는 새로 측정한
 컨텍스트 사용량이 아닌 추정치입니다. [MP4 보기](media/hide-restore.mp4).
 
-![Hide and restore a tool group with the next-request estimate](media/hide-restore.gif)
+https://github.com/user-attachments/assets/2150dbbb-d2a3-433e-8b30-c31101646183
 
 <details>
 <summary>스크린샷 더 보기: Hide, Preview, 빈 상태</summary>
@@ -335,20 +335,39 @@ submodule에 보관합니다. 일반 설치·테스트에는 필요하지 않습
 
 **기록 삭제 없이 컨텍스트를 줄이는 기능이며, 더 똑똑한 답변을 보장하지 않습니다.**
 
-- 캡처한 실행에서 도구 결과는 outgoing prompt 토큰의 약 **70–81%**였습니다.
-  JetBrains/TUM의 별도 SWE-agent 표본은 약
-  [84% observation 토큰](https://kairos.jetbrains.com/research/articles/the-complexity-trap)을
-  보고하지만 모집단이 다릅니다. [측정 방법](evaluation/context-share.md).
-- **16셀 DeepSeek 평가 (미사용 Off 대 사용 On; OMP + Hermes, 25턴 자율 장기 세션 8개 + 3턴 컴포넌트 8개):** 플러그인 사용 시 장기 세션 **8/8 전 세션(100%)** 이 자율 정리를 수행해 관측된 일회성 불필요 출력의 **96.3% (182/189)** 를 **78회** 경계에서 정리하면서, 과제·정규 코드 테스트·회상·돌발 복구 **8/8 통과**, 컴포넌트 Hide **12/12**·Summarize **12/12** 사실 보존, 원본 불일치 **0건**(235건 검증)을 유지했습니다. 플러그인 미사용(`A`) 대비 총 입력 토큰 **12.7% 감소**(`23.21M → 20.27M`), Uncached 입력 토큰 **20.5% 감소**(`3.21M → 2.55M`, 캐시 적중률 **87.4%**), 출력 토큰 **51.5% 감소**(`287,668 → 139,519`), Hermes 호스트 비가역 강제 압축 **28회 → 4회(−85.7%)**, **동일 단가 기준** 8세션 합산 비용 **27.2% 절감**(`$0.589 → $0.429`, `$0.120/M` 현단가 기준; `$0.006/M` 구단가 기준 **38.1% 절감** `$0.223 → $0.138`; GPT-4.1 환산 기준 **19.5% 절감**)을 기록했습니다. [전체 보고서 및 과거 버전별 비교표](evaluation/results-v4-current.md#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-16-8dc53fe).
-- **>300 KiB 12단계 연속 커맨드 Summarize 맞비교:** 단일 >32 KiB 출력 3건을 포함한 `332.9 KiB` 연속 시퀀스에서 B+A 하이브리드 시퀀스 요약은 `input_too_large` 차단 없이 **3회** 롤링 청크 호출(**6.3초**)로 **12/12건 전량 요약(`332.9 KiB → 5.9 KiB`, `98.2%` 감소, 요약 비용 `-50.2%`)** 에 성공했습니다(구버전 개별 요약은 3건 차단·1/12건만 적용되어 `311.8 KiB` 잔류).
-- **합성 focus replay:** prompt 토큰은 약 **97–98%** 줄었으며 정확도 차이는 통계적으로
-  유의하지 않았습니다. 5개 seed에서 짧은 조건 **15/15 대 15/15**, 긴 조건
-  **Hide 14/15 대 RAW 15/15**였습니다. 한 실패는 답변 대신 복원을 시도했습니다.
-  숨김으로만 남은 세부사항은 복원 없이 **0/30**이므로 필요하면 Unhide해야 합니다.
-  [전체 결과와 통계](evaluation/results-focus.md).
-- **실제 OMP, native compaction 없음:** **3/3 대 3/3**, B의 총 prompt 토큰은
-  **54% 감소**했습니다. 작은 자율 실행 비교는 **인과적 근거가 아니며** B 세션 중
-  2개만 실제 정리했습니다. [실제 결과](evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled).
+### 플러그인 미사용 vs 사용
+
+최신 [DeepSeek 평가](evaluation/results-v4-current.md#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-16-8dc53fe)는 OMP와 Hermes에서 25턴 자율 장기 세션 8개와 3턴 컴포넌트 시험 8개를 실행했습니다. 아래는 **장기 세션 8개**의 미사용(`A`)과 사용(`B`) 비교입니다.
+
+| 지표 | 미사용 (`A`) | 사용 (`B`) | 변화 |
+|---|---:|---:|---:|
+| 총 prompt 토큰 | 23.21M | 20.27M | **−12.7%** |
+| 캐시되지 않은 입력 토큰 | 3.21M | 2.55M | **−20.5%** |
+| 출력 토큰 | 287,668 | 139,519 | **−51.5%** |
+| Hermes 비가역 native compaction | 28회 | 4회 | **−85.7%** |
+| 비용: 캐시되지 않은 입력 $0.120/M | $0.589 | $0.429 | **−27.2%** |
+| 비용: 캐시되지 않은 입력 $0.006/M | $0.223 | $0.138 | **−38.1%** |
+
+양쪽 비용은 각각 **동일 단가**로 계산했습니다. GPT-4.1 기준 단가로 환산하면 19.5% 감소했으며, 플러그인 사용 시 캐시 적중률은 87.4%였습니다.
+
+| 플러그인 사용 시 검증 | 결과 |
+|---|---:|
+| 자율 정리를 수행한 세션 | **8/8** |
+| 정리한 일회성 출력 | **182/189 (96.3%)**, 정리 경계 78회 |
+| 과제·회상·돌발 복구·정규 코드 테스트 | 각각 **8/8** 통과 |
+| 컴포넌트 사실 보존 | Hide **12/12**; Summarize **12/12** |
+| 저장된 원본 불일치 | **0/235** 검증 건 |
+
+### 그 밖의 측정
+
+| 실험 | 결과 | 범위와 한계 |
+|---|---|---|
+| 도구 결과 비중 | outgoing prompt 토큰의 **70–81%** | 캡처한 실행만 해당합니다. [측정 방법](evaluation/context-share.md). JetBrains/TUM의 [84% observation 토큰](https://kairos.jetbrains.com/research/articles/the-complexity-trap)은 다른 모집단의 결과입니다. |
+| 연속 시퀀스 Summarize | **332.9 → 5.9 KiB (−98.2%)**, 12/12건 요약 | 32 KiB 초과 출력 3건을 포함한 12단계 시퀀스 1개: 롤링 청크 LLM 호출 3회, 6.3초, 요약 비용 50.2% 감소. 개별 요약은 1/12건 적용, 3건 `input_too_large` 차단, 311.8 KiB 잔류. |
+| 합성 focus replay | prompt 토큰 **97–98% 감소** | seed 5개; 짧은 조건 정확도 15/15 대 15/15, 긴 조건 Hide 14/15 대 RAW 15/15. 숨긴 곳에만 있는 정보는 복원 없이 0/30. 정확도 차이는 통계적으로 유의하지 않음. [결과와 한계](evaluation/results-focus.md). |
+| 실제 OMP, native compaction 비활성화 | B의 총 prompt 토큰 **54% 감소**; 3/3 대 3/3 | B 세션 3개 중 2개만 정리했으며 작은 자율 실행 비교는 **인과적 근거가 아닙니다**. [실제 결과](evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled). |
+
+합성 실험의 한 실패는 답변 대신 복원을 시도했습니다. 숨긴 곳에만 남은 정보는 Unhide해야 다시 사용할 수 있습니다.
 
 원본은 보존하며 규칙 Hide는 핵심 행을 남깁니다. Unhide는 도구 재실행 없이 원본을 복원합니다.
 OMP·Hermes·Paseo에서 사용자 제어/Preview를 제공하지만 정보 보존이 완전한 회상을 뜻하지는 않습니다.

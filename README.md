@@ -46,11 +46,11 @@ A Paseo session reviewing a small API with OMP and DeepSeek Flash. The outline s
 
 **Jump through the conversation:** select an outline row to return to its message, including the first prompt. [Watch MP4](docs/media/outline-jump.mp4).
 
-![Jump from the health-check review back to the first prompt](docs/media/outline-jump.gif)
+https://github.com/user-attachments/assets/c62c89f8-5fa4-42bb-9558-c8e1d401f289
 
 **Hide and restore a completed tool group:** the footer estimates the reduction in the next request. Unhide restores originals without rerunning tools. `next ≈` is an estimate, not a new measured context reading. [Watch MP4](docs/media/hide-restore.mp4).
 
-![Hide and restore a tool group with the next-request estimate](docs/media/hide-restore.gif)
+https://github.com/user-attachments/assets/2150dbbb-d2a3-433e-8b30-c31101646183
 
 <details>
 <summary>More screenshots: Hide, Preview, and the empty state</summary>
@@ -343,11 +343,39 @@ Evaluation methods and summaries are public, but raw run artifacts are stored in
 
 **Less context, without deleting history—not a claim of smarter answers.**
 
-- Tool results accounted for roughly **70–81% of outgoing prompt tokens** in our captured runs. For external context, JetBrains/TUM reports approximately [84% observation tokens](https://kairos.jetbrains.com/research/articles/the-complexity-trap) in its SWE-agent sample; the populations differ. [Measurement details](docs/evaluation/context-share.md).
-- **16-cell DeepSeek evaluation (plugin off vs on; OMP + Hermes, eight 25-turn autonomous sessions + eight 3-turn component trials):** with the plugin enabled, all **8/8** long sessions cleaned autonomously (**96.3%, 182/189** of observed disposable outputs across **78** boundaries) while maintaining **8/8** task, recall, surprise-recovery, and canonical code-test pass rates, **12/12** Hide and **12/12** Summarize component fact retention, and **zero** stored-original mismatches (235 verified records). Compared with plugin-off (`A`), total prompt tokens fell **12.7%** (`23.21M → 20.27M`), uncached input tokens fell **20.5%** (`3.21M → 2.55M`, **87.4%** cache hit), output tokens fell **51.5%** (`287,668 → 139,519`), Hermes native irreversible compactions dropped **28 → 4 (−85.7%)**, and **same-tariff** 8-session cost decreased **27.2%** (`$0.589 → $0.429` at `$0.120/M` uncached input; **−38.1%**, `$0.223 → $0.138` at `$0.006/M`; **−19.5%** under GPT-4.1 reference pricing). [Full report and historical version tables](docs/evaluation/results-v4-current.md#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-16-8dc53fe).
-- **>300 KiB 12-step sequence Summarize benchmark:** on a 332.9 KiB causal investigation sequence containing three >32 KiB outputs, the B+A hybrid sequence summarizer applied **12/12** summaries in **3** rolling-chunk LLM calls (**6.3s**, **332.9 KiB → 5.9 KiB**, **98.2% reduction**, **−50.2%** summary cost), compared with **1/12** applied (**3** blocked by `input_too_large`, **311.8 KiB** remaining) under isolated per-item summarization.
-- **Synthetic focus replay:** rule-hidden histories used approximately **97–98% fewer prompt tokens**, with no statistically significant accuracy difference: short **15/15 vs 15/15**, long **14/15 Hide vs 15/15 RAW** (five seeds). The one miss attempted recovery instead of answering. Hidden-only details were **0/30 without recovery**; they must be unhidden to become available again. [Full results, paired statistics and caveats](docs/evaluation/results-focus.md).
-- **Live OMP, no native compaction:** **3/3 vs 3/3**, with **54% fewer aggregate B prompt tokens**. This small autonomous comparison is **not causal**; only two of three B sessions actually cleaned. [Live results](docs/evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled).
+### Plugin off vs on
+
+In the latest [DeepSeek evaluation](docs/evaluation/results-v4-current.md#autonomous-adoption-and-hybrid-sequence-summary-revalidation-2026-11-16-8dc53fe), eight 25-turn autonomous sessions ran across OMP and Hermes, alongside eight 3-turn component trials. The figures below compare the **eight long sessions** with the plugin off (`A`) and on (`B`).
+
+| Measure | Off (`A`) | On (`B`) | Change |
+|---|---:|---:|---:|
+| Total prompt tokens | 23.21M | 20.27M | **−12.7%** |
+| Uncached input tokens | 3.21M | 2.55M | **−20.5%** |
+| Output tokens | 287,668 | 139,519 | **−51.5%** |
+| Hermes irreversible native compactions | 28 | 4 | **−85.7%** |
+| Cost at $0.120/M uncached input | $0.589 | $0.429 | **−27.2%** |
+| Cost at $0.006/M uncached input | $0.223 | $0.138 | **−38.1%** |
+
+Costs compare both arms at the **same tariff**; GPT-4.1 reference pricing yields a 19.5% reduction. The plugin-on cache hit rate was 87.4%.
+
+| Plugin-on check | Result |
+|---|---:|
+| Sessions with autonomous cleanup | **8/8** |
+| Observed disposable outputs cleaned | **182/189 (96.3%)**, across 78 boundaries |
+| Task, recall, surprise recovery, and canonical code tests | **8/8** each |
+| Component fact retention | Hide **12/12**; Summarize **12/12** |
+| Stored-original mismatches | **0/235** verified records |
+
+### Other measurements
+
+| Experiment | Result | Scope and limitation |
+|---|---|---|
+| Tool-result share | **70–81%** of outgoing prompt tokens | Captured runs only; see [measurement details](docs/evaluation/context-share.md). JetBrains/TUM reports [84% observation tokens](https://kairos.jetbrains.com/research/articles/the-complexity-trap) in a different population. |
+| Sequence Summarize | **332.9 → 5.9 KiB (−98.2%)**, 12/12 summaries | One 12-step sequence with three outputs over 32 KiB: 3 rolling-chunk LLM calls, 6.3s, 50.2% lower summary cost. Isolated per-item summarization applied 1/12, with 3 blocked by `input_too_large` and 311.8 KiB remaining. |
+| Synthetic focus replay | **97–98% fewer** prompt tokens | Five seeds; short accuracy 15/15 vs 15/15, long Hide 14/15 vs RAW 15/15. Hidden-only details were 0/30 without recovery. No statistically significant accuracy difference; [results and caveats](docs/evaluation/results-focus.md). |
+| Live OMP, native compaction disabled | **54% fewer** aggregate B prompt tokens; 3/3 vs 3/3 | Only 2 of 3 B sessions cleaned; this small comparison is **not causal**. [Live results](docs/evaluation/results-focus.md#part-b-live-omp-native-compaction-disabled). |
+
+In the synthetic replay, the one miss attempted recovery instead of answering. Hidden-only details must be unhidden to become available again.
 
 Originals remain preserved. Rule Hide retains key lines, Unhide restores originals without re-executing tools, and user-visible controls/preview span **OMP, Hermes and Paseo**. Retention is not complete recall: inspect or recover details as needed.
 
