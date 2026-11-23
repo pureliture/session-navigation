@@ -184,6 +184,65 @@ def test_reminder_state_machine_silences_small_reads_prevents_oscillation_and_ig
     huge = [{"tool_call_id": "a" * 2000, "tool_name": "read", "hint": "h.txt", "bytes_size": 40_000, "turn": 1}]
     assert "a" * 100 not in BoundaryReminders().note("huge", "1", 100, None, huge)
 
+
+def test_boundary_reminder_reports_stable_suppression_reason():
+    def item(bytes_size, call_id="c"):
+        return [{"tool_call_id": call_id, "tool_name": "read", "hint": "f.txt", "bytes_size": bytes_size, "turn": 1}]
+
+    empty = BoundaryReminders()
+    assert empty.note_with_reason("empty", "", 1, 1, item(40_000)) == (None, "empty_turn", 1, 40_000)
+
+    no_candidates = BoundaryReminders()
+    assert no_candidates.note_with_reason("no", "1", 1, 1, []) == (None, "no_candidates", 0, 0)
+
+    not_after_tool = BoundaryReminders()
+    assert not_after_tool.note_with_reason("after", "1", 1, 1, item(40_000), after_tool=False) == (
+        None, "not_after_tool", 1, 40_000,
+    )
+
+    below = BoundaryReminders()
+    assert below.note_with_reason("small", "1", 1, 1, item(4_000)) == (
+        None, "below_worthwhile_bytes", 1, 4_000,
+    )
+
+    suppressed = BoundaryReminders()
+    suppressed.suppress_unhide("suppressed")
+    assert suppressed.note_with_reason("suppressed", "1", 1, 1, item(40_000)) == (
+        None, "suppressed_unhide_growth", 1, 40_000,
+    )
+
+    fired = BoundaryReminders()
+    note, reason, total, total_bytes = fired.note_with_reason(
+        "fired", "1", 1, 1, item(40_000), step_key=1,
+    )
+    assert note is not None and reason == "fired" and (total, total_bytes) == (1, 40_000)
+
+    repeated = BoundaryReminders()
+    assert repeated.note_with_reason("step", "1", 1, 1, item(40_000), step_key=7)[1] == "fired"
+    assert repeated.note_with_reason("step", "1", 2, 1, item(40_000), step_key=7) == (
+        None, "step_already_fired", 1, 40_000,
+    )
+
+    credit = BoundaryReminders()
+    assert credit.note_with_reason("credit", "1", 1, 1, item(40_000))[1] == "fired"
+    assert credit.note_with_reason("credit", "2", 2, 1, item(40_000)) == (
+        None, "below_unfired_credit", 1, 40_000,
+    )
+
+    wave = BoundaryReminders()
+    for index in range(1, 5):
+        assert wave.note_with_reason(
+            "wave", "1", index, 1, item(40_000), step_key=index,
+        )[1] == "fired"
+    assert wave.note_with_reason("wave", "1", 5, 1, item(40_000), step_key=5) == (
+        None, "wave_cap_reached", 1, 40_000,
+    )
+
+    current = BoundaryReminders()
+    direct = current.note("compat", "1", 1, 1, item(40_000))
+    assert direct is not None and direct.startswith("[context-navigation] eligible=1")
+
+
 def cleanup_session(records):
     plugin = hermes_adapter().plugin
     state = plugin.PluginState(is_enabled=lambda: True, count_middlewares=lambda: 0)

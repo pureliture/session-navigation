@@ -1034,6 +1034,43 @@ def _can_add_supervision(request: dict[str, Any], api_mode: str, turn_id: Any) -
     return MANAGE_TOOL in names or {"tool_describe", "tool_call"}.issubset(names)
 
 
+def _force_manage_tool_choice(request: dict[str, Any], api_mode: str) -> dict[str, Any]:
+    """Require the cleanup tool on the request that carries a cleanup note.
+
+    A reminder alone leaves the decision to the model; some Hermes/ACP models
+    never emit the tool call. Forcing the named tool once makes the call
+    happen without changing the request's history or the next request.
+    """
+    if api_mode not in SUPPORTED_API_MODES:
+        return request
+    if MANAGE_TOOL not in _tool_names(request.get("tools")):
+        return request
+    choice = request.get("tool_choice")
+    if isinstance(choice, str):
+        if choice not in ("auto", "required"):
+            return request
+    elif isinstance(choice, dict):
+        choice_type = choice.get("type")
+        if choice_type == "none":
+            return request
+        if choice_type == "function":
+            function = choice.get("function")
+            name = function.get("name") if isinstance(function, dict) else choice.get("name")
+            if isinstance(name, str) and name != MANAGE_TOOL:
+                return request
+        elif choice_type == "allowed_tools":
+            if MANAGE_TOOL not in _tool_names(choice.get("tools")):
+                return request
+        elif choice_type not in (None, "auto", "required"):
+            return request
+    result = dict(request)
+    if api_mode == "codex_responses":
+        result["tool_choice"] = {"type": "function", "name": MANAGE_TOOL}
+    else:
+        result["tool_choice"] = {"type": "function", "function": {"name": MANAGE_TOOL}}
+    return result
+
+
 def _ensure_supervision_text(request: dict[str, Any], api_mode: str) -> dict[str, Any]:
     """Add current guidance to the outgoing system text, never to session history."""
     updated = _transform_system_texts(request, _strip_stale_supervision_sections)
@@ -1372,16 +1409,23 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                                 break
                             after_tool = True
                     turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
-                    note = state.reminders.note(scope.scope_key(), turn,
+                    note, reminder_reason, reminder_total, reminder_bytes = state.reminders.note_with_reason(scope.scope_key(), turn,
                         estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
                         kwargs.get("context_length") or state.usage.context_window(scope.session_id), candidates,
                         after_tool=after_tool, step_key=seq_len)
+                    if note is None:
+                        logger.debug(
+                            "session-navigation cleanup reminder suppressed: reason=%s eligible=%d bytes=%d",
+                            reminder_reason, reminder_total, reminder_bytes,
+                        )
                     if note:
                         request_out = copy.deepcopy(request_out)
                         if api_mode == "chat_completions":
                             request_out["messages"].append({"role": "user", "content": note})
                         elif isinstance(request_out.get("input"), list):
                             request_out["input"].append({"role": "user", "content": [{"type": "input_text", "text": note}]})
+                        if _can_add_supervision(request_out, api_mode, kwargs.get("turn_id")):
+                            request_out = _force_manage_tool_choice(request_out, api_mode)
                 if not child and _can_add_supervision(request_out, api_mode, kwargs.get("turn_id")):
                     request_out = _ensure_supervision_text(request_out, api_mode)
             return {

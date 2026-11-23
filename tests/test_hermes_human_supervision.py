@@ -356,6 +356,39 @@ def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
     assert system == "Existing system prompt.\n\n" + section
     assert "[context-navigation] eligible=1" in reminder
     assert "call-big" in reminder
+    if mode == "chat_completions":
+        assert outgoing["tool_choice"] == {"type": "function", "function": {"name": "manage_context"}}
+    else:
+        assert outgoing["tool_choice"] == {"type": "function", "name": "manage_context"}
+    assert request == original
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_small_request_does_not_force_manage_tool_choice(mode):
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "user", "content": "Read a tiny file."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-small", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"small.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-small", "content": "tiny"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "manage_context"}}],
+        }
+    else:
+        request = {
+            "instructions": "Existing system prompt.",
+            "input": [
+                {"type": "message", "role": "user", "content": "Read a tiny file."},
+                {"type": "function_call", "call_id": "call-small", "name": "read_file", "arguments": '{"path":"small.txt"}'},
+                {"type": "function_call_output", "call_id": "call-small", "output": "tiny"},
+            ],
+            "tools": [{"type": "function", "name": "manage_context"}],
+        }
+    original = copy.deepcopy(request)
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="small-existing", api_mode=mode)["request"]
+    assert "tool_choice" not in outgoing
     assert request == original
 
 

@@ -28,6 +28,22 @@ Do this in the intended Hermes profile. Host activation and the plugin's
 session after enabling. Fully restart Hermes **and its gateway** after updating:
 a reload cannot replace already imported Python modules.
 
+For ACP/Paseo sessions, Hermes does not use the top-level `toolsets` list. Add
+the plugin toolset to the ACP platform explicitly:
+
+```yaml
+platform_toolsets:
+  acp:
+    - hermes-acp
+    - session_navigation
+```
+
+Without that entry Hermes falls back to the built-in `hermes-acp` composite,
+which does not contain `manage_context`, `hide_context`, `summarize_context`,
+`list_context_items`, or `unhide_context`, so the model correctly reports that
+cleanup tools are unavailable. Existing ACP sessions do not gain new tools
+retroactively; start a new ACP session after changing the list.
+
 The catalog distribution unit is `hermes-plugin/`, selected with
 `subdir: hermes-plugin` at the pinned repository SHA. It contains only the
 manifest, loader, MIT LICENSE and vendor Python packages. The adapter's runtime
@@ -52,12 +68,40 @@ accepted summary without another call, and retries factual validation once.
 A failed upgrade returns an error and preserves the existing Hide replacement.
 
 Originals, replacements and mutation state are stored in the local SQLite state
-file; only outgoing request copies change. Unhide restores the original without
-rerunning the host tool. The local state file must be shared with a local Paseo
-panel for that panel to manage the session; there is no cross-machine sync.
+file; only outgoing request copies change. When the middleware adds an eligible
+`[context-navigation]` note, it also sets `tool_choice` to `manage_context` for
+that one outgoing request if the tool is available and no other tool is
+explicitly forced. The stored history and the next request are unchanged.
+Unhide restores the original without rerunning the host tool. The local state
+file must be shared with a local Paseo panel for that panel to manage the
+session; there is no cross-machine sync.
 Treat stored originals/backups as sensitive data. Hide is not secure erasure.
 The plugin does not add telemetry, read credential files, execute shell commands,
 or install software while handling a session.
+
+### Cleanup cadence and active sessions
+
+Cleanup is deliberately batched, not periodic. A boundary note is considered on
+an outgoing request only after tool results are present, the latest boundary is
+a tool result rather than a cleanup tool, and the eligible results account for
+at least 32 KiB of new or unfired bytes. At most four notes are emitted per
+wave, and repeated requests with the same step are suppressed. Rule-based hides
+therefore appear in uneven batches: a long tool-heavy turn can hide many items
+at once, while a short or cleanup-ended turn hides none.
+
+Tool availability is fixed when an ACP session is created. Changing
+`platform_toolsets.acp`, enabling the plugin, or installing an updated plugin
+does not add tools to sessions that are already open. Start a new ACP session
+after any of those changes. Fully restart Hermes and its gateway after updating
+plugin files because imported Python modules are not replaced by a plugin
+reload.
+
+If a session reports `'manage_context' is not available in this session`, the
+session started without the `session_navigation` toolset. Check that profile's
+`platform_toolsets.acp`, then open a new ACP session. If tool calls are missing
+despite an available toolset, verify that the running gateway loaded the
+installed plugin version and inspect the boundary-reminder suppression reason
+in debug logs.
 
 ### Pausing Hermes, runtime verification, and multi-profile toggles
 
