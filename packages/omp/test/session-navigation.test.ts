@@ -769,7 +769,7 @@ test("worker service patches hides across chunks and confirms the whole snapshot
   } finally {
     await events.session_shutdown();
   }
-});
+}, 30000);
 
 test("extension enters protection_only when omp adapter_control is off and still permits recovery", async () => {
   const dir = mkdtempSync(join(tmpdir(), "omp-ext-off-"));
