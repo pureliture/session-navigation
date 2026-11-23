@@ -95,6 +95,7 @@ test("OMP overlay factory renders rows and unhides via worker", async () => {
   await component.handleInput("u");
   let after = "";
   const database = new Database(DB, { readonly: true });
+  database.exec("PRAGMA busy_timeout=5000");
   let row: any;
   for (let i = 0; i < 50; i++) {
     after = component.render(100).join("\n");
