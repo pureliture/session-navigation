@@ -22,8 +22,8 @@ import {
 import { cancelChatNavigation, parseRgb, scrollToMessageInChat, visibleChatValues } from "./chatNavigation";
 import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
-import { focusedSessionTab, openProviderSubagent, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
-import { childrenForCall, hasMissingLinkedChildren, resolveChildScope, scopeForAgent, subagentMainTarget, type ChildScope } from "./subagents";
+import { focusedSessionTab, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
+import { linkedTimelineFetchNeeded, scopeForAgent } from "./subagents";
 import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
 import {
   buildGroupedRows,
@@ -38,7 +38,7 @@ import {
 } from "./outlineGrouping";
 import { buildFallbackTimelineRows, mergeHermesTimelineRows, mergeLinkedParentRows } from "./fallbackTimeline";
 import { readTimelineHistory } from "./timelineHistory";
-import { EMPTY_LINKED_CHILDREN, MemoOutlineRowItem, OutlineEmptyState } from "./outlineRows";
+import { MemoOutlineRowItem, OutlineEmptyState } from "./outlineRows";
 import { outlineListInput } from "./outlineListInput";
 import { outlineRefreshQueryKeys } from "./outlineRefresh";
 import { OutlineScrollDriver } from "./outlineScroll";
@@ -74,16 +74,12 @@ export function SessionNavPanel({
   openPreviewOnRowClick: openPreviewOnRowClickProp,
   onOpenSettings,
   candidateAgentIds,
-  childScope,
-  ancestry = [],
   ...panelProps
 }: PluginAgentPanelProps & {
   followVisible?: boolean;
   openPreviewOnRowClick?: boolean;
   onOpenSettings?: () => void;
   candidateAgentIds?: readonly string[];
-  childScope?: ChildScope;
-  ancestry?: readonly string[];
 }) {
   const queryClient = useQueryClient();
   const paseo = usePaseo();
@@ -98,11 +94,9 @@ export function SessionNavPanel({
   const [followResolved, setFollowResolved] = useState(
     () => !effectiveFollowVisible || !!params.agentId,
   );
-  const [subagentFallback, setSubagentFallback] = useState(false);
-  const [focusedTab, setFocusedTab] = useState<SessionTab | null>(null);
   const lastMainAgent = useRef(params.agentId || null);
   const agentId =
-    effectiveFollowVisible || subagentFallback ? (followedId ?? params.agentId) : params.agentId;
+    effectiveFollowVisible ? (followedId ?? params.agentId) : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -117,11 +111,7 @@ export function SessionNavPanel({
   const unhideBatch = useRpc(unhideBatchRpc);
   const dbChoice = useRpc(dbChoiceRpc);
 
-  const [storedState, setStoredState] = useTabState(tab, panelTabStateSchema, DEFAULT_TAB_STATE);
-  const [inlineState, setInlineState] = useState(DEFAULT_TAB_STATE);
-  const tabState = childScope ? inlineState : storedState;
-  const setTabState = childScope ? setInlineState : setStoredState;
-  const [expandedChildren, setExpandedChildren] = useState<Record<string, boolean>>({});
+  const [tabState, setTabState] = useTabState(tab, panelTabStateSchema, DEFAULT_TAB_STATE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -133,8 +123,6 @@ export function SessionNavPanel({
     setInView(!!params.agentId);
     setFollowResolved(!effectiveFollowVisible || !!params.agentId);
     lastMainAgent.current = params.agentId || null;
-    setFocusedTab(null);
-    setSubagentFallback(false);
   }, [params.agentId, effectiveFollowVisible]);
   useEffect(() => {
     if (notice !== "Not loaded in chat" && notice !== SUMMARY_QUEUED_NOTICE) return;
@@ -169,10 +157,7 @@ export function SessionNavPanel({
   const scopesSignature = useMemo(
     () =>
       scopes
-        .map(
-          (s) =>
-            `${s.scope_key}|${s.agent_id ?? ""}|${s.parent_scope ?? ""}|${s.subagent_id ?? ""}|${s.tool_call_id ?? ""}`,
-        )
+        .map((s) => `${s.scope_key}|${s.agent_id ?? ""}`)
         .join("\n"),
     [scopes],
   );
@@ -184,36 +169,13 @@ export function SessionNavPanel({
   const hasDocument = hasDomDocument();
 
   useEffect(() => {
-    setFocusedTab((current) => {
-      if (!current) return null;
-      if (current.kind === "provider_subagent" && agentId && current.parentAgentId !== agentId) return null;
-      if (current.kind === "agent" && agentId && current.agentId !== agentId) return null;
-      return current;
-    });
-  }, [agentId]);
-
-  useEffect(() => {
     const doc = "document" in globalThis ? Reflect.get(globalThis, "document") : undefined;
-    if (childScope || !paseo?.agents || (!hasDocument && !hostId && !("activeAgentId" in panelProps))) return;
+    if (!paseo?.agents || (!hasDocument && !hostId && !("activeAgentId" in panelProps))) return;
     let cancelled = false;
-    const parentOf = (id: string) => queryClient.fetchQuery({
-      queryKey: ["session-nav-parent", id],
-      staleTime: 10_000,
-      queryFn: async () => {
-        const handle = paseo.agents.ref(id);
-        await handle.refresh();
-        const snapshot = handle.current();
-        if (!snapshot) throw new Error("agent_not_found");
-        return snapshot.labels["paseo.parent-agent-id"] ?? null;
-      },
-    });
     const applySelection = async (focused: SessionTab | null, values: string[] | null) => {
       const currentScopes = scopesRef.current;
-      const fallback = await subagentMainTarget(focused, parentOf);
-      const managed = focused?.kind === "agent" && currentScopes.some((scope) => scope.agent_id === focused.agentId);
-      const useFallback = fallback.subagent && !managed;
       const needsTimelineScan =
-        effectiveFollowVisible && focused?.kind !== "provider_subagent" && focused?.kind !== "agent" && !useFallback;
+        effectiveFollowVisible && focused?.kind !== "agent";
       const resolvedTarget = needsTimelineScan
         ? await resolveSessionTarget({
             followVisible: effectiveFollowVisible,
@@ -237,15 +199,10 @@ export function SessionNavPanel({
           : params.agentId || null;
       const selection = selectMainOrFallbackAgent({
         tab: focused,
-        managed: !!managed,
-        fallback,
         followVisible: effectiveFollowVisible,
         resolvedTarget,
-        lastMainAgentId: lastMainAgent.current,
       });
       if (cancelled) return;
-      setFocusedTab(focused);
-      setSubagentFallback(selection.subagentFallback);
       setInView(selection.inView);
       if (selection.agentId) lastMainAgent.current = selection.agentId;
       setFollowedId(selection.agentId === params.agentId ? null : selection.agentId);
@@ -262,8 +219,6 @@ export function SessionNavPanel({
         if (effectiveFollowVisible && hasSignal) {
           if (targetId === null) {
             if (cancelled) return;
-            setFocusedTab(null);
-            setSubagentFallback(false);
             setInView(false);
             setFollowedId(null);
             setFollowResolved(true);
@@ -288,7 +243,6 @@ export function SessionNavPanel({
           await applySelection({ kind: "agent", agentId: params.agentId }, null);
           return;
         }
-        setSubagentFallback(false);
         setInView(false);
         setFollowedId(null);
         setFollowResolved(true);
@@ -299,7 +253,7 @@ export function SessionNavPanel({
         const dom = focusedSessionTab(doc, undefined, candidateAgentIds);
         const layoutTab = hostId && panelWorkspaceId ? readWebWorkspaceFocusedTab(hostId, panelWorkspaceId) : null;
         if (dom) {
-          const domAgentId = dom.kind === "agent" ? dom.agentId : dom.kind === "provider_subagent" ? dom.parentAgentId : null;
+          const domAgentId = dom.agentId;
           if (
             domAgentId &&
             Array.isArray(candidateAgentIds) &&
@@ -321,7 +275,7 @@ export function SessionNavPanel({
           : null;
       };
       const focusTab = readFocusedTab();
-      if (focusTab?.kind === "agent" || focusTab?.kind === "provider_subagent") {
+      if (focusTab?.kind === "agent") {
         if (!cancelled) await applySelection(focusTab, null);
         return;
       }
@@ -392,27 +346,14 @@ export function SessionNavPanel({
       unsubscribe();
       clearInterval(timer);
     };
-  }, [paseo, params.agentId, scopesSignature, queryClient, effectiveFollowVisible, candidateAgentIds, childScope, hasDocument, hostId, panelWorkspaceId]);
-  const effectiveFocusedTab = useMemo(() => {
-    if (!focusedTab) return null;
-    if (focusedTab.kind === "provider_subagent" && agentId && focusedTab.parentAgentId !== agentId) {
-      return null;
-    }
-    if (focusedTab.kind === "agent" && agentId && focusedTab.agentId !== agentId) {
-      return null;
-    }
-    return focusedTab;
-  }, [focusedTab, agentId]);
+  }, [paseo, params.agentId, scopesSignature, queryClient, effectiveFollowVisible, candidateAgentIds, hasDocument, hostId, panelWorkspaceId]);
   const parentScopeKey = scopeForAgent(scopes, agentId);
 
-  const activeChild = childScope ?? resolveChildScope(effectiveFocusedTab, parentScopeKey, scopes);
-  const displayOnly = subagentFallback && !activeChild;
-  const resolvedScopeKey = activeChild?.scope_key ?? parentScopeKey;
-  const childLabel = activeChild?.subagent_id;
+  const resolvedScopeKey = parentScopeKey;
 
   const scopeKey = resolvedScopeKey ?? "";
   const query = tabState.query;
-  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}::${activeChild?.scope_key || ""}`;
+  const sessionViewKey = `${agentId || ""}::${resolvedScopeKey || ""}`;
   const sessionViewKeyRef = useRef(sessionViewKey);
   sessionViewKeyRef.current = sessionViewKey;
 
@@ -463,7 +404,7 @@ export function SessionNavPanel({
       changed: boolean;
     } => {
       const rowKey = row.item_id ?? row.tool_call_id;
-      if (displayOnly || !actionAllowed(row, capabilities, mode)) {
+      if (!actionAllowed(row, capabilities, mode)) {
         return { rowKey, prevActionMode: undefined, changed: false };
       }
       const prevActionMode = lastActionByItem[rowKey];
@@ -471,7 +412,7 @@ export function SessionNavPanel({
       return { rowKey, prevActionMode, changed: true };
     },
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
-      if (displayOnly || !actionAllowed(row, capabilities, mode)) return Promise.resolve({ ok: false, error: "capability_unavailable" });
+      if (!actionAllowed(row, capabilities, mode)) return Promise.resolve({ ok: false, error: "capability_unavailable" });
       return hideRpc({
         scope_key: scopeKey,
         item_id: row.item_id ?? "",
@@ -516,7 +457,7 @@ export function SessionNavPanel({
   });
 
   const unhideMutation = useMutation({
-    mutationFn: (row: Row) => displayOnly ? Promise.resolve({ ok: false, error: "capability_unavailable" }) :
+    mutationFn: (row: Row) =>
       unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version }),
     onSuccess: (r, row) => {
       if (!onMutationError(r)) {
@@ -574,7 +515,7 @@ export function SessionNavPanel({
     group: OutlineRow & { type: "group" },
     action: "hide" | "summarize" | "unhide",
   ) => {
-    if (displayOnly || pendingGroupId || !resolvedScopeKey) return;
+    if (pendingGroupId || !resolvedScopeKey) return;
     if (action !== "unhide" && !capabilities?.[action]) { setNotice(capabilityNotice(undefined, capabilities)); return; }
     const items = groupMutationItems(group, action);
     if (items.length === 0) return;
@@ -695,7 +636,7 @@ export function SessionNavPanel({
   });
 
   // Same source as Paseo's own context meter (the `K` figure), for every provider.
-  const capabilities: Capabilities | undefined = displayOnly ? undefined : listQuery.data?.capabilities ?? scopes.find(scope => scope.scope_key === resolvedScopeKey)?.capabilities;
+  const capabilities: Capabilities | undefined = listQuery.data?.capabilities ?? scopes.find(scope => scope.scope_key === resolvedScopeKey)?.capabilities;
   const usageQuery = useQuery({
     queryKey: ["paseo-agent-usage", agentId],
     queryFn: async () => {
@@ -710,11 +651,12 @@ export function SessionNavPanel({
   const isHermesScope = Boolean(resolvedScopeKey?.startsWith("hermes:"));
   const hasServerTimeline = Boolean(listQuery.data?.server_timeline);
   const needsHermesFallbackMerge = isHermesScope && !hasServerTimeline;
-  const needsLinkedTimeline =
-    listQuery.data !== undefined &&
-    !activeChild &&
-    !!resolvedScopeKey &&
-    hasMissingLinkedChildren(listQuery.data.items, scopes, resolvedScopeKey);
+  const needsLinkedTimeline = linkedTimelineFetchNeeded(
+    listQuery.data !== undefined,
+    resolvedScopeKey,
+    listQuery.data?.items ?? [],
+    scopes,
+  );
   const fallbackTimelineQuery = useQuery({
     queryKey: ["paseo-agent-timeline", agentId],
     queryFn: async () => {
@@ -734,8 +676,7 @@ export function SessionNavPanel({
       (!resolvedScopeKey ||
         (isHermesScope && listQuery.data !== undefined && !listQuery.data.server_timeline) ||
         needsLinkedTimeline) &&
-      !!agentId &&
-      !activeChild,
+      !!agentId,
     refetchInterval: 3000,
   });
 
@@ -745,26 +686,22 @@ export function SessionNavPanel({
 
   const serverRows = listQuery.data?.items ?? [];
   const fallbackComplete = fallbackTimelineQuery.data?.complete === true;
-
-
   const fallbackRows = fallbackTimelineQuery.data?.rows ?? [];
 
-  // Linked in-flight subagent rows (task/delegate_task without a toolResult
+  // Linked in-flight parent rows (task/delegate_task without a toolResult
   // yet) merge on top of the server list even when the server owns a
   // timeline: mergeLinkedParentRows only appends rows whose tool_call_id is
-  // missing from the server list, so authoritative rows are untouched.
+  // missing from the server list and owns linked children, so authoritative
+  // rows are untouched. No child rows or tabs are rendered.
   const rawRows = useMemo(
     () =>
       resolvedScopeKey
-        ? activeChild
-          ? serverRows
-          : needsHermesFallbackMerge
-            ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey, fallbackComplete)
-            : mergeLinkedParentRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
+        ? needsHermesFallbackMerge
+          ? mergeHermesTimelineRows(serverRows, fallbackRows, scopes, resolvedScopeKey, fallbackComplete)
+          : mergeLinkedParentRows(serverRows, fallbackRows, scopes, resolvedScopeKey)
         : fallbackRows,
     [
       resolvedScopeKey,
-      activeChild,
       serverRows,
       needsHermesFallbackMerge,
       fallbackRows,
@@ -811,7 +748,7 @@ export function SessionNavPanel({
     [unscopedTotals, rawRows],
   );
   const entryCount =
-    serverTotals && !needsHermesFallbackMerge && !needsLinkedTimeline
+    serverTotals && !needsHermesFallbackMerge
       ? serverTotals.total_rows
       : rows.length;
   const hiddenRows = rows.filter((r) => r.status === "hidden");
@@ -822,14 +759,14 @@ export function SessionNavPanel({
       ? hiddenRows.reduce((sum, r) => sum + (r.tokens ?? 0), 0)
       : null;
   const sessionContext = useMemo(() => {
-    const usage = activeChild ? null : usageQuery.data;
+    const usage = usageQuery.data;
     if (usage?.contextWindowUsedTokens) {
       return { used: usage.contextWindowUsedTokens, max: usage.contextWindowMaxTokens ?? null };
     }
     const fromLog = listQuery.data?.context;
     if (fromLog?.used_tokens) return { used: fromLog.used_tokens, max: fromLog.max_tokens ?? null };
     return null;
-  }, [usageQuery.data, listQuery.data, activeChild]);
+  }, [usageQuery.data, listQuery.data]);
   const pendingDelta = pendingEstimate && pendingEstimate.used === sessionContext?.used ? pendingEstimate.tokens : 0;
   const activeRatio = sessionContext?.max
     ? Math.min(1, Math.max(0, sessionContext.used / sessionContext.max))
@@ -847,7 +784,7 @@ export function SessionNavPanel({
   }
   const hermesSettledKeyRef = useRef<string | null>(null);
 
-  const isSessionHiddenFromView = !childScope && (effectiveFollowVisible || subagentFallback) && !inView;
+  const isSessionHiddenFromView = effectiveFollowVisible && !inView;
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
   scrollDriverRef.current.syncSession(sessionViewKey, isOutlineListMounted);
 
@@ -886,7 +823,7 @@ export function SessionNavPanel({
       ((needsHermesFallbackMerge || needsLinkedTimeline) &&
         fallbackTimelineQuery.isPending &&
         fallbackTimelineQuery.fetchStatus !== "idle")
-    : !!agentId && !activeChild && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
+    : !!agentId && fallbackTimelineQuery.isPending && fallbackTimelineQuery.fetchStatus !== "idle";
 
   const isScrollLoading =
     isLoading ||
@@ -1327,26 +1264,7 @@ export function SessionNavPanel({
     if (!hasDocument) {
       return;
     }
-    if (activeChild) {
-      if (!activeChild.scope_key.startsWith("omp:") || !activeChild.subagent_id) return;
-      const opened = await openProviderSubagent((globalThis as any).document, agentId, activeChild.subagent_id, {
-        openParent: () => navigation?.openAgent({ agentId }),
-      });
-      if (!opened) { setNotice("Could not open subagent tab. Inline outline remains available."); return; }
-      void scrollToMessageInChat(row, rawRows, {
-        visibleOnly: true,
-        accentColor: theme.colors.accent,
-        isDark,
-        onNotFound: () => setNotice("Not loaded in chat"),
-      });
-      return;
-    }
-    if (displayOnly && !navigation) {
-      setNotice("Main session navigation is unavailable.");
-      return;
-    }
     void scrollToMessageInChat(row, rawRows, {
-      openAgent: displayOnly && navigation ? { agentId, open: () => navigation.openAgent({ agentId }) } : undefined,
       accentColor: theme.colors.accent,
       isDark,
       onStart: () => setNotice((current) => current === "Not loaded in chat" ? null : current),
@@ -1387,50 +1305,10 @@ export function SessionNavPanel({
     [],
   );
 
-  const linkedChildrenByCallId = useMemo(() => {
-    const map = new Map<string, ChildScope[]>();
-    if (displayOnly || !resolvedScopeKey) return map;
-    for (const s of scopes) {
-      if (s.tool_call_id) {
-        if (map.has(s.tool_call_id)) continue;
-        const found = childrenForCall(scopes, resolvedScopeKey, s.tool_call_id).filter(
-          (child) => !ancestry.includes(child.scope_key),
-        );
-        if (found.length > 0) map.set(s.tool_call_id, found);
-      }
-    }
-    return map;
-  }, [displayOnly, resolvedScopeKey, scopes, ancestry]);
-
-  const renderLinkedChildList = (linked: readonly ChildScope[]) =>
-    linked.map((child) => (
-      <View key={child.scope_key} style={{ paddingLeft: 12, borderLeftWidth: 2, borderColor: theme.colors.border }}>
-        <View style={{ flexDirection: "row", alignItems: "center", padding: 6, gap: 8 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Expand subagent ${child.subagent_id}`}
-            accessibilityState={{ expanded: !!expandedChildren[child.scope_key] }}
-            onPress={() => setExpandedChildren((current) => ({ ...current, [child.scope_key]: !current[child.scope_key] }))} style={{ flex: 1 }}>
-            <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{expandedChildren[child.scope_key] ? "▾" : "▸"} subagent: {child.subagent_id}</Text>
-          </Pressable>
-          {hasDocument && child.scope_key.startsWith("omp:") ? <Pressable accessibilityRole="button" accessibilityLabel={`Open subagent tab ${child.subagent_id}`}
-            onPress={async () => {
-              const opened = await openProviderSubagent((globalThis as any).document, agentId, child.subagent_id!, { openParent: () => navigation?.openAgent({ agentId }) });
-              if (!opened) {
-                setExpandedChildren((current) => ({ ...current, [child.scope_key]: true }));
-                setNotice("Could not open subagent tab. Inline outline remains available.");
-              }
-            }}><Text style={{ color: theme.colors.accent, fontSize: 11 }}>Open tab ↗</Text></Pressable> : null}
-        </View>
-        {expandedChildren[child.scope_key] ? <View style={{ height: 320, minHeight: 0 }}>
-          <SessionNavPanel {...panelProps} theme={theme} layout={layout} params={{ agentId }} navigation={navigation} tab={tab}
-            followVisible={false} childScope={child} ancestry={[...ancestry, scopeKey]} />
-        </View> : null}
-      </View>
-    ));
-
   const activeRowKey = previewOpen ? selectedId : highlightedId;
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
 
-  const isResolvingSession = !childScope && effectiveFollowVisible && !followResolved;
+  const isResolvingSession = effectiveFollowVisible && !followResolved;
   const isCapabilitiesLoading =
     isResolvingSession || scopesQuery.isPending || (!!resolvedScopeKey && listQuery.isPending && !capabilities);
   const runtimeError =
@@ -1448,22 +1326,21 @@ export function SessionNavPanel({
         })
       : null;
 
-  const capNotice = listQuery.data?.records_capped === true && !notice && !capabilityMessage && !displayOnly
+  const capNotice = listQuery.data?.records_capped === true && !notice && !capabilityMessage
     ? "Large session: oldest tool controls omitted"
     : null;
   // B10: paused-adapter warning (P1-7 parity) renders as its own banner line
   // above the generic capability notice; existing notices are unchanged.
   const pausedNotice = selectPausedNotice(listQuery.data);
-  const noticeBar = notice || capabilityMessage || capNotice || pausedNotice || displayOnly ? (
+  const noticeBar = notice || capabilityMessage || capNotice || pausedNotice ? (
     <View accessibilityRole="alert" style={styles.noticeBar}>
-      {displayOnly ? <Text style={styles.noticeText}>subagent context is not managed</Text> : null}
       {pausedNotice ? <Text style={styles.noticeText}>{pausedNotice}</Text> : null}
       {notice || capabilityMessage || capNotice ?
         <Text style={styles.noticeText}>{notice ?? capabilityMessage ?? capNotice}</Text> : null}
     </View>
   ) : null;
 
-  const settingsButton = !childScope ? (
+  const settingsButton = (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Open session navigation settings"
@@ -1479,9 +1356,9 @@ export function SessionNavPanel({
         <Text style={styles.iconBtnText}>⚙</Text>
       )}
     </Pressable>
-  ) : null;
+  );
 
-  if (!childScope && (effectiveFollowVisible || subagentFallback) && !inView) {
+  if (effectiveFollowVisible && !inView) {
     if (isResolvingSession) {
       return (
         <View style={styles.screen}>
@@ -1532,7 +1409,7 @@ export function SessionNavPanel({
         <OutlineEmptyState
           theme={theme}
           styles={styles}
-          agentLabel={childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
+          agentLabel={agent?.title ?? agentId.slice(0, 8)}
           error={runtimeError ?? null}
           isRefreshing={isRefreshing}
           onRefresh={() => void refreshOutline()}
@@ -1549,7 +1426,7 @@ export function SessionNavPanel({
         <View style={styles.headerLeft}>
           <Text style={styles.headerTitle}>Outline</Text>
           <Text style={styles.headerAgent} numberOfLines={1}>
-            · {childLabel ? `subagent: ${childLabel}` : agent?.title ?? agentId.slice(0, 8)}
+            · {agent?.title ?? agentId.slice(0, 8)}
           </Text>
         </View>
         <View style={styles.headerRight}>
@@ -1635,12 +1512,6 @@ export function SessionNavPanel({
           >
             {groupedRows.map((item) => {
               if (item.type === "group") {
-                const linked =
-                  linkedChildrenByCallId.size === 0
-                    ? EMPTY_LINKED_CHILDREN
-                    : item.children
-                        .flatMap((c) => linkedChildrenByCallId.get(c.tool_call_id) ?? EMPTY_LINKED_CHILDREN)
-                        .filter((c, idx, all) => all.findIndex((o) => o.scope_key === c.scope_key) === idx);
                 return (
                   <MemoOutlineRowItem
                     key={item.key}
@@ -1651,7 +1522,6 @@ export function SessionNavPanel({
                     )}
                     isExpanded={!!expandedGroups[item.groupId]}
                     isPending={pendingGroupId === item.groupId}
-                    displayOnly={displayOnly}
                     resolvedScopeKey={resolvedScopeKey}
                     capabilities={capabilities}
                     lastActionMode={undefined}
@@ -1659,19 +1529,15 @@ export function SessionNavPanel({
                     hasDocument={hasDocument}
                     theme={theme}
                     styles={styles}
-                    linkedChildren={linked.length > 0 ? linked : EMPTY_LINKED_CHILDREN}
                     onPressRow={onPressRow}
                     onToggleGroup={onToggleGroup}
                     onHideRow={onHideRow}
                     onUnhideRow={onUnhideRow}
                     onGroupBatch={onGroupBatch}
-                    renderLinkedChildren={linked.length > 0 ? renderLinkedChildList : undefined}
                   />
                 );
               }
               const rowKey = item.key;
-              const linked =
-                linkedChildrenByCallId.get(item.row.tool_call_id) ?? EMPTY_LINKED_CHILDREN;
               return (
                 <MemoOutlineRowItem
                   key={item.key}
@@ -1679,7 +1545,6 @@ export function SessionNavPanel({
                   isSelected={activeRowKey === rowKey}
                   isExpanded={false}
                   isPending={false}
-                  displayOnly={displayOnly}
                   resolvedScopeKey={resolvedScopeKey}
                   capabilities={capabilities}
                   lastActionMode={lastActionByItem[rowKey]}
@@ -1687,13 +1552,11 @@ export function SessionNavPanel({
                   hasDocument={hasDocument}
                   theme={theme}
                   styles={styles}
-                  linkedChildren={linked}
                   onPressRow={onPressRow}
                   onToggleGroup={onToggleGroup}
                   onHideRow={onHideRow}
                   onUnhideRow={onUnhideRow}
                   onGroupBatch={onGroupBatch}
-                  renderLinkedChildren={linked.length > 0 ? renderLinkedChildList : undefined}
                 />
               );
             })}

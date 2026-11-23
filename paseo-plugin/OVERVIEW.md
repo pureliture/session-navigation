@@ -46,21 +46,17 @@ truncation marker. IDs and metadata remain selectable.
 
 ### Subagents
 
-| Provider | Support |
-| --- | --- |
-| OMP via Paseo | Follow native child tabs; expandable inline outlines under the parent task; child-scoped Hide/Unhide/Summarize and **Open tab**. |
-| Hermes via ACP | Expandable inline outlines under `delegate_task` with the same child-scoped controls; no native child tab. Row clicks only highlight. |
-| Other providers (e.g. OpenCode Go) or unregistered children | Display-only main outline with **subagent context is not managed**; row clicks open main and scroll. |
+The outline follows main sessions only. It does not render subagent child
+rows, inline child outlines, or **Open tab** actions. Parent `delegate_task`
+rows remain as ordinary tool rows with the parent's Hide/Unhide/Summarize
+controls. Subagent scopes stay registered server-side for session binding,
+but no subagent UI is offered.
 
-Tab following, mobile focus tracking, and native child-tab opening use guarded
+Tab following and mobile focus tracking use guarded
 **Paseo 0.15.3 UI/runtime internals**, isolated in `client/hostCompat.ts`. There is no
-public SDK active-tab or child-target API in that version. Known untested versions fail
-closed to manual session selection or inline child outlines; if version metadata is
-unavailable on web, strict DOM guards apply. Paseo-spawned subagents with their own
-registered scope display their own outline, while unregistered children retain the
-parent fallback. Failed tab opening keeps the inline expansion available. Child controls
-use the child's capabilities, never the parent's. Child tools/guidance/reminders are
-suppressed by default.
+public SDK active-tab API in that version. Known untested versions fail
+closed to manual session selection; if version metadata is
+unavailable on web, strict DOM guards apply.
 
 The server runs SQLite away from its event loop in an embedded Node Worker. It reads
 local session history and writes originals, replacements and hide state to

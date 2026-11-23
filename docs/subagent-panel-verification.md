@@ -1,5 +1,9 @@
 # Step 6c: child outlines in the Paseo panel
 
+> **보관용 (2026-11-23):** 아래 Step 6c는 제거 전 Paseo 패널 자식 아웃라인·Open tab 검증 기록이다.
+> 현재 아웃라인은 메인 세션만 표시하며 자식 행·inline 확장·Open tab을 제공하지 않는다.
+> 서버의 자식 scope 등록은 세션 바인딩용으로 유지된다.
+
 Verified on 2026-11-10 with Paseo **0.15.3**, OMP **18.18.3**, and the isolated
 Hermes ACP provider. All model requests used the loopback stub at `127.0.0.1:52088`;
 no paid-provider requests or default-home changes were made.

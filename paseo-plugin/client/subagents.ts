@@ -1,7 +1,3 @@
-import type { SessionTab } from "./hostCompat";
-
-export { mergeHermesTimelineRows, mergeLinkedParentRows } from "./fallbackTimeline";
-
 export type ChildScope = {
   scope_key: string;
   parent_scope?: string | null;
@@ -16,13 +12,6 @@ export function scopeForAgent(scopes: readonly ChildScope[], agentId: string): s
   return scopes.find((scope) => [`pi:default:${agentId}:default`, `paseo:default:${agentId}:default`].includes(scope.scope_key))?.scope_key ?? null;
 }
 
-export function resolveChildScope(tab: SessionTab | null, parentScope: string | null, scopes: readonly ChildScope[]): ChildScope | null {
-  if (tab?.kind !== "provider_subagent" || !parentScope?.startsWith("omp:")) return null;
-  const children = scopes.filter((scope) => scope.parent_scope === parentScope && scope.subagent_id === tab.subagentId && scope.scope_key.startsWith("omp:"));
-  return children.length === 1 ? children[0] : null;
-}
-
-
 export function childrenForCall(scopes: readonly ChildScope[], parentScope: string, callId: string): ChildScope[] {
   const exact = scopes.filter((scope) => scope.parent_scope === parentScope && scope.tool_call_id === callId && !!scope.subagent_id &&
     ["omp", "hermes"].includes(scope.scope_key.split(":")[0]) && scope.scope_key !== parentScope);
@@ -30,10 +19,10 @@ export function childrenForCall(scopes: readonly ChildScope[], parentScope: stri
   if (exact.length > 0) return exact;
   // After a Hermes rotation the panel still addresses the pre-rotation parent
   // (h-old) while new subagents register under the rotation child (h-new).
-  // Fall back to same-profile Hermes parents so inline links keep working.
+  // Fall back to same-profile Hermes parents so linked parents keep working.
   // Matching still requires the exact tool_call_id + subagent_id, and every
   // merged row stays display-only (manageable=false), so a newer
-  // non-rotation child can never hijack mutations — only add an inline link.
+  // non-rotation child can never hijack mutations — only add a merged row.
   if (!parentScope.startsWith("hermes:")) return exact;
   const profile = parentScope.split(":")[1] ?? "";
   if (!profile) return exact;
@@ -64,24 +53,17 @@ export function hasMissingLinkedChildren(
   });
 }
 
-export async function subagentMainTarget(tab: SessionTab | null, parentId: (id: string) => Promise<string | null>): Promise<{
-  agentId: string | null; subagent: boolean;
-}> {
-  if (!tab) return { agentId: null, subagent: false };
-  if (tab.kind === "unresolved_subagent") return { agentId: tab.parentAgentId ?? null, subagent: true };
-  let id = tab.kind === "provider_subagent" ? tab.parentAgentId : tab.agentId;
-  let subagent = tab.kind === "provider_subagent";
-  const seen = new Set<string>();
-  try {
-    while (!seen.has(id)) {
-      seen.add(id);
-      const parent = await parentId(id);
-      if (!parent) return { agentId: subagent ? id : null, subagent };
-      subagent = true;
-      id = parent;
-    }
-  } catch {
-    return { agentId: null, subagent };
-  }
-  return { agentId: null, subagent: true };
+/**
+ * Fetch gate for the linked-parent merge source: full history is read only
+ * when the server list loaded for a resolved scope and linked children own
+ * rows the server does not contain. Ordinary server sessions never trigger
+ * additional reads.
+ */
+export function linkedTimelineFetchNeeded(
+  listLoaded: boolean,
+  resolvedScopeKey: string | null,
+  items: readonly { tool_call_id?: string | null }[],
+  scopes: readonly ChildScope[],
+): boolean {
+  return listLoaded && !!resolvedScopeKey && hasMissingLinkedChildren(items, scopes, resolvedScopeKey);
 }

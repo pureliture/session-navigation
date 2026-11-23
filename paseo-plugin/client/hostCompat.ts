@@ -1,7 +1,4 @@
-export type SessionTab =
-  | { kind: "agent"; agentId: string }
-  | { kind: "provider_subagent"; parentAgentId: string; subagentId: string }
-  | { kind: "unresolved_subagent"; parentAgentId?: string };
+export type SessionTab = { kind: "agent"; agentId: string };
 
 export type HostFocusSnapshot = {
   supported: boolean;
@@ -40,28 +37,13 @@ export function strictSupportedHostVersion(version?: string | null): boolean {
   return parsed !== null && meetsMinimumHostVersion(parsed);
 }
 
-function lengthPrefixed(value: string): [string, string] | null {
-  const match = /^(0|[1-9]\d*)_/.exec(value);
-  if (!match) return null;
-  const length = Number(match[1]);
-  const rest = value.slice(match[0].length);
-  if (!Number.isSafeInteger(length) || length < 1 || length > 1024 || length > rest.length) return null;
-  return [rest.slice(0, length), rest.slice(length)];
-}
-
 // Paseo >=0.15.3 DOM contract; newer releases remain enabled as long as runtime structural guards match.
+// Provider subagent tabs are intentionally ignored: the outline follows main sessions only.
 export function parseSessionTab(testId: string): SessionTab | null {
   const agentPrefix = "workspace-tab-agent_";
-  if (testId.startsWith(agentPrefix)) {
-    const agentId = testId.slice(agentPrefix.length);
-    return agentId ? { kind: "agent", agentId } : null;
-  }
-  const prefix = "workspace-tab-provider_subagent_";
-  if (!testId.startsWith(prefix)) return null;
-  const parent = lengthPrefixed(testId.slice(prefix.length));
-  if (!parent || !parent[1].startsWith("_")) return null;
-  const child = lengthPrefixed(parent[1].slice(1));
-  return child && !child[1] ? { kind: "provider_subagent", parentAgentId: parent[0], subagentId: child[0] } : null;
+  if (!testId.startsWith(agentPrefix)) return null;
+  const agentId = testId.slice(agentPrefix.length);
+  return agentId ? { kind: "agent", agentId } : null;
 }
 
 function visible(node: any): boolean {
@@ -268,88 +250,29 @@ export function subscribeHostFocus(serverId: string, listener: () => void, store
 
 export function focusedSessionTab(
   doc: any,
-  version: string | null | undefined = hostVersion(doc),
+  _version: string | null | undefined = hostVersion(doc),
   workspaceAgentIds?: readonly string[],
 ): SessionTab | null {
   const seen = new Set<string>();
   let tabs = (Array.from(doc?.querySelectorAll?.('[data-testid][aria-selected="true"]') ?? []) as any[])
     .filter(visible)
-    .map((node): SessionTab | null => {
-      const id = node.getAttribute("data-testid") ?? "";
-      return parseSessionTab(id) ?? (id.startsWith("workspace-tab-provider_subagent_") ? { kind: "unresolved_subagent" } : null);
-    })
+    .map((node): SessionTab | null => parseSessionTab(node.getAttribute("data-testid") ?? ""))
     // MobileWorkspaceTabSwitcher repeats the active tab as a combobox row. Identical rows are one session.
     .filter((tab): tab is SessionTab => {
       if (tab === null) return false;
-      const key = tab.kind === "agent" ? `agent:${tab.agentId}`
-        : tab.kind === "provider_subagent" ? `provider:${tab.parentAgentId}:${tab.subagentId}` : "unresolved";
+      const key = `agent:${tab.agentId}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
   if (tabs.length > 1 && Array.isArray(workspaceAgentIds)) {
     const allowed = new Set(workspaceAgentIds);
-    const narrowed = tabs.filter((tab) =>
-      tab.kind === "agent"
-        ? allowed.has(tab.agentId)
-        : tab.kind === "provider_subagent"
-          ? allowed.has(tab.parentAgentId)
-          : true,
-    );
+    const narrowed = tabs.filter((tab) => allowed.has(tab.agentId));
     if (narrowed.length > 0) tabs = narrowed;
   }
-  if (tabs.length > 1 && tabs.some((tab) => tab.kind !== "agent")) return { kind: "unresolved_subagent" };
-  const tab = tabs.length === 1 ? tabs[0] : null;
-  return tab?.kind === "provider_subagent" && !supportedHostVersion(version)
-    ? { kind: "unresolved_subagent", parentAgentId: tab.parentAgentId }
-    : tab;
+  return tabs.length === 1 ? tabs[0] : null;
 }
 
-function uniqueTestId(doc: any, id: string): any {
-  const nodes = (Array.from(doc?.querySelectorAll?.("[data-testid]") ?? []) as any[])
-    .filter((node) => visible(node) && node.getAttribute("data-testid") === id);
-  return nodes.length === 1 ? nodes[0] : null;
-}
-
-export async function openProviderSubagent(doc: any, parentAgentId: string, subagentId: string, options: {
-  version?: string | null; openParent: () => void; wait?: () => Promise<void>;
-}): Promise<boolean> {
-  if (!doc || typeof doc.querySelectorAll !== "function") return false;
-  options = { ...options, version: options.version === undefined ? hostVersion(doc) : options.version };
-  if (!parentAgentId || !subagentId || !supportedHostVersion(options.version)) return false;
-  const matches = () => {
-    const tab = focusedSessionTab(doc, options.version);
-    return tab?.kind === "provider_subagent" && tab.parentAgentId === parentAgentId && tab.subagentId === subagentId;
-  };
-  if (matches()) return true;
-  const wait = options.wait ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
-  try {
-    const tabId = `workspace-tab-provider_subagent_${parentAgentId.length}_${parentAgentId}_${subagentId.length}_${subagentId}`;
-    const existing = uniqueTestId(doc, tabId);
-    if (existing) existing.click();
-    else {
-      const focused = focusedSessionTab(doc, options.version);
-      if (focused?.kind !== "agent" || focused.agentId !== parentAgentId) options.openParent();
-      await wait();
-    }
-    let openedTrack = false, clickedRow = false;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      if (matches()) return true;
-      const focused = focusedSessionTab(doc, options.version);
-      if (focused?.kind === "unresolved_subagent") return false;
-      if (!existing && focused?.kind === "agent" && focused.agentId === parentAgentId) {
-        const row = uniqueTestId(doc, `subagents-track-row-${subagentId}`);
-        if (row && !clickedRow) { row.click(); clickedRow = true; }
-        else if (!row && !openedTrack) {
-          const header = uniqueTestId(doc, "subagents-track-header");
-          if (header && header.getAttribute("aria-expanded") !== "true") { header.click(); openedTrack = true; }
-        }
-      }
-      await wait();
-    }
-  } catch { return false; }
-  return false;
-}
 
 export function demandedWorkspaceAgents(
   serverId: string,
@@ -371,11 +294,6 @@ function sessionTabOf(target: any): SessionTab | null {
   if (!target || typeof target !== "object") return null;
   if (target.kind === "agent" && typeof target.agentId === "string" && target.agentId.length > 0) {
     return { kind: "agent", agentId: target.agentId };
-  }
-  if (target.kind === "provider_subagent" &&
-    typeof target.parentAgentId === "string" && target.parentAgentId.length > 0 &&
-    typeof target.subagentId === "string" && target.subagentId.length > 0) {
-    return { kind: "provider_subagent", parentAgentId: target.parentAgentId, subagentId: target.subagentId };
   }
   return null;
 }

@@ -49,7 +49,7 @@ class Element {
   scrollIntoView() { this.scrolled = true; }
 }
 
-test("subagent fallback opens the main agent before waiting for its chat and scrolling the row", async () => {
+test("ignored tabs open the main agent before waiting for its chat and scrolling the row", async () => {
   const target = row("main-message", "user");
   const node = new Element({ "data-message-id": "main-message" });
   const root = new Element({ "data-testid": "agent-chat-scroll" }).add(node);

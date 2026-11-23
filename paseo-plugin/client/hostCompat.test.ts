@@ -3,33 +3,27 @@ import {
   demandedWorkspaceAgents,
   focusedSessionTab,
   installHostFocusTracker,
-  openProviderSubagent,
+  parseSessionTab,
   readHostFocus,
   readWebWorkspaceFocusedTab,
   strictSupportedHostVersion,
   subscribeHostFocus,
   supportedHostVersion,
 } from "./hostCompat";
-import { subagentMainTarget } from "./subagents";
 
-const parent = "parent", child = "Bird";
+const parent = "parent";
 const childId = "workspace-tab-provider_subagent_6_parent_4_Bird";
 function fixture() {
   let selected = "workspace-tab-agent_parent";
-  let opened = false;
-  const clicked: string[] = [];
   const node = (id: string) => ({ getAttribute: () => id, click: () => {
-    clicked.push(id);
     if (id.startsWith("workspace-tab-")) selected = id;
-    if (id === "subagents-track-header") opened = true;
-    if (id === "subagents-track-row-Bird") selected = childId;
   } });
   const doc = { querySelectorAll: (selector: string) => selector.includes("aria-selected") ? [node(selected)] :
-    [node(selected), node("subagents-track-header"), ...(opened ? [node("subagents-track-row-Bird")] : [])] };
-  return { doc, clicked, select: (id: string) => { selected = id; } };
+    [node(selected)] };
+  return { doc, select: (id: string) => { selected = id; } };
 }
 
-test("hosts below >=0.15.3 disable following/opening; >=0.15.3 hosts work automatically with structural guards", async () => {
+test("host version gates follow correctly and provider subagent tabs are ignored", async () => {
   for (const v of ["0.15.3", "0.15.4", "0.16.0", "0.17.2", "1.0.0", "v0.16.1-rc.1"]) {
     expect(supportedHostVersion(v)).toBe(true);
   }
@@ -37,65 +31,15 @@ test("hosts below >=0.15.3 disable following/opening; >=0.15.3 hosts work automa
   for (const v of ["0.15.2", "0.14.9", "unknown", ""]) {
     expect(supportedHostVersion(v)).toBe(false);
   }
-  const f = fixture(); f.select(childId);
-  expect(focusedSessionTab(f.doc, "0.16.0")).toEqual({ kind: "provider_subagent", parentAgentId: parent, subagentId: child });
-  const unsupported = focusedSessionTab(f.doc, "0.15.2");
-  expect(unsupported).toEqual({ kind: "unresolved_subagent", parentAgentId: parent });
-  expect(await subagentMainTarget(unsupported, async () => null)).toEqual({ agentId: parent, subagent: true });
-  expect(await openProviderSubagent(f.doc, parent, child, { version: "0.15.2", openParent() {} })).toBe(false);
-  expect(f.clicked).toEqual([]);
-  const preFloor = { ...f.doc, defaultView: { location: { pathname: "/h/host/workspace/w" },
-    __paseoHostRuntimeStore: { getClient: () => ({ getLastServerInfoMessage: () => ({ version: "0.15.2" }) }) } } };
-  expect(focusedSessionTab(preFloor)).toEqual({ kind: "unresolved_subagent", parentAgentId: parent });
-  expect(await openProviderSubagent(preFloor, parent, child, { openParent() {} })).toBe(false);
-});
-
-test("opener clicks an existing tab or safely opens the parent's native track", async () => {
-  const f = fixture(); f.select(childId);
-  expect(await openProviderSubagent(f.doc, parent, child, { openParent() {} })).toBe(true);
-  expect(f.clicked).toEqual([]);
-  f.select("workspace-tab-agent_other");
-  expect(await openProviderSubagent(f.doc, parent, child, { openParent: () => f.select("workspace-tab-agent_parent"), wait: async () => {} })).toBe(true);
-  expect(f.clicked).toEqual(["subagents-track-header", "subagents-track-row-Bird"]);
-});
-
-test("opening from the parent settles the initiating event without reopening the parent", async () => {
   const f = fixture();
-  let settled = false;
-  expect(await openProviderSubagent(f.doc, parent, child, {
-    openParent() { throw new Error("must not navigate again and dismiss the native popup"); },
-    wait: async () => { settled = true; },
-  })).toBe(true);
-  expect(settled).toBe(true);
-  expect(f.clicked).toEqual(["subagents-track-header", "subagents-track-row-Bird"]);
-});
-
-test("an inactive existing child tab is clicked without opening the parent's track", async () => {
-  let selected = "workspace-tab-agent_parent";
-  const node = (id: string) => ({ getAttribute: () => id, click: () => { selected = id; } });
-  const doc = { querySelectorAll: (selector: string) => selector.includes("aria-selected") ? [node(selected)] : [node(childId)] };
-  expect(await openProviderSubagent(doc, parent, child, { openParent() { throw new Error("not needed"); } })).toBe(true);
-  expect(selected).toBe(childId);
-});
-
-test("missing track, ambiguous selection, and click errors fail closed", async () => {
-  const options = { openParent() {}, wait: async () => {} };
-  expect(await openProviderSubagent({}, parent, child, options)).toBe(false);
-  const doc = { querySelectorAll: () => ["workspace-tab-agent_parent", childId].map((id) => ({ getAttribute: () => id })) };
-  expect(await openProviderSubagent(doc, parent, child, options)).toBe(false);
-  const f = fixture();
-  f.select("workspace-tab-agent_other");
-  expect(await openProviderSubagent(f.doc, parent, child, { ...options, openParent() { throw new Error("offline"); } })).toBe(false);
-});
-
-test("a document-less opener fails before opening the parent or waiting", async () => {
-  let opened = 0, waits = 0;
-  expect(await openProviderSubagent(undefined, parent, child, {
-    openParent() { opened++; },
-    wait: async () => { waits++; },
-  })).toBe(false);
-  expect(opened).toBe(0);
-  expect(waits).toBe(0);
+  expect(focusedSessionTab(f.doc, "0.16.0")).toEqual({ kind: "agent", agentId: parent });
+  // Consumer-visible regression: provider subagent tabs never become outline
+  // sessions and never offer an "Open tab" path. They are ignored so the
+  // outline keeps following the main session only.
+  f.select(childId);
+  expect(parseSessionTab(childId)).toBeNull();
+  expect(focusedSessionTab(f.doc, "0.16.0")).toBeNull();
+  expect(focusedSessionTab(f.doc, "0.15.2")).toBeNull();
 });
 
 test("strict host version accepts Paseo >=0.15.3 and rejects pre-0.15.3 or missing versions", () => {
@@ -269,14 +213,15 @@ test("web layout resolves the focused main-pane tab beside the Explorer sidebar"
   }
 });
 
-test("web layout prefers the newest workspace sheet's provider subagent", () => {
+test("web layout ignores workspace sheets with provider subagent targets", () => {
   const state = layoutState([{ tabId: "agent-tab", target: { kind: "agent", agentId: "agent-a" } }]);
   state.state.sheetsByWorkspace[workspaceKey] = [
     { tab: { target: { kind: "agent", agentId: "agent-b" } } },
     { target: { kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" } },
   ];
+  // The newest sheet is a provider subagent (ignored), so the main-pane layout wins.
   expect(readWebWorkspaceFocusedTab("server", "workspace", layoutStorage(state), "0.15.3"))
-    .toEqual({ kind: "provider_subagent", parentAgentId: "parent", subagentId: "child" });
+    .toEqual({ kind: "agent", agentId: "agent-a" });
 });
 
 test("web layout rejects malformed storage, pre-0.15.3 hosts and missing keys while accepting >=0.16.0", () => {
