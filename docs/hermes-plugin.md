@@ -69,9 +69,12 @@ A failed upgrade returns an error and preserves the existing Hide replacement.
 
 Originals, replacements and mutation state are stored in the local SQLite state
 file; only outgoing request copies change. When the middleware adds an eligible
-`[context-navigation]` note, it also sets `tool_choice` to `manage_context` for
-that one outgoing request if the tool is available and no other tool is
-explicitly forced. The stored history and the next request are unchanged.
+`[context-navigation]` note, the session model classifies the latest genuine user
+instruction before cleanup is forced. Forced cleanup happens only for an explicit
+`cleanup_allowed` result. Defer/restore, ambiguous or malformed output, timeout,
+missing trusted input, list/restore tool activity, and host-specified tool
+choices leave the advisory note without a forced choice. The stored history and
+the next request are unchanged.
 Unhide restores the original without rerunning the host tool. The local state
 file must be shared with a local Paseo panel for that panel to manage the
 session; there is no cross-machine sync.

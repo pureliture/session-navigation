@@ -9,8 +9,10 @@ Canonical engine/adapter sources remain in `src/session_navigation/` and
 The runtime adapter equivalent is `vendor/session_navigation_hermes/` within
 that subdirectory. No duplicate editable adapter tree is shipped.
 
-Do not submit until the forced `manage_context` tool choice respects explicit
-user requests to wait or restore without breaking automatic cleanup.
+Hermes cleanup is advisory by default and forces `manage_context` only after the
+session model explicitly allows it. Unclear, failed, timed-out, or malformed
+classification leaves only the advisory note, preserving user wait/restore
+requests and host-specified tool choices.
 
 ## Purpose and declared surfaces
 

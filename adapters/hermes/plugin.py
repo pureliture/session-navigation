@@ -129,6 +129,7 @@ def register(ctx: Any) -> PluginState:
     llm = getattr(ctx, "llm", None)
     if llm is not None:
         state.summarizer = CtxLlmSummarizer(ctx, store=state.store)
+        state.intent_llm = llm
     ctx.register_tool(
         name=HIDE_TOOL,
         toolset=TOOLSET,

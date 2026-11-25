@@ -36,6 +36,9 @@ Publication and registry/catalog approval are separate steps; see
 
 ### Summaries and safety
 
+- Hermes asks the session model to classify cleanup intent before forcing
+  `manage_context`. Unclear, failed, timed-out, or malformed classification
+  leaves only the advisory note; host-specified tool choices are preserved.
 - Send the whole original tool result to Summarize, including facts beyond
   character 12,000. Enforce a **32,768-byte UTF-8 source cap** and return
   `input_too_large` rather than silently truncating the source.
