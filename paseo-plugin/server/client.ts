@@ -44,6 +44,24 @@ function stableJson(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(",")}}`;
 }
 
+function scopeAliasKeys(key: string): string[] {
+  const parts = key.split(":");
+  if (
+    parts.length === 4 &&
+    parts[0] === "hermes" &&
+    (parts[3] === "unknown" || parts[3] === "default")
+  ) {
+    return [
+      key,
+      [
+        ...parts.slice(0, 3),
+        parts[3] === "unknown" ? "default" : "unknown",
+      ].join(":"),
+    ];
+  }
+  return [key];
+}
+
 type LaneKind = "read" | "write";
 
 interface QueuedCall {
@@ -53,6 +71,10 @@ interface QueuedCall {
   coalesceKey?: string;
   controlGeneration: number;
   enqueuedAt: number;
+  writeSeq?: number;
+  requiredWriteSeq: number;
+  isDbChoice?: boolean;
+  isToggleWrite?: boolean;
   resolves: Array<(reply: Reply) => void>;
 }
 
@@ -65,6 +87,9 @@ interface WorkerLane {
   kind: LaneKind;
   worker?: Worker;
   active?: ActiveCall;
+  draining: boolean;
+  drainingCall?: ActiveCall;
+  needsDecisionSync: boolean;
   queue: QueuedCall[];
   consecutiveFailures: number;
   inflightByCoalesceKey: Map<string, QueuedCall>;
@@ -77,14 +102,17 @@ export class ServiceClient {
   private writeWorker?: Worker;
   private nextId = 0;
   private closed = false;
-  private writeEnqueueGen = 0;
-  private writeCompleteGen = 0;
+  private writeSeq = 0;
+  private settledWriteSeq = 0;
   private pendingWriteCount = 0;
+  private pendingDbChoiceCount = 0;
+  private activeDecisions: Record<string, string> = {};
   private controlGeneration = 0;
-  private readonly decisionListRemaining = new Map<string, number>();
 
   private readonly readLane: WorkerLane = {
     kind: "read",
+    draining: false,
+    needsDecisionSync: false,
     queue: [],
     consecutiveFailures: 0,
     inflightByCoalesceKey: new Map(),
@@ -92,6 +120,8 @@ export class ServiceClient {
 
   private readonly writeLane: WorkerLane = {
     kind: "write",
+    draining: false,
+    needsDecisionSync: false,
     queue: [],
     consecutiveFailures: 0,
     inflightByCoalesceKey: new Map(),
@@ -127,6 +157,11 @@ export class ServiceClient {
     lane.worker = worker;
   }
 
+  private hasActiveDecisionForScope(scopeKey: unknown): boolean {
+    if (typeof scopeKey !== "string") return false;
+    return scopeAliasKeys(scopeKey).some((key) => key in this.activeDecisions);
+  }
+
   private selectLane(method: string, input: Record<string, any>): WorkerLane {
     if (WRITE_METHODS.has(method)) {
       return this.writeLane;
@@ -134,7 +169,8 @@ export class ServiceClient {
     if (
       method === "list" &&
       typeof input?.scope_key === "string" &&
-      this.decisionListRemaining.has(input.scope_key)
+      (this.pendingDbChoiceCount > 0 ||
+        this.hasActiveDecisionForScope(input.scope_key))
     ) {
       return this.writeLane;
     }
@@ -155,41 +191,37 @@ export class ServiceClient {
     }
 
     const inputObj = (input ?? {}) as Record<string, any>;
-    const isWriteMethod = WRITE_METHODS.has(method);
     const lane = this.selectLane(method, inputObj);
+    const isWriteLaneCall = lane.kind === "write";
+    const isDbChoice = method === "dbChoice";
     const isToggleWrite =
       method === "setAdapterToggle" ||
       method === "session-nav.set-adapter-toggle";
 
-    if (isWriteMethod) {
-      this.writeEnqueueGen += 1;
+    let callWriteSeq: number | undefined;
+    let requiredWriteSeq = 0;
+
+    if (isWriteLaneCall) {
+      callWriteSeq = ++this.writeSeq;
       this.pendingWriteCount += 1;
+      if (isDbChoice) {
+        this.pendingDbChoiceCount += 1;
+      }
       if (isToggleWrite) {
         this.controlGeneration += 1;
       }
-      if (
-        method === "dbChoice" &&
-        typeof inputObj.scope_key === "string" &&
-        (inputObj.choice === "send_original" || inputObj.choice === "abort_request")
-      ) {
-        this.decisionListRemaining.set(
-          inputObj.scope_key,
-          inputObj.choice === "send_original" ? 2 : 1,
-        );
-      }
-    } else if (method === "list" && typeof inputObj.scope_key === "string") {
-      const rem = this.decisionListRemaining.get(inputObj.scope_key);
-      if (rem !== undefined) {
-        if (rem <= 1) this.decisionListRemaining.delete(inputObj.scope_key);
-        else this.decisionListRemaining.set(inputObj.scope_key, rem - 1);
-      }
+    } else {
+      requiredWriteSeq = this.writeSeq;
     }
 
-    // Coalesce identical Read requests only within the same write barrier epoch
-    // and only when no writes are pending, so post-write reads stay fresh.
-    const canCoalesce = lane.kind === "read" && this.pendingWriteCount === 0;
+    // Coalesce identical Read requests only within the same settled write epoch
+    // and only when no writes are pending or in flight, so post-write reads stay fresh.
+    const canCoalesce =
+      lane.kind === "read" &&
+      this.pendingWriteCount === 0 &&
+      this.settledWriteSeq === this.writeSeq;
     const coalesceKey = canCoalesce
-      ? `${method}\0${stableJson(inputObj)}\0${this.writeEnqueueGen}\0${this.writeCompleteGen}\0${this.controlGeneration}`
+      ? `${method}\0${stableJson(inputObj)}\0${this.writeSeq}\0${this.settledWriteSeq}\0${this.controlGeneration}`
       : undefined;
 
     if (coalesceKey) {
@@ -203,17 +235,6 @@ export class ServiceClient {
 
     const id = ++this.nextId;
     return new Promise((resolve) => {
-      const finishWrapper = (reply: Reply) => {
-        if (isWriteMethod) {
-          this.pendingWriteCount = Math.max(0, this.pendingWriteCount - 1);
-          this.writeCompleteGen += 1;
-          if (isToggleWrite) {
-            this.controlGeneration += 1;
-          }
-        }
-        resolve(reply);
-      };
-
       const call: QueuedCall = {
         id,
         method,
@@ -221,7 +242,11 @@ export class ServiceClient {
         coalesceKey,
         controlGeneration: this.controlGeneration,
         enqueuedAt: performance.now(),
-        resolves: [finishWrapper],
+        writeSeq: callWriteSeq,
+        requiredWriteSeq,
+        isDbChoice,
+        isToggleWrite,
+        resolves: [resolve],
       };
 
       if (coalesceKey) {
@@ -242,6 +267,9 @@ export class ServiceClient {
       );
       worker.on("error", () => this.handleLaneCrash(lane, worker, "worker_error"));
       worker.on("exit", () => this.handleLaneCrash(lane, worker, "worker_exit"));
+      if (lane.kind === "write") {
+        lane.needsDecisionSync = true;
+      }
       this.setWorkerRef(lane.kind, worker);
       return worker;
     } catch {
@@ -256,9 +284,24 @@ export class ServiceClient {
         lane.inflightByCoalesceKey.delete(call.coalesceKey);
       }
     }
+    if (lane.kind === "write") {
+      this.pendingWriteCount = Math.max(0, this.pendingWriteCount - 1);
+      if (call.isDbChoice) {
+        this.pendingDbChoiceCount = Math.max(0, this.pendingDbChoiceCount - 1);
+      }
+      if (call.isToggleWrite) {
+        this.controlGeneration += 1;
+      }
+      if (typeof call.writeSeq === "number") {
+        this.settledWriteSeq = Math.max(this.settledWriteSeq, call.writeSeq);
+      }
+    }
     const callbacks = call.resolves.splice(0, call.resolves.length);
     for (const cb of callbacks) {
       cb(reply);
+    }
+    if (lane.kind === "write" && !this.closed) {
+      this.dispatchLane(this.readLane);
     }
   }
 
@@ -283,9 +326,15 @@ export class ServiceClient {
   }
 
   private dispatchLane(lane: WorkerLane): void {
-    while (!lane.active && lane.queue.length > 0) {
+    while (!lane.active && !lane.draining && lane.queue.length > 0) {
       if (this.closed) {
         this.failAllInLane(lane, "closed");
+        return;
+      }
+      if (
+        lane.kind === "read" &&
+        lane.queue[0].requiredWriteSeq > this.settledWriteSeq
+      ) {
         return;
       }
       const next = lane.queue.shift()!;
@@ -314,6 +363,11 @@ export class ServiceClient {
       }, REQUEST_TIMEOUT_MS);
       lane.active = active;
 
+      const sendDecisions = lane.kind === "write" && lane.needsDecisionSync;
+      if (sendDecisions) {
+        lane.needsDecisionSync = false;
+      }
+
       try {
         worker.postMessage({
           id: active.id,
@@ -322,36 +376,65 @@ export class ServiceClient {
           method: active.method,
           input: active.input,
           controlGeneration: this.controlGeneration,
+          ...(lane.kind === "write" ? { syncDecisions: true } : {}),
+          ...(sendDecisions ? { decisions: { ...this.activeDecisions } } : {}),
         });
       } catch {
+        if (sendDecisions) {
+          lane.needsDecisionSync = true;
+        }
         clearTimeout(active.timer);
         if (lane.active === active) {
           lane.active = undefined;
         }
-        this.terminateWorkerInstance(lane, worker);
         lane.consecutiveFailures += 1;
         this.recordLaneTelemetry(lane, active, false, "post_message_failed");
-        this.settleCall(lane, active, { ok: false, error: "engine_error" });
-        if (lane.consecutiveFailures >= MAX_CONSECUTIVE_LANE_FAILURES) {
-          this.failAllInLane(lane, "post_message_failed");
-          return;
-        }
+        this.drainWorkerAndFailCall(lane, worker, active, "post_message_failed");
+        return;
       }
     }
   }
 
-  private terminateWorkerInstance(lane: WorkerLane, worker: Worker): void {
+  private terminateWorkerInstance(
+    lane: WorkerLane,
+    worker: Worker,
+  ): Promise<number> {
     if (this.getWorkerRef(lane.kind) === worker) {
       this.setWorkerRef(lane.kind, undefined);
     }
     worker.removeAllListeners();
-    void worker.terminate();
+    return worker.terminate().catch(() => 0);
+  }
+
+  private drainWorkerAndFailCall(
+    lane: WorkerLane,
+    worker: Worker,
+    active: ActiveCall,
+    reason: string,
+  ): void {
+    lane.draining = true;
+    lane.drainingCall = active;
+    void this.terminateWorkerInstance(lane, worker).finally(() => {
+      if (lane.drainingCall !== active) return;
+      lane.draining = false;
+      lane.drainingCall = undefined;
+      if (lane.kind === "write") {
+        this.controlGeneration += 1;
+      }
+      // Fail ONLY the interrupted/timed-out in-flight call (never report ok or retry).
+      this.settleCall(lane, active, { ok: false, error: "engine_error" });
+      if (this.closed || lane.consecutiveFailures >= MAX_CONSECUTIVE_LANE_FAILURES) {
+        this.failAllInLane(lane, reason);
+        return;
+      }
+      this.dispatchLane(lane);
+    });
   }
 
   private handleLaneMessage(
     lane: WorkerLane,
     worker: Worker,
-    message: { id?: number; reply?: Reply },
+    message: { id?: number; reply?: Reply; decisions?: Record<string, string> },
   ): void {
     if (this.getWorkerRef(lane.kind) !== worker) return;
     const active = lane.active;
@@ -360,6 +443,15 @@ export class ServiceClient {
     clearTimeout(active.timer);
     lane.active = undefined;
     lane.consecutiveFailures = 0;
+
+    if (
+      lane.kind === "write" &&
+      message.decisions &&
+      typeof message.decisions === "object" &&
+      !Array.isArray(message.decisions)
+    ) {
+      this.activeDecisions = { ...message.decisions };
+    }
 
     const validReply =
       message.reply && typeof message.reply.ok === "boolean"
@@ -383,16 +475,9 @@ export class ServiceClient {
   ): void {
     if (lane.active !== active) return;
     lane.active = undefined;
-    this.terminateWorkerInstance(lane, worker);
     lane.consecutiveFailures += 1;
     this.recordLaneTelemetry(lane, active, false, "timeout");
-    // Fail ONLY the timed-out active call (never re-execute writes on timeout).
-    this.settleCall(lane, active, { ok: false, error: "engine_error" });
-    if (this.closed || lane.consecutiveFailures >= MAX_CONSECUTIVE_LANE_FAILURES) {
-      this.failAllInLane(lane, "timeout");
-      return;
-    }
-    this.dispatchLane(lane);
+    this.drainWorkerAndFailCall(lane, worker, active, "timeout");
   }
 
   private handleLaneCrash(
@@ -401,29 +486,30 @@ export class ServiceClient {
     reason: string,
   ): void {
     if (this.getWorkerRef(lane.kind) !== worker) return;
-    this.terminateWorkerInstance(lane, worker);
-
     const active = lane.active;
     if (active) {
       clearTimeout(active.timer);
       lane.active = undefined;
       lane.consecutiveFailures += 1;
       this.recordLaneTelemetry(lane, active, false, reason);
-      // Fail ONLY the interrupted in-flight request; preserve queued requests.
-      this.settleCall(lane, active, { ok: false, error: "engine_error" });
-    }
-
-    if (this.closed || lane.consecutiveFailures >= MAX_CONSECUTIVE_LANE_FAILURES) {
-      this.failAllInLane(lane, reason);
+      this.drainWorkerAndFailCall(lane, worker, active, reason);
       return;
     }
+
+    void this.terminateWorkerInstance(lane, worker);
     this.dispatchLane(lane);
   }
 
   private failAllInLane(lane: WorkerLane, _reason: string): void {
     const worker = this.getWorkerRef(lane.kind);
     if (worker) {
-      this.terminateWorkerInstance(lane, worker);
+      void this.terminateWorkerInstance(lane, worker);
+    }
+    if (lane.drainingCall) {
+      const draining = lane.drainingCall;
+      lane.draining = false;
+      lane.drainingCall = undefined;
+      this.settleCall(lane, draining, { ok: false, error: "engine_error" });
     }
     if (lane.active) {
       const active = lane.active;

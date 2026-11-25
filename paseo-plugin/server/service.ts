@@ -144,6 +144,19 @@ export class PaseoService {
     this.hermesHostCheck = undefined;
   }
 
+  exportDecisions(): Record<string, string> {
+    return Object.fromEntries(this.decisions.entries());
+  }
+
+  restoreDecisions(decisions: Record<string, string>): void {
+    this.decisions.clear();
+    for (const [scope, choice] of Object.entries(decisions)) {
+      if (choice === "abort_request" || choice === "send_original") {
+        this.decisions.set(scope, choice);
+      }
+    }
+  }
+
   capabilities(scope: string): Capabilities {
     const registration = this.store.driver.get(
       "SELECT * FROM adapter_sessions WHERE scope_key=?",
@@ -294,7 +307,9 @@ export class PaseoService {
       controlArg !== undefined
         ? controlArg
         : this.store.getAdapterControl("hermes");
-    const controlRev = control ? `${control.enabled ? 1 : 0}:${control.updated_at}` : "none";
+    const controlRev = control
+      ? `${control.enabled ? 1 : 0}:${control.revision}:${control.updated_at}`
+      : "none";
     const statSig = this.hermesHostStatSignature(profile);
     const now = Date.now();
     if (

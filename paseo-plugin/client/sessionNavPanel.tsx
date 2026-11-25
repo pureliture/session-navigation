@@ -24,15 +24,12 @@ import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { linkedTimelineFetchNeeded, scopeForAgent } from "./subagents";
-import { acceptWorkspaceAgentId, hasDomDocument, readSessionIdsUntilMatch, readSessionTailIds, resolveSessionTargetProgressive, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelinePage, resolveSessionTargetProgressive, selectMainOrFallbackAgent, sessionFollowCandidates, type SessionTimelinePage } from "./sessionFollowing";
 import {
-  OUTLINE_VIRTUALIZE_THRESHOLD,
-  computeOutlineWindow,
   stabilizeGroupedRows,
   stabilizeRows,
   visiblePollInterval,
 } from "./outlineWindow";
-import { recordClientPerf } from "./diagnostics";
 import {
   buildGroupedRows,
   effectiveRowBytes,
@@ -185,41 +182,43 @@ export function SessionNavPanel({
       const currentScopes = scopesRef.current;
       const needsTimelineScan =
         effectiveFollowVisible && focused?.kind !== "agent";
-      const resolvedTarget = needsTimelineScan
-        ? await resolveSessionTargetProgressive({
-            followVisible: effectiveFollowVisible,
-            boundAgentId: params.agentId,
-            visibleValues: values,
-            candidates: sessionFollowCandidates(
-              candidateAgentIds,
-              currentScopes.map((s) => s.agent_id).filter((id): id is string => !!id),
-            ),
-            getCachedTimelineIds: (id) => {
-              const entry = queryClient.getQueryData<{ ids: string[]; complete: boolean }>(["session-nav-follow", id]);
-              const state = queryClient.getQueryState(["session-nav-follow", id]);
-              if (!entry?.complete || !state?.dataUpdatedAt) return undefined;
-              if (Date.now() - state.dataUpdatedAt > 10_000) return undefined;
-              return entry;
-            },
-            loadTailIds: (id) =>
-              queryClient.fetchQuery({
-                queryKey: ["session-nav-follow-tail", id],
-                staleTime: 4000,
-                queryFn: () => readSessionTailIds(paseo.agents.ref(id).timeline, 200),
-              }),
-            loadProgressiveIds: (id) =>
-              queryClient.fetchQuery({
-                queryKey: ["session-nav-follow", id],
-                staleTime: (q) => (q.state.data?.complete ? 10_000 : 0),
-                queryFn: () =>
-                  readSessionIdsUntilMatch(paseo.agents.ref(id).timeline, values ?? [], {
-                    allowPartial: true,
-                  }),
-              }),
-          })
-        : effectiveFollowVisible
-          ? null
-          : params.agentId || null;
+      let resolvedTarget: string | null;
+      if (needsTimelineScan) {
+        const followResult = await resolveSessionTargetProgressive({
+          followVisible: effectiveFollowVisible,
+          boundAgentId: params.agentId,
+          visibleValues: values,
+          candidates: sessionFollowCandidates(
+            candidateAgentIds,
+            currentScopes.map((s) => s.agent_id).filter((id): id is string => !!id),
+          ),
+          getCachedTimelineIds: (id) => {
+            const entry = queryClient.getQueryData<{ ids: string[]; complete: boolean }>(["session-nav-follow", id]);
+            const state = queryClient.getQueryState(["session-nav-follow", id]);
+            if (!entry?.complete || !state?.dataUpdatedAt) return undefined;
+            if (Date.now() - state.dataUpdatedAt > 10_000) return undefined;
+            return entry;
+          },
+          getCachedTailPage: (id) => {
+            const entry = queryClient.getQueryData<SessionTimelinePage>(["session-nav-follow-tail", id]);
+            const state = queryClient.getQueryState(["session-nav-follow-tail", id]);
+            if (!entry || !state?.dataUpdatedAt) return undefined;
+            if (Date.now() - state.dataUpdatedAt > 4_000) return undefined;
+            return entry;
+          },
+          loadPage: (id, cursor) => readSessionTimelinePage(paseo.agents.ref(id).timeline, cursor),
+          onTailLoaded: (id, page) => {
+            queryClient.setQueryData(["session-nav-follow-tail", id], page);
+          },
+          onCompleteTimelineIds: (id, ids) => {
+            queryClient.setQueryData(["session-nav-follow", id], { ids, complete: true });
+          },
+        });
+        if (!followResult.confirmed) return;
+        resolvedTarget = followResult.targetId;
+      } else {
+        resolvedTarget = effectiveFollowVisible ? null : params.agentId || null;
+      }
       const selection = selectMainOrFallbackAgent({
         tab: focused,
         followVisible: effectiveFollowVisible,
@@ -889,10 +888,6 @@ export function SessionNavPanel({
     scrollDriverRef.current = new OutlineScrollDriver();
   }
   const hermesSettledKeyRef = useRef<string | null>(null);
-  const [windowMetrics, setWindowMetrics] = useState<{ scrollTop: number; clientHeight: number }>({
-    scrollTop: 0,
-    clientHeight: 0,
-  });
 
   const isSessionHiddenFromView = effectiveFollowVisible && !inView;
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
@@ -919,33 +914,8 @@ export function SessionNavPanel({
     }
   }, [agentId, isRefreshing, queryClient]);
 
-  const updateWindowViewport = (top: number | undefined, clientH: number | undefined) => {
-    if (groupedRows.length < OUTLINE_VIRTUALIZE_THRESHOLD) return;
-    setWindowMetrics((prev) => {
-      const nextTop = typeof top === "number" && Number.isFinite(top) ? Math.max(0, top) : prev.scrollTop;
-      const nextH =
-        typeof clientH === "number" && Number.isFinite(clientH) && clientH > 0
-          ? clientH
-          : prev.clientHeight;
-      if (
-        Math.abs(nextTop - prev.scrollTop) < 240 &&
-        Math.abs(nextH - prev.clientHeight) < 24
-      ) {
-        return prev;
-      }
-      return { scrollTop: nextTop, clientHeight: nextH };
-    });
-  };
-
   const handleOutlineScroll = (ev: any) => {
     scrollDriverRef.current?.handleScrollEvent(ev);
-    const ne = ev?.nativeEvent;
-    const sh = ne?.contentSize?.height;
-    const ch = ne?.layoutMeasurement?.height;
-    if (typeof sh === "number" && typeof ch === "number" && (sh <= 0 || ch <= 0)) {
-      return;
-    }
-    updateWindowViewport(ne?.contentOffset?.y, ch);
   };
 
 
@@ -1001,7 +971,6 @@ export function SessionNavPanel({
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
-    setWindowMetrics({ scrollTop: 0, clientHeight: 0 });
     scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
@@ -1446,33 +1415,6 @@ export function SessionNavPanel({
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
   const selectedGroupId = activeRowKey ? (groupIdByChildKey.get(activeRowKey) ?? null) : null;
 
-  const outlineWindow = useMemo(
-    () =>
-      computeOutlineWindow(groupedRows, {
-        scrollTop: windowMetrics.scrollTop,
-        clientHeight: windowMetrics.clientHeight,
-        compact: layout.compact,
-        expandedGroups,
-        pinToTail: !scrollDriverRef.current?.scroller.isUserScrolledUp(),
-        isSearching: Boolean(query),
-      }),
-    [groupedRows, windowMetrics, layout.compact, expandedGroups, query],
-  );
-
-  useEffect(() => {
-    if (!outlineWindow.virtualized) return;
-    recordClientPerf({
-      op: "outline.window",
-      duration_ms: 0,
-      ok: true,
-      row_count: groupedRows.length,
-      rendered_count: outlineWindow.visibleItems.length,
-      window_start: outlineWindow.startIndex,
-      window_end: outlineWindow.endIndex,
-      virtualized: outlineWindow.virtualized,
-    });
-  }, [outlineWindow, groupedRows.length]);
-
   const isResolvingSession = effectiveFollowVisible && !followResolved;
   const isCapabilitiesLoading =
     isResolvingSession || scopesQuery.isPending || (!!resolvedScopeKey && listQuery.isPending && !capabilities);
@@ -1670,21 +1612,14 @@ export function SessionNavPanel({
             onScroll={handleOutlineScroll}
             onScrollEndDrag={handleOutlineScroll}
             onMomentumScrollEnd={handleOutlineScroll}
-            onLayout={(ev: any) => {
-              scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState);
-              const ch = ev?.nativeEvent?.layout?.height;
-              if (typeof ch === "number" && ch > 0) {
-                updateWindowViewport(undefined, ch);
-              }
-            }}
+            onLayout={(ev: any) =>
+              scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState)
+            }
             onContentSizeChange={(_w: number, h: number) =>
               scrollDriverRef.current?.handleContentSizeChange(listRef.current, h, scrollState)
             }
           >
-            {outlineWindow.topSpacerHeight > 0 ? (
-              <View style={{ height: outlineWindow.topSpacerHeight }} />
-            ) : null}
-            {outlineWindow.visibleItems.map((item) => {
+            {groupedRows.map((item) => {
               if (item.type === "group") {
                 return (
                   <MemoOutlineRowItem
@@ -1731,9 +1666,6 @@ export function SessionNavPanel({
                 />
               );
             })}
-            {outlineWindow.bottomSpacerHeight > 0 ? (
-              <View style={{ height: outlineWindow.bottomSpacerHeight }} />
-            ) : null}
           </ScrollView>
         </View>
       )}

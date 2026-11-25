@@ -29,6 +29,20 @@ export function compileVisibleMatcher(
   };
 }
 
+export type SessionTimelineCursor = { epoch: string; seq: number };
+
+export interface SessionTimelinePage {
+  ids: string[];
+  complete: boolean;
+  startCursor?: SessionTimelineCursor;
+}
+
+export interface ProgressiveSessionTargetResult {
+  targetId: string | null;
+  confirmed: boolean;
+  incompleteIds: string[];
+}
+
 export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHandle, "refetch">) {
   const { entries, complete } = await readTimelineHistory(timeline, { allowPartial: true });
   return { ids: extractIdsFromEntries(entries), complete };
@@ -38,40 +52,47 @@ export async function readSessionTailIds(
   timeline: Pick<PaseoAgentTimelineHandle, "refetch">,
   limit = 200,
 ): Promise<{ ids: string[]; complete: boolean }> {
-  const page = await timeline.refetch({ direction: "tail", limit, projection: "canonical" });
-  if (page.error) throw new Error(page.error);
-  const ids: string[] = [];
-  for (const entry of page.entries) {
-    const item = entry.item as Record<string, unknown> | undefined;
-    if (!item) continue;
-    for (const key of ["messageId", "callId", "id"] as const) {
-      const value = item[key];
-      if (typeof value === "string" && value.length > 0) ids.push(value);
-    }
-  }
-  return { ids, complete: page.hasOlder === false };
+  const page = await readSessionTimelinePage(timeline, undefined, limit);
+  return { ids: page.ids, complete: page.complete };
 }
 
-export async function readSessionIdsUntilMatch(
+export async function readSessionTimelinePage(
   timeline: Pick<PaseoAgentTimelineHandle, "refetch">,
-  visibleValues: readonly string[],
-  options?: { maxPages?: number; allowPartial?: boolean },
-): Promise<{ ids: string[]; complete: boolean; matched: boolean }> {
-  const matcher = compileVisibleMatcher(visibleValues);
-  let matched = false;
-  const { entries, complete } = await readTimelineHistory(timeline, {
-    allowPartial: options?.allowPartial ?? true,
-    maxPages: options?.maxPages,
-    shouldStop: (batch) => {
-      const batchIds = extractIdsFromEntries(batch);
-      if (batchIds.some((id) => matcher(id))) {
-        matched = true;
-        return true;
-      }
-      return false;
-    },
-  });
-  return { ids: extractIdsFromEntries(entries), complete, matched };
+  cursor?: SessionTimelineCursor,
+  limit?: number,
+): Promise<SessionTimelinePage> {
+  const page = cursor
+    ? await timeline.refetch({
+        direction: "before",
+        cursor,
+        limit: limit ?? 1000,
+        projection: "canonical",
+      })
+    : await timeline.refetch({
+        direction: "tail",
+        limit: limit ?? 200,
+        projection: "canonical",
+      });
+  if (page.error) throw new Error(page.error);
+  if (
+    cursor &&
+    (!page.entries.length ||
+      (page.startCursor &&
+        page.startCursor.epoch === cursor.epoch &&
+        page.startCursor.seq >= cursor.seq))
+  ) {
+    return {
+      ids: [],
+      complete: page.hasOlder === false,
+      startCursor: undefined,
+    };
+  }
+  const complete = page.hasOlder === false;
+  return {
+    ids: extractIdsFromEntries(page.entries as TimelineHistory["entries"]),
+    complete,
+    startCursor: complete ? undefined : (page.startCursor ?? undefined),
+  };
 }
 
 export function sessionFollowCandidates(workspaceAgentIds: readonly string[] | undefined, scopeAgentIds: readonly string[]): readonly string[] {
@@ -84,23 +105,35 @@ export async function resolveSessionTargetProgressive({
   visibleValues,
   candidates,
   getCachedTimelineIds,
-  loadTailIds,
-  loadProgressiveIds,
+  getCachedTailPage,
+  loadPage,
+  onTailLoaded,
+  onCompleteTimelineIds,
+  maxPagesPerCandidate,
 }: {
   followVisible: boolean;
   boundAgentId: string;
   visibleValues: string[] | null;
   candidates: readonly string[];
   getCachedTimelineIds?: (id: string) => { ids: string[]; complete: boolean } | undefined;
-  loadTailIds: (id: string) => Promise<{ ids: string[]; complete: boolean }>;
-  loadProgressiveIds: (id: string) => Promise<{ ids: string[]; complete: boolean }>;
-}): Promise<string | null> {
-  if (!followVisible) return boundAgentId || null;
-  if (visibleValues === null || visibleValues.length === 0) return null;
+  getCachedTailPage?: (id: string) => SessionTimelinePage | undefined;
+  loadPage: (id: string, cursor?: SessionTimelineCursor) => Promise<SessionTimelinePage>;
+  onTailLoaded?: (id: string, page: SessionTimelinePage) => void;
+  onCompleteTimelineIds?: (id: string, ids: string[]) => void;
+  maxPagesPerCandidate?: number;
+}): Promise<ProgressiveSessionTargetResult> {
+  if (!followVisible) {
+    return { targetId: boundAgentId || null, confirmed: true, incompleteIds: [] };
+  }
+  if (visibleValues === null || visibleValues.length === 0) {
+    return { targetId: null, confirmed: true, incompleteIds: [] };
+  }
 
   const started = performance.now();
   const ordered = [...new Set([boundAgentId, ...candidates].filter(Boolean))];
-  if (ordered.length === 0) return null;
+  if (ordered.length === 0) {
+    return { targetId: null, confirmed: true, incompleteIds: [] };
+  }
 
   const matcher = compileVisibleMatcher(visibleValues);
   const scoreIds = (ids: readonly string[]): number => {
@@ -111,84 +144,256 @@ export async function resolveSessionTargetProgressive({
     return score;
   };
 
-  let best = { id: "", score: 0 };
-  const incompleteTailIds: string[] = [];
-  const needTailIds: string[] = [];
+  interface CandidateState {
+    id: string;
+    index: number;
+    pages: string[][];
+    score: number;
+    complete: boolean;
+    failed: boolean;
+    truncated: boolean;
+    fromCompleteCache: boolean;
+    usedCachedTail: boolean;
+    pagesLoaded: number;
+    cursor?: SessionTimelineCursor;
+  }
 
-  for (const id of ordered) {
+  const states: CandidateState[] = ordered.map((id, index) => {
     const cached = getCachedTimelineIds?.(id);
     if (cached && cached.complete) {
-      const score = scoreIds(cached.ids);
-      if (score > best.score) best = { id, score };
-    } else {
-      needTailIds.push(id);
+      return {
+        id,
+        index,
+        pages: [cached.ids],
+        score: scoreIds(cached.ids),
+        complete: true,
+        failed: false,
+        truncated: false,
+        fromCompleteCache: true,
+        usedCachedTail: false,
+        pagesLoaded: 0,
+        cursor: undefined,
+      };
     }
-  }
-
-  if (needTailIds.length > 0 && best.score === 0) {
-    const tailResults = await Promise.all(
-      needTailIds.map(async (id) => {
-        try {
-          const tail = await loadTailIds(id);
-          return { id, tail };
-        } catch {
-          return { id, tail: { ids: [] as string[], complete: false } };
-        }
-      }),
-    );
-    for (const { id, tail } of tailResults) {
-      const score = scoreIds(tail.ids);
-      if (score > best.score) best = { id, score };
-      if (!tail.complete && score === 0) {
-        incompleteTailIds.push(id);
-      }
-    }
-  } else if (needTailIds.length > 0 && best.score > 0) {
-    // Still check incomplete uncached tails only if we haven't checked tails yet? No:
-    // if a complete cached session matched >= 1 visible item, still allow tail checks
-    // for uncached candidates to ensure highest score without scanning full history.
-    const tailResults = await Promise.all(
-      needTailIds.map(async (id) => {
-        try {
-          const tail = await loadTailIds(id);
-          return { id, tail };
-        } catch {
-          return { id, tail: { ids: [] as string[], complete: false } };
-        }
-      }),
-    );
-    for (const { id, tail } of tailResults) {
-      const score = scoreIds(tail.ids);
-      if (score > best.score) best = { id, score };
-    }
-  }
-
-  if (best.score === 0 && incompleteTailIds.length > 0) {
-    const progressiveResults = await Promise.all(
-      incompleteTailIds.map(async (id) => {
-        try {
-          const prog = await loadProgressiveIds(id);
-          return { id, ids: prog.ids };
-        } catch {
-          return { id, ids: [] as string[] };
-        }
-      }),
-    );
-    for (const { id, ids } of progressiveResults) {
-      const score = scoreIds(ids);
-      if (score > best.score) best = { id, score };
-    }
-  }
-
-  recordClientPerf({
-    op: "sessionFollow.resolve",
-    duration_ms: performance.now() - started,
-    ok: true,
-    candidate_count: ordered.length,
-    page_count: needTailIds.length,
+    return {
+      id,
+      index,
+      pages: [],
+      score: 0,
+      complete: false,
+      failed: false,
+      truncated: false,
+      fromCompleteCache: false,
+      usedCachedTail: false,
+      pagesLoaded: 0,
+      cursor: undefined,
+    };
   });
 
-  return best.id || null;
+  const flattenChronological = (pages: readonly string[][]): string[] => {
+    const combined: string[] = [];
+    for (let i = pages.length - 1; i >= 0; i--) {
+      combined.push(...pages[i]);
+    }
+    return combined;
+  };
+
+  const incompleteIds = (): string[] =>
+    states.filter((s) => !s.complete).map((s) => s.id);
+
+  // A candidate w with positive score is provably identical to the full-history
+  // winner iff every competitor j != w is complete (or failed) and cannot tie-beat
+  // or outscore w's current score (lower index wins exact ties).
+  const evaluateProof = (): ProgressiveSessionTargetResult | null => {
+    for (let w = 0; w < states.length; w++) {
+      const winner = states[w];
+      if (winner.score <= 0) continue;
+      let proven = true;
+      for (let j = 0; j < states.length; j++) {
+        if (j === w) continue;
+        const other = states[j];
+        if (!other.complete && !other.failed) {
+          proven = false;
+          break;
+        }
+        const beats = w < j ? winner.score >= other.score : winner.score > other.score;
+        if (!beats) {
+          proven = false;
+          break;
+        }
+      }
+      if (proven) {
+        return {
+          targetId: winner.id,
+          confirmed: true,
+          incompleteIds: incompleteIds(),
+        };
+      }
+    }
+
+    if (states.every((s) => s.complete || s.failed)) {
+      let best: CandidateState | null = null;
+      for (const s of states) {
+        if (s.score > 0 && (!best || s.score > best.score)) {
+          best = s;
+        }
+      }
+      return {
+        targetId: best ? best.id : null,
+        confirmed: true,
+        incompleteIds: incompleteIds(),
+      };
+    }
+
+    return null;
+  };
+
+  let rpcPagesLoaded = 0;
+  const finish = (result: ProgressiveSessionTargetResult): ProgressiveSessionTargetResult => {
+    recordClientPerf({
+      op: "sessionFollow.resolve",
+      duration_ms: performance.now() - started,
+      ok: result.confirmed,
+      candidate_count: ordered.length,
+      page_count: rpcPagesLoaded,
+    });
+    return result;
+  };
+
+  const cachedProof = evaluateProof();
+  if (cachedProof) {
+    return finish(cachedProof);
+  }
+
+  // Check cached tail snapshots speculatively first (0 RPCs if sufficient).
+  const uncachedStates = states.filter((s) => !s.fromCompleteCache);
+  if (getCachedTailPage && uncachedStates.length > 0) {
+    let anyCachedTail = false;
+    for (const s of uncachedStates) {
+      const tail = getCachedTailPage(s.id);
+      if (!tail) continue;
+      anyCachedTail = true;
+      s.pages = [tail.ids];
+      s.score = scoreIds(tail.ids);
+      s.complete = tail.complete;
+      s.cursor = tail.complete ? undefined : tail.startCursor;
+      s.usedCachedTail = true;
+      s.pagesLoaded = 1;
+      if (!s.complete && !s.cursor) {
+        s.failed = true;
+      }
+    }
+    if (anyCachedTail) {
+      const cachedTailProof = evaluateProof();
+      if (cachedTailProof) {
+        return finish(cachedTailProof);
+      }
+    }
+  }
+
+  // Fetch fresh tail pages for all candidates not backed by complete full-history cache.
+  if (uncachedStates.length > 0) {
+    await Promise.all(
+      uncachedStates.map(async (s) => {
+        s.usedCachedTail = false;
+        s.failed = false;
+        s.truncated = false;
+        try {
+          rpcPagesLoaded += 1;
+          const page = await loadPage(s.id, undefined);
+          s.pages = [page.ids];
+          s.score = scoreIds(page.ids);
+          s.pagesLoaded = 1;
+          s.complete = page.complete;
+          s.cursor = page.complete ? undefined : page.startCursor;
+          onTailLoaded?.(s.id, page);
+          if (s.complete) {
+            onCompleteTimelineIds?.(s.id, page.ids);
+          } else if (!s.cursor) {
+            s.failed = true;
+          }
+        } catch {
+          s.pages = [];
+          s.score = 0;
+          s.pagesLoaded = 0;
+          s.complete = false;
+          s.cursor = undefined;
+          s.failed = true;
+        }
+      }),
+    );
+
+    const tailProof = evaluateProof();
+    if (tailProof) {
+      return finish(tailProof);
+    }
+  }
+
+  // Incremental expansion: prioritize paging incomplete non-leaders first so
+  // small/medium competitors finish cleanly and can prove a large leader
+  // without scanning older pages of the leader unless strictly necessary.
+  while (true) {
+    if (typeof maxPagesPerCandidate === "number" && maxPagesPerCandidate > 0) {
+      for (const s of states) {
+        if (!s.complete && !s.failed && !s.truncated && s.pagesLoaded >= maxPagesPerCandidate) {
+          s.truncated = true;
+        }
+      }
+    }
+
+    const stepProof = evaluateProof();
+    if (stepProof) {
+      return finish(stepProof);
+    }
+
+    const expandable = states.filter(
+      (s) => !s.complete && !s.failed && !s.truncated && Boolean(s.cursor),
+    );
+    if (expandable.length === 0) {
+      break;
+    }
+
+    let leader: CandidateState | null = null;
+    for (const s of states) {
+      if (s.score > 0 && (!leader || s.score > leader.score)) {
+        leader = s;
+      }
+    }
+    const nonLeaders = leader ? expandable.filter((s) => s !== leader) : expandable;
+    const batch = nonLeaders.length > 0 ? nonLeaders : expandable;
+
+    await Promise.all(
+      batch.map(async (s) => {
+        try {
+          rpcPagesLoaded += 1;
+          const page = await loadPage(s.id, s.cursor);
+          s.pages.push(page.ids);
+          s.score += scoreIds(page.ids);
+          s.pagesLoaded += 1;
+          s.complete = page.complete;
+          s.cursor = page.complete ? undefined : page.startCursor;
+          if (s.complete) {
+            onCompleteTimelineIds?.(s.id, flattenChronological(s.pages));
+          } else if (!s.cursor) {
+            s.failed = true;
+          }
+        } catch {
+          s.failed = true;
+        }
+      }),
+    );
+
+    const afterProof = evaluateProof();
+    if (afterProof) {
+      return finish(afterProof);
+    }
+  }
+
+  return finish({
+    targetId: null,
+    confirmed: false,
+    incompleteIds: incompleteIds(),
+  });
 }
 
 export async function resolveSessionTarget({

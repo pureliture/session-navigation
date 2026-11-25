@@ -17,6 +17,13 @@ parentPort!.on("message", (request) => {
           new Store(new NodeDriver(request.path)),
           request.home,
         );
+        if (
+          request.decisions &&
+          typeof request.decisions === "object" &&
+          !Array.isArray(request.decisions)
+        ) {
+          service.restoreDecisions(request.decisions);
+        }
       }
       if (
         typeof request.controlGeneration === "number" &&
@@ -25,9 +32,13 @@ parentPort!.on("message", (request) => {
         lastControlGeneration = request.controlGeneration;
         service.invalidateControlCaches();
       }
+      const reply = await service.handle(request.method, request.input);
       parentPort!.postMessage({
         id: request.id,
-        reply: await service.handle(request.method, request.input),
+        reply,
+        ...(request.syncDecisions === true
+          ? { decisions: service.exportDecisions() }
+          : {}),
       });
     } catch (error) {
       const code = error instanceof EngineError ? error.code : "engine_error";
@@ -45,6 +56,9 @@ parentPort!.on("message", (request) => {
             ? { choices: ["abort_request", "send_original"] }
             : {}),
         },
+        ...(request.syncDecisions === true && service
+          ? { decisions: service.exportDecisions() }
+          : {}),
       });
     }
   });
