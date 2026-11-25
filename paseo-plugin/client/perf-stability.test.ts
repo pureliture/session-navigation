@@ -6,6 +6,9 @@ import { buildGroupedRows, outlineRowKey, type OutlineRow } from "./outlineGroup
 import { OutlineScrollDriver } from "./outlineScroll";
 import { stabilizeGroupedRows, stabilizeRows, visiblePollInterval } from "./outlineWindow";
 import {
+  FollowSelectionCoordinator,
+  followSnapshotKey,
+  isSameConfirmedFollowSession,
   reconcileFollowSelection,
   readSessionTimelineIds,
   readSessionTimelinePage,
@@ -761,4 +764,347 @@ test("client diagnostics keep bounded ring buffer and reject user content or std
     else process.env.SESSION_NAVIGATION_PERF_DIAG = prev;
     clearClientPerf();
   }
+});
+
+test("FollowSelectionCoordinator blocks actions immediately on A->B switch and discards stale slow scans (both completion orders)", async () => {
+  // Helper deferred gate for deterministic async interleaving.
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+
+  // Initial mount in follow mode bound to "a1" MUST block actions before first match confirms.
+  const coord = new FollowSelectionCoordinator(true, "a1");
+  expect(coord.getState()).toMatchObject({
+    agentId: null,
+    inView: false,
+    followResolved: false,
+    actionBlocked: true,
+  });
+
+  // Initial slow scan for A ("msg-a1") starts; mid-scan focus switches to B ("msg-b1").
+  const obsA = { tab: null, visibleValues: ["msg-a1"] };
+  const obsB = { tab: null, visibleValues: ["msg-b1"] };
+  const attemptA = coord.beginAttempt(obsA, true);
+  expect(attemptA.kind).toBe("run");
+  if (attemptA.kind !== "run") throw new Error("expected run attempt for A");
+
+  const gateA = deferred<SessionTimelinePage>();
+  let aPageCalls = 0;
+  const slowScanA = resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues: [...obsA.visibleValues],
+    candidates: ["a1", "b1"],
+    loadPage: async (id) => {
+      aPageCalls += 1;
+      if (id === "a1") return gateA.promise;
+      return { ids: ["msg-b1"], complete: true };
+    },
+    isStale: () => !coord.isCurrent(attemptA.generation),
+  });
+
+  // Switch focus to B while slowScanA is still suspended on gateA.
+  const liveToB = coord.observeLiveChange(obsB, true);
+  expect(liveToB.invalidatedInFlight).toBe(true);
+  expect(coord.isCurrent(attemptA.generation)).toBe(false);
+
+  // Start fast scan for B immediately (without waiting for slowScanA).
+  const attemptB = coord.beginAttempt(obsB, true);
+  expect(attemptB.kind).toBe("run");
+  if (attemptB.kind !== "run") throw new Error("expected run attempt for B");
+  const fastResultB = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues: [...obsB.visibleValues],
+    candidates: ["a1", "b1"],
+    loadPage: async (id) =>
+      id === "b1"
+        ? { ids: ["msg-b1"], complete: true }
+        : { ids: ["msg-a1"], complete: true },
+    isStale: () => !coord.isCurrent(attemptB.generation),
+  });
+  const outcomeB = coord.commitAttempt({
+    generation: attemptB.generation,
+    startObservation: obsB,
+    startSnapshotKey: attemptB.snapshotKey,
+    liveObservation: obsB,
+    followVisible: true,
+    followResult: fastResultB,
+    boundAgentId: "a1",
+  });
+  expect(outcomeB.committed).toBe(true);
+  expect(outcomeB.state).toMatchObject({
+    agentId: "b1",
+    inView: true,
+    followResolved: true,
+    followSwitching: false,
+    actionBlocked: false,
+  });
+
+  // Late resolution of slowScanA MUST stop early via isStale and be discarded (never overwrite B).
+  gateA.resolve({ ids: ["msg-a1"], complete: false, startCursor: { epoch: "e1", seq: 1 } });
+  const staleResultA = await slowScanA;
+  expect(staleResultA.confirmed).toBe(false);
+  expect(aPageCalls).toBe(2); // did not proceed to "before" pagination once marked stale
+  const staleOutcomeA = coord.commitAttempt({
+    generation: attemptA.generation,
+    startObservation: obsA,
+    startSnapshotKey: attemptA.snapshotKey,
+    liveObservation: obsB,
+    followVisible: true,
+    followResult: staleResultA,
+    boundAgentId: "a1",
+  });
+  expect(staleOutcomeA).toMatchObject({
+    committed: false,
+    staleReason: "superseded",
+    needsFollowUp: false,
+  });
+  expect(coord.getState().agentId).toBe("b1");
+
+  // Second switch B -> C: verify stale previous-session B actions are blocked at T=0ms before C settles.
+  const obsC = { tab: null, visibleValues: ["msg-c1"] };
+  const switchBtoC = coord.observeLiveChange(obsC, true, (id) =>
+    id === "b1" ? ["msg-b1"] : undefined,
+  );
+  expect(switchBtoC.enteredSwitching).toBe(true);
+  expect(switchBtoC.state).toMatchObject({
+    agentId: null,
+    followSwitching: true,
+    actionBlocked: true,
+  });
+
+  // Also test stale slow B resolving AFTER superseding attempt C starts (reverse completion order).
+  const attemptCSlow = coord.beginAttempt(obsC, true);
+  if (attemptCSlow.kind !== "run") throw new Error("expected run attempt for C");
+  const obsD = { tab: null, visibleValues: ["msg-d1"] };
+  coord.observeLiveChange(obsD, true);
+  const outcomeCSupersededBeforeD = coord.commitAttempt({
+    generation: attemptCSlow.generation,
+    startObservation: obsC,
+    startSnapshotKey: attemptCSlow.snapshotKey,
+    liveObservation: obsD,
+    followVisible: true,
+    followResult: { targetId: "c1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+  });
+  expect(outcomeCSupersededBeforeD.committed).toBe(false);
+  expect(coord.getState().actionBlocked).toBe(true);
+  expect(coord.getState().agentId).toBeNull();
+});
+
+test("FollowSelectionCoordinator catches silent mid-scan DOM changes and keeps same-session refreshes flicker-free", () => {
+  const coord = new FollowSelectionCoordinator(true, "a1");
+  const knownTimelines: Record<string, string[]> = {
+    a1: ["msg-a1", "msg-a2"],
+    b1: ["msg-b1"],
+  };
+  const getKnown = (id: string) => knownTimelines[id];
+
+  // Confirm session A ("a1").
+  const obsA1 = { tab: null, visibleValues: ["msg-a1"] };
+  const a1 = coord.beginAttempt(obsA1, true, getKnown);
+  if (a1.kind !== "run") throw new Error("expected run");
+  const cA1 = coord.commitAttempt({
+    generation: a1.generation,
+    startObservation: obsA1,
+    startSnapshotKey: a1.snapshotKey,
+    liveObservation: obsA1,
+    followVisible: true,
+    followResult: { targetId: "a1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+    getKnownAgentTimelineIds: getKnown,
+  });
+  expect(cA1.state).toMatchObject({
+    agentId: "a1",
+    inView: true,
+    followSwitching: false,
+    actionBlocked: false,
+  });
+
+  // 1. Periodic 3s refresh on identical snapshot: NO switching banner, NO action blocking, deduplicates same snapshot in-flight.
+  const refreshSame = coord.beginAttempt(obsA1, true, getKnown);
+  expect(refreshSame.kind).toBe("run");
+  if (refreshSame.kind !== "run") throw new Error("expected run");
+  expect(refreshSame.enteredSwitching).toBe(false);
+  expect(coord.getState()).toMatchObject({
+    agentId: "a1",
+    followSwitching: false,
+    actionBlocked: false,
+  });
+  const dupRefresh = coord.beginAttempt(obsA1, true, getKnown);
+  expect(dupRefresh.kind).toBe("dedup");
+
+  // 2. While identical periodic refresh is in-flight, DOM silently mutates to session B without a prior event
+  // (including a shared generic DOM chrome id "chat-root" that must NOT mask an A -> B session change).
+  const obsBWithSharedChrome = { tab: null, visibleValues: ["chat-root", "msg-b1"] };
+  expect(
+    isSameConfirmedFollowSession({
+      confirmed: coord.getConfirmed(),
+      observation: obsBWithSharedChrome,
+      getKnownAgentTimelineIds: getKnown,
+    }),
+  ).toBe(false);
+
+  const staleCommit = coord.commitAttempt({
+    generation: refreshSame.generation,
+    startObservation: obsA1,
+    startSnapshotKey: refreshSame.snapshotKey,
+    liveObservation: obsBWithSharedChrome,
+    followVisible: true,
+    followResult: { targetId: "a1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+    getKnownAgentTimelineIds: getKnown,
+  });
+  expect(staleCommit).toMatchObject({
+    committed: false,
+    staleReason: "snapshot_changed",
+    needsFollowUp: true,
+    enteredSwitching: true,
+  });
+  expect(staleCommit.state).toMatchObject({
+    agentId: null,
+    followSwitching: true,
+    actionBlocked: true,
+  });
+
+  // 3. Follow-up scan resolves B cleanly.
+  const b1 = coord.beginAttempt(obsBWithSharedChrome, true, getKnown);
+  if (b1.kind !== "run") throw new Error("expected run");
+  const cB1 = coord.commitAttempt({
+    generation: b1.generation,
+    startObservation: obsBWithSharedChrome,
+    startSnapshotKey: b1.snapshotKey,
+    liveObservation: obsBWithSharedChrome,
+    followVisible: true,
+    followResult: { targetId: "b1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+    getKnownAgentTimelineIds: getKnown,
+  });
+  expect(cB1).toMatchObject({
+    committed: true,
+    state: {
+      agentId: "b1",
+      inView: true,
+      followSwitching: false,
+      actionBlocked: false,
+    },
+  });
+
+  // 4. Same-session scroll / streaming new message matching cached B timeline: NO switching flicker and NO blocking.
+  knownTimelines.b1 = ["msg-b1", "msg-b2"];
+  const obsBScrolled = { tab: null, visibleValues: ["msg-b1", "msg-b2"] };
+  const liveScroll = coord.observeLiveChange(obsBScrolled, true, getKnown);
+  expect(liveScroll.enteredSwitching).toBe(false);
+  expect(liveScroll.state).toMatchObject({
+    agentId: "b1",
+    followSwitching: false,
+    actionBlocked: false,
+  });
+});
+
+test("FollowSelectionCoordinator handles direct tab supersede, uncertain failure retry without flicker, recovery, and panel wiring", () => {
+  const coord = new FollowSelectionCoordinator(true, "a1");
+  const obsA = { tab: null, visibleValues: ["msg-a1"] };
+  const aAttempt = coord.beginAttempt(obsA, true);
+  if (aAttempt.kind !== "run") throw new Error("expected run");
+
+  // Direct agent tab B supersedes slow scan A immediately.
+  const tabB = { tab: { kind: "agent" as const, agentId: "b1" }, visibleValues: null };
+  const bAttempt = coord.beginAttempt(tabB, true);
+  if (bAttempt.kind !== "run") throw new Error("expected run");
+  const bCommitted = coord.commitAttempt({
+    generation: bAttempt.generation,
+    startObservation: tabB,
+    startSnapshotKey: followSnapshotKey(tabB),
+    liveObservation: tabB,
+    followVisible: true,
+    followResult: null,
+    boundAgentId: "a1",
+  });
+  expect(bCommitted.state).toMatchObject({
+    agentId: "b1",
+    inView: true,
+    followSwitching: false,
+    actionBlocked: false,
+  });
+
+  // Stale slow scan A resolves late -> rejected, B remains active.
+  const lateA = coord.commitAttempt({
+    generation: aAttempt.generation,
+    startObservation: obsA,
+    startSnapshotKey: aAttempt.snapshotKey,
+    liveObservation: tabB,
+    followVisible: true,
+    followResult: { targetId: "a1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+  });
+  expect(lateA.committed).toBe(false);
+  expect(coord.getState().agentId).toBe("b1");
+
+  // Switch B -> failing C: blocks B immediately, enters followUncertain, retries cleanly without flicker, recovers to C.
+  const obsC = { tab: null, visibleValues: ["msg-c1"] };
+  const cAttempt1 = coord.beginAttempt(obsC, true);
+  if (cAttempt1.kind !== "run") throw new Error("expected run");
+  expect(cAttempt1.enteredSwitching).toBe(true);
+  expect(cAttempt1.state.actionBlocked).toBe(true);
+
+  const cFailed = coord.commitAttempt({
+    generation: cAttempt1.generation,
+    startObservation: obsC,
+    startSnapshotKey: cAttempt1.snapshotKey,
+    liveObservation: obsC,
+    followVisible: true,
+    followResult: { targetId: null, confirmed: false, incompleteIds: ["c1"], failedIds: ["c1"] },
+    boundAgentId: "a1",
+  });
+  expect(cFailed.state).toMatchObject({
+    agentId: null,
+    inView: false,
+    followUncertain: true,
+    followSwitching: false,
+    actionBlocked: true,
+    retryable: true,
+    failedIds: ["c1"],
+  });
+
+  // Retry while uncertain stays on error screen (does not flip followSwitching=true).
+  const cRetry = coord.beginAttempt(obsC, true);
+  if (cRetry.kind !== "run") throw new Error("expected run");
+  expect(cRetry.enteredSwitching).toBe(false);
+  expect(cRetry.state.actionBlocked).toBe(true);
+
+  // Recovery confirms C and re-enables actions.
+  const cRecovered = coord.commitAttempt({
+    generation: cRetry.generation,
+    startObservation: obsC,
+    startSnapshotKey: cRetry.snapshotKey,
+    liveObservation: obsC,
+    followVisible: true,
+    followResult: { targetId: "c1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+  });
+  expect(cRecovered.state).toMatchObject({
+    agentId: "c1",
+    inView: true,
+    followUncertain: false,
+    followSwitching: false,
+    actionBlocked: false,
+    retryable: false,
+  });
+
+  // Structural guard verifying SessionNavPanel wires FollowSelectionCoordinator, sync ref guard, and live probe.
+  const panelSource = readFileSync(join(import.meta.dir, "sessionNavPanel.tsx"), "utf8");
+  expect(panelSource).toContain("FollowSelectionCoordinator");
+  expect(panelSource).toContain("followActionBlockedRef");
+  expect(panelSource).toContain("isMutationAllowedNow");
+  expect(panelSource).toContain("isStale: () => cancelled || !coordinator.isCurrent(attempt.generation)");
+  expect(panelSource).toContain("coordinator.commitAttempt");
+  expect(panelSource).toContain("Switching session…");
 });

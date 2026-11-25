@@ -111,6 +111,7 @@ export async function resolveSessionTargetProgressive({
   onTailLoaded,
   onCompleteTimelineIds,
   maxPagesPerCandidate,
+  isStale,
 }: {
   followVisible: boolean;
   boundAgentId: string;
@@ -122,6 +123,7 @@ export async function resolveSessionTargetProgressive({
   onTailLoaded?: (id: string, page: SessionTimelinePage) => void;
   onCompleteTimelineIds?: (id: string, ids: string[]) => void;
   maxPagesPerCandidate?: number;
+  isStale?: () => boolean;
 }): Promise<ProgressiveSessionTargetResult> {
   if (!followVisible) {
     return { targetId: boundAgentId || null, confirmed: true, incompleteIds: [], failedIds: [] };
@@ -287,6 +289,17 @@ export async function resolveSessionTargetProgressive({
     return result;
   };
 
+  const abortedResult = (): ProgressiveSessionTargetResult => ({
+    targetId: null,
+    confirmed: false,
+    incompleteIds: incompleteIds(),
+    failedIds: failedIds(),
+  });
+
+  if (isStale?.()) {
+    return finish(abortedResult());
+  }
+
   const cachedProof = evaluateProof();
   if (cachedProof) {
     return finish(cachedProof);
@@ -318,16 +331,22 @@ export async function resolveSessionTargetProgressive({
     }
   }
 
+  if (isStale?.()) {
+    return finish(abortedResult());
+  }
+
   // Fetch fresh tail pages for all candidates not backed by complete full-history cache.
   if (uncachedStates.length > 0) {
     await Promise.all(
       uncachedStates.map(async (s) => {
+        if (isStale?.()) return;
         s.usedCachedTail = false;
         s.failed = false;
         s.truncated = false;
         try {
           rpcPagesLoaded += 1;
           const page = await loadPage(s.id, undefined);
+          if (isStale?.()) return;
           s.pages = [page.ids];
           s.score = scoreIds(page.ids);
           s.pagesLoaded = 1;
@@ -340,6 +359,7 @@ export async function resolveSessionTargetProgressive({
             s.failed = true;
           }
         } catch {
+          if (isStale?.()) return;
           s.pages = [];
           s.score = 0;
           s.pagesLoaded = 0;
@@ -349,6 +369,10 @@ export async function resolveSessionTargetProgressive({
         }
       }),
     );
+
+    if (isStale?.()) {
+      return finish(abortedResult());
+    }
 
     const tailProof = evaluateProof();
     if (tailProof) {
@@ -360,6 +384,10 @@ export async function resolveSessionTargetProgressive({
   // small/medium competitors finish cleanly and can prove a large leader
   // without scanning older pages of the leader unless strictly necessary.
   while (true) {
+    if (isStale?.()) {
+      return finish(abortedResult());
+    }
+
     if (typeof maxPagesPerCandidate === "number" && maxPagesPerCandidate > 0) {
       for (const s of states) {
         if (!s.complete && !s.failed && !s.truncated && s.pagesLoaded >= maxPagesPerCandidate) {
@@ -395,9 +423,11 @@ export async function resolveSessionTargetProgressive({
 
     await Promise.all(
       batch.map(async (s) => {
+        if (isStale?.()) return;
         try {
           rpcPagesLoaded += 1;
           const page = await loadPage(s.id, s.cursor);
+          if (isStale?.()) return;
           s.pages.push(page.ids);
           s.score += scoreIds(page.ids);
           s.pagesLoaded += 1;
@@ -409,10 +439,14 @@ export async function resolveSessionTargetProgressive({
             s.failed = true;
           }
         } catch {
-          s.failed = true;
+          if (!isStale?.()) s.failed = true;
         }
       }),
     );
+
+    if (isStale?.()) {
+      return finish(abortedResult());
+    }
 
     const afterProof = evaluateProof();
     if (afterProof) {
@@ -420,12 +454,7 @@ export async function resolveSessionTargetProgressive({
     }
   }
 
-  return finish({
-    targetId: null,
-    confirmed: false,
-    incompleteIds: incompleteIds(),
-    failedIds: failedIds(),
-  });
+  return finish(abortedResult());
 }
 
 export async function resolveSessionTarget({
@@ -709,4 +738,347 @@ export function reconcileFollowSelection({
     followUncertain: false,
     retryable: false,
   };
+}
+
+export interface FollowObservation {
+  tab: SessionTab | null;
+  visibleValues: readonly string[] | null;
+}
+
+export interface ConfirmedFollowContext {
+  agentId: string | null;
+  inView: boolean;
+  tab: SessionTab | null;
+  snapshotKey: string;
+}
+
+export interface FollowCoordinatorUiState {
+  agentId: string | null;
+  inView: boolean;
+  followResolved: boolean;
+  followUncertain: boolean;
+  followSwitching: boolean;
+  actionBlocked: boolean;
+  retryable: boolean;
+  failedIds: string[];
+}
+
+export type FollowAttemptStart =
+  | { kind: "dedup"; state: FollowCoordinatorUiState }
+  | {
+      kind: "run";
+      generation: number;
+      snapshotKey: string;
+      enteredSwitching: boolean;
+      state: FollowCoordinatorUiState;
+    };
+
+export type FollowCommitOutcome =
+  | {
+      committed: true;
+      state: FollowCoordinatorUiState;
+    }
+  | {
+      committed: false;
+      staleReason: "superseded" | "snapshot_changed";
+      needsFollowUp: boolean;
+      enteredSwitching: boolean;
+      state: FollowCoordinatorUiState;
+    };
+
+export function followTabKey(tab: SessionTab | null): string {
+  return tab?.kind === "agent" ? `agent:${tab.agentId}` : "chat";
+}
+
+export function visibleValuesKey(values: readonly string[] | null): string {
+  if (values === null) return "null";
+  if (values.length === 0) return "empty";
+  return JSON.stringify(values);
+}
+
+export function followSnapshotKey(observation: FollowObservation): string {
+  return `${followTabKey(observation.tab)}\n${visibleValuesKey(observation.visibleValues)}`;
+}
+
+/**
+ * Determine whether a live focus/DOM observation belongs to the already
+ * confirmed session without relying on raw DOM string reuse across chats
+ * (shared element chrome `id`s must never mask an A -> B session switch).
+ */
+export function isSameConfirmedFollowSession({
+  confirmed,
+  observation,
+  getKnownAgentTimelineIds,
+}: {
+  confirmed: ConfirmedFollowContext | null;
+  observation: FollowObservation;
+  getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined;
+}): boolean {
+  if (!confirmed) return false;
+  if (followSnapshotKey(observation) === confirmed.snapshotKey) {
+    return true;
+  }
+  if (!confirmed.inView || !confirmed.agentId) {
+    return (
+      !confirmed.inView &&
+      observation.tab?.kind !== "agent" &&
+      (!observation.visibleValues || observation.visibleValues.length === 0)
+    );
+  }
+  if (observation.tab?.kind === "agent") {
+    return observation.tab.agentId === confirmed.agentId;
+  }
+  if (!observation.visibleValues || observation.visibleValues.length === 0) {
+    return false;
+  }
+  const knownIds = getKnownAgentTimelineIds?.(confirmed.agentId);
+  if (!knownIds || knownIds.length === 0) {
+    return false;
+  }
+  const matcher = compileVisibleMatcher(observation.visibleValues);
+  return knownIds.some((id) => matcher(id));
+}
+
+function initialCoordinatorState(
+  initialPending: boolean,
+  boundAgentId: string,
+): FollowCoordinatorUiState {
+  if (initialPending) {
+    return {
+      agentId: null,
+      inView: false,
+      followResolved: false,
+      followUncertain: false,
+      followSwitching: false,
+      actionBlocked: true,
+      retryable: false,
+      failedIds: [],
+    };
+  }
+  return {
+    agentId: boundAgentId || null,
+    inView: Boolean(boundAgentId),
+    followResolved: true,
+    followUncertain: false,
+    followSwitching: false,
+    actionBlocked: false,
+    retryable: false,
+    failedIds: [],
+  };
+}
+
+/**
+ * Coordinates async follow resolution with monotonic generation tokens,
+ * immediate switch-time action blocking, same-session flicker avoidance,
+ * and pre-commit live snapshot re-verification.
+ */
+export class FollowSelectionCoordinator {
+  private generation = 0;
+  private confirmed: ConfirmedFollowContext | null = null;
+  private inFlight: { generation: number; snapshotKey: string } | null = null;
+  private state: FollowCoordinatorUiState;
+
+  constructor(initialPending: boolean, boundAgentId = "") {
+    this.state = initialCoordinatorState(initialPending, boundAgentId);
+  }
+
+  reset(initialPending: boolean, boundAgentId = ""): FollowCoordinatorUiState {
+    this.generation += 1;
+    this.confirmed = null;
+    this.inFlight = null;
+    this.state = initialCoordinatorState(initialPending, boundAgentId);
+    return this.state;
+  }
+
+  getState(): FollowCoordinatorUiState {
+    return this.state;
+  }
+
+  getGeneration(): number {
+    return this.generation;
+  }
+
+  getConfirmed(): ConfirmedFollowContext | null {
+    return this.confirmed;
+  }
+
+  isCurrent(generation: number): boolean {
+    return generation === this.generation;
+  }
+
+  /**
+   * Supersede any in-flight scan (for example during effect cleanup) without
+   * clearing the confirmed session state or inducing unnecessary UI flicker.
+   */
+  invalidateInFlight(): void {
+    if (this.inFlight !== null) {
+      this.generation += 1;
+      this.inFlight = null;
+    }
+  }
+
+  abortAttempt(generation: number): void {
+    if (this.inFlight?.generation === generation) {
+      this.inFlight = null;
+    }
+  }
+
+  observeLiveChange(
+    observation: FollowObservation,
+    followVisible: boolean,
+    getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined,
+  ): {
+    invalidatedInFlight: boolean;
+    enteredSwitching: boolean;
+    state: FollowCoordinatorUiState;
+  } {
+    if (!followVisible) {
+      return {
+        invalidatedInFlight: false,
+        enteredSwitching: false,
+        state: this.state,
+      };
+    }
+
+    const liveKey = followSnapshotKey(observation);
+    let invalidatedInFlight = false;
+    if (this.inFlight !== null && this.inFlight.snapshotKey !== liveKey) {
+      this.generation += 1;
+      this.inFlight = null;
+      invalidatedInFlight = true;
+    }
+
+    const sameConfirmed = isSameConfirmedFollowSession({
+      confirmed: this.confirmed,
+      observation,
+      getKnownAgentTimelineIds,
+    });
+    let enteredSwitching = false;
+    if (!sameConfirmed && this.confirmed?.inView && !this.state.followSwitching) {
+      this.state = {
+        ...this.state,
+        agentId: null,
+        followSwitching: true,
+        actionBlocked: true,
+      };
+      enteredSwitching = true;
+    }
+
+    return {
+      invalidatedInFlight,
+      enteredSwitching,
+      state: this.state,
+    };
+  }
+
+  beginAttempt(
+    observation: FollowObservation,
+    followVisible: boolean,
+    getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined,
+  ): FollowAttemptStart {
+    const snapshotKey = followSnapshotKey(observation);
+    if (this.inFlight !== null && this.inFlight.snapshotKey === snapshotKey) {
+      return {
+        kind: "dedup",
+        state: this.state,
+      };
+    }
+
+    const liveCheck = this.observeLiveChange(
+      observation,
+      followVisible,
+      getKnownAgentTimelineIds,
+    );
+    this.generation += 1;
+    const generation = this.generation;
+    this.inFlight = { generation, snapshotKey };
+
+    return {
+      kind: "run",
+      generation,
+      snapshotKey,
+      enteredSwitching: liveCheck.enteredSwitching,
+      state: this.state,
+    };
+  }
+
+  commitAttempt({
+    generation,
+    startObservation,
+    startSnapshotKey,
+    liveObservation,
+    followVisible,
+    followResult,
+    boundAgentId,
+    getKnownAgentTimelineIds,
+  }: {
+    generation: number;
+    startObservation: FollowObservation;
+    startSnapshotKey: string;
+    liveObservation: FollowObservation;
+    followVisible: boolean;
+    followResult: ProgressiveSessionTargetResult | null;
+    boundAgentId: string;
+    getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined;
+  }): FollowCommitOutcome {
+    if (this.inFlight?.generation === generation) {
+      this.inFlight = null;
+    }
+
+    if (generation !== this.generation) {
+      return {
+        committed: false,
+        staleReason: "superseded",
+        needsFollowUp: false,
+        enteredSwitching: false,
+        state: this.state,
+      };
+    }
+
+    if (followVisible && followSnapshotKey(liveObservation) !== startSnapshotKey) {
+      const liveCheck = this.observeLiveChange(
+        liveObservation,
+        followVisible,
+        getKnownAgentTimelineIds,
+      );
+      this.generation += 1;
+      return {
+        committed: false,
+        staleReason: "snapshot_changed",
+        needsFollowUp: true,
+        enteredSwitching: liveCheck.enteredSwitching,
+        state: this.state,
+      };
+    }
+
+    const nextUi = reconcileFollowSelection({
+      tab: startObservation.tab,
+      followVisible,
+      followResult,
+      boundAgentId,
+    });
+    const actionBlocked = followVisible && (!nextUi.inView || nextUi.followUncertain);
+    this.confirmed = nextUi.followUncertain
+      ? null
+      : {
+          agentId: nextUi.agentId,
+          inView: nextUi.inView,
+          tab: startObservation.tab,
+          snapshotKey: startSnapshotKey,
+        };
+    this.state = {
+      agentId: nextUi.agentId,
+      inView: nextUi.inView,
+      followResolved: nextUi.followResolved,
+      followUncertain: nextUi.followUncertain,
+      followSwitching: false,
+      actionBlocked,
+      retryable: nextUi.retryable,
+      failedIds: followResult && !followResult.confirmed ? followResult.failedIds : [],
+    };
+    return {
+      committed: true,
+      state: this.state,
+    };
+  }
 }
