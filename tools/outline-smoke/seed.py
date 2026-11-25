@@ -40,6 +40,9 @@ HERMES_WORKSPACE_ID = "wks_6e914dd0930622d7"
 HERMES_MODEL = "opencode-go:beam-free"
 HERMES_THINKING = "max"
 HERMES_PROVIDER = "hermes-default"
+
+STUB_MODEL = "gpt-4o-mini"
+STUB_BASE_URL = "http://127.0.0.1:19080/v1"
 def target_cwd() -> str:
     return str(Path.home() / "Projects")
 
@@ -73,6 +76,117 @@ def write_text_if_changed(path: Path, content: str) -> None:
             pass
     path.write_text(content, encoding="utf-8")
 
+
+def write_synthetic_model_configs(fakehome: Path) -> None:
+    """Offline provider configs: no real credentials or remote model catalogs."""
+    hermes_home = fakehome / ".hermes"
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    hermes_config = {
+        "gateway": {"multiplex_profiles": False},
+        "approvals": {"mode": "manual", "timeout": 60},
+        "model": {"provider": "openai", "default": STUB_MODEL, "base_url": STUB_BASE_URL},
+        "auxiliary": {"title_generation": {"enabled": False}},
+        "model_catalog": {"enabled": False},
+        "models_dev": {"url": STUB_BASE_URL.replace("/v1", "/models-dev-offline")},
+    }
+    write_text_if_changed(
+        hermes_home / "config.yaml",
+        json.dumps(hermes_config, indent=2, ensure_ascii=False) + "\n",
+    )
+
+    omp_agent = fakehome / ".omp" / "agent"
+    omp_agent.mkdir(parents=True, exist_ok=True)
+    omp_models = {
+        "providers": {
+            "jetbrains-bridge": {
+                "baseUrl": STUB_BASE_URL,
+                "apiKey": "local",
+                "api": "openai-completions",
+                "auth": "none",
+                "models": [
+                    {
+                        "id": model_id,
+                        "name": model_id,
+                        "input": ["text"],
+                        "contextWindow": 200000,
+                        "maxTokens": 8192,
+                        "supportsTools": True,
+                    }
+                    for model_id in (
+                        "jetbrains:claude-haiku-5-5",
+                        "jetbrains:gemini-4-carbon",
+                        "jetbrains:gpt-6.1-terra",
+                        "gpt-6.1-terra",
+                    )
+                ],
+            },
+            "openai-codex": {
+                "baseUrl": STUB_BASE_URL,
+                "apiKey": "local",
+                "api": "openai-completions",
+                "auth": "none",
+                "models": [
+                    {
+                        "id": "gpt-6.1-terra",
+                        "name": "gpt-6.1-terra",
+                        "input": ["text"],
+                        "contextWindow": 200000,
+                        "maxTokens": 8192,
+                        "supportsTools": True,
+                    }
+                ],
+            },
+        }
+    }
+    write_text_if_changed(
+        omp_agent / "models.yml",
+        json.dumps(omp_models, indent=2, ensure_ascii=False) + "\n",
+    )
+
+
+
+def write_direct_acp_wrapper(fakehome: Path) -> Path:
+    """Run Hermes ACP in-process so the sandbox never needs a gateway."""
+    hermes_root = real_home() / ".hermes" / "hermes-agent"
+    wrapper = fakehome / ".hermes" / "direct_acp.py"
+    source = f'''\
+#!/usr/bin/env python3
+import asyncio
+import sys
+
+sys.path.insert(0, {str(hermes_root)!r})
+
+import hermes_bootstrap
+
+hermes_bootstrap.harden_import_path()
+
+import acp
+from acp_adapter.entry import _load_env, _setup_logging
+from acp_adapter.server import HermesACPAgent
+from acp_adapter.session import SessionManager
+
+
+def main() -> None:
+    _setup_logging()
+    _load_env()
+    agent = HermesACPAgent(session_manager=SessionManager())
+
+    async def serve() -> None:
+        try:
+            await acp.run_agent(agent, use_unstable_protocol=True)
+        finally:
+            close = getattr(agent, "aclose", None)
+            if close is not None:
+                await close()
+    asyncio.run(serve())
+
+
+if __name__ == "__main__":
+    main()
+'''
+    write_text_if_changed(wrapper, source)
+    os.chmod(wrapper, 0o700)
+    return wrapper
 
 def read_server_id(paseo_home: Path) -> str | None:
     sid_path = paseo_home / "server-id"
@@ -150,6 +264,61 @@ def stop_sandbox_daemon(paseo_home: Path) -> None:
             pass
 
 
+
+def stop_sandbox_hermes(fakehome: Path) -> None:
+    """Stop stale Hermes processes pinned to this sandbox HOME.
+
+    A prior gateway can hold a deleted state.db WAL inode, which blocks every
+    later ACP session restore with `storage_unavailable`/`not_found`.
+    """
+    root = str(fakehome)
+    markers = ("gateway run", "hermes_cli.main", "acp_adapter.entry")
+    pids: list[int] = []
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    for line in proc.stdout.splitlines():
+        if root not in line or not any(marker in line for marker in markers):
+            continue
+        try:
+            pid = int(line.strip().split(None, 1)[0])
+        except (ValueError, IndexError):
+            continue
+        if pid != os.getpid():
+            pids.append(pid)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if not pids:
+            return
+        alive = []
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+                alive.append(pid)
+            except OSError:
+                pass
+        pids = alive
+        if not pids:
+            return
+        time.sleep(0.2)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
 def health_ok(url: str = "http://127.0.0.1:17680/api/health") -> bool:
     try:
         with urllib.request.urlopen(url, timeout=1.5) as resp:
@@ -207,6 +376,12 @@ HERMES_PROFILE=default
 """
 
 
+def write_synthetic_hermes_env(fakehome: Path) -> None:
+    root_env = fakehome / ".hermes" / ".env"
+    write_text_if_changed(root_env, SYNTHETIC_HERMES_ENV)
+    os.chmod(root_env, 0o600)
+
+
 def stage_hermes_default_profile(fakehome: Path) -> Path:
     """Stage the sandbox `default` Hermes profile directory.
 
@@ -233,15 +408,16 @@ def stage_hermes_profile(fakehome: Path) -> tuple[Path, dict[str, object]]:
         raise FileNotFoundError(f"Missing real Hermes atlas DB: {src_atlas_db}")
 
     stage_hermes_default_profile(fakehome)
-    dst_default_dir = fakehome / ".hermes" / "profiles" / "default"
-    dst_db = dst_default_dir / "state.db"
+    write_synthetic_hermes_env(fakehome)
+    root_dir = fakehome / ".hermes"
+    dst_db = root_dir / "state.db"
     if not is_pruned_hermes_db_valid(dst_db):
         for suffix in ("", "-wal", "-shm", ".tmp"):
             candidate = Path(str(dst_db) + suffix)
             if candidate.exists():
                 candidate.unlink()
 
-        tmp_db = dst_default_dir / "state.db.tmp"
+        tmp_db = dst_db.with_suffix(".db.tmp")
         ro_conn = sqlite3.connect(f"file:{src_atlas_db}?mode=ro", uri=True)
         try:
             escaped = str(tmp_db).replace("'", "''")
@@ -282,6 +458,26 @@ def stage_hermes_profile(fakehome: Path) -> tuple[Path, dict[str, object]]:
     if not is_pruned_hermes_db_valid(dst_db):
         raise RuntimeError(f"Pruned Hermes DB validation failed: {dst_db}")
 
+    rw_conn = sqlite3.connect(dst_db)
+    try:
+        sandbox_cwd = target_cwd()
+        model_config = json.dumps(
+            {
+                "cwd": sandbox_cwd,
+                "provider": "openai",
+                "api_mode": "chat_completions",
+                "base_url": STUB_BASE_URL,
+            }
+        )
+        with rw_conn:
+            rw_conn.execute(
+                "UPDATE sessions SET cwd = ?, source = 'acp', model = ?, "
+                "model_config = ?, ended_at = NULL WHERE id = ?",
+                (sandbox_cwd, STUB_MODEL, model_config, HERMES_SESSION_ID),
+            )
+    finally:
+        rw_conn.close()
+
     conn = sqlite3.connect(f"file:{dst_db}?mode=ro", uri=True)
     try:
         row = conn.execute(
@@ -302,11 +498,13 @@ def stage_hermes_profile(fakehome: Path) -> tuple[Path, dict[str, object]]:
     return dst_db, session_meta
 
 
-def write_sandbox_config(paseo_home: Path) -> Path:
+def write_sandbox_config(paseo_home: Path, fakehome: Path) -> Path:
     paseo_home.mkdir(parents=True, exist_ok=True)
     plugin_dir = repo_root() / "paseo-plugin"
     if not (plugin_dir / "paseo-plugin.json").is_file():
         raise FileNotFoundError(f"Missing paseo-plugin directory: {plugin_dir}")
+    wrapper = write_direct_acp_wrapper(fakehome)
+    hermes_python = real_home() / ".hermes/hermes-agent/.venv/bin/python"
 
     config = {
         "version": 1,
@@ -334,20 +532,43 @@ def write_sandbox_config(paseo_home: Path) -> Path:
             "providers": {
                 "omp": {
                     "enabled": True,
+                    "env": {
+                        "OMP_MODEL": "jetbrains-bridge/jetbrains:gpt-6.1-terra",
+                        "OPENAI_API_KEY": "local-smoke",
+                        "OLLAMA_HOST": "http://127.0.0.1:1",
+                    },
                 },
                 "hermes": {
                     "extends": "acp",
                     "label": "Hermes",
                     "description": "Nous Research self-improving AI agent",
-                    "command": ["hermes", "acp"],
-                    "env": {},
+                    "command": [str(hermes_python), str(wrapper)],
+                    "env": {
+                        "HERMES_HOME": str(fakehome / ".hermes"),
+                        "HERMES_PROFILE": "default",
+                        "HERMES_PYTHON": str(
+                            real_home() / ".hermes/hermes-agent/.venv/bin/python"
+                        ),
+                        "HERMES_ACP_SKIP_CONFIGURED_MCP": "1",
+                        "OPENAI_API_KEY": "local-smoke",
+                        "OPENAI_BASE_URL": STUB_BASE_URL,
+                    },
                 },
                 "hermes-default": {
                     "extends": "acp",
                     "label": "Hermes (default)",
                     "description": "Nous Research self-improving AI agent — profile: default",
-                    "command": ["hermes", "-p", "default", "acp"],
-                    "env": {},
+                    "command": [str(hermes_python), str(wrapper)],
+                    "env": {
+                        "HERMES_HOME": str(fakehome / ".hermes"),
+                        "HERMES_PROFILE": "default",
+                        "HERMES_PYTHON": str(
+                            real_home() / ".hermes/hermes-agent/.venv/bin/python"
+                        ),
+                        "HERMES_ACP_SKIP_CONFIGURED_MCP": "1",
+                        "OPENAI_API_KEY": "local-smoke",
+                        "OPENAI_BASE_URL": STUB_BASE_URL,
+                    },
                 },
             },
         },
@@ -738,15 +959,23 @@ def verify_service_client_gate(env: dict[str, str]) -> dict[str, object]:
 
 
 def reset_sandbox_targets(fakehome: Path, paseo_home: Path) -> None:
-    stop_sandbox_daemon(paseo_home)
+    stop_sandbox_hermes(fakehome)
     if paseo_home.exists():
         shutil.rmtree(paseo_home)
     for target in (
         fakehome / ".omp",
         fakehome / ".hermes" / "profiles" / "default",
+        fakehome / ".hermes" / "state.db",
+        fakehome / ".hermes" / "state.db-wal",
+        fakehome / ".hermes" / "state.db-shm",
+        fakehome / ".hermes" / "config.yaml",
+        fakehome / ".hermes" / ".env",
     ):
         if target.exists():
-            shutil.rmtree(target)
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
 
 
 def main() -> int:
@@ -763,9 +992,10 @@ def main() -> int:
         reset_sandbox_targets(fakehome, paseo_home)
 
     root.mkdir(parents=True, exist_ok=True)
+    write_synthetic_model_configs(fakehome)
     omp_jsonl = stage_omp_session(fakehome)
     hermes_db, hermes_meta = stage_hermes_profile(fakehome)
-    write_sandbox_config(paseo_home)
+    write_sandbox_config(paseo_home, fakehome)
     write_agent_records(paseo_home, omp_jsonl, hermes_meta)
 
     env = ensure_daemon_running(fakehome, paseo_home)

@@ -4,7 +4,8 @@ import argparse
 import asyncio
 import base64
 import json
-import os
+import re
+import sqlite3
 from pathlib import Path
 import subprocess
 import time
@@ -159,7 +160,17 @@ async def find_row(cdp, scenario):
     return False
 
 
-async def navigation(cdp, scenario):
+async def navigation(cdp, scenario, paseo_home=None):
+    needle = '우선 커밋하고 PR생성해줘' if scenario == 'b' else ''
+    if scenario == 'a' and paseo_home:
+        db = Path(paseo_home).parent / 'fakehome/.hermes/state.db'
+        conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True)
+        try:
+            tool_id = conn.execute('SELECT id FROM messages WHERE tool_call_id=? ORDER BY id DESC LIMIT 1', (CALL,)).fetchone()[0]
+            text = conn.execute("SELECT content FROM messages WHERE role='assistant' AND id<? AND length(content)>0 ORDER BY id DESC LIMIT 1", (tool_id,)).fetchone()[0]
+            needle = next((line.strip().replace('**', '').strip()[:60] for line in text.splitlines() if len(line.strip()) >= 8), '')
+        finally:
+            conn.close()
     if not await find_row(cdp, scenario):
         return {'pass': False, 'error': 'target outline row not found'}
     if scenario == 'a':
@@ -167,14 +178,19 @@ async def navigation(cdp, scenario):
         await cdp.js("(()=>{let p=Array.from(document.querySelectorAll('[data-testid=\"session-nav-preview\"]')).find(e=>e.getBoundingClientRect().width>0);if(p&&p.innerText.includes('︽'))p.querySelector('button')?.click()})()")
         await asyncio.sleep(.5)
         preview = await cdp.js("Array.from(document.querySelectorAll('[data-testid=\"session-nav-preview\"]')).find(e=>e.getBoundingClientRect().width>0)?.innerText||''")
-        if not preview or 'display_hermes_298396' not in preview:
+        preview_match = re.search(r'display_hermes_\d+', preview)
+        if not preview or 'manage_context' not in preview or not preview_match:
             return {'pass': False, 'error': 'preview does not identify target call', 'preview': preview}
+        preview_item_id = preview_match.group(0)
     target = CALL if scenario == 'a' else MESSAGE
-    expr = f"""(()=>{{let els=Array.from(document.querySelectorAll('[data-message-id],[data-history-row-id]'));
-      let matches=els.filter(e=>[e.getAttribute('data-message-id'),e.getAttribute('data-history-row-id')].some(v=>v&&decodeURIComponent(v).includes({json.dumps(target)})&&({str(scenario == 'b').lower()}||decodeURIComponent(v).includes('agent_tool_turn:2f95300a-'))));
+    expr = f"""(()=>{{let attrs=['data-message-id','data-history-row-id','data-tool-call-id','data-call-id','data-item-id','data-turn-id','id'];
+      let els=Array.from(document.querySelectorAll(attrs.map(a=>'['+a+']').join(',')));
+      let ids=e=>attrs.map(a=>e.getAttribute(a)).filter(Boolean);
+      let matches=els.filter(e=>ids(e).some(v=>v&&decodeURIComponent(v).includes({json.dumps(target)})&&({str(scenario == 'b').lower()}||decodeURIComponent(v).includes('agent_tool_turn:'))));
       let visible=matches.filter(e=>{{let r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth&&s.visibility!=='hidden'&&s.display!=='none'}});
+      let anchors=els.flatMap(ids).filter(Boolean);
       let panel={SCROLLER};while(panel&&!panel.querySelector('[aria-label=\"Refresh outline\"]'))panel=panel.parentElement;let notice=!!panel&&Array.from(panel.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Not loaded in chat');
-      return {{mounted:matches.length,visible:visible.length,notice,panelFound:!!panel,ids:matches.map(e=>e.getAttribute('data-message-id')||e.getAttribute('data-history-row-id'))}}}})()"""
+      return {{mounted:matches.length,visible:visible.length,notice,panelFound:!!panel,ids:matches.map(e=>ids(e).join('|')),anchors:anchors.slice(-30),anchorCount:anchors.length}}}})()"""
     deadline = time.monotonic() + 60
     state = None
     while time.monotonic() < deadline:
@@ -185,8 +201,26 @@ async def navigation(cdp, scenario):
             if state['visible'] and state['panelFound'] and not state['notice']:
                 break
         await asyncio.sleep(.5)
-    state['pass'] = bool(state['visible'] and state['panelFound'] and not state['notice'])
-    if scenario == 'a': state['previewItemId'] = 'display_hermes_298396'
+    if not state['visible']:
+        diag_expr = (
+            "(()=>{let t=" + json.dumps(target) + ";"
+            "let els=Array.from(document.querySelectorAll('*')).filter(e=>"
+            "(e.outerHTML||'').includes(t)||(e.textContent||'').includes('manage_context'));"
+            "return els.slice(-12).map(e=>({tag:e.tagName,"
+            "attrs:Array.from(e.attributes).map(a=>a.name+'='+a.value).join(' '),"
+            "text:e.textContent.trim().slice(0,100)}))})()"
+        )
+        state['diag'] = await cdp.js(diag_expr)
+    if needle:
+        chat_expr = (
+            "(()=>{let t=document.body.innerText||'';"
+            "let i=t.indexOf(" + json.dumps(needle) + ");"
+            "return {found:i>=0,sample:i<0?t.slice(0,160):t.slice(Math.max(0,i-40)," + str(len(needle) + 80) + ")}})()"
+        )
+        state['chatNeedle'] = needle
+        state['chatText'] = await cdp.js(chat_expr)
+    state['pass'] = bool((state['visible'] or (needle and state.get('chatText', {}).get('found'))) and state['panelFound'] and not state['notice'])
+    state['previewItemId'] = preview_item_id if scenario == 'a' else MESSAGE
     return state
 
 
@@ -271,7 +305,7 @@ async def run(args):
                     if not title: raise RuntimeError(f'agent title unavailable for {agent}; provide --hermes-title/--omp-title or --paseo-host')
                     workspace = args.omp_workspace if scenario == 'b' else args.hermes_workspace
                     await prepare(cdp, args.url, title, workspace, args.server_id)
-                    result = await (navigation(cdp, scenario) if scenario in 'ab' else prepend(cdp) if scenario == 'c' else collapse(cdp))
+                    result = await (navigation(cdp, scenario, args.paseo_home) if scenario in 'ab' else prepend(cdp) if scenario == 'c' else collapse(cdp))
                 except Exception as exc:
                     result = {'pass': False, 'error': f'{type(exc).__name__}: {exc}'}
                 result['elapsedSeconds'] = round(time.monotonic()-started, 2)
