@@ -11,9 +11,11 @@ scope + ID. Reject when absent or duplicated, otherwise call the engine.
 """
 
 from collections import Counter
+import time
 from typing import Any
 
 from .allowlist import AdapterRejected, filter_invocation
+from .diagnostics import record_perf
 from .payload import UNSUPPORTED_API_MODE, apply_replacements
 from .session import SessionTranscriptStore
 from session_navigation.engine import SessionNavigationEngine, _run_sync
@@ -424,6 +426,7 @@ def middleware_step(
     summarizer: Any = None,
 ) -> dict[str, Any]:
     """Run one middleware pass: record, plan, apply to a copy (fail-open)."""
+    started = time.perf_counter()
     stored, skipped, record_error = store.record_request(
         scope.scope_key(), api_mode, payload)
     trace: dict[str, Any] = {
@@ -434,6 +437,13 @@ def middleware_step(
     }
     if record_error == UNSUPPORTED_API_MODE:
         trace["reason"] = UNSUPPORTED_API_MODE
+        record_perf(
+            "middleware_step",
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            ok=False,
+            error_code=UNSUPPORTED_API_MODE,
+            row_count=0,
+        )
         return {
             "request": dict(payload) if isinstance(payload, dict) else payload,
             "applied": [],
@@ -502,13 +512,35 @@ def middleware_step(
             if record.call_id in unique_calls and result_counts[record.call_id] == 1], summarizer)
     plans = engine.project(scope, records)
     # Pair-atomic units: one pair_ row per transmitted record (call+result).
+    unit_count = 0
     try:
-        upsert = getattr(engine.store, "upsert_unit", None)
-        if callable(upsert):
-            for record in records:
-                upsert(scope, unit_id=pair_unit_id(scope.scope_key(), record.call_id, record.content_sha256),
-                       kind="tool_result", tool_call_id=record.call_id,
-                       content_sha256=record.content_sha256, char_count=len(record.content))
+        units_payload = [
+            {
+                "unit_id": pair_unit_id(scope.scope_key(), record.call_id, record.content_sha256),
+                "kind": "tool_result",
+                "tool_call_id": record.call_id,
+                "content_sha256": record.content_sha256,
+                "char_count": len(record.content),
+            }
+            for record in records
+        ]
+        unit_count = len(units_payload)
+        upsert_batch = getattr(engine.store, "upsert_units", None)
+        if callable(upsert_batch):
+            if units_payload:
+                upsert_batch(scope, units_payload)
+        else:
+            upsert = getattr(engine.store, "upsert_unit", None)
+            if callable(upsert):
+                for unit in units_payload:
+                    upsert(
+                        scope,
+                        unit_id=unit["unit_id"],
+                        kind=unit["kind"],
+                        tool_call_id=unit["tool_call_id"],
+                        content_sha256=unit["content_sha256"],
+                        char_count=unit["char_count"],
+                    )
     except Exception:
         pass
     plan_dicts = resolve_plan_dicts(
@@ -522,6 +554,13 @@ def middleware_step(
     new_payload, applied, apply_skipped = apply_replacements(
         api_mode, payload, plan_dicts)
     trace["applied"] = len(applied)
+    record_perf(
+        "middleware_step",
+        duration_ms=(time.perf_counter() - started) * 1000.0,
+        ok=True,
+        row_count=len(stored),
+        unit_count=unit_count,
+    )
     return {
         "request": new_payload,
         "applied": applied,

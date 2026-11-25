@@ -24,7 +24,15 @@ import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { linkedTimelineFetchNeeded, scopeForAgent } from "./subagents";
-import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, hasDomDocument, readSessionIdsUntilMatch, readSessionTailIds, resolveSessionTargetProgressive, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
+import {
+  OUTLINE_VIRTUALIZE_THRESHOLD,
+  computeOutlineWindow,
+  stabilizeGroupedRows,
+  stabilizeRows,
+  visiblePollInterval,
+} from "./outlineWindow";
+import { recordClientPerf } from "./diagnostics";
 import {
   buildGroupedRows,
   effectiveRowBytes,
@@ -148,7 +156,8 @@ export function SessionNavPanel({
       if (!result.ok) throw new Error(result.error ?? "scopes_failed");
       return result.scopes;
     },
-    refetchInterval: 3000,
+    staleTime: 2500,
+    refetchInterval: () => visiblePollInterval(10_000),
   });
 
   const scopes = scopesQuery.data ?? [];
@@ -177,7 +186,7 @@ export function SessionNavPanel({
       const needsTimelineScan =
         effectiveFollowVisible && focused?.kind !== "agent";
       const resolvedTarget = needsTimelineScan
-        ? await resolveSessionTarget({
+        ? await resolveSessionTargetProgressive({
             followVisible: effectiveFollowVisible,
             boundAgentId: params.agentId,
             visibleValues: values,
@@ -185,14 +194,28 @@ export function SessionNavPanel({
               candidateAgentIds,
               currentScopes.map((s) => s.agent_id).filter((id): id is string => !!id),
             ),
-            timelineIds: async (id) =>
-              (
-                await queryClient.fetchQuery({
-                  queryKey: ["session-nav-follow", id],
-                  staleTime: (q) => (q.state.data?.complete ? 10_000 : 0),
-                  queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
-                })
-              ).ids,
+            getCachedTimelineIds: (id) => {
+              const entry = queryClient.getQueryData<{ ids: string[]; complete: boolean }>(["session-nav-follow", id]);
+              const state = queryClient.getQueryState(["session-nav-follow", id]);
+              if (!entry?.complete || !state?.dataUpdatedAt) return undefined;
+              if (Date.now() - state.dataUpdatedAt > 10_000) return undefined;
+              return entry;
+            },
+            loadTailIds: (id) =>
+              queryClient.fetchQuery({
+                queryKey: ["session-nav-follow-tail", id],
+                staleTime: 4000,
+                queryFn: () => readSessionTailIds(paseo.agents.ref(id).timeline, 200),
+              }),
+            loadProgressiveIds: (id) =>
+              queryClient.fetchQuery({
+                queryKey: ["session-nav-follow", id],
+                staleTime: (q) => (q.state.data?.complete ? 10_000 : 0),
+                queryFn: () =>
+                  readSessionIdsUntilMatch(paseo.agents.ref(id).timeline, values ?? [], {
+                    allowPartial: true,
+                  }),
+              }),
           })
         : effectiveFollowVisible
           ? null
@@ -290,17 +313,42 @@ export function SessionNavPanel({
       await applySelection(focusTab, values);
     };
     let rafId: number | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let tickInFlight = false;
+    let tickDirty = false;
+    const runTick = async () => {
+      if (cancelled) return;
+      if (tickInFlight) {
+        tickDirty = true;
+        return;
+      }
+      tickInFlight = true;
+      try {
+        await tick();
+      } finally {
+        tickInFlight = false;
+        if (tickDirty && !cancelled) {
+          tickDirty = false;
+          scheduleTick();
+        }
+      }
+    };
     const scheduleTick = () => {
       if (cancelled) return;
-      if (typeof requestAnimationFrame === "function") {
-        if (rafId !== null) return;
-        rafId = requestAnimationFrame(() => {
-          rafId = null;
-          if (!cancelled) void tick();
-        });
-      } else {
-        void tick();
-      }
+      if (debounceTimer !== null) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (cancelled) return;
+        if (typeof requestAnimationFrame === "function") {
+          if (rafId !== null) return;
+          rafId = requestAnimationFrame(() => {
+            rafId = null;
+            if (!cancelled) void runTick();
+          });
+        } else {
+          void runTick();
+        }
+      }, 60);
     };
     const unsubscribe = hostId ? subscribeHostFocus(hostId, scheduleTick) : () => {};
     let observer: { disconnect: () => void } | null = null;
@@ -321,23 +369,39 @@ export function SessionNavPanel({
     }
     const win = (doc as any)?.defaultView;
     const onUiActivity = () => scheduleTick();
+    const onKeyUp = (ev: any) => {
+      const target = ev?.target;
+      const tag = typeof target?.tagName === "string" ? target.tagName.toUpperCase() : "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+        return;
+      }
+      scheduleTick();
+    };
     if (hasDocument && typeof (doc as any)?.addEventListener === "function") {
       (doc as any).addEventListener("click", onUiActivity, true);
-      (doc as any).addEventListener("keyup", onUiActivity, true);
+      (doc as any).addEventListener("keyup", onKeyUp, true);
     }
     if (win && typeof win.addEventListener === "function") {
       win.addEventListener("popstate", onUiActivity);
       win.addEventListener("focus", onUiActivity);
     }
-    void tick();
-    const timer = hasDocument ? setInterval(() => void tick(), 1500) : undefined;
+    void runTick();
+    const timer = hasDocument
+      ? setInterval(() => {
+          if ((doc as any)?.visibilityState === "hidden" || (doc as any)?.hidden === true) {
+            return;
+          }
+          void runTick();
+        }, 3000)
+      : undefined;
     return () => {
       cancelled = true;
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (rafId !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
       observer?.disconnect();
       if (hasDocument && typeof (doc as any)?.removeEventListener === "function") {
         (doc as any).removeEventListener("click", onUiActivity, true);
-        (doc as any).removeEventListener("keyup", onUiActivity, true);
+        (doc as any).removeEventListener("keyup", onKeyUp, true);
       }
       if (win && typeof win.removeEventListener === "function") {
         win.removeEventListener("popstate", onUiActivity);
@@ -630,13 +694,19 @@ export function SessionNavPanel({
       };
     },
     enabled: !!resolvedScopeKey,
+    staleTime: 500,
     placeholderData: (previousData, previousQuery) =>
       previousQuery?.queryKey?.[2] === scopeKey ? previousData : undefined,
-    refetchInterval: isMutating ? 400 : 4000,
+    refetchInterval: () => visiblePollInterval(isMutating ? 400 : 4000),
   });
 
   // Same source as Paseo's own context meter (the `K` figure), for every provider.
-  const capabilities: Capabilities | undefined = listQuery.data?.capabilities ?? scopes.find(scope => scope.scope_key === resolvedScopeKey)?.capabilities;
+  const capabilities: Capabilities | undefined = useMemo(
+    () =>
+      listQuery.data?.capabilities ??
+      scopes.find((scope) => scope.scope_key === resolvedScopeKey)?.capabilities,
+    [listQuery.data?.capabilities, scopes, resolvedScopeKey],
+  );
   const usageQuery = useQuery({
     queryKey: ["paseo-agent-usage", agentId],
     queryFn: async () => {
@@ -645,7 +715,7 @@ export function SessionNavPanel({
       await handle.refresh();
       return handle.lastUsage ?? null;
     },
-    refetchInterval: 5000,
+    refetchInterval: () => visiblePollInterval(5000),
   });
 
   const isHermesScope = Boolean(resolvedScopeKey?.startsWith("hermes:"));
@@ -677,7 +747,7 @@ export function SessionNavPanel({
         (isHermesScope && listQuery.data !== undefined && !listQuery.data.server_timeline) ||
         needsLinkedTimeline) &&
       !!agentId,
-    refetchInterval: 3000,
+    refetchInterval: () => visiblePollInterval(5000),
   });
 
   useEffect(() => {
@@ -709,23 +779,59 @@ export function SessionNavPanel({
       scopes,
     ],
   );
+  const prevRowsRef = useRef<Row[]>([]);
   const rows = useMemo(() => {
-    if (!query) return rawRows;
-    const q = query.toLowerCase();
-    return rawRows.filter(
-      (r) =>
-        (r.item_id && r.item_id.toLowerCase().includes(q)) ||
-        (r.tool_name && r.tool_name.toLowerCase().includes(q)) ||
-        (r.summary_line && r.summary_line.toLowerCase().includes(q)) ||
-        (r.tool_input && r.tool_input.toLowerCase().includes(q)) ||
-        (r.tool_call_id && r.tool_call_id.toLowerCase().includes(q)),
-    );
+    const filtered = !query
+      ? rawRows
+      : rawRows.filter((r) => {
+          const q = query.toLowerCase();
+          return (
+            (r.item_id && r.item_id.toLowerCase().includes(q)) ||
+            (r.tool_name && r.tool_name.toLowerCase().includes(q)) ||
+            (r.summary_line && r.summary_line.toLowerCase().includes(q)) ||
+            (r.tool_input && r.tool_input.toLowerCase().includes(q)) ||
+            (r.tool_call_id && r.tool_call_id.toLowerCase().includes(q))
+          );
+        });
+    const stabilized = stabilizeRows(prevRowsRef.current, filtered);
+    prevRowsRef.current = stabilized;
+    return stabilized;
   }, [rawRows, query]);
 
-  const groupedRows = useMemo(
-    () => buildGroupedRows(rows, expandedGroups, lastActionByItem),
-    [rows, expandedGroups, lastActionByItem],
-  );
+  const rowIndexByRow = useMemo(() => {
+    const map = new WeakMap<Row, number>();
+    for (let i = 0; i < rows.length; i++) map.set(rows[i], i);
+    return map;
+  }, [rows]);
+
+  const rowByKey = useMemo(() => {
+    const map = new Map<string, Row>();
+    for (let i = 0; i < rows.length; i++) {
+      const k = outlineRowKey(rows[i], i);
+      if (!map.has(k)) map.set(k, rows[i]);
+    }
+    return map;
+  }, [rows]);
+
+  const prevGroupedRef = useRef<OutlineRow[]>([]);
+  const groupedRows = useMemo(() => {
+    const next = buildGroupedRows(rows, expandedGroups, lastActionByItem);
+    const stabilized = stabilizeGroupedRows(prevGroupedRef.current, next);
+    prevGroupedRef.current = stabilized;
+    return stabilized;
+  }, [rows, expandedGroups, lastActionByItem]);
+
+  const groupIdByChildKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of groupedRows) {
+      if (item.type !== "group") continue;
+      for (const child of item.children) {
+        const idx = rowIndexByRow.get(child) ?? rows.indexOf(child);
+        map.set(outlineRowKey(child, idx), item.groupId);
+      }
+    }
+    return map;
+  }, [groupedRows, rowIndexByRow, rows]);
 
   const localHiddenCount = rows.filter((r) => r.status === "hidden").length;
   const localSavedBytes = useMemo(
@@ -774,8 +880,8 @@ export function SessionNavPanel({
 
   const selectedRow = useMemo(() => {
     if (!selectedId) return null;
-    return rows.find((r, index) => outlineRowKey(r, index) === selectedId) ?? null;
-  }, [rows, selectedId]);
+    return rowByKey.get(selectedId) ?? null;
+  }, [rowByKey, selectedId]);
 
   const listRef = useRef<any>(null);
   const scrollDriverRef = useRef<OutlineScrollDriver | null>(null);
@@ -783,6 +889,10 @@ export function SessionNavPanel({
     scrollDriverRef.current = new OutlineScrollDriver();
   }
   const hermesSettledKeyRef = useRef<string | null>(null);
+  const [windowMetrics, setWindowMetrics] = useState<{ scrollTop: number; clientHeight: number }>({
+    scrollTop: 0,
+    clientHeight: 0,
+  });
 
   const isSessionHiddenFromView = effectiveFollowVisible && !inView;
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
@@ -809,8 +919,33 @@ export function SessionNavPanel({
     }
   }, [agentId, isRefreshing, queryClient]);
 
+  const updateWindowViewport = (top: number | undefined, clientH: number | undefined) => {
+    if (groupedRows.length < OUTLINE_VIRTUALIZE_THRESHOLD) return;
+    setWindowMetrics((prev) => {
+      const nextTop = typeof top === "number" && Number.isFinite(top) ? Math.max(0, top) : prev.scrollTop;
+      const nextH =
+        typeof clientH === "number" && Number.isFinite(clientH) && clientH > 0
+          ? clientH
+          : prev.clientHeight;
+      if (
+        Math.abs(nextTop - prev.scrollTop) < 240 &&
+        Math.abs(nextH - prev.clientHeight) < 24
+      ) {
+        return prev;
+      }
+      return { scrollTop: nextTop, clientHeight: nextH };
+    });
+  };
+
   const handleOutlineScroll = (ev: any) => {
     scrollDriverRef.current?.handleScrollEvent(ev);
+    const ne = ev?.nativeEvent;
+    const sh = ne?.contentSize?.height;
+    const ch = ne?.layoutMeasurement?.height;
+    if (typeof sh === "number" && typeof ch === "number" && (sh <= 0 || ch <= 0)) {
+      return;
+    }
+    updateWindowViewport(ne?.contentOffset?.y, ch);
   };
 
 
@@ -866,6 +1001,7 @@ export function SessionNavPanel({
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
+    setWindowMetrics({ scrollTop: 0, clientHeight: 0 });
     scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
@@ -1249,7 +1385,8 @@ export function SessionNavPanel({
   const handleRowPress = async (row: Row) => {
     // Outline keys (not raw item ids): fallback rows share item_id null and
     // often an empty tool_call_id, so raw ids collide across rows.
-    const rowKey = outlineRowKey(row, rows.indexOf(row));
+    const rowIdx = rowIndexByRow.get(row) ?? rows.indexOf(row);
+    const rowKey = outlineRowKey(row, rowIdx);
     setSelectedId(rowKey);
     const shouldOpenPreview = shouldOpenPreviewDrawerOnRowPress({
       hasDocument,
@@ -1307,6 +1444,34 @@ export function SessionNavPanel({
 
   const activeRowKey = previewOpen ? selectedId : highlightedId;
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
+  const selectedGroupId = activeRowKey ? (groupIdByChildKey.get(activeRowKey) ?? null) : null;
+
+  const outlineWindow = useMemo(
+    () =>
+      computeOutlineWindow(groupedRows, {
+        scrollTop: windowMetrics.scrollTop,
+        clientHeight: windowMetrics.clientHeight,
+        compact: layout.compact,
+        expandedGroups,
+        pinToTail: !scrollDriverRef.current?.scroller.isUserScrolledUp(),
+        isSearching: Boolean(query),
+      }),
+    [groupedRows, windowMetrics, layout.compact, expandedGroups, query],
+  );
+
+  useEffect(() => {
+    if (!outlineWindow.virtualized) return;
+    recordClientPerf({
+      op: "outline.window",
+      duration_ms: 0,
+      ok: true,
+      row_count: groupedRows.length,
+      rendered_count: outlineWindow.visibleItems.length,
+      window_start: outlineWindow.startIndex,
+      window_end: outlineWindow.endIndex,
+      virtualized: outlineWindow.virtualized,
+    });
+  }, [outlineWindow, groupedRows.length]);
 
   const isResolvingSession = effectiveFollowVisible && !followResolved;
   const isCapabilitiesLoading =
@@ -1505,21 +1670,27 @@ export function SessionNavPanel({
             onScroll={handleOutlineScroll}
             onScrollEndDrag={handleOutlineScroll}
             onMomentumScrollEnd={handleOutlineScroll}
-            onLayout={(ev: any) => scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState)}
+            onLayout={(ev: any) => {
+              scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState);
+              const ch = ev?.nativeEvent?.layout?.height;
+              if (typeof ch === "number" && ch > 0) {
+                updateWindowViewport(undefined, ch);
+              }
+            }}
             onContentSizeChange={(_w: number, h: number) =>
               scrollDriverRef.current?.handleContentSizeChange(listRef.current, h, scrollState)
             }
           >
-            {groupedRows.map((item) => {
+            {outlineWindow.topSpacerHeight > 0 ? (
+              <View style={{ height: outlineWindow.topSpacerHeight }} />
+            ) : null}
+            {outlineWindow.visibleItems.map((item) => {
               if (item.type === "group") {
                 return (
                   <MemoOutlineRowItem
                     key={item.key}
                     item={item}
-                    isSelected={Boolean(
-                      activeRowKey &&
-                        item.children.some((c) => outlineRowKey(c, rows.indexOf(c)) === activeRowKey),
-                    )}
+                    isSelected={selectedGroupId === item.groupId}
                     isExpanded={!!expandedGroups[item.groupId]}
                     isPending={pendingGroupId === item.groupId}
                     resolvedScopeKey={resolvedScopeKey}
@@ -1560,6 +1731,9 @@ export function SessionNavPanel({
                 />
               );
             })}
+            {outlineWindow.bottomSpacerHeight > 0 ? (
+              <View style={{ height: outlineWindow.bottomSpacerHeight }} />
+            ) : null}
           </ScrollView>
         </View>
       )}

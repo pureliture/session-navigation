@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .diagnostics import record_perf
 from .payload import find_tool_results
 
 # Retained-transcript bounds, kept identical to the host history limits
@@ -107,9 +108,17 @@ class SessionTranscriptStore:
         Returns (stored, skipped, error) mirroring the payload finder. Out
         of scope keys or oversized sessions evict the oldest entries first.
         """
+        started = time.perf_counter()
         self._evict_expired()
         results, skipped, error = find_tool_results(api_mode, payload)
         if error is not None:
+            record_perf(
+                "record_request",
+                duration_ms=(time.perf_counter() - started) * 1000.0,
+                ok=False,
+                error_code=error,
+                row_count=0,
+            )
             return [], [], error
         invocations, duplicate_ids = _extract_invocations_and_duplicates(api_mode, payload)
         stored: list[StoredResult] = []
@@ -150,6 +159,14 @@ class SessionTranscriptStore:
         while len(self._sessions) > self.max_sessions:
             oldest = min(self._sessions, key=lambda k: self._sessions[k].updated_at)
             del self._sessions[oldest]
+        total_bytes = sum(len(item.content.encode("utf-8")) for item in kept)
+        record_perf(
+            "record_request",
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            ok=True,
+            row_count=len(kept),
+            byte_count=total_bytes,
+        )
         return kept, skipped_dicts, None
 
     def _apply_history_bounds(

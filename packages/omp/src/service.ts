@@ -27,6 +27,7 @@ import {
   type Row,
 } from "../../core/src/index.ts";
 import { ompInvocationArgs, safeString } from "./context.ts";
+import { recordOmpPerf, sanitizeOmpErrorCode } from "./diagnostics.ts";
 
 export const MAX_SCOPES = 32;
 export const MAX_CHUNK_RECORDS = 64;
@@ -94,6 +95,30 @@ function hintText(args: { [key: string]: Json }): string {
   }
   return "";
 }
+
+type StaticRecordMeta = {
+  bytesSize: number;
+  isDestructiveCall: boolean;
+  staticRefusal: string | undefined;
+};
+
+const staticRecordMetaCache = new WeakMap<RecordInput, StaticRecordMeta>();
+
+function getStaticRecordMeta(record: RecordInput): StaticRecordMeta {
+  const cached = staticRecordMetaCache.get(record);
+  if (cached) return cached;
+  const computed: StaticRecordMeta = {
+    bytesSize: bytes(record.content),
+    isDestructiveCall: isDestructive(
+      record.invocation.tool_name,
+      record.invocation.arguments,
+    ),
+    staticRefusal: refusalReason(record),
+  };
+  staticRecordMetaCache.set(record, computed);
+  return computed;
+}
+
 export class OmpService {
   readonly engine: Engine;
   readonly snapshots = new Map<string, Snapshot>();
@@ -108,77 +133,101 @@ export class OmpService {
   }
 
   async handle(method: string, params: unknown): Promise<Reply> {
+    const started = performance.now();
     try {
-      if (method === "ping") return { ok: true, protocol: 1 };
-      if (method === "adapter_status") return { ok: true, enabled: this.isAdapterEnabled() };
-      if (!object(params)) return { ok: false, error: "invalid_params" };
-      if (method === "fork_scope") return this.fork(params);
-      const session = params.session_id;
-      if (
-        typeof session !== "string" ||
-        !session ||
-        length(session) > 256 ||
-        session.includes(":")
-      ) {
-        return { ok: false, error: "invalid_session" };
-      }
-      const scope = sessionScope(session);
-      if (method === "record_summary_call") {
-        if (typeof params.call_key !== "string" || !params.call_key || params.call_key.length > 256 ||
-          ![params.prompt_tokens, params.completion_tokens, params.total_tokens].every(value => Number.isSafeInteger(value) && Number(value) >= 0) ||
-          !(params.cost_usd === null || (typeof params.cost_usd === "number" && Number.isFinite(params.cost_usd) && params.cost_usd >= 0)))
-          return { ok: false, error: "invalid_params" };
-        this.store.recordCall(scope, params.call_key, Number(params.prompt_tokens), Number(params.completion_tokens), Number(params.total_tokens), params.cost_usd as number | null);
-        return { ok: true };
-      }
-      if (method === "register") {
-        this.register(scope, params);
-        return { ok: true };
-      }
-      if (method === "link_children") {
-        if (typeof params.tool_call_id !== "string" || !params.tool_call_id ||
-          !Array.isArray(params.subagent_ids) || params.subagent_ids.some((id) => typeof id !== "string"))
-          return { ok: false, error: "invalid_params" };
-        this.store.linkChildren(scope, params.tool_call_id, params.subagent_ids as string[]);
-        return { ok: true };
-      }
-      if (method === "prepare") return this.prepare(scope, session, params);
-      if (method === "restore") {
-        if (
-          params.expected_version !== undefined &&
-          params.expected_version !== null &&
-          !Number.isSafeInteger(params.expected_version)
-        ) {
-          return { ok: false, error: "invalid_version" };
-        }
-        return mutationReply(
-          this.engine.unhide(
-            scope,
-            safeString(params.item_id ?? ""),
-            params.expected_version == null ? undefined : Number(params.expected_version),
-          ),
-        );
-      }
-      if (method === "apply_summary" || method === "summary_failed") {
-        if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
-        return this.finishSummary(scope, method, params);
-      }
-      if (method === "list_items") return this.listItems(scope, session, params);
-      if (method === "list_candidates") return this.listCandidates(scope, session, params);
-      if (method === "manage") {
-        if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
-        return this.manage(scope, session, params);
-      }
-      if (method === "compact" || method === "summarize" || method === "summary_state") {
-        if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
-        return this.compact(scope, session, method, params);
-      }
-      return { ok: false, error: "unknown_method" };
+      const reply = await this.dispatch(method, params);
+      recordOmpPerf({
+        op: method,
+        duration_ms: performance.now() - started,
+        ok: Boolean(reply.ok),
+        ...(reply.ok ? {} : { error_code: sanitizeOmpErrorCode(reply.error ?? "error") }),
+        ...(method === "prepare" && object(params) && Array.isArray(params.records)
+          ? { unit_count: params.records.length, include_memory: true }
+          : {}),
+        ...(method === "manage" && Array.isArray(reply.items)
+          ? { row_count: reply.items.length }
+          : {}),
+      });
+      return reply;
     } catch (error) {
+      recordOmpPerf({
+        op: method,
+        duration_ms: performance.now() - started,
+        ok: false,
+        error_code: sanitizeOmpErrorCode(error),
+      });
       if (error instanceof EngineError)
         return { ok: false, error: error.code, choices: ["abort_request", "send_original"] };
       throw error;
     }
+  }
+
+  private async dispatch(method: string, params: unknown): Promise<Reply> {
+    if (method === "ping") return { ok: true, protocol: 1 };
+    if (method === "adapter_status") return { ok: true, enabled: this.isAdapterEnabled() };
+    if (!object(params)) return { ok: false, error: "invalid_params" };
+    if (method === "fork_scope") return this.fork(params);
+    const session = params.session_id;
+    if (
+      typeof session !== "string" ||
+      !session ||
+      length(session) > 256 ||
+      session.includes(":")
+    ) {
+      return { ok: false, error: "invalid_session" };
+    }
+    const scope = sessionScope(session);
+    if (method === "record_summary_call") {
+      if (typeof params.call_key !== "string" || !params.call_key || params.call_key.length > 256 ||
+        ![params.prompt_tokens, params.completion_tokens, params.total_tokens].every(value => Number.isSafeInteger(value) && Number(value) >= 0) ||
+        !(params.cost_usd === null || (typeof params.cost_usd === "number" && Number.isFinite(params.cost_usd) && params.cost_usd >= 0)))
+        return { ok: false, error: "invalid_params" };
+      this.store.recordCall(scope, params.call_key, Number(params.prompt_tokens), Number(params.completion_tokens), Number(params.total_tokens), params.cost_usd as number | null);
+      return { ok: true };
+    }
+    if (method === "register") {
+      this.register(scope, params);
+      return { ok: true };
+    }
+    if (method === "link_children") {
+      if (typeof params.tool_call_id !== "string" || !params.tool_call_id ||
+        !Array.isArray(params.subagent_ids) || params.subagent_ids.some((id) => typeof id !== "string"))
+        return { ok: false, error: "invalid_params" };
+      this.store.linkChildren(scope, params.tool_call_id, params.subagent_ids as string[]);
+      return { ok: true };
+    }
+    if (method === "prepare") return this.prepare(scope, session, params);
+    if (method === "restore") {
+      if (
+        params.expected_version !== undefined &&
+        params.expected_version !== null &&
+        !Number.isSafeInteger(params.expected_version)
+      ) {
+        return { ok: false, error: "invalid_version" };
+      }
+      return mutationReply(
+        this.engine.unhide(
+          scope,
+          safeString(params.item_id ?? ""),
+          params.expected_version == null ? undefined : Number(params.expected_version),
+        ),
+      );
+    }
+    if (method === "apply_summary" || method === "summary_failed") {
+      if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
+      return this.finishSummary(scope, method, params);
+    }
+    if (method === "list_items") return this.listItems(scope, session, params);
+    if (method === "list_candidates") return this.listCandidates(scope, session, params);
+    if (method === "manage") {
+      if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
+      return this.manage(scope, session, params);
+    }
+    if (method === "compact" || method === "summarize" || method === "summary_state") {
+      if (!this.isAdapterEnabled()) return { ok: false, error: "adapter_disabled" };
+      return this.compact(scope, session, method, params);
+    }
+    return { ok: false, error: "unknown_method" };
   }
 
   private fork(params: Record<string, unknown>): Reply {
@@ -315,21 +364,39 @@ export class OmpService {
     const enabled = this.isAdapterEnabled();
     this.adoptLegacySession(scope, session);
     this.register(scope, params, enabled);
+    const includeCandidates = params.include_candidates !== false;
+    const isChildScope = Boolean(this.store.registration(scope)?.parent_scope);
+    const needsIdentities = enabled && (isChildScope || includeCandidates);
+    const identities = needsIdentities
+      ? this.store.identitiesForScope(scope)
+      : undefined;
+    const visibilityMap = needsIdentities
+      ? this.store.itemVisibilityMap(scope)
+      : undefined;
     if (enabled) {
-      if (this.store.registration(scope)?.parent_scope)
+      if (isChildScope && identities && visibilityMap)
         this.store.publishTargets(scope, [...selected.values()]
-          .filter((record) => !refusalReason(record) &&
-            !isDestructive(record.invocation.tool_name, record.invocation.arguments) &&
-            !this.identityError(scope, record))
+          .filter((record) => {
+            const meta = getStaticRecordMeta(record);
+            return (
+              !meta.staticRefusal &&
+              !meta.isDestructiveCall &&
+              !this.identityErrorWithMaps(scope, record, identities, visibilityMap)
+            );
+          })
           .map((record) => ({ record })));
-      for (const record of selected.values()) {
-        this.store.upsertUnit(scope, {
-          unit_id: pairUnitId(scope, record.call_id, record.content_sha256),
-          kind: "tool_result",
-          tool_call_id: record.call_id,
-          content_sha256: record.content_sha256,
-          char_count: length(record.content),
-        });
+      if (selected.size > 0) {
+        const units: Array<Row & { unit_id: string }> = [];
+        for (const record of selected.values()) {
+          units.push({
+            unit_id: pairUnitId(scope, record.call_id, record.content_sha256),
+            kind: "tool_result",
+            tool_call_id: record.call_id,
+            content_sha256: record.content_sha256,
+            char_count: length(record.content),
+          });
+        }
+        this.store.upsertUnits(scope, units);
       }
     }
     for (const [callId, record] of selected) previous.set(callId, record);
@@ -340,11 +407,12 @@ export class OmpService {
       this.snapshots.delete(oldest);
       evicted.push(oldest);
     }
+    const hiddenProjection = this.store.hiddenItemsForProjection(scope);
     const patches = [];
     const pending = [];
     for (const record of selected.values()) {
-      const item = this.store.get(scope, identity(scope, record));
-      if (item?.visibility !== "hidden") continue;
+      const item = hiddenProjection.get(identity(scope, record));
+      if (!item) continue;
       patches.push({
         call_id: record.call_id,
         sha256: record.content_sha256,
@@ -358,9 +426,17 @@ export class OmpService {
           content: record.content,
         });
     }
-    const candidates = !enabled || this.store.registration(scope)?.parent_scope
+    const candidates = !enabled || isChildScope || !includeCandidates
       ? { total: 0, total_bytes: 0, candidate_ids: [] as string[], items: [] }
-      : this.candidateSnapshot(scope, previous.values(), previous.size);
+      : this.candidateSnapshot(
+          scope,
+          previous.values(),
+          previous.size,
+          undefined,
+          false,
+          identities,
+          visibilityMap,
+        );
     return {
       ok: true,
       patches,
@@ -382,6 +458,22 @@ export class OmpService {
   private confirmed(session: string, token: unknown): Snapshot | undefined {
     const snapshot = this.snapshots.get(session);
     return snapshot?.token === token ? snapshot : undefined;
+  }
+
+  private identityErrorWithMaps(
+    scope: string,
+    record: RecordInput,
+    identities: ReadonlyMap<string, ReadonlySet<string>>,
+    visibilityMap: ReadonlyMap<string, string>,
+  ): string | undefined {
+    const key = `${record.call_id}\0${record.content_sha256}\0${record.result_position}`;
+    const digests = identities.get(key);
+    if (digests && digests.size > 0 && !digests.has(record.invocation_digest)) {
+      return "invocation_conflict";
+    }
+    if (!digests?.has(record.invocation_digest) && visibilityMap.has(identity(scope, record))) {
+      return "identity_expired";
+    }
   }
 
   private identityError(scope: string, record: RecordInput): string | undefined {
@@ -408,8 +500,26 @@ export class OmpService {
     return refusalReason(record);
   }
 
+  private cleanupErrorWithMaps(
+    scope: string,
+    record: RecordInput,
+    allowHidden: boolean,
+    identities: ReadonlyMap<string, ReadonlySet<string>>,
+    visibilityMap: ReadonlyMap<string, string>,
+  ): string | undefined {
+    const conflict = this.identityErrorWithMaps(scope, record, identities, visibilityMap);
+    if (conflict) return conflict;
+    if (!allowHidden && visibilityMap.get(identity(scope, record)) === "hidden")
+      return "already_hidden";
+    const meta = getStaticRecordMeta(record);
+    if (meta.isDestructiveCall)
+      return "destructive_command";
+    return meta.staticRefusal;
+  }
+
   private listItems(scope: string, session: string, params: Record<string, unknown>): Reply {
-    const items = this.engine.listItems(scope, safeString(params.query));
+    const query = safeString(params.query);
+    const items = this.engine.listItems(scope, query);
     const rows: Record<string, unknown>[] = items.map((item) => ({
       ...item,
       call_id: item.tool_call_id,
@@ -419,7 +529,13 @@ export class OmpService {
       tokens_display: "—",
     }));
     if (this.isAdapterEnabled()) {
-      const recorded = new Set(this.engine.listItems(scope).map((item) => item.tool_call_id));
+      const recorded = query
+        ? new Set(
+            this.store.driver
+              .all("SELECT DISTINCT tool_call_id FROM items WHERE scope_key=?", [scope])
+              .map((row) => String(row.tool_call_id ?? "")),
+          )
+        : new Set(items.map((item) => item.tool_call_id));
       for (const record of this.confirmed(session, params.snapshot_id)?.records.values() ?? []) {
         if (!recorded.has(record.call_id))
           rows.push({
@@ -474,17 +590,28 @@ export class OmpService {
     limit: number,
     wanted?: readonly string[],
     includeHidden = false,
+    identitiesArg?: ReadonlyMap<string, ReadonlySet<string>>,
+    visibilityMapArg?: ReadonlyMap<string, string>,
   ) {
+    const identities = identitiesArg ?? this.store.identitiesForScope(scope);
+    const visibilityMap = visibilityMapArg ?? this.store.itemVisibilityMap(scope);
+    const wantedSet = wanted ? new Set(wanted) : undefined;
     const filtered = [...records]
       .reverse()
       .filter(
         (record) =>
-          (!wanted || wanted.includes(record.call_id)) &&
-          !this.cleanupError(scope, record, includeHidden),
+          (!wantedSet || wantedSet.has(record.call_id)) &&
+          !this.cleanupErrorWithMaps(
+            scope,
+            record,
+            includeHidden,
+            identities,
+            visibilityMap,
+          ),
       );
     return {
       total: filtered.length,
-      total_bytes: filtered.reduce((sum, record) => sum + bytes(record.content), 0),
+      total_bytes: filtered.reduce((sum, record) => sum + getStaticRecordMeta(record).bytesSize, 0),
       candidate_ids: filtered.map((record) => record.call_id),
       items: filtered.slice(0, limit).map((record) => {
         const args = record.invocation.arguments as { [key: string]: Json };
@@ -492,7 +619,7 @@ export class OmpService {
           tool_call_id: record.call_id,
           tool_name: record.invocation.tool_name,
           hint: hintText(args),
-          bytes_size: bytes(record.content),
+          bytes_size: getStaticRecordMeta(record).bytesSize,
           tokens_display: "—",
         };
       }),

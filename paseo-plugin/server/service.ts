@@ -1,4 +1,6 @@
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   Engine,
   EngineError,
@@ -32,13 +34,34 @@ import {
   type HermesWriteOptions,
 } from "./adapterToggles.ts";
 import {
+  applyHermesOverlay,
+  hydrateHermesRows,
+  loadHermesRecordById,
+  loadHermesTimelineIndex,
+  resolveHermesEffectiveScope,
+  searchHermesIndex,
+  type HermesOverlaidSlot,
+  type HermesTimelineIndex,
+} from "./hermesHistory.ts";
+import {
+  hydrateOmpRows,
+  loadOmpRecordById,
+  loadOmpTimelineIndex,
   loadTimeline,
   measuredTokens,
+  measuredTokensFromSummary,
   preview,
+  searchOmpIndex,
   summaryLine,
   type Message,
+  type OmpTimelineIndex,
   type Timeline,
 } from "./history.ts";
+import {
+  recordServerPerf,
+  sanitizeErrorCode,
+  scopeAdapterKind,
+} from "./diagnostics.ts";
 
 export interface Capabilities {
   display: boolean;
@@ -63,7 +86,7 @@ type VerifiedTargetRecord = RecordInput & {
   options_omitted: boolean;
 };
 
-function isToolTimelineRow(row: Message): boolean {
+function isToolTimelineRow(row: { kind?: unknown; tool_name?: unknown }): boolean {
   const kind =
     row.kind ??
     (row.tool_name === "user"
@@ -102,12 +125,23 @@ export class PaseoService {
   readonly engine: Engine;
   private readonly decisions = new Map<string, string>();
   hermesWriteOptions?: HermesWriteOptions;
-  private hermesHostCheck?: { at: number; valid: boolean; profiles: string[] };
+  private hermesHostCheck?: {
+    at: number;
+    controlRev: string;
+    statSig: string;
+    valid: boolean;
+    profiles: string[];
+  };
+
   constructor(
     readonly store: Store,
     readonly home = homedir(),
   ) {
     this.engine = new Engine(store);
+  }
+
+  invalidateControlCaches(): void {
+    this.hermesHostCheck = undefined;
   }
 
   capabilities(scope: string): Capabilities {
@@ -121,19 +155,21 @@ export class PaseoService {
         ? "omp"
         : null;
     const control = adapterId ? this.store.getAdapterControl(adapterId) : null;
-    const hostVerified = !registration && adapterId === "hermes" && this.hermesHostProtectionReady(scope);
+    const hostVerified =
+      !registration &&
+      adapterId === "hermes" &&
+      this.hermesHostProtectionReady(scope, control);
     let state: Capabilities["state"];
     if (control !== null && !control.enabled) {
       state = "adapter_disabled";
     } else if (registration) {
-      state = registration.adapter_protocol !== 1 || !registration.enabled
-        ? registration.adapter_protocol !== 1 ? "incompatible_protocol" : "adapter_disabled"
-        : "ready";
+      state =
+        registration.adapter_protocol !== 1 || !registration.enabled
+          ? registration.adapter_protocol !== 1
+            ? "incompatible_protocol"
+            : "adapter_disabled"
+          : "ready";
     } else if (hostVerified) {
-      // A session that has not sent an LLM request since gateway startup has
-      // no registration row yet. A verified, enabled host installation is
-      // enough to permit hidden-state writes; the adapter applies them on the
-      // next request.
       state = "ready";
     } else {
       state = "adapter_not_detected";
@@ -141,10 +177,11 @@ export class PaseoService {
     return {
       display: true,
       hide: state === "ready" && (hostVerified || this.store.can(scope, "hide")),
-      summarize: state === "ready" && (hostVerified || this.store.can(scope, "summarize")),
+      summarize:
+        state === "ready" && (hostVerified || this.store.can(scope, "summarize")),
       unhide:
-        this.store.items(scope).some((item) => item.visibility === "hidden") ||
-        this.store.hiddenMessages(scope).length > 0,
+        this.store.hasHiddenItems(scope) ||
+        this.store.hasHiddenMessages(scope),
       state,
       ...(state === "adapter_not_detected"
         ? {
@@ -160,27 +197,137 @@ export class PaseoService {
     };
   }
 
-  private hermesHostProtectionReady(scope: string): boolean {
+  private capabilitiesFromStats(
+    scope: string,
+    stats: ReturnType<Store["scopeSummaryStats"]>,
+  ): Capabilities {
+    const registration = stats.registrations.get(scope);
+    const adapterId = scope.startsWith("hermes:")
+      ? "hermes"
+      : scope.startsWith("omp:")
+        ? "omp"
+        : null;
+    const control = adapterId ? (stats.controls.get(adapterId) ?? null) : null;
+    const hostVerified =
+      !registration &&
+      adapterId === "hermes" &&
+      this.hermesHostProtectionReady(scope, control);
+    let state: Capabilities["state"];
+    if (control !== null && !control.enabled) {
+      state = "adapter_disabled";
+    } else if (registration) {
+      state =
+        registration.adapter_protocol !== 1 || !registration.enabled
+          ? registration.adapter_protocol !== 1
+            ? "incompatible_protocol"
+            : "adapter_disabled"
+          : "ready";
+    } else if (hostVerified) {
+      state = "ready";
+    } else {
+      state = "adapter_not_detected";
+    }
+    const counts = stats.itemCounts.get(scope);
+    const hiddenMsgCount = stats.hiddenMessageCounts.get(scope) ?? 0;
+    const regCaps = registration?.capabilities as Record<string, unknown> | undefined;
+    const regCanHide =
+      Boolean(registration?.enabled) &&
+      registration?.adapter_protocol === 1 &&
+      (control === null || control.enabled) &&
+      Boolean(regCaps?.hide);
+    const regCanSummarize =
+      Boolean(registration?.enabled) &&
+      registration?.adapter_protocol === 1 &&
+      (control === null || control.enabled) &&
+      Boolean(regCaps?.summarize);
+    return {
+      display: true,
+      hide: state === "ready" && (hostVerified || regCanHide),
+      summarize: state === "ready" && (hostVerified || regCanSummarize),
+      unhide: (counts?.hiddenItemCount ?? 0) > 0 || hiddenMsgCount > 0,
+      state,
+      ...(state === "adapter_not_detected"
+        ? {
+            hint: scope.startsWith("hermes:")
+              ? "Install and enable the Session Navigation Hermes adapter."
+              : "Install and enable @tkdgur1756/session-navigation-omp in the session host.",
+          }
+        : state === "adapter_disabled" && scope.startsWith("hermes:")
+          ? {
+              hint: "Context management paused via DB control — updated protection-only sessions protect hidden items while older/frozen Hermes processes stay active until restarted (SQLite DB errors fail open per D9).",
+            }
+          : {}),
+    };
+  }
+
+  private hermesHostStatSignature(profile?: string): string {
+    const profileDir = join(this.home, ".hermes", "profiles");
+    const profileNames = new Set<string>(this.hermesHostCheck?.profiles ?? []);
+    if (profile && profile !== "default" && !/[\\/:]/.test(profile) && profile !== "..") {
+      profileNames.add(profile);
+    }
+    const paths = [
+      join(this.home, ".hermes", "config.yaml"),
+      join(this.home, ".hermes", "plugins", "session_navigation", "__init__.py"),
+      join(this.home, ".hermes", "plugins", "session_navigation", "vendor", "session_navigation_hermes", "plugin.py"),
+      profileDir,
+      ...[...profileNames].sort().map((p) => join(profileDir, p, "config.yaml")),
+    ];
+    return paths
+      .map((p) => {
+        try {
+          const st = statSync(p);
+          return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+        } catch {
+          return "missing";
+        }
+      })
+      .join("|");
+  }
+
+  private hermesHostProtectionReady(
+    scope: string,
+    controlArg?: ReturnType<Store["getAdapterControl"]>,
+  ): boolean {
     const profile = scope.split(":")[1] || "default";
+    const control =
+      controlArg !== undefined
+        ? controlArg
+        : this.store.getAdapterControl("hermes");
+    const controlRev = control ? `${control.enabled ? 1 : 0}:${control.updated_at}` : "none";
+    const statSig = this.hermesHostStatSignature(profile);
     const now = Date.now();
-    if (!this.hermesHostCheck || now - this.hermesHostCheck.at > 2000) {
+    if (
+      !this.hermesHostCheck ||
+      this.hermesHostCheck.controlRev !== controlRev ||
+      this.hermesHostCheck.statSig !== statSig ||
+      now - this.hermesHostCheck.at > 5000
+    ) {
       const install = inspectHermesPluginInstall(this.home);
-      const status = inspectHermesToggle(this.home, this.store.getAdapterControl("hermes")?.enabled);
+      const status = inspectHermesToggle(this.home, control?.enabled);
       this.hermesHostCheck = {
         at: now,
+        controlRev,
+        statSig: "",
         valid: Boolean(
           install.pluginInstalled &&
-          install.protectionSupportedOnDisk &&
-          status.installed &&
-          status.enabled &&
-          !status.stateUnknown &&
-          !status.error &&
-          (status.enabledProfileCount ?? 0) > 0,
+            install.protectionSupportedOnDisk &&
+            status.installed &&
+            status.enabled &&
+            !status.stateUnknown &&
+            !status.error &&
+            (status.enabledProfileCount ?? 0) > 0,
         ),
-        profiles: (status.profiles ?? []).filter((entry) => entry.enabled).map((entry) => entry.profile),
+        profiles: (status.profiles ?? [])
+          .filter((entry) => entry.enabled)
+          .map((entry) => entry.profile),
       };
+      this.hermesHostCheck.statSig = this.hermesHostStatSignature(profile);
     }
-    return this.hermesHostCheck.valid && this.hermesHostCheck.profiles.includes(profile);
+    return (
+      this.hermesHostCheck.valid &&
+      this.hermesHostCheck.profiles.includes(profile)
+    );
   }
 
   private hermesRuntimeContext(): HermesRuntimeInspectionContext {
@@ -231,7 +378,10 @@ export class PaseoService {
       this.capabilities(scopeKey),
     );
     const boundScopes = bound
-      .filter((entry) => entry.scope_key.startsWith("hermes:") && Boolean(entry.agent_id))
+      .filter(
+        (entry) =>
+          entry.scope_key.startsWith("hermes:") && Boolean(entry.agent_id),
+      )
       .map((entry) => entry.scope_key);
 
     return {
@@ -248,7 +398,9 @@ export class PaseoService {
     const omp = {
       installed: true,
       enabled: ompEnabled,
-      statusText: ompEnabled ? "Active" : "Paused (existing hidden items protected)",
+      statusText: ompEnabled
+        ? "Active"
+        : "Paused (existing hidden items protected)",
     };
     const hermesCtrl = this.store.getAdapterControl("hermes");
     const hermes = inspectHermesToggle(
@@ -260,10 +412,13 @@ export class PaseoService {
   }
 
   setAdapterToggle(input: Record<string, any>): Reply {
-    this.hermesHostCheck = undefined;
+    this.invalidateControlCaches();
     const adapter = input?.adapter;
     const enabled = input?.enabled;
-    if ((adapter !== "omp" && adapter !== "hermes") || typeof enabled !== "boolean") {
+    if (
+      (adapter !== "omp" && adapter !== "hermes") ||
+      typeof enabled !== "boolean"
+    ) {
       return { ...this.getAdapterToggles(), ok: false, error: "invalid_params" };
     }
     if (adapter === "omp") {
@@ -303,7 +458,9 @@ export class PaseoService {
           ...this.getAdapterToggles(),
           ok: false,
           error: preCheck.error ?? "hermes_not_installed",
-          ...(preCheck.error ? { hermes: { ...preCheck, error: preCheck.error } } : {}),
+          ...(preCheck.error
+            ? { hermes: { ...preCheck, error: preCheck.error } }
+            : {}),
         };
       }
       if (preCheck.error) {
@@ -317,8 +474,6 @@ export class PaseoService {
           },
         };
       }
-      // Pausing Hermes updates shared SQLite adapter_control only while leaving config.yaml intact
-      // (enabled) so legacy/duplicate/frozen Hermes processes never disable middleware protection.
       if (!enabled) {
         try {
           this.store.setAdapterControl("hermes", false);
@@ -348,7 +503,9 @@ export class PaseoService {
             : (writeRes.error ?? "hermes_toggle_failed"),
           hermes: {
             ...current.hermes,
-            ...(writeRes.profiles.length > 0 ? { profiles: writeRes.profiles } : {}),
+            ...(writeRes.profiles.length > 0
+              ? { profiles: writeRes.profiles }
+              : {}),
             rolledBack: writeRes.rolledBack,
             partialUpdate: writeRes.partialUpdate,
             updatedFiles: writeRes.updatedFiles,
@@ -388,12 +545,13 @@ export class PaseoService {
           },
         };
       }
-      // Post-commit journal cleanup failure must NOT roll back already-committed config.yaml files,
-      // because SQLite adapter_control is already committed. Surface residual journal state honestly.
       try {
         writeRes.clearJournal?.();
       } catch (cleanupErr) {
-        const cleanupReason = cleanupErr instanceof Error ? cleanupErr.message : "journal_cleanup_failed";
+        const cleanupReason =
+          cleanupErr instanceof Error
+            ? cleanupErr.message
+            : "journal_cleanup_failed";
         const current = this.getAdapterToggles();
         return {
           ...current,
@@ -416,87 +574,134 @@ export class PaseoService {
   }
 
   async handle(method: string, input: Record<string, any>): Promise<Reply> {
+    const started = performance.now();
+    const adapter = scopeAdapterKind(input?.scope_key);
     try {
-      if (method === "getAdapterToggles" || method === "session-nav.get-adapter-toggles") {
-        return this.getAdapterToggles();
-      }
-      if (method === "setAdapterToggle" || method === "session-nav.set-adapter-toggle") {
-        return this.setAdapterToggle(input);
-      }
-      if (method === "scopes") return this.scopes(input.parent_scope);
-      const requested = input.scope_key;
-      if (typeof requested !== "string" || requested.split(":").length !== 4)
-        return { ok: false, error: "invalid_scope" };
-      const scope = this.resolveScope(requested);
-      if (method === "dbChoice") {
-        if (!["abort_request", "send_original"].includes(input.choice))
-          return { ok: false, error: "invalid_choice" };
-        this.decisions.set(scope, input.choice);
-        return { ok: true };
-      }
-      if (method === "list") {
-        const result = this.list(
-          scope,
-          input.query,
-          {
-            limit: typeof input.limit === "number" ? input.limit : undefined,
-            before_index:
-              typeof input.before_index === "number"
-                ? input.before_index
-                : undefined,
-          },
-          scope,
-        );
-        if (this.decisions.get(scope) === "send_original")
-          this.decisions.set(scope, "abort_request");
-        else this.decisions.delete(scope);
-        return result;
-      }
-      if (this.decisions.has(scope))
-        return {
-          ok: false,
-          error: "db_error",
-          choices: ["abort_request", "send_original"],
-        };
-      if (method === "fork") {
-        const effective = this.effectiveScope(scope);
-        const destination =
-          typeof input.dst_scope_key === "string"
-            ? this.resolveScope(input.dst_scope_key)
-            : "";
-        const denied = this.gate(destination, "hide");
-        if (denied) return denied;
-        if (
-          this.store
-            .items(effective)
-            .some((item) => item.compaction_source === "summarize_pending")
-        ) {
-          const deniedSummary = this.gate(destination, "summarize");
-          if (deniedSummary) return deniedSummary;
+      let reply: Reply;
+      let diagMeta: Record<string, unknown> = {};
+      if (
+        method === "getAdapterToggles" ||
+        method === "session-nav.get-adapter-toggles"
+      ) {
+        reply = this.getAdapterToggles();
+      } else if (
+        method === "setAdapterToggle" ||
+        method === "session-nav.set-adapter-toggle"
+      ) {
+        reply = this.setAdapterToggle(input);
+      } else if (method === "scopes") {
+        reply = this.scopes(input.parent_scope);
+        if (reply.ok && Array.isArray(reply.scopes)) {
+          diagMeta = { scope_count: reply.scopes.length };
         }
-        return { ok: true, counts: this.store.fork(effective, destination) };
+      } else {
+        const requested = input.scope_key;
+        if (typeof requested !== "string" || requested.split(":").length !== 4) {
+          reply = { ok: false, error: "invalid_scope" };
+        } else {
+          const scope = this.resolveScope(requested);
+          if (method === "dbChoice") {
+            if (!["abort_request", "send_original"].includes(input.choice)) {
+              reply = { ok: false, error: "invalid_choice" };
+            } else {
+              this.decisions.set(scope, input.choice);
+              reply = { ok: true };
+            }
+          } else if (method === "list") {
+            const listMeta: {
+              row_count?: number;
+              hydrated_count?: number;
+              page_size?: number;
+            } = {};
+            reply = this.list(
+              scope,
+              input.query,
+              {
+                limit: typeof input.limit === "number" ? input.limit : undefined,
+                before_index:
+                  typeof input.before_index === "number"
+                    ? input.before_index
+                    : undefined,
+              },
+              scope,
+              listMeta,
+            );
+            diagMeta = listMeta;
+            if (this.decisions.get(scope) === "send_original")
+              this.decisions.set(scope, "abort_request");
+            else this.decisions.delete(scope);
+          } else if (this.decisions.has(scope)) {
+            reply = {
+              ok: false,
+              error: "db_error",
+              choices: ["abort_request", "send_original"],
+            };
+          } else if (method === "fork") {
+            const effective = this.effectiveScope(scope);
+            const destination =
+              typeof input.dst_scope_key === "string"
+                ? this.resolveScope(input.dst_scope_key)
+                : "";
+            const denied = this.gate(destination, "hide");
+            if (denied) {
+              reply = denied;
+            } else if (
+              this.store
+                .items(effective)
+                .some((item) => item.compaction_source === "summarize_pending")
+            ) {
+              const deniedSummary = this.gate(destination, "summarize");
+              reply =
+                deniedSummary ??
+                ({ ok: true, counts: this.store.fork(effective, destination) } as Reply);
+            } else {
+              reply = {
+                ok: true,
+                counts: this.store.fork(effective, destination),
+              };
+            }
+          } else if (method === "hide" || method === "unhide") {
+            reply = await this.mutate(
+              this.effectiveScope(scope),
+              input.item_id,
+              method,
+              input.mode ?? "hide",
+              input.expected_version,
+            );
+          } else if (method === "hideBatch" || method === "unhideBatch") {
+            reply = await this.batch(
+              this.effectiveScope(scope),
+              input,
+              method === "hideBatch" ? "hide" : "unhide",
+            );
+          } else if (method === "manage") {
+            reply = await this.manage(this.effectiveScope(scope), input);
+          } else {
+            reply = { ok: false, error: "unknown_method" };
+          }
+        }
       }
-      // P0-1: mutations resolve the rotation-effective scope once so hide /
-      // unhide / batch / manage act on the child session that owns the latest
-      // chunk instead of 404ing against the requested parent scope.
-      if (method === "hide" || method === "unhide")
-        return await this.mutate(
-          this.effectiveScope(scope),
-          input.item_id,
-          method,
-          input.mode ?? "hide",
-          input.expected_version,
-        );
-      if (method === "hideBatch" || method === "unhideBatch")
-        return await this.batch(
-          this.effectiveScope(scope),
-          input,
-          method === "hideBatch" ? "hide" : "unhide",
-        );
-      if (method === "manage") return await this.manage(this.effectiveScope(scope), input);
-      return { ok: false, error: "unknown_method" };
+      recordServerPerf({
+        op: method,
+        duration_ms: performance.now() - started,
+        ok: Boolean(reply.ok),
+        ...(reply.ok ? {} : { error_code: sanitizeErrorCode(reply.error ?? "error") }),
+        adapter,
+        lane: "direct",
+        ...diagMeta,
+      });
+      return reply;
     } catch (error) {
-      return this.failure(error);
+      const reply = this.failure(error);
+      recordServerPerf({
+        op: method,
+        duration_ms: performance.now() - started,
+        ok: false,
+        error_code: sanitizeErrorCode(reply.error ?? error),
+        adapter,
+        lane: "direct",
+      });
+      return reply;
     }
   }
 
@@ -514,34 +719,9 @@ export class PaseoService {
     );
   }
 
-  /**
-   * Resolve the rotation-effective scope (P0-1). Hermes sessions rotate
-   * parent -> child; the panel keeps sending the parent scope_key, so the
-   * server resolves the child scope that owns the latest chunk and uses it
-   * consistently for items, message-unit writes, targets, capabilities,
-   * aliases and gates. The requested parent scope_key stays API-compatible
-   * (replies still echo it); only server-side state uses the effective scope.
-   * Non-Hermes scopes resolve to themselves without extra I/O.
-   */
   private effectiveScope(scope: string): string {
     if (!scope.startsWith("hermes:")) return scope;
-    return this.resolvedTimeline(scope).scope;
-  }
-
-  private resolvedTimeline(scope: string) {
-    const items = this.store.items(scope);
-    const units = this.store.listUnits(scope);
-    const timeline = this.timeline(scope, items, units);
-    const effective = timeline.history.effectiveScope;
-    if (!effective || effective === scope) return { scope, items, units, timeline };
-    const effectiveItems = this.store.items(effective);
-    const effectiveUnits = this.store.listUnits(effective);
-    return {
-      scope: effective,
-      items: effectiveItems,
-      units: effectiveUnits,
-      timeline: this.timeline(effective, effectiveItems, effectiveUnits),
-    };
+    return resolveHermesEffectiveScope(this.home, scope);
   }
 
   private failure(error: unknown): Reply {
@@ -554,10 +734,12 @@ export class PaseoService {
     return {
       ok: false,
       error: code,
-      // B5: every abortable failure code offers the abort backlog choice.
-      // engine_protocol_incompatible is terminal for the session (the
-      // middleware cannot proceed), so it aborts rather than retries.
-      ...(["db_error", "db_full", "unsafe_journal_mode", "engine_protocol_incompatible"].includes(code)
+      ...([
+        "db_error",
+        "db_full",
+        "unsafe_journal_mode",
+        "engine_protocol_incompatible",
+      ].includes(code)
         ? { choices: ["abort_request", "send_original"] }
         : {}),
     };
@@ -584,21 +766,18 @@ export class PaseoService {
   private scopes(parentScope?: unknown): Reply {
     if (parentScope !== undefined && typeof parentScope !== "string")
       return { ok: false, error: "invalid_params" };
-    const scopes = this.store.driver
-      .all(
-        "SELECT scope_key FROM adapter_sessions UNION SELECT scope_key FROM items UNION SELECT scope_key FROM units ORDER BY scope_key",
-      )
-      .map((row) => {
-        const scope = String(row.scope_key);
-        return {
-          scope_key: scope,
-          items: this.store.items(scope).length,
-          parent_scope: this.store.registration(scope)?.parent_scope ?? null,
-          tool_call_id: this.store.registration(scope)?.tool_call_id ?? null,
-          subagent_id: this.store.registration(scope)?.subagent_id ?? null,
-          capabilities: this.capabilities(scope),
-        };
-      });
+    const stats = this.store.scopeSummaryStats();
+    const scopes = stats.scopeKeys.map((scope) => {
+      const reg = stats.registrations.get(scope);
+      return {
+        scope_key: scope,
+        items: stats.itemCounts.get(scope)?.itemCount ?? 0,
+        parent_scope: reg?.parent_scope ?? null,
+        tool_call_id: reg?.tool_call_id ?? null,
+        subagent_id: reg?.subagent_id ?? null,
+        capabilities: this.capabilitiesFromStats(scope, stats),
+      };
+    });
     const filtered = scopes.filter(
       (row) => parentScope === undefined || row.parent_scope === parentScope,
     );
@@ -607,7 +786,7 @@ export class PaseoService {
       scopes:
         parentScope === undefined
           ? bindAgents(this.home, filtered, undefined, (scopeKey) =>
-              this.capabilities(scopeKey),
+              this.capabilitiesFromStats(scopeKey, stats),
             )
           : bindAgents(this.home, filtered),
     };
@@ -665,10 +844,6 @@ export class PaseoService {
     const timeline = loadTimeline(this.home, scope, storedItems, storedUnits);
     if (
       timeline.rows.length > 0 ||
-      // P1-2: an empty but authoritative latest chunk (matched session/file)
-      // is valid and must NOT be backfilled with stale targets. Only a
-      // genuinely missing timeline (no session, no file, no read) falls
-      // through to the legacy targets resurrection below.
       timeline.history.chunkAuthoritative === true ||
       (!scope.startsWith("hermes:") && !this.store.registration(scope)?.parent_scope)
     )
@@ -730,106 +905,513 @@ export class PaseoService {
     };
   }
 
+  private mergeSlotWithOverlay(
+    row: Message,
+    timelineIndex: number,
+    stored: ReadonlyMap<string, Item>,
+    units: ReadonlyMap<string, Record<string, unknown>>,
+    measuredTokensMap: ReadonlyMap<string, number>,
+  ): Message {
+    let merged: Message;
+    const item = stored.get(row.item_id);
+    if (item) {
+      const itemProps = this.itemRow(item);
+      const preservedSummary =
+        typeof row.summary_line === "string" &&
+        row.summary_line &&
+        !row.summary_line.startsWith("[hidden:")
+          ? row.summary_line
+          : itemProps.summary_line;
+      merged = {
+        ...row,
+        ...itemProps,
+        summary_line: preservedSummary,
+        ...(row.tool_input !== undefined
+          ? { tool_input: row.tool_input }
+          : {}),
+      };
+    } else {
+      const unit = units.get(row.item_id);
+      const hidden = unit?.visibility === "hidden";
+      const version = Number(unit?.version ?? 1);
+      merged = {
+        status: hidden ? "hidden" : version > 1 ? "unhidden" : "visible",
+        visibility: hidden ? "hidden" : "visible",
+        version,
+        tokens_display: "—",
+        ...(hidden ? { compacted_bytes_size: 0 } : {}),
+        ...row,
+      };
+    }
+    const tokens = measuredTokensMap.get(
+      row.kind === "tool" ? row.tool_call_id : row.item_id,
+    );
+    if (tokens !== undefined) {
+      Object.assign(merged, {
+        tokens,
+        tokens_display:
+          tokens < 1000
+            ? `${tokens} tok`
+            : `${(tokens / 1000).toFixed(1)}K tok`,
+        tokens_source: "measured allocation",
+      });
+    }
+    return {
+      tokens_display: "—",
+      ...merged,
+      timeline_index: timelineIndex,
+    };
+  }
+
+  private buildListResponse(
+    requestedScope: string,
+    effectiveScope: string,
+    pageItems: Message[],
+    hasOlder: boolean,
+    nextBeforeIndex: number | null,
+    totals: {
+      total_rows: number;
+      manageable_count: number;
+      hidden_count: number;
+      saved_bytes: number;
+    },
+    serverTimeline: boolean,
+    options: {
+      recordsCapped?: boolean;
+      readError?: string;
+      context?: { used_tokens: number; max_tokens: number | null; source: string };
+    },
+  ): Reply {
+    const capabilities = this.capabilities(effectiveScope);
+    const pausedAdapter = effectiveScope.startsWith("hermes:")
+      ? "hermes"
+      : effectiveScope.startsWith("omp:")
+        ? "omp"
+        : null;
+    const paused =
+      capabilities.state === "adapter_disabled" && pausedAdapter !== null;
+    return {
+      ok: true,
+      scope_key: requestedScope,
+      items: pageItems,
+      capabilities,
+      ...(paused
+        ? {
+            paused: true,
+            paused_warning:
+              pausedAdapter === "hermes"
+                ? "adapter paused: hides/summaries are disabled, but stored hidden items are still redacted from outgoing requests (protection-only); capabilities refresh on resume."
+                : "adapter paused: hides/summaries are disabled; existing hidden items stay protected (protection-only).",
+          }
+        : {}),
+      server_timeline: serverTimeline,
+      has_older: hasOlder,
+      next_before_index: nextBeforeIndex,
+      totals,
+      ...(options.recordsCapped ? { records_capped: true } : {}),
+      ...(options.readError
+        ? { timeline_read_error: options.readError }
+        : {}),
+      ...(options.context ? { context: options.context } : {}),
+    };
+  }
+
+  private selectWindowIndices(
+    slots: readonly { kind?: unknown; tool_name?: unknown }[],
+    limitParam: number,
+    beforeIndexParam: number | undefined,
+  ): { startIndex: number; endIndex: number; hasOlder: boolean; nextBeforeIndex: number | null } {
+    const limit = Math.min(2000, Math.max(1, Math.trunc(limitParam)));
+    const endIndex =
+      typeof beforeIndexParam === "number" && Number.isFinite(beforeIndexParam)
+        ? Math.max(0, Math.min(slots.length, Math.trunc(beforeIndexParam)))
+        : slots.length;
+    let startIndex = Math.max(0, endIndex - limit);
+    while (
+      startIndex > 0 &&
+      isToolTimelineRow(slots[startIndex]) &&
+      isToolTimelineRow(slots[startIndex - 1])
+    ) {
+      startIndex--;
+    }
+    return {
+      startIndex,
+      endIndex,
+      hasOlder: startIndex > 0,
+      nextBeforeIndex: startIndex > 0 ? startIndex : null,
+    };
+  }
+
+  private computeSlotTotals(
+    slots: readonly { item_id: string; manageable: boolean; bytes_size: number; kind: string }[],
+    stored: ReadonlyMap<string, Item>,
+    units: ReadonlyMap<string, Record<string, unknown>>,
+  ): {
+    total_rows: number;
+    manageable_count: number;
+    hidden_count: number;
+    saved_bytes: number;
+  } {
+    let manageableCount = 0;
+    let hiddenCount = 0;
+    let savedBytes = 0;
+    for (const slot of slots) {
+      if (Boolean(slot.item_id) && slot.manageable !== false) {
+        manageableCount++;
+      }
+      const item = stored.get(slot.item_id);
+      if (item) {
+        if (item.visibility === "hidden") {
+          hiddenCount++;
+          const origBytes = bytes(item.original);
+          const compBytes = Math.min(Math.max(0, origBytes), Math.max(0, bytes(item.compacted)));
+          savedBytes += Math.max(0, origBytes - compBytes);
+        }
+        continue;
+      }
+      const unit = units.get(slot.item_id);
+      if (unit?.visibility === "hidden") {
+        hiddenCount++;
+        const post =
+          slot.kind === "user" || slot.kind === "assistant" || slot.kind === "agent"
+            ? 0
+            : 0;
+        const clamped = Math.min(Math.max(0, slot.bytes_size), post);
+        savedBytes += Math.max(0, slot.bytes_size - clamped);
+      }
+    }
+    return {
+      total_rows: slots.length,
+      manageable_count: manageableCount,
+      hidden_count: hiddenCount,
+      saved_bytes: savedBytes,
+    };
+  }
+
+  private collectSpans(
+    items: readonly Item[],
+    units: ReadonlyMap<string, Record<string, unknown>>,
+  ): [number, number][] {
+    const spans: [number, number][] = items
+      .filter((item) => item.version > 1 || item.visibility === "hidden")
+      .map((item) => [item.created_at, item.updated_at]);
+    for (const [key, unit] of units) {
+      if (
+        key.startsWith("msg:") &&
+        (Number(unit.version) > 1 || unit.visibility === "hidden")
+      ) {
+        spans.push([Number(key.split(":")[2]) / 1000, Number(unit.updated_at)]);
+      }
+    }
+    return spans;
+  }
+
   private list(
     scope: string,
     query = "",
     paging?: { limit?: number; before_index?: number },
     requestedScope?: string,
+    diagOut?: { row_count?: number; hydrated_count?: number; page_size?: number },
   ): Reply {
-    // P0-1/P1-4: resolve the rotation-effective scope once and load its
-    // items/units/timeline a single time (no same-key cache thrash).
-    const resolved = this.resolvedTimeline(scope);
-    const effectiveScope = resolved.scope;
-    const items = resolved.items;
-    const rawUnits = resolved.units;
-    const timeline = resolved.timeline;
-    const stored = new Map(items.map((item) => [item.item_id, item]));
-    const units = new Map(
-      rawUnits.map((unit) => [String(unit.unit_id), unit]),
-    );
-    const spans: [number, number][] = items
-      .filter((item) => item.version > 1 || item.visibility === "hidden")
-      .map((item) => [item.created_at, item.updated_at]);
-    for (const [key, unit] of units)
-      if (
-        key.startsWith("msg:") &&
-        (Number(unit.version) > 1 || unit.visibility === "hidden")
-      )
-        spans.push([Number(key.split(":")[2]) / 1000, Number(unit.updated_at)]);
-    const measured = measuredTokens(this.home, timeline.history, spans);
-    const seen = new Set<string>();
-    const rows = timeline.rows.map((row) => {
-      seen.add(row.item_id);
-      let merged: Message;
-      const item = stored.get(row.item_id);
-      if (item) {
-        const itemProps = this.itemRow(item);
-        const preservedSummary =
-          typeof row.summary_line === "string" &&
-          row.summary_line &&
-          !row.summary_line.startsWith("[hidden:")
-            ? row.summary_line
-            : itemProps.summary_line;
-        merged = {
-          ...row,
-          ...itemProps,
-          summary_line: preservedSummary,
-          ...(row.tool_input !== undefined
-            ? { tool_input: row.tool_input }
-            : {}),
-        };
-      } else {
-        const unit = units.get(row.item_id);
-        const hidden = unit?.visibility === "hidden";
-        const version = Number(unit?.version ?? 1);
-        merged = {
-          status: hidden ? "hidden" : version > 1 ? "unhidden" : "visible",
-          visibility: hidden ? "hidden" : "visible",
-          version,
-          tokens_display: "—",
-          ...(hidden ? { compacted_bytes_size: 0 } : {}),
-          ...row,
-        };
+    const adapter = scope.split(":")[0];
+    const hasQuery = typeof query === "string" && query.length > 0;
+    const hasLimit =
+      typeof paging?.limit === "number" &&
+      Number.isFinite(paging.limit) &&
+      paging.limit > 0;
+
+    if (adapter === "omp" || adapter === "pi") {
+      const ompIndex = loadOmpTimelineIndex(this.home, scope);
+      if (ompIndex) {
+        return this.listFromOmpIndex(
+          ompIndex,
+          scope,
+          requestedScope ?? scope,
+          query,
+          hasQuery,
+          hasLimit ? paging! : undefined,
+          diagOut,
+        );
       }
-      const tokens = measured.tokens.get(
-        row.kind === "tool" ? row.tool_call_id : row.item_id,
+    } else if (adapter === "hermes") {
+      const hermesRes = loadHermesTimelineIndex(this.home, scope);
+      if (hermesRes.readError) {
+        return this.listLegacyOrEmpty(
+          scope,
+          requestedScope ?? scope,
+          query,
+          paging,
+          {
+            rows: [],
+            records: new Map(),
+            history: {
+              messages: [],
+              boundaries: [],
+              injected: [],
+              chunkStart: 0,
+              readError: hermesRes.readError,
+              readErrorDb: hermesRes.readErrorDb,
+            },
+          },
+          diagOut,
+        );
+      }
+      if (hermesRes.index) {
+        return this.listFromHermesIndex(
+          hermesRes.index,
+          requestedScope ?? scope,
+          query,
+          hasQuery,
+          hasLimit ? paging! : undefined,
+          diagOut,
+        );
+      }
+    }
+
+    const resolved = this.timeline(scope);
+    return this.listLegacyOrEmpty(
+      scope,
+      requestedScope ?? scope,
+      query,
+      paging,
+      resolved,
+      diagOut,
+    );
+  }
+
+  private listFromOmpIndex(
+    index: OmpTimelineIndex,
+    effectiveScope: string,
+    requestedScope: string,
+    query: string,
+    hasQuery: boolean,
+    paging: { limit?: number; before_index?: number } | undefined,
+    diagOut?: { row_count?: number; hydrated_count?: number; page_size?: number },
+  ): Reply {
+    const items = this.store.items(effectiveScope);
+    const rawUnits = this.store.listUnits(effectiveScope);
+    const stored = new Map(items.map((item) => [item.item_id, item]));
+    const units = new Map(rawUnits.map((unit) => [String(unit.unit_id), unit]));
+    const spans = this.collectSpans(items, units);
+    const measured = measuredTokensFromSummary(this.home, index.summary, spans);
+
+    if (!index.slots.length) {
+      return this.listEmptySlotsWithStoreFallback(
+        requestedScope,
+        effectiveScope,
+        items,
+        units,
+        measured,
+        query,
+        hasQuery,
+        paging,
+        {
+          recordsCapped: index.recordsCapped,
+        },
+        diagOut,
       );
-      if (tokens !== undefined)
-        Object.assign(merged, {
-          tokens,
-          tokens_display:
-            tokens < 1000
-              ? `${tokens} tok`
-              : `${(tokens / 1000).toFixed(1)}K tok`,
-          tokens_source: "measured allocation",
+    }
+
+    const totals = this.computeSlotTotals(index.slots, stored, units);
+
+    let selectedIndices: number[];
+    let hasOlder = false;
+    let nextBeforeIndex: number | null = null;
+    if (hasQuery) {
+      const storedCompacted = new Map<string, string | undefined>();
+      for (const item of items) storedCompacted.set(item.item_id, item.compacted);
+      selectedIndices = searchOmpIndex(index, query, storedCompacted);
+    } else if (paging) {
+      const win = this.selectWindowIndices(
+        index.slots,
+        paging.limit!,
+        paging.before_index,
+      );
+      hasOlder = win.hasOlder;
+      nextBeforeIndex = win.nextBeforeIndex;
+      selectedIndices = [];
+      for (let i = win.startIndex; i < win.endIndex; i++) selectedIndices.push(i);
+    } else {
+      selectedIndices = index.slots.map((_, i) => i);
+    }
+
+    const selectedSlots = selectedIndices.map((idx) => index.slots[idx]);
+    const hydratedRows = hydrateOmpRows(this.home, index, selectedSlots);
+    const pageItems = hydratedRows.map((row, pos) =>
+      this.mergeSlotWithOverlay(
+        row,
+        selectedIndices[pos],
+        stored,
+        units,
+        measured.tokens,
+      ),
+    );
+
+    if (diagOut) {
+      diagOut.row_count = index.slots.length;
+      diagOut.hydrated_count = selectedSlots.length;
+      diagOut.page_size = pageItems.length;
+    }
+
+    return this.buildListResponse(
+      requestedScope,
+      effectiveScope,
+      pageItems,
+      hasOlder,
+      nextBeforeIndex,
+      totals,
+      true,
+      {
+        recordsCapped: index.recordsCapped,
+        context: measured.context,
+      },
+    );
+  }
+
+  private listFromHermesIndex(
+    index: HermesTimelineIndex,
+    requestedScope: string,
+    query: string,
+    hasQuery: boolean,
+    paging: { limit?: number; before_index?: number } | undefined,
+    diagOut?: { row_count?: number; hydrated_count?: number; page_size?: number },
+  ): Reply {
+    const effectiveScope = index.effectiveScope;
+    const items = this.store.items(effectiveScope);
+    const rawUnits = this.store.listUnits(effectiveScope);
+    const overlaid = applyHermesOverlay(index, items, rawUnits);
+    const stored = new Map(items.map((item) => [item.item_id, item]));
+    const units = new Map(rawUnits.map((unit) => [String(unit.unit_id), unit]));
+    const measured: {
+      tokens: Map<string, number>;
+      context?: { used_tokens: number; max_tokens: number | null; source: string };
+    } = {
+      tokens: new Map(),
+      ...(index.usedTokens
+        ? {
+            context: {
+              used_tokens: index.usedTokens,
+              max_tokens: null,
+              source: "hermes_session_usage",
+            },
+          }
+        : {}),
+    };
+
+    if (!overlaid.length) {
+      return this.listEmptySlotsWithStoreFallback(
+        requestedScope,
+        effectiveScope,
+        items,
+        units,
+        measured,
+        query,
+        hasQuery,
+        paging,
+        {
+          recordsCapped: index.recordsCapped,
+        },
+        diagOut,
+      );
+    }
+
+    const totals = this.computeSlotTotals(overlaid, stored, units);
+
+    let selectedIndices: number[];
+    let hasOlder = false;
+    let nextBeforeIndex: number | null = null;
+    if (hasQuery) {
+      const storedCompacted = new Map<string, string | undefined>();
+      for (const item of items) storedCompacted.set(item.item_id, item.compacted);
+      selectedIndices = searchHermesIndex(index, overlaid, query, storedCompacted);
+    } else if (paging) {
+      const win = this.selectWindowIndices(
+        overlaid,
+        paging.limit!,
+        paging.before_index,
+      );
+      hasOlder = win.hasOlder;
+      nextBeforeIndex = win.nextBeforeIndex;
+      selectedIndices = [];
+      for (let i = win.startIndex; i < win.endIndex; i++) selectedIndices.push(i);
+    } else {
+      selectedIndices = overlaid.map((_, i) => i);
+    }
+
+    const selectedSlots: HermesOverlaidSlot[] = selectedIndices.map(
+      (idx) => overlaid[idx],
+    );
+    const hydratedRows = hydrateHermesRows(index, selectedSlots);
+    const pageItems = hydratedRows.map((row, pos) =>
+      this.mergeSlotWithOverlay(
+        row,
+        selectedIndices[pos],
+        stored,
+        units,
+        measured.tokens,
+      ),
+    );
+
+    if (diagOut) {
+      diagOut.row_count = overlaid.length;
+      diagOut.hydrated_count = selectedSlots.length;
+      diagOut.page_size = pageItems.length;
+    }
+
+    return this.buildListResponse(
+      requestedScope,
+      effectiveScope,
+      pageItems,
+      hasOlder,
+      nextBeforeIndex,
+      totals,
+      true,
+      {
+        recordsCapped: index.recordsCapped,
+        context: measured.context,
+      },
+    );
+  }
+
+  private listEmptySlotsWithStoreFallback(
+    requestedScope: string,
+    effectiveScope: string,
+    items: readonly Item[],
+    units: ReadonlyMap<string, Record<string, unknown>>,
+    measured: {
+      tokens: Map<string, number>;
+      context?: { used_tokens: number; max_tokens: number | null; source: string };
+    },
+    query: string,
+    hasQuery: boolean,
+    paging: { limit?: number; before_index?: number } | undefined,
+    options: { recordsCapped?: boolean; readError?: string },
+    diagOut?: { row_count?: number; hydrated_count?: number; page_size?: number },
+  ): Reply {
+    const stored = new Map(items.map((item) => [item.item_id, item]));
+    const rows: Message[] = [];
+    for (const item of items) rows.push(this.itemRow(item));
+    const calls = new Set(items.map((item) => item.tool_call_id));
+    for (const unit of units.values()) {
+      if (
+        unit.kind === "tool_result" &&
+        unit.tool_call_id &&
+        !calls.has(String(unit.tool_call_id))
+      ) {
+        calls.add(String(unit.tool_call_id));
+        rows.push({
+          item_id: `unit_${unit.unit_id}`,
+          tool_call_id: unit.tool_call_id,
+          kind: "tool",
+          tool_name: "tool",
+          status: "visible",
+          visibility: "visible",
+          version: 1,
+          source: "unrecorded",
+          manageable: false,
+          bytes_size: Number(unit.char_count),
+          summary_line: `[tool_result] ${unit.tool_call_id}`,
         });
-      return merged;
-    });
-    if (!timeline.rows.length) {
-      for (const item of items)
-        if (!seen.has(item.item_id)) rows.push(this.itemRow(item));
-      const calls = new Set(items.map((item) => item.tool_call_id));
-      for (const unit of units.values()) {
-        if (
-          unit.kind === "tool_result" &&
-          unit.tool_call_id &&
-          !calls.has(String(unit.tool_call_id))
-        ) {
-          calls.add(String(unit.tool_call_id));
-          rows.push({
-            item_id: `unit_${unit.unit_id}`,
-            tool_call_id: unit.tool_call_id,
-            kind: "tool",
-            tool_name: "tool",
-            status: "visible",
-            visibility: "visible",
-            version: 1,
-            source: "unrecorded",
-            manageable: false,
-            bytes_size: Number(unit.char_count),
-            summary_line: `[tool_result] ${unit.tool_call_id}`,
-          });
-        }
       }
     }
     const indexedRows: Message[] = rows.map((row, idx) => ({
@@ -855,7 +1437,6 @@ export class PaseoService {
         0,
       ),
     };
-    const hasQuery = typeof query === "string" && query.length > 0;
     let pageItems: Message[];
     let hasOlder = false;
     let nextBeforeIndex: number | null = null;
@@ -870,8 +1451,116 @@ export class PaseoService {
           row.tool_input,
           stored.get(row.item_id)?.compacted,
         ].some(
-          (value) =>
-            typeof value === "string" && value.toLowerCase().includes(q),
+          (value) => typeof value === "string" && value.toLowerCase().includes(q),
+        ),
+      );
+    } else if (paging) {
+      const win = this.selectWindowIndices(
+        indexedRows,
+        paging.limit!,
+        paging.before_index,
+      );
+      pageItems = indexedRows.slice(win.startIndex, win.endIndex);
+      hasOlder = win.hasOlder;
+      nextBeforeIndex = win.nextBeforeIndex;
+    } else {
+      pageItems = indexedRows;
+    }
+    if (diagOut) {
+      diagOut.row_count = indexedRows.length;
+      diagOut.hydrated_count = pageItems.length;
+      diagOut.page_size = pageItems.length;
+    }
+    return this.buildListResponse(
+      requestedScope,
+      effectiveScope,
+      pageItems,
+      hasOlder,
+      nextBeforeIndex,
+      totals,
+      false,
+      {
+        recordsCapped: options.recordsCapped,
+        readError: options.readError,
+        context: measured.context,
+      },
+    );
+  }
+
+  private listLegacyOrEmpty(
+    effectiveScope: string,
+    requestedScope: string,
+    query = "",
+    paging: { limit?: number; before_index?: number } | undefined,
+    timeline: Timeline,
+    diagOut?: { row_count?: number; hydrated_count?: number; page_size?: number },
+  ): Reply {
+    const items = this.store.items(effectiveScope);
+    const rawUnits = this.store.listUnits(effectiveScope);
+    const stored = new Map(items.map((item) => [item.item_id, item]));
+    const units = new Map(rawUnits.map((unit) => [String(unit.unit_id), unit]));
+    const spans = this.collectSpans(items, units);
+    const measured = measuredTokens(this.home, timeline.history, spans);
+    const seen = new Set<string>();
+    const rows = timeline.rows.map((row, idx) => {
+      seen.add(row.item_id);
+      return this.mergeSlotWithOverlay(row, idx, stored, units, measured.tokens);
+    });
+    if (!timeline.rows.length) {
+      return this.listEmptySlotsWithStoreFallback(
+        requestedScope,
+        effectiveScope,
+        items,
+        units,
+        measured,
+        query,
+        typeof query === "string" && query.length > 0,
+        typeof paging?.limit === "number" &&
+          Number.isFinite(paging.limit) &&
+          paging.limit > 0
+          ? paging
+          : undefined,
+        {
+          recordsCapped: timeline.history.recordsCapped,
+          readError: timeline.history.readError,
+        },
+        diagOut,
+      );
+    }
+    const hiddenRows = rows.filter((row) => row.status === "hidden");
+    const totals = {
+      total_rows: rows.length,
+      manageable_count: rows.filter(
+        (row) => Boolean(row.item_id) && row.manageable !== false,
+      ).length,
+      hidden_count: hiddenRows.length,
+      saved_bytes: hiddenRows.reduce(
+        (sum, row) =>
+          sum +
+          Math.max(
+            0,
+            (typeof row.bytes_size === "number" ? row.bytes_size : 0) -
+              effectiveRowBytesServer(row),
+          ),
+        0,
+      ),
+    };
+    const hasQuery = typeof query === "string" && query.length > 0;
+    let pageItems: Message[];
+    let hasOlder = false;
+    let nextBeforeIndex: number | null = null;
+    if (hasQuery) {
+      const q = query.toLowerCase();
+      pageItems = rows.filter((row) =>
+        [
+          row.item_id,
+          row.tool_call_id,
+          row.tool_name,
+          row.summary_line,
+          row.tool_input,
+          stored.get(row.item_id)?.compacted,
+        ].some(
+          (value) => typeof value === "string" && value.toLowerCase().includes(q),
         ),
       );
     } else if (
@@ -879,62 +1568,96 @@ export class PaseoService {
       Number.isFinite(paging.limit) &&
       paging.limit > 0
     ) {
-      const limit = Math.min(2000, Math.max(1, Math.trunc(paging.limit)));
-      const endIndex =
-        typeof paging.before_index === "number" &&
-        Number.isFinite(paging.before_index)
-          ? Math.max(0, Math.min(indexedRows.length, Math.trunc(paging.before_index)))
-          : indexedRows.length;
-      let startIndex = Math.max(0, endIndex - limit);
-      while (
-        startIndex > 0 &&
-        isToolTimelineRow(indexedRows[startIndex]) &&
-        isToolTimelineRow(indexedRows[startIndex - 1])
-      ) {
-        startIndex--;
-      }
-      pageItems = indexedRows.slice(startIndex, endIndex);
-      hasOlder = startIndex > 0;
-      nextBeforeIndex = startIndex > 0 ? startIndex : null;
+      const win = this.selectWindowIndices(
+        rows,
+        paging.limit,
+        paging.before_index,
+      );
+      pageItems = rows.slice(win.startIndex, win.endIndex);
+      hasOlder = win.hasOlder;
+      nextBeforeIndex = win.nextBeforeIndex;
     } else {
-      pageItems = indexedRows;
+      pageItems = rows;
     }
-    const capabilities = this.capabilities(effectiveScope);
-    // B10: propagate the paused state (P1-7 parity) so the panel can render
-    // the protection-only warning. Additive: ready scopes omit both fields.
-    const pausedAdapter = effectiveScope.startsWith("hermes:")
-      ? "hermes"
-      : effectiveScope.startsWith("omp:")
-        ? "omp"
-        : null;
-    const paused = capabilities.state === "adapter_disabled" && pausedAdapter !== null;
-    return {
-      ok: true,
-      // P0-1: echo the requested (parent) scope_key for API compatibility;
-      // all state above (items, units, capabilities, gates) uses the
-      // rotation-effective scope.
-      scope_key: requestedScope ?? scope,
-      items: pageItems,
-      capabilities,
-      ...(paused
-        ? {
-            paused: true,
-            paused_warning:
-              pausedAdapter === "hermes"
-                ? "adapter paused: hides/summaries are disabled, but stored hidden items are still redacted from outgoing requests (protection-only); capabilities refresh on resume."
-                : "adapter paused: hides/summaries are disabled; existing hidden items stay protected (protection-only).",
-          }
-        : {}),
-      server_timeline: timeline.rows.length > 0,
-      has_older: hasOlder,
-      next_before_index: nextBeforeIndex,
+    if (diagOut) {
+      diagOut.row_count = rows.length;
+      diagOut.hydrated_count = pageItems.length;
+      diagOut.page_size = pageItems.length;
+    }
+    return this.buildListResponse(
+      requestedScope,
+      effectiveScope,
+      pageItems,
+      hasOlder,
+      nextBeforeIndex,
       totals,
-      ...(timeline.history.recordsCapped ? { records_capped: true } : {}),
-      ...(timeline.history.readError
-        ? { timeline_read_error: timeline.history.readError }
-        : {}),
-      ...(measured.context ? { context: measured.context } : {}),
-    };
+      timeline.rows.length > 0,
+      {
+        recordsCapped: timeline.history.recordsCapped,
+        readError: timeline.history.readError,
+        context: measured.context,
+      },
+    );
+  }
+
+  private findMessageRowForHide(scope: string, id: string): Message | undefined {
+    const adapter = scope.split(":")[0];
+    if (adapter === "omp" || adapter === "pi") {
+      const index = loadOmpTimelineIndex(this.home, scope);
+      if (index) {
+        const slot = index.slots.find(
+          (s) => s.item_id === id && s.kind !== "tool",
+        );
+        return slot ? hydrateOmpRows(this.home, index, [slot])[0] : undefined;
+      }
+    } else if (adapter === "hermes") {
+      const res = loadHermesTimelineIndex(this.home, scope);
+      if (res.index) {
+        const overlaid = applyHermesOverlay(
+          res.index,
+          this.store.items(res.index.effectiveScope),
+          this.store.listUnits(res.index.effectiveScope),
+        );
+        const slot = overlaid.find((s) => s.item_id === id && s.kind !== "tool");
+        return slot ? hydrateHermesRows(res.index, [slot])[0] : undefined;
+      }
+    }
+    return this.timeline(scope).rows.find(
+      (row) => row.item_id === id && row.kind !== "tool",
+    );
+  }
+
+  private findTimelineRecordById(
+    scope: string,
+    id: string,
+  ): (RecordInput & { options_omitted?: boolean }) | undefined {
+    const adapter = scope.split(":")[0];
+    if (adapter === "omp" || adapter === "pi") {
+      const rec = loadOmpRecordById(this.home, scope, id);
+      if (rec) return rec;
+      if (loadOmpTimelineIndex(this.home, scope)) return undefined;
+    } else if (adapter === "hermes") {
+      const res = loadHermesTimelineIndex(this.home, scope);
+      if (res.index) {
+        const overlaid = applyHermesOverlay(
+          res.index,
+          this.store.items(res.index.effectiveScope),
+          this.store.listUnits(res.index.effectiveScope),
+        );
+        return loadHermesRecordById(res.index, overlaid, id);
+      }
+    }
+    return [...this.timeline(scope).records.values()].find(
+      (candidate) =>
+        candidate.call_id === id ||
+        itemId(
+          scope,
+          candidate.call_id,
+          candidate.content_sha256,
+          candidate.invocation_digest,
+          candidate.result_position,
+        ) === id,
+    );
   }
 
   private result(result: Result): Reply {
@@ -971,23 +1694,16 @@ export class PaseoService {
     if (id.startsWith("msg:")) {
       if (command === "hide" && mode === "summarize")
         return { ok: false, error: "summarize_unsupported" };
-      // P1-11: resolve the stored unit first. A unit carries everything
-      // setMessageVisibility needs on the UPDATE path (kind/sha/count), so
-      // timeline rows are only loaded for hide, and an oversized timeline
-      // falls back to the unit instead of failing hide/unhide (and thus
-      // batch/manage via mutate). Normal-history contracts are unchanged.
       const unit = this.store
         .listUnits(scope)
-        .find((unit) => unit.unit_id === id);
+        .find((u) => u.unit_id === id);
       if (command === "unhide" && !unit)
         return { ok: false, error: "not_found" };
-      let row: Timeline["rows"][number] | undefined;
+      let row: Message | undefined;
       let timelineOversized = false;
       if (command === "hide") {
         try {
-          row = this.timeline(scope).rows.find(
-            (row) => row.item_id === id && row.kind !== "tool",
-          );
+          row = this.findMessageRowForHide(scope, id);
         } catch (error) {
           if (!(error instanceof HistoryTooLargeError)) throw error;
           timelineOversized = true;
@@ -1016,9 +1732,20 @@ export class PaseoService {
     let item = this.store.get(scope, id);
     if (item && expected !== undefined && item.version !== expected)
       return this.result({ ok: false, error: "version_conflict", item });
-    if (item && mode === "summarize" && ["llm", "llm_summary"].includes(item.compaction_source))
-      return this.result(item.visibility === "hidden" ? { ok: true, item } :
-        this.store.put(scope, { ...item, visibility: "hidden", version: item.version + 1 }, item.version));
+    if (
+      item &&
+      mode === "summarize" &&
+      ["llm", "llm_summary"].includes(item.compaction_source)
+    )
+      return this.result(
+        item.visibility === "hidden"
+          ? { ok: true, item }
+          : this.store.put(
+              scope,
+              { ...item, visibility: "hidden", version: item.version + 1 },
+              item.version,
+            ),
+      );
     if (!item) {
       const verifiedTargets = this.store
         .targets(scope)
@@ -1028,17 +1755,7 @@ export class PaseoService {
         verifiedTargets.find((target) => target.item_id === id) ??
         verifiedTargets.find((target) => target.call_id === id);
       const timelineRecord = !matchedTarget
-        ? [...this.timeline(scope).records.values()].find(
-            (candidate) =>
-              candidate.call_id === id ||
-              itemId(
-                scope,
-                candidate.call_id,
-                candidate.content_sha256,
-                candidate.invocation_digest,
-                candidate.result_position,
-              ) === id,
-          )
+        ? this.findTimelineRecordById(scope, id)
         : undefined;
       if (!matchedTarget && timelineRecord) {
         matchedTarget = verifiedTargets.find(
@@ -1244,12 +1961,19 @@ export class PaseoService {
         version: result.version ?? result.item?.version ?? null,
         ...(result.error ? { error: result.error } : {}),
       });
-      if (["db_error", "db_full", "unsafe_journal_mode", "engine_protocol_incompatible"].includes(result.error ?? ""))
+      if (
+        [
+          "db_error",
+          "db_full",
+          "unsafe_journal_mode",
+          "engine_protocol_incompatible",
+        ].includes(result.error ?? "")
+      )
         return {
           ...result,
           items: results,
-          applied: results.filter((item) => item.ok).length,
-          failed: results.filter((item) => !item.ok).length,
+          applied: results.filter((entry) => entry.ok).length,
+          failed: results.filter((entry) => !entry.ok).length,
         };
     }
     return {
@@ -1281,45 +2005,80 @@ export class PaseoService {
         failed: input.tool_call_ids.length,
         items: [],
       };
-    // C1: the timeline used to load upfront, so an oversized history threw
-    // history_too_large even for ids that resolve from stored items alone.
-    // Resolve those first and load the timeline lazily, only when an id has
-    // no stored item; ids that still need the timeline under an oversized
-    // history get a bounded per-item error instead of an unhandled throw.
-    let timeline: Timeline | undefined;
+
+    let cachedSlots: Array<{ item_id: string; tool_call_id: string; manageable: boolean }> | undefined;
     let timelineOversized = false;
-    const timelineRows = (): Timeline["rows"] => {
-      if (timeline) return timeline.rows;
+    const timelineSlotRows = (): Array<{
+      item_id: string;
+      tool_call_id: string;
+      manageable: boolean;
+    }> => {
+      if (cachedSlots) return cachedSlots;
       if (timelineOversized) return [];
       try {
-        timeline = this.timeline(scope);
+        const adapter = scope.split(":")[0];
+        if (adapter === "omp" || adapter === "pi") {
+          const idx = loadOmpTimelineIndex(this.home, scope);
+          if (idx && idx.slots.length > 0) {
+            cachedSlots = idx.slots;
+            return cachedSlots;
+          }
+        } else if (adapter === "hermes") {
+          const res = loadHermesTimelineIndex(this.home, scope);
+          if (res.index) {
+            const overlaid = applyHermesOverlay(
+              res.index,
+              this.store.items(res.index.effectiveScope),
+              this.store.listUnits(res.index.effectiveScope),
+            );
+            if (overlaid.length > 0) {
+              cachedSlots = overlaid;
+              return cachedSlots;
+            }
+          }
+        }
+        cachedSlots = this.timeline(scope).rows as Array<{
+          item_id: string;
+          tool_call_id: string;
+          manageable: boolean;
+        }>;
       } catch (error) {
         if (!(error instanceof HistoryTooLargeError)) throw error;
         timelineOversized = true;
         return [];
       }
-      return timeline.rows;
+      return cachedSlots;
     };
+
+    const existingByCallId = new Map<string, Item>();
+    for (const item of this.store.items(scope)) {
+      if (!existingByCallId.has(item.tool_call_id)) {
+        existingByCallId.set(item.tool_call_id, item);
+      }
+    }
+
     const results: Reply[] = [];
     for (const id of new Set<string>(input.tool_call_ids)) {
-      const existing = this.store
-        .items(scope)
-        .find((item) => item.tool_call_id === id);
-      let itemId = existing?.item_id;
-      if (!itemId) {
-        itemId = timelineRows().find((row) => row.tool_call_id === id && row.manageable)?.item_id;
+      const existing = existingByCallId.get(id);
+      let resolvedItemId = existing?.item_id;
+      if (!resolvedItemId) {
+        resolvedItemId = timelineSlotRows().find(
+          (row) => row.tool_call_id === id && row.manageable,
+        )?.item_id;
       }
-      if (!itemId) {
+      if (!resolvedItemId) {
         results.push({
           tool_call_id: id,
           ok: false,
-          ...(timelineOversized ? { error: "history_too_large" } : { error: "not_found" }),
+          ...(timelineOversized
+            ? { error: "history_too_large" }
+            : { error: "not_found" }),
         });
         continue;
       }
       const result = await this.mutate(
         scope,
-        itemId,
+        resolvedItemId,
         "hide",
         mode,
         existing?.version,

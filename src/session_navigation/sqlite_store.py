@@ -666,8 +666,57 @@ class SQLiteContextStore(AdapterRegistryMixin):
                 raise DBError(str(exc))
 
     def upsert_units(self, scope: Any, units: Any) -> None:
-        for u in units:
-            self.upsert_unit(scope, u)
+        unit_list = list(units)
+        if not unit_list:
+            return
+        sk = _scope_key(scope)
+        now_ts = time.time()
+        rows = []
+        for u in unit_list:
+            data = self._coerce_unit(u, {})
+            rows.append((
+                sk,
+                data["unit_id"],
+                data.get("message_uid"),
+                data.get("kind"),
+                data.get("parent_unit_id"),
+                data.get("tool_call_id"),
+                data.get("content_sha256"),
+                int(data.get("char_count", 0) or 0),
+                data.get("tokens_display", "—"),
+                data.get("visibility", "visible"),
+                int(data.get("version", 1) or 1),
+                float(data.get("updated_at", now_ts) or now_ts),
+            ))
+        with self._lock:
+            try:
+                self._conn.executemany(
+                    """
+                    INSERT INTO units (scope_key,unit_id,message_uid,kind,parent_unit_id,tool_call_id,content_sha256,char_count,tokens_display,visibility,version,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(scope_key,unit_id) DO UPDATE SET
+                        message_uid=excluded.message_uid,
+                        kind=excluded.kind,
+                        parent_unit_id=excluded.parent_unit_id,
+                        tool_call_id=excluded.tool_call_id,
+                        content_sha256=excluded.content_sha256,
+                        char_count=excluded.char_count,
+                        tokens_display=excluded.tokens_display,
+                        visibility=excluded.visibility,
+                        version=excluded.version,
+                        updated_at=excluded.updated_at
+                    """,
+                    rows,
+                )
+                self._conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                if self._is_full(exc):
+                    raise DBFullError(str(exc))
+                raise DBError(str(exc))
 
     def list_units(self, scope: Any, message_uid: str | None = None) -> list[dict[str, Any]]:
         sk = _scope_key(scope)
