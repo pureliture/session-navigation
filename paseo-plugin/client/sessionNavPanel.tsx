@@ -24,7 +24,7 @@ import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { linkedTimelineFetchNeeded, scopeForAgent } from "./subagents";
-import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelinePage, resolveSessionTargetProgressive, selectMainOrFallbackAgent, sessionFollowCandidates, type SessionTimelinePage } from "./sessionFollowing";
+import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelinePage, reconcileFollowSelection, resolveSessionTargetProgressive, sessionFollowCandidates, type SessionTimelinePage } from "./sessionFollowing";
 import {
   stabilizeGroupedRows,
   stabilizeRows,
@@ -96,12 +96,17 @@ export function SessionNavPanel({
   // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [inView, setInView] = useState(!!params.agentId);
+  const [followUncertain, setFollowUncertain] = useState(false);
   const [followResolved, setFollowResolved] = useState(
     () => !effectiveFollowVisible || !!params.agentId,
   );
   const lastMainAgent = useRef(params.agentId || null);
-  const agentId =
-    effectiveFollowVisible ? (followedId ?? params.agentId) : params.agentId;
+  const retryFollowRef = useRef<(() => void) | null>(null);
+  const agentId = effectiveFollowVisible
+    ? inView && !followUncertain
+      ? (followedId ?? params.agentId)
+      : ""
+    : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -126,6 +131,7 @@ export function SessionNavPanel({
   useEffect(() => {
     setFollowedId(null);
     setInView(!!params.agentId);
+    setFollowUncertain(false);
     setFollowResolved(!effectiveFollowVisible || !!params.agentId);
     lastMainAgent.current = params.agentId || null;
   }, [params.agentId, effectiveFollowVisible]);
@@ -178,13 +184,21 @@ export function SessionNavPanel({
     const doc = "document" in globalThis ? Reflect.get(globalThis, "document") : undefined;
     if (!paseo?.agents || (!hasDocument && !hostId && !("activeAgentId" in panelProps))) return;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearRetryTimer = () => {
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
     const applySelection = async (focused: SessionTab | null, values: string[] | null) => {
+      clearRetryTimer();
       const currentScopes = scopesRef.current;
       const needsTimelineScan =
         effectiveFollowVisible && focused?.kind !== "agent";
-      let resolvedTarget: string | null;
+      let followResult: Awaited<ReturnType<typeof resolveSessionTargetProgressive>> | null = null;
       if (needsTimelineScan) {
-        const followResult = await resolveSessionTargetProgressive({
+        followResult = await resolveSessionTargetProgressive({
           followVisible: effectiveFollowVisible,
           boundAgentId: params.agentId,
           visibleValues: values,
@@ -214,21 +228,41 @@ export function SessionNavPanel({
             queryClient.setQueryData(["session-nav-follow", id], { ids, complete: true });
           },
         });
-        if (!followResult.confirmed) return;
-        resolvedTarget = followResult.targetId;
-      } else {
-        resolvedTarget = effectiveFollowVisible ? null : params.agentId || null;
+      } else if (!effectiveFollowVisible) {
+        followResult = {
+          targetId: params.agentId || null,
+          confirmed: true,
+          incompleteIds: [],
+          failedIds: [],
+        };
       }
-      const selection = selectMainOrFallbackAgent({
+      if (cancelled) return;
+      if (followResult && !followResult.confirmed) {
+        for (const failedId of followResult.failedIds) {
+          queryClient.removeQueries({ queryKey: ["session-nav-follow-tail", failedId], exact: true });
+        }
+        setSelectedId(null);
+        setHighlightedId(null);
+        setPreviewOpen(false);
+        setDbErrorOpen(false);
+        if (retryTimer === null) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (!cancelled) void runTick();
+          }, 1500);
+        }
+      }
+      const nextUi = reconcileFollowSelection({
         tab: focused,
         followVisible: effectiveFollowVisible,
-        resolvedTarget,
+        followResult,
+        boundAgentId: params.agentId,
       });
-      if (cancelled) return;
-      setInView(selection.inView);
-      if (selection.agentId) lastMainAgent.current = selection.agentId;
-      setFollowedId(selection.agentId === params.agentId ? null : selection.agentId);
-      setFollowResolved(true);
+      setInView(nextUi.inView);
+      setFollowUncertain(nextUi.followUncertain);
+      if (nextUi.agentId) lastMainAgent.current = nextUi.agentId;
+      setFollowedId(nextUi.agentId === params.agentId ? null : nextUi.agentId);
+      setFollowResolved(nextUi.followResolved);
     };
     const tick = async () => {
       const explicitSupported = "activeAgentId" in panelProps;
@@ -242,6 +276,7 @@ export function SessionNavPanel({
           if (targetId === null) {
             if (cancelled) return;
             setInView(false);
+            setFollowUncertain(false);
             setFollowedId(null);
             setFollowResolved(true);
             return;
@@ -266,6 +301,7 @@ export function SessionNavPanel({
           return;
         }
         setInView(false);
+        setFollowUncertain(false);
         setFollowedId(null);
         setFollowResolved(true);
         return;
@@ -332,6 +368,12 @@ export function SessionNavPanel({
         }
       }
     };
+    retryFollowRef.current = () => {
+      if (!cancelled) {
+        clearRetryTimer();
+        void runTick();
+      }
+    };
     const scheduleTick = () => {
       if (cancelled) return;
       if (debounceTimer !== null) return;
@@ -395,6 +437,8 @@ export function SessionNavPanel({
       : undefined;
     return () => {
       cancelled = true;
+      retryFollowRef.current = null;
+      clearRetryTimer();
       if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (rafId !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
       observer?.disconnect();
@@ -413,6 +457,8 @@ export function SessionNavPanel({
   const parentScopeKey = scopeForAgent(scopes, agentId);
 
   const resolvedScopeKey = parentScopeKey;
+  const canMutateSession =
+    Boolean(resolvedScopeKey) && (!effectiveFollowVisible || (inView && !followUncertain));
 
   const scopeKey = resolvedScopeKey ?? "";
   const query = tabState.query;
@@ -467,7 +513,7 @@ export function SessionNavPanel({
       changed: boolean;
     } => {
       const rowKey = row.item_id ?? row.tool_call_id;
-      if (!actionAllowed(row, capabilities, mode)) {
+      if (!canMutateSession || !actionAllowed(row, capabilities, mode)) {
         return { rowKey, prevActionMode: undefined, changed: false };
       }
       const prevActionMode = lastActionByItem[rowKey];
@@ -475,7 +521,12 @@ export function SessionNavPanel({
       return { rowKey, prevActionMode, changed: true };
     },
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
-      if (!actionAllowed(row, capabilities, mode)) return Promise.resolve({ ok: false, error: "capability_unavailable" });
+      if (!canMutateSession) {
+        return Promise.resolve({ ok: false, error: "session_unconfirmed" });
+      }
+      if (!actionAllowed(row, capabilities, mode)) {
+        return Promise.resolve({ ok: false, error: "capability_unavailable" });
+      }
       return hideRpc({
         scope_key: scopeKey,
         item_id: row.item_id ?? "",
@@ -520,8 +571,12 @@ export function SessionNavPanel({
   });
 
   const unhideMutation = useMutation({
-    mutationFn: (row: Row) =>
-      unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version }),
+    mutationFn: (row: Row) => {
+      if (!canMutateSession) {
+        return Promise.resolve({ ok: false, error: "session_unconfirmed" });
+      }
+      return unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version });
+    },
     onSuccess: (r, row) => {
       if (!onMutationError(r)) {
         setNotice(null);
@@ -578,7 +633,7 @@ export function SessionNavPanel({
     group: OutlineRow & { type: "group" },
     action: "hide" | "summarize" | "unhide",
   ) => {
-    if (pendingGroupId || !resolvedScopeKey) return;
+    if (pendingGroupId || !canMutateSession || !resolvedScopeKey) return;
     if (action !== "unhide" && !capabilities?.[action]) { setNotice(capabilityNotice(undefined, capabilities)); return; }
     const items = groupMutationItems(group, action);
     if (items.length === 0) return;
@@ -1481,6 +1536,35 @@ export function SessionNavPanel({
         </View>
       );
     }
+    if (followUncertain) {
+      return (
+        <View style={styles.screen}>
+          {noticeBar}
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <Text style={styles.headerTitle}>Outline</Text>
+            </View>
+            <View style={styles.headerRight}>{settingsButton}</View>
+          </View>
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 10 }}>
+            <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
+              Unable to confirm visible session
+            </Text>
+            <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}>
+              History fetch failed while matching the visible chat. Context actions are paused to prevent editing another session.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry session match"
+              style={styles.actionBtnPrimary}
+              onPress={() => retryFollowRef.current?.()}
+            >
+              <Text style={styles.actionBtnPrimaryText}>Retry</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={styles.screen}>
         {noticeBar}
@@ -1694,7 +1778,7 @@ export function SessionNavPanel({
       <PreviewDrawer row={selectedRow} open={previewOpen} onToggle={togglePreviewDrawer} theme={theme} />
 
       {/* DB Error Overlay */}
-      {dbErrorOpen ? (
+      {dbErrorOpen && canMutateSession ? (
         <>
           <Pressable
             accessibilityRole="button"
@@ -1713,6 +1797,7 @@ export function SessionNavPanel({
                 accessibilityLabel="Abort request"
                 style={styles.actionBtnPrimary}
                 onPress={async () => {
+                  if (!canMutateSession || !scopeKey) return;
                   await dbChoice({ scope_key: scopeKey, choice: "abort_request" });
                   setNotice("DB error: aborted.");
                   setDbErrorOpen(false);
@@ -1725,6 +1810,7 @@ export function SessionNavPanel({
                 accessibilityLabel="Send original"
                 style={styles.actionBtnSecondary}
                 onPress={async () => {
+                  if (!canMutateSession || !scopeKey) return;
                   await dbChoice({ scope_key: scopeKey, choice: "send_original" });
                   setNotice("DB error: showing originals once.");
                   setDbErrorOpen(false);

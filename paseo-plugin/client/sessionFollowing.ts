@@ -41,6 +41,7 @@ export interface ProgressiveSessionTargetResult {
   targetId: string | null;
   confirmed: boolean;
   incompleteIds: string[];
+  failedIds: string[];
 }
 
 export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHandle, "refetch">) {
@@ -123,16 +124,16 @@ export async function resolveSessionTargetProgressive({
   maxPagesPerCandidate?: number;
 }): Promise<ProgressiveSessionTargetResult> {
   if (!followVisible) {
-    return { targetId: boundAgentId || null, confirmed: true, incompleteIds: [] };
+    return { targetId: boundAgentId || null, confirmed: true, incompleteIds: [], failedIds: [] };
   }
   if (visibleValues === null || visibleValues.length === 0) {
-    return { targetId: null, confirmed: true, incompleteIds: [] };
+    return { targetId: null, confirmed: true, incompleteIds: [], failedIds: [] };
   }
 
   const started = performance.now();
   const ordered = [...new Set([boundAgentId, ...candidates].filter(Boolean))];
   if (ordered.length === 0) {
-    return { targetId: null, confirmed: true, incompleteIds: [] };
+    return { targetId: null, confirmed: true, incompleteIds: [], failedIds: [] };
   }
 
   const matcher = compileVisibleMatcher(visibleValues);
@@ -201,9 +202,13 @@ export async function resolveSessionTargetProgressive({
   const incompleteIds = (): string[] =>
     states.filter((s) => !s.complete).map((s) => s.id);
 
+  const failedIds = (): string[] =>
+    states.filter((s) => s.failed).map((s) => s.id);
+
   // A candidate w with positive score is provably identical to the full-history
-  // winner iff every competitor j != w is complete (or failed) and cannot tie-beat
-  // or outscore w's current score (lower index wins exact ties).
+  // winner iff every OTHER competitor j != w is strictly complete (never failed or
+  // truncated — unread history has no upper bound) and cannot tie-beat or outscore
+  // w's current score (lower index wins exact ties).
   const evaluateProof = (): ProgressiveSessionTargetResult | null => {
     for (let w = 0; w < states.length; w++) {
       const winner = states[w];
@@ -212,7 +217,7 @@ export async function resolveSessionTargetProgressive({
       for (let j = 0; j < states.length; j++) {
         if (j === w) continue;
         const other = states[j];
-        if (!other.complete && !other.failed) {
+        if (!other.complete) {
           proven = false;
           break;
         }
@@ -227,11 +232,12 @@ export async function resolveSessionTargetProgressive({
           targetId: winner.id,
           confirmed: true,
           incompleteIds: incompleteIds(),
+          failedIds: failedIds(),
         };
       }
     }
 
-    if (states.every((s) => s.complete || s.failed)) {
+    if (states.every((s) => s.complete)) {
       let best: CandidateState | null = null;
       for (const s of states) {
         if (s.score > 0 && (!best || s.score > best.score)) {
@@ -241,11 +247,32 @@ export async function resolveSessionTargetProgressive({
       return {
         targetId: best ? best.id : null,
         confirmed: true,
-        incompleteIds: incompleteIds(),
+        incompleteIds: [],
+        failedIds: [],
       };
     }
 
     return null;
+  };
+
+  // Early-exit guard when failure or truncation makes proving ANY winner in this pass
+  // mathematically impossible, avoiding wasted RPCs on remaining pages.
+  const canStillProveAnyWinner = (): boolean => {
+    const blocked = states.filter((s) => !s.complete && (s.failed || s.truncated));
+    if (blocked.length === 0) return true;
+    if (blocked.length >= 2) return false;
+    const onlyBlocked = blocked[0];
+    if (onlyBlocked.score <= 0) return false;
+    for (let j = 0; j < states.length; j++) {
+      if (j === onlyBlocked.index) continue;
+      const other = states[j];
+      const beats =
+        onlyBlocked.index < j
+          ? onlyBlocked.score >= other.score
+          : onlyBlocked.score > other.score;
+      if (!beats) return false;
+    }
+    return true;
   };
 
   let rpcPagesLoaded = 0;
@@ -346,6 +373,10 @@ export async function resolveSessionTargetProgressive({
       return finish(stepProof);
     }
 
+    if (!canStillProveAnyWinner()) {
+      break;
+    }
+
     const expandable = states.filter(
       (s) => !s.complete && !s.failed && !s.truncated && Boolean(s.cursor),
     );
@@ -393,6 +424,7 @@ export async function resolveSessionTargetProgressive({
     targetId: null,
     confirmed: false,
     incompleteIds: incompleteIds(),
+    failedIds: failedIds(),
   });
 }
 
@@ -616,4 +648,65 @@ export function selectMainOrFallbackAgent({ tab, followVisible, resolvedTarget }
 }): { agentId: string | null; inView: boolean } {
   const agentId = tab?.kind === "agent" && followVisible ? tab.agentId : resolvedTarget;
   return { agentId, inView: !!agentId };
+}
+
+export interface FollowUiSelection {
+  agentId: string | null;
+  inView: boolean;
+  followResolved: boolean;
+  followUncertain: boolean;
+  retryable: boolean;
+}
+
+export function reconcileFollowSelection({
+  tab,
+  followVisible,
+  followResult,
+  boundAgentId,
+}: {
+  tab: SessionTab | null;
+  followVisible: boolean;
+  followResult: ProgressiveSessionTargetResult | null;
+  boundAgentId: string;
+}): FollowUiSelection {
+  if (!followVisible) {
+    const agentId = boundAgentId || null;
+    return {
+      agentId,
+      inView: !!agentId,
+      followResolved: true,
+      followUncertain: false,
+      retryable: false,
+    };
+  }
+  if (tab?.kind === "agent") {
+    return {
+      agentId: tab.agentId,
+      inView: true,
+      followResolved: true,
+      followUncertain: false,
+      retryable: false,
+    };
+  }
+  if (followResult && !followResult.confirmed) {
+    return {
+      agentId: null,
+      inView: false,
+      followResolved: true,
+      followUncertain: true,
+      retryable: true,
+    };
+  }
+  const selection = selectMainOrFallbackAgent({
+    tab,
+    followVisible,
+    resolvedTarget: followResult ? followResult.targetId : null,
+  });
+  return {
+    agentId: selection.agentId,
+    inView: selection.inView,
+    followResolved: true,
+    followUncertain: false,
+    retryable: false,
+  };
 }

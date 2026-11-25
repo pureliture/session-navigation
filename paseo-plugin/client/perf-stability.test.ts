@@ -6,6 +6,7 @@ import { buildGroupedRows, outlineRowKey, type OutlineRow } from "./outlineGroup
 import { OutlineScrollDriver } from "./outlineScroll";
 import { stabilizeGroupedRows, stabilizeRows, visiblePollInterval } from "./outlineWindow";
 import {
+  reconcileFollowSelection,
   readSessionTimelineIds,
   readSessionTimelinePage,
   resolveSessionTarget,
@@ -219,6 +220,7 @@ test("resolveSessionTargetProgressive checks older history of trailing candidate
     targetId: "a2",
     confirmed: true,
     incompleteIds: ["a2"],
+    failedIds: [],
   });
   expect(caseA.pageCalls.a2.length).toBe(2);
 
@@ -240,6 +242,7 @@ test("resolveSessionTargetProgressive checks older history of trailing candidate
   expect(resB.confirmed).toBe(true);
   expect(resB.targetId).toBe("a2_huge");
   expect(resB.incompleteIds).toEqual(["a2_huge"]);
+  expect(resB.failedIds).toEqual([]);
   expect(caseB.pageCalls.a2_huge.length).toBe(1);
   expect(completedCached).toEqual(["a1_small"]);
 });
@@ -263,6 +266,7 @@ test("resolveSessionTargetProgressive refuses to misclassify bounded incomplete 
   expect(unconfirmed.confirmed).toBe(false);
   expect(unconfirmed.targetId).toBeNull();
   expect(unconfirmed.incompleteIds).toEqual(["a1", "a2"]);
+  expect(unconfirmed.failedIds).toEqual([]);
 
   // If competitor a2 IS complete with score 0 on page 1, a1 is provably the winner even with maxPagesPerCandidate=1.
   const provable = makePagedHistoryFixture({
@@ -280,6 +284,7 @@ test("resolveSessionTargetProgressive refuses to misclassify bounded incomplete 
   expect(confirmed.confirmed).toBe(true);
   expect(confirmed.targetId).toBe("a1");
   expect(confirmed.incompleteIds).toEqual(["a1"]);
+  expect(confirmed.failedIds).toEqual([]);
 });
 
 test("resolveSessionTargetProgressive uses complete cache and tail cache cleanly when provable", async () => {
@@ -303,7 +308,272 @@ test("resolveSessionTargetProgressive uses complete cache and tail cache cleanly
     targetId: "a2",
     confirmed: true,
     incompleteIds: [],
+    failedIds: [],
   });
+});
+
+test("resolveSessionTargetProgressive refuses confirmed winner on initial tail failure when unread competitor may outscore", async () => {
+  // a1 completes with score 1, while a2 fails on initial tail fetch and actually holds 3 matches.
+  const a2Ids = ["m_1", "m_2", "m_3"];
+  const tailLoadedIds: string[] = [];
+  const completeCachedIds: string[] = [];
+  const { loadPage } = makePagedHistoryFixture({
+    a1: { ids: ["hit_a1"], tailLimit: 5, beforeLimit: 5 },
+    a2: { ids: a2Ids, tailLimit: 5, beforeLimit: 5, failOnPageCall: 1 },
+  });
+
+  const res = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues: ["message-hit_a1", "message-m_1", "message-m_2", "message-m_3"],
+    candidates: ["a1", "a2"],
+    loadPage,
+    onTailLoaded: (id) => tailLoadedIds.push(id),
+    onCompleteTimelineIds: (id) => completeCachedIds.push(id),
+  });
+
+  expect(res.confirmed).toBe(false);
+  expect(res.targetId).toBeNull();
+  expect(res.incompleteIds).toEqual(["a2"]);
+  expect(res.failedIds).toEqual(["a2"]);
+  expect(tailLoadedIds).toEqual(["a1"]);
+  expect(completeCachedIds).toEqual(["a1"]);
+});
+
+test("resolveSessionTargetProgressive refuses confirmed winner when mid-history RPC fails before higher older score, then recovers on retry", async () => {
+  // Reproduces exact 784a78f defect:
+  // a1 is complete with score 2.
+  // a2 gets 1 match in tail (call 1), then RPC fails on older page (call 2), hiding 4 matches in older pages (total 5 > 2).
+  let a2ShouldFailMid = true;
+  const cachedComplete = new Map<string, { ids: string[]; complete: boolean }>();
+  const a1Ids = ["a1_h1", "a1_h2"];
+  const a2Ids = ["old_1", "old_2", "old_3", "old_4", "pad_1", "pad_2", "pad_3", "pad_4", "tail_hit", "pad_5"];
+  const visibleValues = [
+    "message-a1_h1",
+    "message-a1_h2",
+    "message-tail_hit",
+    "message-old_1",
+    "message-old_2",
+    "message-old_3",
+    "message-old_4",
+  ];
+
+  let a1Calls = 0;
+  let a2CallsThisAttempt = 0;
+  const loadPage = async (id: string, cursor?: SessionTimelineCursor): Promise<SessionTimelinePage> => {
+    if (id === "a1") {
+      a1Calls += 1;
+      return { ids: a1Ids, complete: true, startCursor: undefined };
+    }
+    a2CallsThisAttempt += 1;
+    if (!cursor) {
+      return {
+        ids: a2Ids.slice(5), // tail 5 -> 1 hit ("tail_hit")
+        complete: false,
+        startCursor: { epoch: "e1", seq: 5 },
+      };
+    }
+    if (a2ShouldFailMid) {
+      throw new Error("transient older-page RPC error");
+    }
+    return {
+      ids: a2Ids.slice(0, cursor.seq), // 4 older hits
+      complete: true,
+      startCursor: undefined,
+    };
+  };
+
+  // Attempt 1 (mid-page failure): MUST return confirmed=false, NOT pick a1 with confirmed=true!
+  const attempt1 = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues,
+    candidates: ["a1", "a2"],
+    getCachedTimelineIds: (id) => cachedComplete.get(id),
+    loadPage,
+    onCompleteTimelineIds: (id, ids) => cachedComplete.set(id, { ids, complete: true }),
+  });
+  expect(attempt1).toEqual({
+    targetId: null,
+    confirmed: false,
+    incompleteIds: ["a2"],
+    failedIds: ["a2"],
+  });
+  expect(cachedComplete.has("a1")).toBe(true);
+  expect(cachedComplete.has("a2")).toBe(false);
+
+  // Attempt 2 (recovery): a1 is served from complete cache (0 more calls), a2 retries and wins 5 > 2!
+  a2ShouldFailMid = false;
+  a2CallsThisAttempt = 0;
+  const attempt2 = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues,
+    candidates: ["a1", "a2"],
+    getCachedTimelineIds: (id) => cachedComplete.get(id),
+    loadPage,
+    onCompleteTimelineIds: (id, ids) => cachedComplete.set(id, { ids, complete: true }),
+  });
+  expect(attempt2).toEqual({
+    targetId: "a2",
+    confirmed: true,
+    incompleteIds: [],
+    failedIds: [],
+  });
+  expect(a1Calls).toBe(1);
+  expect(a2CallsThisAttempt).toBe(2);
+  expect(cachedComplete.has("a2")).toBe(true);
+});
+
+test("resolveSessionTargetProgressive blocks tie award when earlier candidate fails mid-history and recovers tie priority", async () => {
+  // ordered = ["a1", "a2"]. a2 completes with score 1.
+  // a1 gets 0 in tail (pad), fails on older page that contains 1 match -> tie 1:1 MUST wait for recovery!
+  let failA1Mid = true;
+  const a1Ids = ["old_tie_hit", "p1", "p2", "p3", "p4", "p5", "p6", "p7"];
+  const a2Ids = ["a2_tail_hit"];
+  const visibleValues = ["message-old_tie_hit", "message-a2_tail_hit"];
+
+  const loadPage = async (id: string, cursor?: SessionTimelineCursor): Promise<SessionTimelinePage> => {
+    if (id === "a2") {
+      return { ids: a2Ids, complete: true };
+    }
+    if (!cursor) {
+      return { ids: a1Ids.slice(4), complete: false, startCursor: { epoch: "e1", seq: 4 } };
+    }
+    if (failA1Mid) throw new Error("a1 older page RPC error");
+    return { ids: a1Ids.slice(0, 4), complete: true };
+  };
+
+  const duringFail = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues,
+    candidates: ["a1", "a2"],
+    loadPage,
+  });
+  expect(duringFail).toEqual({
+    targetId: null,
+    confirmed: false,
+    incompleteIds: ["a1"],
+    failedIds: ["a1"],
+  });
+
+  failA1Mid = false;
+  const recovered = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues,
+    candidates: ["a1", "a2"],
+    loadPage,
+  });
+  expect(recovered).toEqual({
+    targetId: "a1",
+    confirmed: true,
+    incompleteIds: [],
+    failedIds: [],
+  });
+});
+
+test("resolveSessionTargetProgressive allows confirmed winner only if ALL competitors are strictly complete and surpassed", async () => {
+  // a1 gets 2 hits in tail while competitor a2 is strictly complete with 1 hit.
+  // Proof finishes after tail without ever needing to touch a1's unavailable older page.
+  const cachedComplete: string[] = [];
+  let a1OlderCalls = 0;
+  const res = await resolveSessionTargetProgressive({
+    followVisible: true,
+    boundAgentId: "a1",
+    visibleValues: ["message-h1", "message-h2", "message-a2h"],
+    candidates: ["a1", "a2"],
+    loadPage: async (id, cursor) => {
+      if (id === "a2") return { ids: ["a2h"], complete: true };
+      if (!cursor) {
+        return {
+          ids: ["h1", "h2"],
+          complete: false,
+          startCursor: { epoch: "e1", seq: 5 },
+        };
+      }
+      a1OlderCalls += 1;
+      throw new Error("a1 older page unavailable");
+    },
+    onCompleteTimelineIds: (id) => cachedComplete.push(id),
+  });
+  expect(res).toEqual({
+    targetId: "a1",
+    confirmed: true,
+    incompleteIds: ["a1"],
+    failedIds: [],
+  });
+  expect(a1OlderCalls).toBe(0);
+  expect(cachedComplete).toEqual(["a2"]);
+});
+
+test("reconcileFollowSelection clears stale previous session on uncertain failure and SessionNavPanel gates mutations", () => {
+  // 1. Confirmed Session A ("a1")
+  const sessionA = reconcileFollowSelection({
+    tab: { kind: "chat" } as any,
+    followVisible: true,
+    followResult: { targetId: "a1", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+  });
+  expect(sessionA).toEqual({
+    agentId: "a1",
+    inView: true,
+    followResolved: true,
+    followUncertain: false,
+    retryable: false,
+  });
+
+  // 2. Follow failure happens (even though panel was bound to "a1"): MUST clear agentId & inView, set followUncertain=true
+  const uncertain = reconcileFollowSelection({
+    tab: { kind: "chat" } as any,
+    followVisible: true,
+    followResult: { targetId: null, confirmed: false, incompleteIds: ["a2"], failedIds: ["a2"] },
+    boundAgentId: "a1",
+  });
+  expect(uncertain).toEqual({
+    agentId: null,
+    inView: false,
+    followResolved: true,
+    followUncertain: true,
+    retryable: true,
+  });
+
+  // 3. Recovery resolves Session B ("a2") cleanly and clears uncertain/retryable flags
+  const recovered = reconcileFollowSelection({
+    tab: { kind: "chat" } as any,
+    followVisible: true,
+    followResult: { targetId: "a2", confirmed: true, incompleteIds: [], failedIds: [] },
+    boundAgentId: "a1",
+  });
+  expect(recovered).toEqual({
+    agentId: "a2",
+    inView: true,
+    followResolved: true,
+    followUncertain: false,
+    retryable: false,
+  });
+
+  // 4. Direct agent tab clears uncertain state immediately
+  const directTab = reconcileFollowSelection({
+    tab: { kind: "agent", agentId: "a2" },
+    followVisible: true,
+    followResult: null,
+    boundAgentId: "a1",
+  });
+  expect(directTab).toEqual({
+    agentId: "a2",
+    inView: true,
+    followResolved: true,
+    followUncertain: false,
+    retryable: false,
+  });
+
+  // 5. Structural guard: SessionNavPanel clears agentId when !inView || followUncertain and gates mutations
+  const panelSource = readFileSync(join(import.meta.dir, "sessionNavPanel.tsx"), "utf8");
+  expect(panelSource).toContain("inView && !followUncertain");
+  expect(panelSource).toContain("canMutateSession");
+  expect(panelSource).toContain("Retry session match");
 });
 
 test("stabilizeRows avoids fallback item_id/tool_call_id collisions and detects cost_usd changes", () => {
