@@ -13,9 +13,12 @@ packages, opened a release PR, or contacted either registry/catalog.
 - [ ] Requirements: Bun >=1.4.4; Node >=22.13; verified hosts OMP 18.18.3 and
   Paseo 0.15.3; Hermes >=0.20.1 (API floor, not old-version live acceptance).
 - [ ] Back up state and follow the README's daemon-retirement migration.
-- [ ] Before publishing Hermes, resolve the conflict between forced
-  `manage_context` tool choice and explicit user requests to wait or restore.
-  Verify both user control and automatic cleanup with the intended ACP model.
+- [ ] Verify Hermes cleanup intent classification with the intended ACP model.
+  The session model classifies the latest genuine user instruction before a
+  forced `manage_context` choice: explicit `defer` or `restore` suppresses both
+  the trailing reminder and forced tool choice, while ambiguity, timeout/failure,
+  invalid output, missing trusted input, list/restore activity, or a host-specified
+  tool choice leaves only the advisory note. Verify both user control and automatic cleanup.
 
 ```sh
 git fetch origin main

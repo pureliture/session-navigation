@@ -147,6 +147,30 @@ def main() -> int:
         ok = ok and item["original_bytes_size"] == len(body.encode("utf-8"))
         ok = ok and isinstance(item["compacted_at"], str) and item["compacted_at"].endswith("Z")
 
+        restore_request = {
+            "input": [
+                {"type": "message", "role": "user", "content": "List hidden items and restore the first one."},
+                {"type": "function_call", "call_id": "call-large", "name": "read_file",
+                 "arguments": json.dumps({"path": "large.txt"})},
+                {"type": "function_call_output", "call_id": "call-large", "output": "safe result\n" * 4000},
+                {"type": "function_call", "call_id": "call-list", "name": "list_context_items",
+                 "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call-list", "output": json.dumps(listed)},
+            ],
+            "tools": [
+                {"type": "function", "name": "manage_context"},
+                {"type": "function", "name": "unhide_context"},
+            ],
+        }
+        listed_request = mw(
+            request=restore_request, original_request=copy.deepcopy(restore_request),
+            session_id=SESSION, api_mode="codex_responses",
+            provider="probe", model="probe", task_id="t", turn_id="u", api_request_id="r3",
+        )
+        restore_available = listed_request is not None and "tool_choice" not in listed_request["request"]
+        print(f"restore available after list: {restore_available}")
+        ok = ok and restore_available
+
         restored = json.loads(restore({"item_id": "1번"}, session_id=SESSION))
         after = json.loads(list_items({"query": ""}, session_id=SESSION))
         print(f"restore('1번')   : {restored}")
@@ -158,7 +182,7 @@ def main() -> int:
             print("number reference resolved to a different item")
             ok = False
         ok = ok and after["compacted_count"] == 0
-        ok = ok and after["items"][0]["visibility"] == "original"
+        ok = ok and after["items"][0]["visibility"] == "visible"
         ok = ok and after["items"][0]["display_number"] is None
 
     print(f"VERDICT         : {'PASS' if ok else 'FAIL'}")
