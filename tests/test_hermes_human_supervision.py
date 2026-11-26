@@ -881,3 +881,107 @@ def test_fixed_id_restore_after_recheck_keeps_original_target():
     assert next(
         item["visibility"] for item in after["items"] if item["item_id"] == fixed
     ) == "visible"
+
+
+def _deferred_tools(mode: str, *, include_cleanup: bool = True) -> list[dict]:
+    catalog = (
+        "Deferred tool catalog (call schemas via `tool_describe`, invoke via `tool_call`):\n"
+        "session_navigation tools (5):\n"
+        "- hide_context: Hide one tool result.\n"
+        "- manage_context: Clean agent-chosen tool_call_ids.\n"
+        if include_cleanup
+        else "Deferred tool catalog (call schemas via `tool_describe`, invoke via `tool_call`):\n"
+        "- todo_list: Manage todo items.\n"
+    )
+    entries = [
+        ("tool_search", catalog),
+        ("tool_describe", "Load schemas."),
+        ("tool_call", "Invoke deferred tools."),
+    ]
+    if mode == "chat_completions":
+        return [{"type": "function", "function": {"name": n, "description": d}} for n, d in entries]
+    return [{"type": "function", "name": n, "description": d} for n, d in entries]
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_deferred_bridge_forces_tool_call_when_cleanup_allowed(mode):
+    body = "A safe result row.\n" * 2500
+    tools = _deferred_tools(mode, include_cleanup=True)
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "system", "content": "Base."},
+                {"role": "user", "content": "Read big.txt and summarize it."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": tools,
+        }
+        expected = {"type": "function", "function": {"name": "tool_call"}}
+    else:
+        request = {
+            "instructions": "Base.",
+            "input": [
+                {"type": "message", "role": "user", "content": "Read big.txt and summarize it."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": tools,
+        }
+        expected = {"type": "function", "name": "tool_call"}
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"cleanup_allowed"}')))(
+        request=request, session_id="deferred-allowed", api_mode=mode)["request"]
+    assert outgoing["tool_choice"] == expected
+    conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
+    reminder = conversation[-1]["content"]
+    if isinstance(reminder, list):
+        reminder = reminder[0]["text"]
+    assert "Deferred bridge active" in reminder
+    assert "manage_context" in reminder
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_deferred_bridge_without_session_navigation_fails_closed(mode):
+    body = "A safe result row.\n" * 2500
+    tools = _deferred_tools(mode, include_cleanup=False)
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "user", "content": "Read big.txt."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": tools,
+        }
+    else:
+        request = {
+            "input": [
+                {"type": "message", "role": "user", "content": "Read big.txt."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": tools,
+        }
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"cleanup_allowed"}')))(
+        request=request, session_id="deferred-missing", api_mode=mode)["request"]
+    assert "tool_choice" not in outgoing
+
+
+@pytest.mark.parametrize("intent", ["defer", "restore"])
+def test_deferred_bridge_does_not_force_on_defer_or_restore(intent):
+    body = "A safe result row.\n" * 2500
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": "Do not clean yet."},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": _deferred_tools("codex_responses", include_cleanup=True),
+    }
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm(json.dumps({"intent": intent}))))(
+        request=request, session_id="deferred-defer", api_mode="codex_responses")["request"]
+    assert "tool_choice" not in outgoing

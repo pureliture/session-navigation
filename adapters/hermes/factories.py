@@ -1038,11 +1038,38 @@ def _is_navigation_call(name: str, arguments: str, navigation_names: tuple[str, 
         return True
 
 
+def _deferred_manage_available(tools: Any) -> bool:
+    """True when manage_context is deferred behind the Hermes tool_search bridge."""
+    names = _tool_names(tools)
+    if MANAGE_TOOL in names or not {"tool_describe", "tool_call"}.issubset(names):
+        return False
+    if not isinstance(tools, list):
+        return False
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function")
+        name = fn.get("name") if isinstance(fn, dict) else item.get("name")
+        if name not in ("tool_search", "hermes_tool_search"):
+            continue
+        desc = fn.get("description") if isinstance(fn, dict) else item.get("description")
+        if isinstance(desc, str) and (
+            "Deferred tool catalog" in desc or "The servers below are connected" in desc
+        ):
+            return bool(re.search(r"\b(?:manage_context|session_navigation)\b", desc))
+    return True
+
+
 def _force_manage_tool_choice(request: dict[str, Any], api_mode: str) -> dict[str, Any]:
-    """Force manage_context once on an advisory-only request that allows it."""
+    """Force manage_context (or deferred tool_call bridge) once on an advisory-only request."""
     if api_mode not in SUPPORTED_API_MODES:
         return request
-    if MANAGE_TOOL not in _tool_names(request.get("tools")):
+    names = _tool_names(request.get("tools"))
+    if MANAGE_TOOL in names:
+        target_tool = MANAGE_TOOL
+    elif _deferred_manage_available(request.get("tools")):
+        target_tool = "tool_call"
+    else:
         return request
     choice = request.get("tool_choice")
     if isinstance(choice, str):
@@ -1055,7 +1082,7 @@ def _force_manage_tool_choice(request: dict[str, Any], api_mode: str) -> dict[st
         if choice_type == "function":
             function = choice.get("function")
             name = function.get("name") if isinstance(function, dict) else choice.get("name")
-            if isinstance(name, str) and name != MANAGE_TOOL:
+            if isinstance(name, str) and name != target_tool:
                 return request
         elif choice_type == "allowed_tools":
             return request
@@ -1063,9 +1090,9 @@ def _force_manage_tool_choice(request: dict[str, Any], api_mode: str) -> dict[st
             return request
     result = dict(request)
     if api_mode == "codex_responses":
-        result["tool_choice"] = {"type": "function", "name": MANAGE_TOOL}
+        result["tool_choice"] = {"type": "function", "name": target_tool}
     else:
-        result["tool_choice"] = {"type": "function", "function": {"name": MANAGE_TOOL}}
+        result["tool_choice"] = {"type": "function", "function": {"name": target_tool}}
     return result
 
 
@@ -1502,10 +1529,18 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                         )
                     if note:
                         request_out = copy.deepcopy(request_out)
+                        note_out = (
+                            note
+                            + '\n(Deferred bridge active: invoke tool_call with '
+                            '{"calls":[{"name":"manage_context","arguments":{"tool_call_ids":[...],"action":"auto"}}]} '
+                            '— action may be "hide", "summarize", or "auto".)'
+                            if _deferred_manage_available(request_out.get("tools"))
+                            else note
+                        )
                         if api_mode == "chat_completions":
-                            request_out["messages"].append({"role": "user", "content": note})
+                            request_out["messages"].append({"role": "user", "content": note_out})
                         elif isinstance(request_out.get("input"), list):
-                            request_out["input"].append({"role": "user", "content": [{"type": "input_text", "text": note}]})
+                            request_out["input"].append({"role": "user", "content": [{"type": "input_text", "text": note_out}]})
                         if _can_add_supervision(request_out, api_mode, kwargs.get("turn_id")) and \
                                 _cleanup_intent_allows(state, users[-1][1], turn):
                             request_out = _force_manage_tool_choice(request_out, api_mode)
