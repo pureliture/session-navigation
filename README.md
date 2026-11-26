@@ -30,7 +30,7 @@
 
 Session Navigation is a host-neutral engine for hiding, summarizing, and restoring context in long AI agent sessions. It works through Paseo's Explorer panel, an OMP (oh-my-pi) extension, and a Hermes plugin. It changes **only the outgoing request copy**; original host history is not deleted.
 
-Install from a source checkout. This does not imply that a release is available on npm, PyPI, or an official plugin catalog. For a reproducible Git installation, use a reviewed commit or release tag.
+Install from a source checkout. This does not imply that a release is available on npm, PyPI, or an official plugin catalog. Use a reviewed commit or release tag for reproducible source checkouts.
 
 | Problem | How Session Navigation helps |
 | --- | --- |
@@ -110,21 +110,18 @@ paseo plugin add pureliture/session-navigation
 Until registry approval, install the published npm version directly:
 
 ```bash
-paseo plugin add npm:@pureliture/session-navigation-paseo@0.1.0
+paseo plugin add npm:@tkdgur1756/session-navigation-paseo@0.1.0
 ```
 
 These are release channels, not a claim that publication/approval has happened.
-Before npm publication, use the Git command below or a source checkout:
+Before npm publication, install dependencies in a source checkout and install its
+plugin directory. Direct Git-folder installation is not supported because it does
+not install the required `yaml` runtime dependency.
 
 ```bash
+(cd paseo-plugin && npm ci)
 paseo plugin add "$PWD/paseo-plugin"
 paseo plugin ls
-```
-
-Or install the Git folder directly. For reproducibility, use a reviewed commit or release tag instead of `main`. The older `152f63c` commit fails a clean Git installation because a type dependency cannot be resolved.
-
-```bash
-paseo plugin add git:pureliture/session-navigation:paseo-plugin --ref main
 ```
 
 Choose **+ → Session navigation** in Explorer to follow the visible chat session across desktop, compact mobile web, and Paseo 0.15.3 mobile clients, or pin an agent with the selector. When no session is focused on native clients (or on untested host versions), the panel presents a bound-session chooser; selecting an outline row on native clients opens **Preview** directly. Empty, unmatched, or non-session web screens show **No session in view**. **Cmd/Ctrl+K → Open session navigation** and **/nav** are also available. Paseo restores open panel layouts; a panel closed by the user is not forcibly reopened. If an old page remains after a plugin reload, refresh the entire page.
@@ -135,7 +132,7 @@ Tested with `@oh-my-pi/pi-coding-agent` **18.18.3** and **Bun 1.4.4**.
 Requires Bun **>=1.4.4**, the oldest verified Bun runtime. After npm publication:
 
 ```bash
-omp plugin install @pureliture/session-navigation-omp@0.1.0
+omp plugin install @tkdgur1756/session-navigation-omp@0.1.0
 ```
 
 Before publication or for development, build and install the checkout:
@@ -153,7 +150,7 @@ omp --extension "$PWD/packages/omp"
 ```
 
 For a packed local archive, run `bun pm pack` in `packages/omp`, then
-`bun add /absolute/path/to/pureliture-session-navigation-omp-0.1.0.tgz` in `~/.omp/plugins` (create
+`bun add /absolute/path/to/tkdgur1756-session-navigation-omp-0.1.0.tgz` in `~/.omp/plugins` (create
 that directory first). Restart OMP and check `omp plugin list`. OMP 18.18.3
 does **not** accept local tarballs via `omp plugin install`. No npm publication
 is claimed by these preparation instructions.
@@ -305,8 +302,8 @@ merged commit. There is no automated GitHub Actions publishing workflow.
 
 | Host | Release channel | Installation after publication/approval |
 | --- | --- | --- |
-| OMP | Public npm `@pureliture/session-navigation-omp@0.1.0` | `omp plugin install @pureliture/session-navigation-omp@0.1.0` |
-| Paseo | Public npm `@pureliture/session-navigation-paseo@0.1.0`, then reviewed registry slug `pureliture/session-navigation` | `paseo plugin add pureliture/session-navigation` |
+| OMP | Public npm `@tkdgur1756/session-navigation-omp@0.1.0` | `omp plugin install @tkdgur1756/session-navigation-omp@0.1.0` |
+| Paseo | Public npm `@tkdgur1756/session-navigation-paseo@0.1.0`, then reviewed registry slug `pureliture/session-navigation` | `paseo plugin add pureliture/session-navigation` |
 | Hermes | Official plugin catalog, `subdir: hermes-plugin` at a full 40-character SHA | `hermes plugins install session-navigation` |
 
 Both npm packages bundle their worker/core and include MIT LICENSE. The core

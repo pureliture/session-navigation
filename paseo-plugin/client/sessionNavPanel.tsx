@@ -24,7 +24,22 @@ import { PreviewDrawer } from "./PreviewDrawer";
 import { actionAllowed, capabilityNotice, selectPausedNotice, type Capabilities } from "./capabilities";
 import { focusedSessionTab, readHostFocus, readWebWorkspaceFocusedTab, subscribeHostFocus, type SessionTab } from "./hostCompat";
 import { linkedTimelineFetchNeeded, scopeForAgent } from "./subagents";
-import { acceptWorkspaceAgentId, hasDomDocument, readSessionTimelineIds, resolveSessionTarget, selectMainOrFallbackAgent, sessionFollowCandidates } from "./sessionFollowing";
+import {
+  FollowSelectionCoordinator,
+  acceptWorkspaceAgentId,
+  hasDomDocument,
+  readSessionTimelinePage,
+  resolveSessionTargetProgressive,
+  sessionFollowCandidates,
+  type FollowCoordinatorUiState,
+  type FollowObservation,
+  type SessionTimelinePage,
+} from "./sessionFollowing";
+import {
+  stabilizeGroupedRows,
+  stabilizeRows,
+  visiblePollInterval,
+} from "./outlineWindow";
 import {
   buildGroupedRows,
   effectiveRowBytes,
@@ -88,15 +103,54 @@ export function SessionNavPanel({
   const effectiveFollowVisible = followVisible && outlineValues.followVisibleSession;
   const effectiveOpenPreviewOnRowClick =
     openPreviewOnRowClickProp ?? outlineValues.openPreviewOnRowClick;
+  const hostProp: unknown =
+    "host" in panelProps &&
+    typeof panelProps.host === "object" &&
+    panelProps.host !== null &&
+    "id" in panelProps.host
+      ? panelProps.host.id
+      : undefined;
+  const hostId = typeof hostProp === "string" ? hostProp : "";
+  const workspaceProp: unknown = "workspaceId" in panelProps ? panelProps.workspaceId : undefined;
+  const panelWorkspaceId = typeof workspaceProp === "string" ? workspaceProp : undefined;
+  const hasDocument = hasDomDocument();
+  const explicitActiveSupported = "activeAgentId" in panelProps;
+  const explicitActiveRaw: unknown = explicitActiveSupported ? panelProps.activeAgentId : undefined;
+  const explicitActiveId =
+    typeof explicitActiveRaw === "string" && explicitActiveRaw.length > 0 ? explicitActiveRaw : null;
+  const latestExplicitActiveRef = useRef({
+    supported: explicitActiveSupported,
+    agentId: explicitActiveId,
+  });
+  latestExplicitActiveRef.current = {
+    supported: explicitActiveSupported,
+    agentId: explicitActiveId,
+  };
+  const canFollowLive =
+    Boolean(paseo?.agents) && (hasDocument || Boolean(hostId) || explicitActiveSupported);
+  const startPendingFollow = effectiveFollowVisible && canFollowLive;
   // Paseo binds agent panels to the agent they were opened for; follow whichever session the chat shows instead.
+  const followCoordinatorRef = useRef<FollowSelectionCoordinator | null>(null);
+  if (!followCoordinatorRef.current) {
+    followCoordinatorRef.current = new FollowSelectionCoordinator(
+      startPendingFollow,
+      params.agentId,
+    );
+  }
+  const followActionBlockedRef = useRef<boolean>(startPendingFollow);
+  const probeLiveFollowChangeRef = useRef<(() => boolean) | null>(null);
   const [followedId, setFollowedId] = useState<string | null>(null);
-  const [inView, setInView] = useState(!!params.agentId);
-  const [followResolved, setFollowResolved] = useState(
-    () => !effectiveFollowVisible || !!params.agentId,
-  );
+  const [inView, setInView] = useState(() => (startPendingFollow ? false : !!params.agentId));
+  const [followUncertain, setFollowUncertain] = useState(false);
+  const [followSwitching, setFollowSwitching] = useState(false);
+  const [followResolved, setFollowResolved] = useState(() => !startPendingFollow);
   const lastMainAgent = useRef(params.agentId || null);
-  const agentId =
-    effectiveFollowVisible ? (followedId ?? params.agentId) : params.agentId;
+  const retryFollowRef = useRef<(() => void) | null>(null);
+  const agentId = effectiveFollowVisible
+    ? inView && !followUncertain && !followSwitching
+      ? (followedId ?? params.agentId)
+      : ""
+    : params.agentId;
   const agent = useAgent(agentId, (v) => ({
     title: v.title,
     provider: v.provider,
@@ -118,12 +172,20 @@ export function SessionNavPanel({
   const [dbErrorOpen, setDbErrorOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const prevFollowInitKeyRef = useRef(`${params.agentId}\0${effectiveFollowVisible}\0${canFollowLive}`);
   useEffect(() => {
-    setFollowedId(null);
-    setInView(!!params.agentId);
-    setFollowResolved(!effectiveFollowVisible || !!params.agentId);
+    const nextInitKey = `${params.agentId}\0${effectiveFollowVisible}\0${canFollowLive}`;
+    if (prevFollowInitKeyRef.current === nextInitKey) return;
+    prevFollowInitKeyRef.current = nextInitKey;
+    const resetState = followCoordinatorRef.current!.reset(startPendingFollow, params.agentId);
+    followActionBlockedRef.current = resetState.actionBlocked;
+    setFollowedId(resetState.agentId === params.agentId ? null : resetState.agentId);
+    setInView(resetState.inView);
+    setFollowUncertain(resetState.followUncertain);
+    setFollowSwitching(resetState.followSwitching);
+    setFollowResolved(resetState.followResolved);
     lastMainAgent.current = params.agentId || null;
-  }, [params.agentId, effectiveFollowVisible]);
+  }, [params.agentId, effectiveFollowVisible, canFollowLive, startPendingFollow]);
   useEffect(() => {
     if (notice !== "Not loaded in chat" && notice !== SUMMARY_QUEUED_NOTICE) return;
     const timer = setTimeout(() => setNotice((current) => current === notice ? null : current),
@@ -148,7 +210,8 @@ export function SessionNavPanel({
       if (!result.ok) throw new Error(result.error ?? "scopes_failed");
       return result.scopes;
     },
-    refetchInterval: 3000,
+    staleTime: 2500,
+    refetchInterval: () => visiblePollInterval(10_000),
   });
 
   const scopes = scopesQuery.data ?? [];
@@ -161,154 +224,404 @@ export function SessionNavPanel({
         .join("\n"),
     [scopes],
   );
-  const hostProp: unknown = "host" in panelProps && typeof panelProps.host === "object" && panelProps.host !== null &&
-    "id" in panelProps.host ? panelProps.host.id : undefined;
-  const hostId = typeof hostProp === "string" ? hostProp : "";
-  const workspaceProp: unknown = "workspaceId" in panelProps ? panelProps.workspaceId : undefined;
-  const panelWorkspaceId = typeof workspaceProp === "string" ? workspaceProp : undefined;
-  const hasDocument = hasDomDocument();
-
   useEffect(() => {
     const doc = "document" in globalThis ? Reflect.get(globalThis, "document") : undefined;
-    if (!paseo?.agents || (!hasDocument && !hostId && !("activeAgentId" in panelProps))) return;
+    if (!canFollowLive || !paseo?.agents) return;
+    const coordinator = followCoordinatorRef.current!;
     let cancelled = false;
-    const applySelection = async (focused: SessionTab | null, values: string[] | null) => {
-      const currentScopes = scopesRef.current;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearRetryTimer = () => {
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+    const clearTransientOverlays = () => {
+      setSelectedId(null);
+      setHighlightedId(null);
+      setPreviewOpen(false);
+      setDbErrorOpen(false);
+    };
+    const getKnownAgentTimelineIds = (id: string): readonly string[] | undefined => {
+      const completeEntry = queryClient.getQueryData<{ ids: string[]; complete: boolean }>([
+        "session-nav-follow",
+        id,
+      ]);
+      if (completeEntry?.ids?.length) return completeEntry.ids;
+      const tailEntry = queryClient.getQueryData<SessionTimelinePage>([
+        "session-nav-follow-tail",
+        id,
+      ]);
+      return tailEntry?.ids;
+    };
+    const applyCoordinatorUiState = (next: FollowCoordinatorUiState) => {
+      followActionBlockedRef.current = next.actionBlocked;
+      setFollowSwitching(next.followSwitching);
+      setInView(next.inView);
+      setFollowUncertain(next.followUncertain);
+      if (next.agentId) lastMainAgent.current = next.agentId;
+      setFollowedId(next.agentId === params.agentId ? null : next.agentId);
+      setFollowResolved(next.followResolved);
+    };
+    // Web: DOM tab wins; layout-state and workspace-verified heartbeat focus back up compact/empty chats.
+    const readFocusedTab = (): SessionTab | null => {
+      const dom = focusedSessionTab(doc, undefined, candidateAgentIds);
+      const layoutTab =
+        hostId && panelWorkspaceId ? readWebWorkspaceFocusedTab(hostId, panelWorkspaceId) : null;
+      if (dom) {
+        const domAgentId = dom.agentId;
+        if (
+          domAgentId &&
+          Array.isArray(candidateAgentIds) &&
+          !candidateAgentIds.includes(domAgentId) &&
+          layoutTab
+        ) {
+          return layoutTab;
+        }
+        return dom;
+      }
+      if (layoutTab) return layoutTab;
+      const liveExplicit = latestExplicitActiveRef.current;
+      const candidateId = liveExplicit.supported
+        ? liveExplicit.agentId
+        : hostId
+          ? readHostFocus(hostId).focusedAgentId
+          : null;
+      if (!candidateId) return null;
+      const verdict = acceptWorkspaceAgentId({
+        agentId: candidateId,
+        workspaceCandidateIds: candidateAgentIds,
+        panelWorkspaceId,
+      });
+      return verdict === "accept" || (verdict === "unknown" && !panelWorkspaceId)
+        ? { kind: "agent", agentId: candidateId }
+        : null;
+    };
+    const readWebObservation = (): FollowObservation => {
+      const focusTab = readFocusedTab();
+      if (focusTab?.kind === "agent") {
+        return { tab: focusTab, visibleValues: null };
+      }
+      const values = visibleChatValues(doc);
+      const recheckedTab = readFocusedTab();
+      if (recheckedTab?.kind === "agent") {
+        return { tab: recheckedTab, visibleValues: null };
+      }
+      return { tab: recheckedTab, visibleValues: values };
+    };
+    const readNativeFocusSignal = () => {
+      const liveExplicit = latestExplicitActiveRef.current;
+      const hostFocus = hostId
+        ? readHostFocus(hostId)
+        : { supported: false, focusedAgentId: null, hasSignal: false };
+      const hasSignal = liveExplicit.supported || (hostFocus.supported && hostFocus.hasSignal);
+      const targetId = liveExplicit.supported ? liveExplicit.agentId : hostFocus.focusedAgentId;
+      return { hasSignal, targetId };
+    };
+    const readLiveNativeObservation = (): FollowObservation => {
+      const { hasSignal, targetId } = readNativeFocusSignal();
+      if (!effectiveFollowVisible || !hasSignal) {
+        return params.agentId
+          ? { tab: { kind: "agent", agentId: params.agentId }, visibleValues: null }
+          : { tab: null, visibleValues: null };
+      }
+      return {
+        tab: targetId ? { kind: "agent", agentId: targetId } : null,
+        visibleValues: null,
+      };
+    };
+    const applyLiveSuspension = (showSwitchingUi: boolean, blocked: boolean) => {
+      clearRetryTimer();
+      followActionBlockedRef.current = blocked;
+      if (showSwitchingUi) {
+        clearTransientOverlays();
+        setFollowSwitching(true);
+      }
+    };
+
+    let rafId: number | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleTick = () => {
+      if (cancelled) return;
+      if (debounceTimer !== null) return;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (cancelled) return;
+        if (typeof requestAnimationFrame === "function") {
+          if (rafId !== null) return;
+          rafId = requestAnimationFrame(() => {
+            rafId = null;
+            if (!cancelled) void runTick();
+          });
+        } else {
+          void runTick();
+        }
+      }, 60);
+    };
+
+    const handleLiveChange = (scheduleIfChanged: boolean): boolean => {
+      if (cancelled || !effectiveFollowVisible) return coordinator.getState().actionBlocked;
+      if (hasDocument) {
+        const res = coordinator.observeLiveChange(
+          readWebObservation(),
+          effectiveFollowVisible,
+          getKnownAgentTimelineIds,
+        );
+        if (res.invalidatedInFlight || res.enteredSwitching) {
+          applyLiveSuspension(res.enteredSwitching, res.state.actionBlocked);
+          if (scheduleIfChanged) scheduleTick();
+        }
+        return res.state.actionBlocked;
+      }
+      const { hasSignal, targetId } = readNativeFocusSignal();
+      if (!hasSignal) return coordinator.getState().actionBlocked;
+      if (targetId !== null) {
+        const verdict = acceptWorkspaceAgentId({
+          agentId: targetId,
+          workspaceCandidateIds: candidateAgentIds,
+          panelWorkspaceId,
+        });
+        if (verdict !== "accept") {
+          return coordinator.getState().actionBlocked;
+        }
+      }
+      const res = coordinator.observeLiveChange(
+        {
+          tab: targetId ? { kind: "agent", agentId: targetId } : null,
+          visibleValues: null,
+        },
+        effectiveFollowVisible,
+      );
+      if (res.invalidatedInFlight || res.enteredSwitching) {
+        applyLiveSuspension(res.enteredSwitching, res.state.actionBlocked);
+        if (scheduleIfChanged) scheduleTick();
+      }
+      return res.state.actionBlocked;
+    };
+    probeLiveFollowChangeRef.current = () => handleLiveChange(true);
+
+    const applySelection = async (
+      startObs: FollowObservation,
+      readLiveObs: () => FollowObservation,
+      followUpDepth = 0,
+    ) => {
+      const attempt = coordinator.beginAttempt(
+        startObs,
+        effectiveFollowVisible,
+        getKnownAgentTimelineIds,
+      );
+      if (attempt.kind === "dedup") return;
+
       const needsTimelineScan =
-        effectiveFollowVisible && focused?.kind !== "agent";
-      const resolvedTarget = needsTimelineScan
-        ? await resolveSessionTarget({
+        effectiveFollowVisible &&
+        startObs.tab?.kind !== "agent" &&
+        Boolean(startObs.visibleValues && startObs.visibleValues.length > 0);
+      if (attempt.enteredSwitching) {
+        applyLiveSuspension(needsTimelineScan, attempt.state.actionBlocked);
+      }
+
+      const currentScopes = scopesRef.current;
+      let followResult: Awaited<ReturnType<typeof resolveSessionTargetProgressive>> | null = null;
+      try {
+        if (needsTimelineScan) {
+          followResult = await resolveSessionTargetProgressive({
             followVisible: effectiveFollowVisible,
             boundAgentId: params.agentId,
-            visibleValues: values,
+            visibleValues: [...(startObs.visibleValues ?? [])],
             candidates: sessionFollowCandidates(
               candidateAgentIds,
               currentScopes.map((s) => s.agent_id).filter((id): id is string => !!id),
             ),
-            timelineIds: async (id) =>
-              (
-                await queryClient.fetchQuery({
-                  queryKey: ["session-nav-follow", id],
-                  staleTime: (q) => (q.state.data?.complete ? 10_000 : 0),
-                  queryFn: () => readSessionTimelineIds(paseo.agents.ref(id).timeline),
-                })
-              ).ids,
-          })
-        : effectiveFollowVisible
-          ? null
-          : params.agentId || null;
-      const selection = selectMainOrFallbackAgent({
-        tab: focused,
+            getCachedTimelineIds: (id) => {
+              const entry = queryClient.getQueryData<{ ids: string[]; complete: boolean }>([
+                "session-nav-follow",
+                id,
+              ]);
+              const state = queryClient.getQueryState(["session-nav-follow", id]);
+              if (!entry?.complete || !state?.dataUpdatedAt) return undefined;
+              if (Date.now() - state.dataUpdatedAt > 10_000) return undefined;
+              return entry;
+            },
+            getCachedTailPage: (id) => {
+              const entry = queryClient.getQueryData<SessionTimelinePage>([
+                "session-nav-follow-tail",
+                id,
+              ]);
+              const state = queryClient.getQueryState(["session-nav-follow-tail", id]);
+              if (!entry || !state?.dataUpdatedAt) return undefined;
+              if (Date.now() - state.dataUpdatedAt > 4_000) return undefined;
+              return entry;
+            },
+            loadPage: (id, cursor) => readSessionTimelinePage(paseo.agents.ref(id).timeline, cursor),
+            onTailLoaded: (id, page) => {
+              queryClient.setQueryData(["session-nav-follow-tail", id], page);
+            },
+            onCompleteTimelineIds: (id, ids) => {
+              queryClient.setQueryData(["session-nav-follow", id], { ids, complete: true });
+            },
+            isStale: () => cancelled || !coordinator.isCurrent(attempt.generation),
+          });
+        } else if (!effectiveFollowVisible) {
+          followResult = {
+            targetId: params.agentId || null,
+            confirmed: true,
+            incompleteIds: [],
+            failedIds: [],
+          };
+        } else if (startObs.tab?.kind !== "agent") {
+          followResult = {
+            targetId: null,
+            confirmed: true,
+            incompleteIds: [],
+            failedIds: [],
+          };
+        }
+      } catch {
+        coordinator.abortAttempt(attempt.generation);
+        return;
+      }
+
+      if (cancelled) {
+        coordinator.abortAttempt(attempt.generation);
+        return;
+      }
+
+      const outcome = coordinator.commitAttempt({
+        generation: attempt.generation,
+        startObservation: startObs,
+        startSnapshotKey: attempt.snapshotKey,
+        liveObservation: readLiveObs(),
         followVisible: effectiveFollowVisible,
-        resolvedTarget,
+        followResult,
+        boundAgentId: params.agentId,
+        getKnownAgentTimelineIds,
       });
-      if (cancelled) return;
-      setInView(selection.inView);
-      if (selection.agentId) lastMainAgent.current = selection.agentId;
-      setFollowedId(selection.agentId === params.agentId ? null : selection.agentId);
-      setFollowResolved(true);
+
+      if (!outcome.committed) {
+        if (outcome.enteredSwitching) {
+          applyLiveSuspension(true, outcome.state.actionBlocked);
+        }
+        if (outcome.needsFollowUp && !cancelled) {
+          if (followUpDepth < 2) {
+            void runTick(followUpDepth + 1);
+          } else {
+            scheduleTick();
+          }
+        }
+        return;
+      }
+
+      if (!outcome.state.retryable) {
+        clearRetryTimer();
+      } else {
+        for (const failedId of outcome.state.failedIds) {
+          queryClient.removeQueries({
+            queryKey: ["session-nav-follow-tail", failedId],
+            exact: true,
+          });
+        }
+        clearTransientOverlays();
+        if (retryTimer === null) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (!cancelled) void runTick();
+          }, 1500);
+        }
+      }
+      applyCoordinatorUiState(outcome.state);
     };
-    const tick = async () => {
-      const explicitSupported = "activeAgentId" in panelProps;
-      const explicitProp: unknown = explicitSupported ? panelProps.activeAgentId : undefined;
-      const explicitAgentId = typeof explicitProp === "string" && explicitProp.length > 0 ? explicitProp : null;
+
+    const tick = async (followUpDepth = 0) => {
+      if (cancelled) return;
       if (!hasDocument) {
-        const hostFocus = hostId ? readHostFocus(hostId) : { supported: false, focusedAgentId: null, hasSignal: false };
-        const hasSignal = explicitSupported || (hostFocus.supported && hostFocus.hasSignal);
-        const targetId = explicitSupported ? explicitAgentId : hostFocus.focusedAgentId;
+        const { hasSignal, targetId } = readNativeFocusSignal();
         if (effectiveFollowVisible && hasSignal) {
           if (targetId === null) {
-            if (cancelled) return;
-            setInView(false);
-            setFollowedId(null);
-            setFollowResolved(true);
+            await applySelection(
+              { tab: null, visibleValues: null },
+              readLiveNativeObservation,
+              followUpDepth,
+            );
             return;
           }
-          let verdict = acceptWorkspaceAgentId({ agentId: targetId, workspaceCandidateIds: candidateAgentIds, panelWorkspaceId });
+          let verdict = acceptWorkspaceAgentId({
+            agentId: targetId,
+            workspaceCandidateIds: candidateAgentIds,
+            panelWorkspaceId,
+          });
           if (verdict === "unknown") {
+            const preRefreshGen = coordinator.getGeneration();
             try {
               const handle = paseo.agents.ref(targetId);
               await handle.refresh();
-              verdict = acceptWorkspaceAgentId({ agentId: targetId, workspaceCandidateIds: candidateAgentIds, agentWorkspaceId: handle.current()?.workspaceId ?? null, panelWorkspaceId });
+              if (cancelled || !coordinator.isCurrent(preRefreshGen)) return;
+              const liveNow = readLiveNativeObservation();
+              if (liveNow.tab?.agentId !== targetId) {
+                scheduleTick();
+                return;
+              }
+              verdict = acceptWorkspaceAgentId({
+                agentId: targetId,
+                workspaceCandidateIds: candidateAgentIds,
+                agentWorkspaceId: handle.current()?.workspaceId ?? null,
+                panelWorkspaceId,
+              });
             } catch {
               verdict = "reject";
             }
           }
-          if (verdict !== "accept" || cancelled) return;
-          await applySelection({ kind: "agent", agentId: targetId }, null);
-          return;
-        }
-        if (cancelled) return;
-        if (params.agentId) {
-          await applySelection({ kind: "agent", agentId: params.agentId }, null);
-          return;
-        }
-        setInView(false);
-        setFollowedId(null);
-        setFollowResolved(true);
-        return;
-      }
-      // Web: DOM tab wins; layout-state and workspace-verified heartbeat focus back up compact/empty chats.
-      const readFocusedTab = (): SessionTab | null => {
-        const dom = focusedSessionTab(doc, undefined, candidateAgentIds);
-        const layoutTab = hostId && panelWorkspaceId ? readWebWorkspaceFocusedTab(hostId, panelWorkspaceId) : null;
-        if (dom) {
-          const domAgentId = dom.agentId;
-          if (
-            domAgentId &&
-            Array.isArray(candidateAgentIds) &&
-            !candidateAgentIds.includes(domAgentId) &&
-            layoutTab
-          ) {
-            return layoutTab;
+          if (cancelled) return;
+          if (verdict !== "accept") {
+            if (!coordinator.getState().followResolved) {
+              const fallbackObs: FollowObservation = params.agentId
+                ? { tab: { kind: "agent", agentId: params.agentId }, visibleValues: null }
+                : { tab: null, visibleValues: null };
+              await applySelection(fallbackObs, () => fallbackObs, followUpDepth);
+            }
+            return;
           }
-          return dom;
+          await applySelection(
+            { tab: { kind: "agent", agentId: targetId }, visibleValues: null },
+            readLiveNativeObservation,
+            followUpDepth,
+          );
+          return;
         }
-        if (layoutTab) return layoutTab;
-        const candidateId = explicitSupported
-          ? explicitAgentId
-          : (hostId ? readHostFocus(hostId).focusedAgentId : null);
-        if (!candidateId) return null;
-        const verdict = acceptWorkspaceAgentId({ agentId: candidateId, workspaceCandidateIds: candidateAgentIds, panelWorkspaceId });
-        return verdict === "accept" || (verdict === "unknown" && !panelWorkspaceId)
-          ? { kind: "agent", agentId: candidateId }
-          : null;
-      };
-      const focusTab = readFocusedTab();
-      if (focusTab?.kind === "agent") {
-        if (!cancelled) await applySelection(focusTab, null);
+        const pinnedObs: FollowObservation = params.agentId
+          ? { tab: { kind: "agent", agentId: params.agentId }, visibleValues: null }
+          : { tab: null, visibleValues: null };
+        await applySelection(pinnedObs, readLiveNativeObservation, followUpDepth);
         return;
       }
-      const values = visibleChatValues(doc);
-      if (focusTab && (values === null || values.length === 0)) {
-        if (!cancelled && JSON.stringify(readFocusedTab()) === JSON.stringify(focusTab)) {
-          await applySelection(focusTab, null);
-        }
-        return;
-      }
-      if (cancelled || JSON.stringify(readFocusedTab()) !== JSON.stringify(focusTab)) return;
-      await applySelection(focusTab, values);
+
+      const startObs = readWebObservation();
+      await applySelection(startObs, readWebObservation, followUpDepth);
     };
-    let rafId: number | null = null;
-    const scheduleTick = () => {
+
+    const runTick = async (followUpDepth = 0) => {
       if (cancelled) return;
-      if (typeof requestAnimationFrame === "function") {
-        if (rafId !== null) return;
-        rafId = requestAnimationFrame(() => {
-          rafId = null;
-          if (!cancelled) void tick();
-        });
-      } else {
-        void tick();
+      await tick(followUpDepth);
+    };
+
+    retryFollowRef.current = () => {
+      if (!cancelled) {
+        clearRetryTimer();
+        void runTick();
       }
     };
-    const unsubscribe = hostId ? subscribeHostFocus(hostId, scheduleTick) : () => {};
+
+    const onLiveEvent = () => {
+      if (cancelled) return;
+      handleLiveChange(false);
+      scheduleTick();
+    };
+    const unsubscribe = hostId ? subscribeHostFocus(hostId, onLiveEvent) : () => {};
     let observer: { disconnect: () => void } | null = null;
     const ObserverCtor = (globalThis as Record<string, any>).MutationObserver;
     const observeRoot = (doc as any)?.body ?? (doc as any)?.documentElement;
     if (hasDocument && typeof ObserverCtor === "function" && observeRoot) {
       try {
-        const instance = new ObserverCtor(scheduleTick);
+        const instance = new ObserverCtor(onLiveEvent);
         instance.observe(observeRoot, {
           subtree: true,
           attributes: true,
@@ -320,24 +633,44 @@ export function SessionNavPanel({
       }
     }
     const win = (doc as any)?.defaultView;
-    const onUiActivity = () => scheduleTick();
+    const onUiActivity = () => onLiveEvent();
+    const onKeyUp = (ev: any) => {
+      const target = ev?.target;
+      const tag = typeof target?.tagName === "string" ? target.tagName.toUpperCase() : "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+        return;
+      }
+      onLiveEvent();
+    };
     if (hasDocument && typeof (doc as any)?.addEventListener === "function") {
       (doc as any).addEventListener("click", onUiActivity, true);
-      (doc as any).addEventListener("keyup", onUiActivity, true);
+      (doc as any).addEventListener("keyup", onKeyUp, true);
     }
     if (win && typeof win.addEventListener === "function") {
       win.addEventListener("popstate", onUiActivity);
       win.addEventListener("focus", onUiActivity);
     }
-    void tick();
-    const timer = hasDocument ? setInterval(() => void tick(), 1500) : undefined;
+    void runTick();
+    const timer = hasDocument
+      ? setInterval(() => {
+          if ((doc as any)?.visibilityState === "hidden" || (doc as any)?.hidden === true) {
+            return;
+          }
+          void runTick();
+        }, 3000)
+      : undefined;
     return () => {
       cancelled = true;
+      retryFollowRef.current = null;
+      probeLiveFollowChangeRef.current = null;
+      coordinator.invalidateInFlight();
+      clearRetryTimer();
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (rafId !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(rafId);
       observer?.disconnect();
       if (hasDocument && typeof (doc as any)?.removeEventListener === "function") {
         (doc as any).removeEventListener("click", onUiActivity, true);
-        (doc as any).removeEventListener("keyup", onUiActivity, true);
+        (doc as any).removeEventListener("keyup", onKeyUp, true);
       }
       if (win && typeof win.removeEventListener === "function") {
         win.removeEventListener("popstate", onUiActivity);
@@ -346,10 +679,33 @@ export function SessionNavPanel({
       unsubscribe();
       clearInterval(timer);
     };
-  }, [paseo, params.agentId, scopesSignature, queryClient, effectiveFollowVisible, candidateAgentIds, hasDocument, hostId, panelWorkspaceId]);
+  }, [
+    paseo,
+    params.agentId,
+    scopesSignature,
+    queryClient,
+    effectiveFollowVisible,
+    candidateAgentIds,
+    hasDocument,
+    hostId,
+    panelWorkspaceId,
+    canFollowLive,
+    explicitActiveSupported,
+    explicitActiveId,
+  ]);
   const parentScopeKey = scopeForAgent(scopes, agentId);
 
   const resolvedScopeKey = parentScopeKey;
+  const canMutateSession =
+    Boolean(resolvedScopeKey) &&
+    (!effectiveFollowVisible || (inView && !followUncertain && !followSwitching));
+  const isMutationAllowedNow = () => {
+    if (!canMutateSession || followActionBlockedRef.current) return false;
+    if (effectiveFollowVisible && probeLiveFollowChangeRef.current?.()) {
+      return false;
+    }
+    return true;
+  };
 
   const scopeKey = resolvedScopeKey ?? "";
   const query = tabState.query;
@@ -382,6 +738,10 @@ export function SessionNavPanel({
       invalidate();
       return true;
     }
+    if (!result.ok && result.error === "session_unconfirmed") {
+      setNotice("Session changed — action paused until confirmed.");
+      return true;
+    }
     if (!result.ok) {
       setNotice(result.error ?? "failed");
       return true;
@@ -404,7 +764,7 @@ export function SessionNavPanel({
       changed: boolean;
     } => {
       const rowKey = row.item_id ?? row.tool_call_id;
-      if (!actionAllowed(row, capabilities, mode)) {
+      if (!isMutationAllowedNow() || !actionAllowed(row, capabilities, mode)) {
         return { rowKey, prevActionMode: undefined, changed: false };
       }
       const prevActionMode = lastActionByItem[rowKey];
@@ -412,7 +772,12 @@ export function SessionNavPanel({
       return { rowKey, prevActionMode, changed: true };
     },
     mutationFn: ({ row, mode }: { row: Row; mode: "hide" | "summarize" }) => {
-      if (!actionAllowed(row, capabilities, mode)) return Promise.resolve({ ok: false, error: "capability_unavailable" });
+      if (!isMutationAllowedNow()) {
+        return Promise.resolve({ ok: false, error: "session_unconfirmed" });
+      }
+      if (!actionAllowed(row, capabilities, mode)) {
+        return Promise.resolve({ ok: false, error: "capability_unavailable" });
+      }
       return hideRpc({
         scope_key: scopeKey,
         item_id: row.item_id ?? "",
@@ -457,8 +822,12 @@ export function SessionNavPanel({
   });
 
   const unhideMutation = useMutation({
-    mutationFn: (row: Row) =>
-      unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version }),
+    mutationFn: (row: Row) => {
+      if (!isMutationAllowedNow()) {
+        return Promise.resolve({ ok: false, error: "session_unconfirmed" });
+      }
+      return unhideRpc({ scope_key: scopeKey, item_id: row.item_id ?? "", expected_version: row.version });
+    },
     onSuccess: (r, row) => {
       if (!onMutationError(r)) {
         setNotice(null);
@@ -482,7 +851,18 @@ export function SessionNavPanel({
       scope_key: string;
       mode: "hide" | "summarize";
       items: { item_id: string; expected_version?: number }[];
-    }) => hideBatch(vars),
+    }) => {
+      if (!isMutationAllowedNow()) {
+        return Promise.resolve({
+          ok: false,
+          applied: 0,
+          failed: 0,
+          items: [],
+          error: "session_unconfirmed",
+        });
+      }
+      return hideBatch(vars);
+    },
     onError: () => {
       invalidate();
     },
@@ -495,7 +875,18 @@ export function SessionNavPanel({
     mutationFn: (vars: {
       scope_key: string;
       items: { item_id: string; expected_version?: number }[];
-    }) => unhideBatch(vars),
+    }) => {
+      if (!isMutationAllowedNow()) {
+        return Promise.resolve({
+          ok: false,
+          applied: 0,
+          failed: 0,
+          items: [],
+          error: "session_unconfirmed",
+        });
+      }
+      return unhideBatch(vars);
+    },
     onError: () => {
       invalidate();
     },
@@ -515,7 +906,7 @@ export function SessionNavPanel({
     group: OutlineRow & { type: "group" },
     action: "hide" | "summarize" | "unhide",
   ) => {
-    if (pendingGroupId || !resolvedScopeKey) return;
+    if (pendingGroupId || !isMutationAllowedNow() || !resolvedScopeKey) return;
     if (action !== "unhide" && !capabilities?.[action]) { setNotice(capabilityNotice(undefined, capabilities)); return; }
     const items = groupMutationItems(group, action);
     if (items.length === 0) return;
@@ -630,13 +1021,19 @@ export function SessionNavPanel({
       };
     },
     enabled: !!resolvedScopeKey,
+    staleTime: 500,
     placeholderData: (previousData, previousQuery) =>
       previousQuery?.queryKey?.[2] === scopeKey ? previousData : undefined,
-    refetchInterval: isMutating ? 400 : 4000,
+    refetchInterval: () => visiblePollInterval(isMutating ? 400 : 4000),
   });
 
   // Same source as Paseo's own context meter (the `K` figure), for every provider.
-  const capabilities: Capabilities | undefined = listQuery.data?.capabilities ?? scopes.find(scope => scope.scope_key === resolvedScopeKey)?.capabilities;
+  const capabilities: Capabilities | undefined = useMemo(
+    () =>
+      listQuery.data?.capabilities ??
+      scopes.find((scope) => scope.scope_key === resolvedScopeKey)?.capabilities,
+    [listQuery.data?.capabilities, scopes, resolvedScopeKey],
+  );
   const usageQuery = useQuery({
     queryKey: ["paseo-agent-usage", agentId],
     queryFn: async () => {
@@ -645,7 +1042,7 @@ export function SessionNavPanel({
       await handle.refresh();
       return handle.lastUsage ?? null;
     },
-    refetchInterval: 5000,
+    refetchInterval: () => visiblePollInterval(5000),
   });
 
   const isHermesScope = Boolean(resolvedScopeKey?.startsWith("hermes:"));
@@ -677,7 +1074,7 @@ export function SessionNavPanel({
         (isHermesScope && listQuery.data !== undefined && !listQuery.data.server_timeline) ||
         needsLinkedTimeline) &&
       !!agentId,
-    refetchInterval: 3000,
+    refetchInterval: () => visiblePollInterval(5000),
   });
 
   useEffect(() => {
@@ -709,23 +1106,59 @@ export function SessionNavPanel({
       scopes,
     ],
   );
+  const prevRowsRef = useRef<Row[]>([]);
   const rows = useMemo(() => {
-    if (!query) return rawRows;
-    const q = query.toLowerCase();
-    return rawRows.filter(
-      (r) =>
-        (r.item_id && r.item_id.toLowerCase().includes(q)) ||
-        (r.tool_name && r.tool_name.toLowerCase().includes(q)) ||
-        (r.summary_line && r.summary_line.toLowerCase().includes(q)) ||
-        (r.tool_input && r.tool_input.toLowerCase().includes(q)) ||
-        (r.tool_call_id && r.tool_call_id.toLowerCase().includes(q)),
-    );
+    const filtered = !query
+      ? rawRows
+      : rawRows.filter((r) => {
+          const q = query.toLowerCase();
+          return (
+            (r.item_id && r.item_id.toLowerCase().includes(q)) ||
+            (r.tool_name && r.tool_name.toLowerCase().includes(q)) ||
+            (r.summary_line && r.summary_line.toLowerCase().includes(q)) ||
+            (r.tool_input && r.tool_input.toLowerCase().includes(q)) ||
+            (r.tool_call_id && r.tool_call_id.toLowerCase().includes(q))
+          );
+        });
+    const stabilized = stabilizeRows(prevRowsRef.current, filtered);
+    prevRowsRef.current = stabilized;
+    return stabilized;
   }, [rawRows, query]);
 
-  const groupedRows = useMemo(
-    () => buildGroupedRows(rows, expandedGroups, lastActionByItem),
-    [rows, expandedGroups, lastActionByItem],
-  );
+  const rowIndexByRow = useMemo(() => {
+    const map = new WeakMap<Row, number>();
+    for (let i = 0; i < rows.length; i++) map.set(rows[i], i);
+    return map;
+  }, [rows]);
+
+  const rowByKey = useMemo(() => {
+    const map = new Map<string, Row>();
+    for (let i = 0; i < rows.length; i++) {
+      const k = outlineRowKey(rows[i], i);
+      if (!map.has(k)) map.set(k, rows[i]);
+    }
+    return map;
+  }, [rows]);
+
+  const prevGroupedRef = useRef<OutlineRow[]>([]);
+  const groupedRows = useMemo(() => {
+    const next = buildGroupedRows(rows, expandedGroups, lastActionByItem);
+    const stabilized = stabilizeGroupedRows(prevGroupedRef.current, next);
+    prevGroupedRef.current = stabilized;
+    return stabilized;
+  }, [rows, expandedGroups, lastActionByItem]);
+
+  const groupIdByChildKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of groupedRows) {
+      if (item.type !== "group") continue;
+      for (const child of item.children) {
+        const idx = rowIndexByRow.get(child) ?? rows.indexOf(child);
+        map.set(outlineRowKey(child, idx), item.groupId);
+      }
+    }
+    return map;
+  }, [groupedRows, rowIndexByRow, rows]);
 
   const localHiddenCount = rows.filter((r) => r.status === "hidden").length;
   const localSavedBytes = useMemo(
@@ -774,8 +1207,8 @@ export function SessionNavPanel({
 
   const selectedRow = useMemo(() => {
     if (!selectedId) return null;
-    return rows.find((r, index) => outlineRowKey(r, index) === selectedId) ?? null;
-  }, [rows, selectedId]);
+    return rowByKey.get(selectedId) ?? null;
+  }, [rowByKey, selectedId]);
 
   const listRef = useRef<any>(null);
   const scrollDriverRef = useRef<OutlineScrollDriver | null>(null);
@@ -784,7 +1217,8 @@ export function SessionNavPanel({
   }
   const hermesSettledKeyRef = useRef<string | null>(null);
 
-  const isSessionHiddenFromView = effectiveFollowVisible && !inView;
+  const isSessionHiddenFromView =
+    effectiveFollowVisible && (!inView || followUncertain || followSwitching);
   const isOutlineListMounted = !isSessionHiddenFromView && groupedRows.length > 0;
   scrollDriverRef.current.syncSession(sessionViewKey, isOutlineListMounted);
 
@@ -1249,7 +1683,8 @@ export function SessionNavPanel({
   const handleRowPress = async (row: Row) => {
     // Outline keys (not raw item ids): fallback rows share item_id null and
     // often an empty tool_call_id, so raw ids collide across rows.
-    const rowKey = outlineRowKey(row, rows.indexOf(row));
+    const rowIdx = rowIndexByRow.get(row) ?? rows.indexOf(row);
+    const rowKey = outlineRowKey(row, rowIdx);
     setSelectedId(rowKey);
     const shouldOpenPreview = shouldOpenPreviewDrawerOnRowPress({
       hasDocument,
@@ -1307,8 +1742,9 @@ export function SessionNavPanel({
 
   const activeRowKey = previewOpen ? selectedId : highlightedId;
   // Both individual rows and group headers follow activeRowKey (1.5s auto-clear unless Preview is open).
+  const selectedGroupId = activeRowKey ? (groupIdByChildKey.get(activeRowKey) ?? null) : null;
 
-  const isResolvingSession = effectiveFollowVisible && !followResolved;
+  const isResolvingSession = effectiveFollowVisible && (!followResolved || followSwitching);
   const isCapabilitiesLoading =
     isResolvingSession || scopesQuery.isPending || (!!resolvedScopeKey && listQuery.isPending && !capabilities);
   const runtimeError =
@@ -1318,7 +1754,7 @@ export function SessionNavPanel({
         ? scopesQuery.error.message
         : undefined;
   const capabilityMessage =
-    runtimeError || (!isCapabilitiesLoading && inView && Boolean(agentId))
+    runtimeError || (!isCapabilitiesLoading && inView && !followSwitching && !followUncertain && Boolean(agentId))
       ? capabilityNotice(runtimeError, capabilities, {
           provider: agent?.provider ?? null,
           scopeKey: resolvedScopeKey ?? null,
@@ -1358,7 +1794,7 @@ export function SessionNavPanel({
     </Pressable>
   );
 
-  if (effectiveFollowVisible && !inView) {
+  if (effectiveFollowVisible && (!inView || followUncertain || followSwitching)) {
     if (isResolvingSession) {
       return (
         <View style={styles.screen}>
@@ -1369,7 +1805,38 @@ export function SessionNavPanel({
             <View style={styles.headerRight}>{settingsButton}</View>
           </View>
           <View style={[styles.list, styles.emptyContainer]}>
-            <Text style={styles.emptyText}>Loading outline…</Text>
+            <Text style={styles.emptyText}>
+              {followSwitching ? "Switching session…" : "Loading outline…"}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+    if (followUncertain) {
+      return (
+        <View style={styles.screen}>
+          {noticeBar}
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <Text style={styles.headerTitle}>Outline</Text>
+            </View>
+            <View style={styles.headerRight}>{settingsButton}</View>
+          </View>
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24, gap: 10 }}>
+            <Text style={{ fontSize: 13, color: theme.colors.foregroundMuted, fontWeight: "600" }}>
+              Unable to confirm visible session
+            </Text>
+            <Text style={{ fontSize: 11, color: theme.colors.foregroundMuted, textAlign: "center", lineHeight: 16 }}>
+              History fetch failed while matching the visible chat. Context actions are paused to prevent editing another session.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry session match"
+              style={styles.actionBtnPrimary}
+              onPress={() => retryFollowRef.current?.()}
+            >
+              <Text style={styles.actionBtnPrimaryText}>Retry</Text>
+            </Pressable>
           </View>
         </View>
       );
@@ -1505,7 +1972,9 @@ export function SessionNavPanel({
             onScroll={handleOutlineScroll}
             onScrollEndDrag={handleOutlineScroll}
             onMomentumScrollEnd={handleOutlineScroll}
-            onLayout={(ev: any) => scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState)}
+            onLayout={(ev: any) =>
+              scrollDriverRef.current?.handleLayout(listRef.current, ev, scrollState)
+            }
             onContentSizeChange={(_w: number, h: number) =>
               scrollDriverRef.current?.handleContentSizeChange(listRef.current, h, scrollState)
             }
@@ -1516,10 +1985,7 @@ export function SessionNavPanel({
                   <MemoOutlineRowItem
                     key={item.key}
                     item={item}
-                    isSelected={Boolean(
-                      activeRowKey &&
-                        item.children.some((c) => outlineRowKey(c, rows.indexOf(c)) === activeRowKey),
-                    )}
+                    isSelected={selectedGroupId === item.groupId}
                     isExpanded={!!expandedGroups[item.groupId]}
                     isPending={pendingGroupId === item.groupId}
                     resolvedScopeKey={resolvedScopeKey}
@@ -1588,7 +2054,7 @@ export function SessionNavPanel({
       <PreviewDrawer row={selectedRow} open={previewOpen} onToggle={togglePreviewDrawer} theme={theme} />
 
       {/* DB Error Overlay */}
-      {dbErrorOpen ? (
+      {dbErrorOpen && canMutateSession ? (
         <>
           <Pressable
             accessibilityRole="button"
@@ -1607,6 +2073,7 @@ export function SessionNavPanel({
                 accessibilityLabel="Abort request"
                 style={styles.actionBtnPrimary}
                 onPress={async () => {
+                  if (!isMutationAllowedNow() || !scopeKey) return;
                   await dbChoice({ scope_key: scopeKey, choice: "abort_request" });
                   setNotice("DB error: aborted.");
                   setDbErrorOpen(false);
@@ -1619,6 +2086,7 @@ export function SessionNavPanel({
                 accessibilityLabel="Send original"
                 style={styles.actionBtnSecondary}
                 onPress={async () => {
+                  if (!isMutationAllowedNow() || !scopeKey) return;
                   await dbChoice({ scope_key: scopeKey, choice: "send_original" });
                   setNotice("DB error: showing originals once.");
                   setDbErrorOpen(false);

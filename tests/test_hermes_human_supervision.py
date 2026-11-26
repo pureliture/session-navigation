@@ -17,6 +17,19 @@ def _state(**overrides):
     return plugin.PluginState(**defaults)
 
 
+class _FakeIntentLlm:
+    def __init__(self, text=None, error=None):
+        self.text = text
+        self.error = error
+        self.kwargs = None
+
+    def complete(self, **kwargs):
+        self.kwargs = kwargs
+        if self.error is not None:
+            raise self.error
+        return type("Result", (), {"text": self.text})()
+
+
 def _frame(content: str, *, section_id: str | None = None, chars: int | None = None) -> str:
     section_id = section_id or plugin.SUPERVISION_SECTION_ID
     declared = len(content) if chars is None else chars
@@ -347,7 +360,8 @@ def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
             "tools": [{"type": "function", "name": "manage_context"}],
         }
     original = copy.deepcopy(request)
-    outgoing = plugin.make_middleware(_state())(request=request, session_id="large-existing", api_mode=mode)["request"]
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"cleanup_allowed"}')))(
+        request=request, session_id="large-existing", api_mode=mode)["request"]
     system = outgoing["messages"][0]["content"] if mode == "chat_completions" else outgoing["instructions"]
     conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
     reminder = conversation[-1]["content"]
@@ -361,6 +375,233 @@ def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
     else:
         assert outgoing["tool_choice"] == {"type": "function", "name": "manage_context"}
     assert request == original
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("reply", ['{"intent":"defer"}', '{"intent":"restore"}'])
+def test_cleanup_intent_defer_or_restore_suppresses_reminder_and_force(mode, reply):
+    body = "A safe result row.\n" * 2500
+    instruction = "Wait; do not clean or hide any results until I ask again."
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "system", "content": "Base."},
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": [{"type": "function", "function": {"name": "manage_context"}}],
+        }
+    else:
+        request = {
+            "instructions": "Base.",
+            "input": [
+                {"type": "message", "role": "user", "content": instruction},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": [{"type": "function", "name": "manage_context"}],
+        }
+    original = copy.deepcopy(request)
+    llm = _FakeIntentLlm(reply)
+    outgoing = plugin.make_middleware(_state(intent_llm=llm))(
+        request=request, session_id="defer-restore-suppress", api_mode=mode)["request"]
+    orig_conv = original["messages"] if mode == "chat_completions" else original["input"]
+    conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
+    assert len(conversation) == len(orig_conv)
+    non_system = [m for m in conversation if m.get("role") not in ("system", "developer")]
+    assert "[context-navigation]" not in json.dumps(non_system, ensure_ascii=False)
+    assert "[context-navigation] eligible=" not in json.dumps(outgoing, ensure_ascii=False)
+    assert "tool_choice" not in outgoing
+    assert llm.kwargs["purpose"] == "session-navigation-cleanup-intent"
+    assert instruction in llm.kwargs["messages"][1]["content"]
+
+
+@pytest.mark.parametrize("reply,error,with_llm", [
+    ('{"intent":"unclear"}', None, True),
+    ("not-json", None, True),
+    ("", None, True),
+    ('```json\n{"intent":"cleanup_allowed"}\n```', None, True),
+    ('{"intent":"cleanup_allowed","extra":1}', None, True),
+    (None, TimeoutError("timeout"), True),
+    (None, None, False),
+])
+def test_cleanup_intent_unclear_or_error_keeps_advisory_only(reply, error, with_llm):
+    body = "A safe result row.\n" * 2500
+    instruction = "Wait; do not clean any results until I ask again."
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": instruction},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": [{"type": "function", "name": "manage_context"}],
+    }
+    llm = _FakeIntentLlm(reply, error) if with_llm else None
+    outgoing = plugin.make_middleware(_state(intent_llm=llm))(
+        request=request, session_id="fail-closed", api_mode="codex_responses")["request"]
+    reminder = outgoing["input"][-1]["content"]
+    if isinstance(reminder, list):
+        reminder = reminder[0]["text"]
+    assert "[context-navigation] eligible=1" in reminder
+    assert "Deferred bridge active" not in reminder
+    assert "tool_choice" not in outgoing
+    if llm is not None:
+        assert llm.kwargs["purpose"] == "session-navigation-cleanup-intent"
+        assert instruction in llm.kwargs["messages"][1]["content"]
+
+
+def test_cleanup_intent_allows_whitespace_padded_json_and_defines_intents():
+    body = "A safe result row.\n" * 2500
+    instruction = "Read the log file and summarize the key error."
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": instruction},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": [{"type": "function", "name": "manage_context"}],
+    }
+    llm = _FakeIntentLlm('  {"intent":"cleanup_allowed"}\n')
+    outgoing = plugin.make_middleware(_state(intent_llm=llm))(
+        request=request, session_id="allow-padded", api_mode="codex_responses")["request"]
+    assert outgoing["tool_choice"] == {"type": "function", "name": "manage_context"}
+    assert llm.kwargs["timeout"] == 12.0
+    assert llm.kwargs["max_tokens"] == 256
+    system_prompt = llm.kwargs["messages"][0]["content"]
+    for token in ("cleanup_allowed =", "defer =", "restore =", "unclear ="):
+        assert token in system_prompt
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("choice_kind", ["allowed_auto", "allowed_required", "required", "typed_required"])
+def test_cleanup_reminder_respects_existing_tool_choice(mode, choice_kind):
+    body = "A safe result row.\n" * 2500
+    if mode == "chat_completions":
+        tools = [{"type": "function", "function": {"name": name}} for name in ("manage_context", "unhide_context")]
+        request = {
+            "messages": [
+                {"role": "user", "content": "Read the file and restore a hidden item."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": tools,
+        }
+    else:
+        tools = [{"type": "function", "name": name} for name in ("manage_context", "unhide_context")]
+        request = {
+            "input": [
+                {"type": "message", "role": "user", "content": "Read the file and restore a hidden item."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": tools,
+        }
+    if choice_kind.startswith("allowed_"):
+        choice = {"type": "allowed_tools", "mode": choice_kind.removeprefix("allowed_"), "tools": tools}
+    else:
+        choice = "required" if choice_kind == "required" else {"type": "required"}
+    request["tool_choice"] = choice
+    outgoing = plugin.make_middleware(_state())(request=request, session_id="allowed-tools", api_mode=mode)["request"]
+    conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
+    reminder = conversation[-1]["content"]
+    if isinstance(reminder, list):
+        reminder = reminder[0]["text"]
+    assert "[context-navigation]" in reminder
+    assert outgoing["tool_choice"] == choice
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("bridge_args", [
+    None,
+    '{"calls":[{"name":"list_context_items","arguments":{}}]}',
+    r'{"calls":[{"name":"\u006cist_context_items","arguments":{}}]}',
+    '{"name":"list_context_items","arguments":{}}',
+    json.dumps({"calls": json.dumps([{"name": "list_context_items", "arguments": {}}])}),
+])
+def test_listing_hidden_items_leaves_restoration_available(mode, bridge_args):
+    body = "A safe result row.\n" * 2500
+    list_name = "tool_call" if bridge_args is not None else "list_context_items"
+    list_args = bridge_args if bridge_args is not None else "{}"
+    state = _state()
+    compacted = _compact(state, session="restore-list")
+    listed = json.dumps(_list(state, session="restore-list"))
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "user", "content": "List hidden items and restore the first one."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-list", "type": "function", "function": {"name": list_name, "arguments": list_args}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-list", "content": listed},
+            ],
+            "tools": [
+                {"type": "function", "function": {"name": "manage_context"}},
+                {"type": "function", "function": {"name": "unhide_context"}},
+            ],
+        }
+    else:
+        request = {
+            "input": [
+                {"type": "message", "role": "user", "content": "List hidden items and restore the first one."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+                {"type": "function_call", "call_id": "call-list", "name": list_name, "arguments": list_args},
+                {"type": "function_call_output", "call_id": "call-list", "output": listed},
+            ],
+            "tools": [
+                {"type": "function", "name": "manage_context"},
+                {"type": "function", "name": "unhide_context"},
+            ],
+        }
+    outgoing = plugin.make_middleware(state)(request=request, session_id="restore-list", api_mode=mode)["request"]
+    assert "tool_choice" not in outgoing
+    assert _restore(state, compacted["item_id"], session="restore-list")["ok"] is True
+    assert _list(state, session="restore-list")["items"][0]["visibility"] == "visible"
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_bridge_arguments_mentioning_navigation_do_not_block_cleanup(mode):
+    body = "A safe result row.\n" * 2500
+    bridge_args = '{"calls":[{"name":"read_file","arguments":{"path":"list_context_items.txt"}}]}'
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "user", "content": "Inspect the two files."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-bridge", "type": "function", "function": {"name": "tool_call", "arguments": bridge_args}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-bridge", "content": "Small result."},
+            ],
+            "tools": [{"type": "function", "function": {"name": "manage_context"}}],
+        }
+        expected = {"type": "function", "function": {"name": "manage_context"}}
+    else:
+        request = {
+            "input": [
+                {"type": "message", "role": "user", "content": "Inspect the two files."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+                {"type": "function_call", "call_id": "call-bridge", "name": "tool_call", "arguments": bridge_args},
+                {"type": "function_call_output", "call_id": "call-bridge", "output": "Small result."},
+            ],
+            "tools": [{"type": "function", "name": "manage_context"}],
+        }
+        expected = {"type": "function", "name": "manage_context"}
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"cleanup_allowed"}')))(
+        request=request, session_id="unrelated-bridge", api_mode=mode)["request"]
+    assert outgoing["tool_choice"] == expected
 
 
 @pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
@@ -681,3 +922,128 @@ def test_fixed_id_restore_after_recheck_keeps_original_target():
     assert next(
         item["visibility"] for item in after["items"] if item["item_id"] == fixed
     ) == "visible"
+
+
+def _deferred_tools(mode: str, *, include_cleanup: bool = True) -> list[dict]:
+    catalog = (
+        "Deferred tool catalog (call schemas via `tool_describe`, invoke via `tool_call`):\n"
+        "session_navigation tools (5):\n"
+        "- hide_context: Hide one tool result.\n"
+        "- manage_context: Clean agent-chosen tool_call_ids.\n"
+        if include_cleanup
+        else "Deferred tool catalog (call schemas via `tool_describe`, invoke via `tool_call`):\n"
+        "- todo_list: Manage todo items.\n"
+    )
+    entries = [
+        ("tool_search", catalog),
+        ("tool_describe", "Load schemas."),
+        ("tool_call", "Invoke deferred tools."),
+    ]
+    if mode == "chat_completions":
+        return [{"type": "function", "function": {"name": n, "description": d}} for n, d in entries]
+    return [{"type": "function", "name": n, "description": d} for n, d in entries]
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_deferred_bridge_forces_tool_call_when_cleanup_allowed(mode):
+    body = "A safe result row.\n" * 2500
+    tools = _deferred_tools(mode, include_cleanup=True)
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "system", "content": "Base."},
+                {"role": "user", "content": "Read big.txt and summarize it."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": tools,
+        }
+        expected = {"type": "function", "function": {"name": "tool_call"}}
+    else:
+        request = {
+            "instructions": "Base.",
+            "input": [
+                {"type": "message", "role": "user", "content": "Read big.txt and summarize it."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": tools,
+        }
+        expected = {"type": "function", "name": "tool_call"}
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"cleanup_allowed"}')))(
+        request=request, session_id="deferred-allowed", api_mode=mode)["request"]
+    assert outgoing["tool_choice"] == expected
+    conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
+    reminder = conversation[-1]["content"]
+    if isinstance(reminder, list):
+        reminder = reminder[0]["text"]
+    assert "Deferred bridge active" in reminder
+    assert "manage_context" in reminder
+
+
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+def test_deferred_bridge_without_session_navigation_fails_closed(mode):
+    body = "A safe result row.\n" * 2500
+    tools = _deferred_tools(mode, include_cleanup=False)
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "user", "content": "Read big.txt."},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": tools,
+        }
+    else:
+        request = {
+            "input": [
+                {"type": "message", "role": "user", "content": "Read big.txt."},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": tools,
+        }
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"cleanup_allowed"}')))(
+        request=request, session_id="deferred-missing", api_mode=mode)["request"]
+    assert "tool_choice" not in outgoing
+
+
+@pytest.mark.parametrize("intent", ["defer", "restore"])
+def test_deferred_bridge_does_not_force_on_defer_or_restore(intent):
+    body = "A safe result row.\n" * 2500
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": "Do not clean yet."},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": _deferred_tools("codex_responses", include_cleanup=True),
+    }
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm(json.dumps({"intent": intent}))))(
+        request=request, session_id="deferred-defer", api_mode="codex_responses")["request"]
+    assert "tool_choice" not in outgoing
+    serialized = json.dumps(outgoing["input"], ensure_ascii=False)
+    assert "[context-navigation]" not in serialized
+    assert "Deferred bridge active" not in serialized
+
+
+def test_deferred_bridge_unclear_keeps_advisory_without_bridge_hint():
+    body = "A safe result row.\n" * 2500
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": "Do the task; maybe keep outputs?"},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": _deferred_tools("codex_responses", include_cleanup=True),
+    }
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"unclear"}')))(
+        request=request, session_id="deferred-unclear", api_mode="codex_responses")["request"]
+    assert "tool_choice" not in outgoing
+    reminder = outgoing["input"][-1]["content"][0]["text"]
+    assert "[context-navigation] eligible=1" in reminder
+    assert "Deferred bridge active" not in reminder

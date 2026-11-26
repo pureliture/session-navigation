@@ -67,6 +67,19 @@ export interface AdapterControl {
   revision: number;
   updated_at: number;
 }
+export interface HiddenProjectionItem {
+  item_id: string;
+  compacted: string;
+  compaction_source: string;
+  version: number;
+}
+export interface ScopeSummaryStats {
+  scopeKeys: string[];
+  itemCounts: Map<string, { itemCount: number; hiddenItemCount: number }>;
+  hiddenMessageCounts: Map<string, number>;
+  registrations: Map<string, Registration>;
+  controls: Map<string, AdapterControl>;
+}
 // B1.3: internal bookkeeping flag stored inside adapter_sessions.capabilities
 // JSON. Marks rows whose enabled=false was written by setAdapterControl(false)
 // so a later setAdapterControl(true) resurrects only those rows — never rows
@@ -214,6 +227,59 @@ export class Store {
       .map(decodeItem);
   }
 
+  hasHiddenItems(scope: ScopeLike): boolean {
+    return Boolean(
+      this.driver.get(
+        "SELECT 1 FROM items WHERE scope_key=? AND visibility='hidden' LIMIT 1",
+        [scopeKey(scope)],
+      ),
+    );
+  }
+
+  itemVisibilityMap(scope: ScopeLike): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const row of this.driver.all(
+      "SELECT item_id, visibility FROM items WHERE scope_key=?",
+      [scopeKey(scope)],
+    )) {
+      out.set(String(row.item_id), String(row.visibility));
+    }
+    return out;
+  }
+
+  hiddenItemsForProjection(scope: ScopeLike): Map<string, HiddenProjectionItem> {
+    const out = new Map<string, HiddenProjectionItem>();
+    for (const row of this.driver.all(
+      "SELECT item_id, compacted, compaction_source, version FROM items WHERE scope_key=? AND visibility='hidden'",
+      [scopeKey(scope)],
+    )) {
+      out.set(String(row.item_id), {
+        item_id: String(row.item_id),
+        compacted: String(row.compacted ?? ""),
+        compaction_source: String(row.compaction_source ?? "rule"),
+        version: safeNumber(row.version),
+      });
+    }
+    return out;
+  }
+
+  identitiesForScope(scope: ScopeLike): Map<string, Set<string>> {
+    const out = new Map<string, Set<string>>();
+    for (const row of this.driver.all(
+      "SELECT tool_call_id, content_sha256, result_position, invocation_digest FROM identities WHERE scope_key=?",
+      [scopeKey(scope)],
+    )) {
+      const key = `${String(row.tool_call_id ?? "")}\0${String(row.content_sha256 ?? "")}\0${safeNumber(row.result_position)}`;
+      let digests = out.get(key);
+      if (!digests) {
+        digests = new Set<string>();
+        out.set(key, digests);
+      }
+      digests.add(String(row.invocation_digest ?? ""));
+    }
+    return out;
+  }
+
   put(scope: ScopeLike, item: Item, expectedVersion?: number, createOnly = false): Result {
     return this.transaction(() => {
       const key = scopeKey(scope);
@@ -348,27 +414,74 @@ export class Store {
     });
   }
 
+  private decodeRegistration(row: Row, resolvedScopeKey: string): Registration {
+    const stored = JSON.parse(String(row.capabilities)) as Record<string, unknown>;
+    const linkage = stored.linkage as Record<string, unknown> | undefined;
+    // The control-disabled marker is store bookkeeping, not a capability.
+    const { [CONTROL_DISABLED_MARKER]: _controlDisabled, ...capabilities } = stored;
+    return {
+      ...row,
+      parent_scope: linkage?.parent_scope ?? null,
+      tool_call_id: linkage?.tool_call_id ?? null,
+      subagent_id: linkage?.subagent_id ?? null,
+      scope_key: resolvedScopeKey,
+      capabilities,
+      enabled: !!row.enabled,
+      adapter_protocol: safeNumber(row.adapter_protocol),
+      last_seen: Number(row.last_seen),
+    } as unknown as Registration;
+  }
+
   registration(scope: ScopeLike): Registration | undefined {
     for (const key of scopeAliases(scopeKey(scope))) {
       const row = this.driver.get("SELECT * FROM adapter_sessions WHERE scope_key=?", [key]);
-      if (row) {
-        const stored = JSON.parse(String(row.capabilities)) as Record<string, unknown>;
-        const linkage = stored.linkage as Record<string, unknown> | undefined;
-        // The control-disabled marker is store bookkeeping, not a capability.
-        const { [CONTROL_DISABLED_MARKER]: _controlDisabled, ...capabilities } = stored;
-        return {
-          ...row,
-          parent_scope: linkage?.parent_scope ?? null,
-          tool_call_id: linkage?.tool_call_id ?? null,
-          subagent_id: linkage?.subagent_id ?? null,
-          scope_key: key,
-          capabilities,
-          enabled: !!row.enabled,
-          adapter_protocol: safeNumber(row.adapter_protocol),
-          last_seen: Number(row.last_seen),
-        } as unknown as Registration;
-      }
+      if (row) return this.decodeRegistration(row, key);
     }
+  }
+
+  scopeSummaryStats(): ScopeSummaryStats {
+    const scopeKeys = this.driver
+      .all(
+        "SELECT scope_key FROM adapter_sessions UNION SELECT scope_key FROM items UNION SELECT scope_key FROM units ORDER BY scope_key",
+      )
+      .map((row) => String(row.scope_key));
+    const itemCounts = new Map<string, { itemCount: number; hiddenItemCount: number }>();
+    for (const row of this.driver.all(
+      "SELECT scope_key, COUNT(*) AS total, SUM(CASE WHEN visibility='hidden' THEN 1 ELSE 0 END) AS hidden FROM items GROUP BY scope_key",
+    )) {
+      itemCounts.set(String(row.scope_key), {
+        itemCount: safeNumber(row.total),
+        hiddenItemCount: safeNumber(row.hidden),
+      });
+    }
+    const hiddenMessageCounts = new Map<string, number>();
+    for (const row of this.driver.all(
+      "SELECT scope_key, COUNT(*) AS hidden FROM units WHERE kind IN ('user', 'assistant') AND visibility='hidden' GROUP BY scope_key",
+    )) {
+      hiddenMessageCounts.set(String(row.scope_key), safeNumber(row.hidden));
+    }
+    const registrations = new Map<string, Registration>();
+    for (const row of this.driver.all("SELECT * FROM adapter_sessions ORDER BY scope_key")) {
+      const key = String(row.scope_key);
+      registrations.set(key, this.decodeRegistration(row, key));
+    }
+    const controls = new Map<string, AdapterControl>();
+    for (const row of this.driver.all("SELECT * FROM adapter_control")) {
+      const adapterId = String(row.adapter_id);
+      controls.set(adapterId, {
+        adapter_id: adapterId,
+        enabled: !!row.enabled,
+        revision: safeNumber(row.revision),
+        updated_at: Number(row.updated_at),
+      });
+    }
+    return {
+      scopeKeys,
+      itemCounts,
+      hiddenMessageCounts,
+      registrations,
+      controls,
+    };
   }
 
   listScopes(parentScope?: string): Registration[] {
@@ -723,11 +836,83 @@ export class Store {
       .map((row) => String(row.unit_id));
   }
 
+  hasHiddenMessages(scope: ScopeLike): boolean {
+    return Boolean(
+      this.driver.get(
+        `SELECT 1
+      FROM
+        units
+      WHERE
+        scope_key = ?
+        AND kind IN ('user', 'assistant')
+        AND visibility = 'hidden'
+      LIMIT 1`,
+        [scopeKey(scope)],
+      ),
+    );
+  }
+
   listUnits(scope: ScopeLike, messageUid?: string): Row[] {
     return this.driver.all(
       `SELECT * FROM units WHERE scope_key=?${messageUid === undefined ? "" : " AND message_uid=?"}`,
       [scopeKey(scope), ...(messageUid === undefined ? [] : [messageUid])],
     );
+  }
+
+  upsertUnits(
+    scope: ScopeLike,
+    units: readonly (Row & {
+      unit_id: string;
+    })[],
+  ): void {
+    if (!units.length) return;
+    const key = scopeKey(scope);
+    const now = this.clock();
+    const columns = [
+      "scope_key",
+      "unit_id",
+      "message_uid",
+      "kind",
+      "parent_unit_id",
+      "tool_call_id",
+      "content_sha256",
+      "char_count",
+      "tokens_display",
+      "visibility",
+      "version",
+      "updated_at",
+    ] as const;
+    const sql = `INSERT INTO units(${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")}) ON CONFLICT(scope_key,unit_id) DO UPDATE SET ${columns
+      .filter((column) => !["scope_key", "unit_id"].includes(column))
+      .map((column) => `${column}=excluded.${column}`)
+      .join(",")}`;
+    this.transaction(() => {
+      for (const unit of units) {
+        const row: Row = {
+          scope_key: key,
+          unit_id: unit.unit_id,
+          message_uid: null,
+          kind: null,
+          parent_unit_id: null,
+          tool_call_id: null,
+          content_sha256: null,
+          char_count: 0,
+          tokens_display: "—",
+          visibility: "visible",
+          version: 1,
+          updated_at: now,
+        };
+        for (const col of columns) {
+          if (!["scope_key", "unit_id"].includes(col) && unit[col] !== undefined) {
+            row[col] = unit[col];
+          }
+        }
+        this.driver.run(
+          sql,
+          columns.map((col) => row[col]),
+        );
+      }
+    });
   }
 
   upsertUnit(
@@ -736,35 +921,7 @@ export class Store {
       unit_id: string;
     },
   ): void {
-    const row: Row = {
-      scope_key: scopeKey(scope),
-      unit_id: unit.unit_id,
-      message_uid: null,
-      kind: null,
-      parent_unit_id: null,
-      tool_call_id: null,
-      content_sha256: null,
-      char_count: 0,
-      tokens_display: "—",
-      visibility: "visible",
-      version: 1,
-      updated_at: this.clock(),
-    };
-    for (const key of Object.keys(row)) {
-      if (!["scope_key", "unit_id"].includes(key) && unit[key] !== undefined) {
-        row[key] = unit[key];
-      }
-    }
-    const columns = Object.keys(row);
-    this.transaction(() => {
-      this.driver.run(
-        `INSERT INTO units(${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")}) ON CONFLICT(scope_key,unit_id) DO UPDATE SET ${columns
-          .filter((column) => !["scope_key", "unit_id"].includes(column))
-          .map((column) => `${column}=excluded.${column}`)
-          .join(",")}`,
-        Object.values(row),
-      );
-    });
+    this.upsertUnits(scope, [unit]);
   }
 
   recordCall(

@@ -9,6 +9,7 @@ import { demandedWorkspaceAgents, readHostFocus, subscribeHostFocus } from "./ho
 import { resolveOutlineSettingsValues, useOutlineSettings } from "./outlineSettingsHook";
 import { openSessionNavSettings } from "./registration";
 import { acceptWorkspaceAgentId, boundRootSessions, hasDomDocument, nextWorkspaceTrackedAgent, resolveWorkspaceSessionState, workspaceHeaderText } from "./sessionFollowing";
+import { visiblePollInterval } from "./outlineWindow";
 import { SessionNavPanel } from "./sessionNavPanel";
 import { listWorkspaceAgents } from "./workspaceAgents";
 import { defaultWorkspaceState, selectWorkspaceAgent, workspaceTabSchema } from "./workspaceState";
@@ -39,7 +40,8 @@ export function WorkspaceNavPanel(props: PluginWorkspacePanelProps) {
       if (!result.ok) throw new Error(result.error ?? "scopes_failed");
       return result.scopes;
     },
-    refetchInterval: 3000,
+    staleTime: 2500,
+    refetchInterval: () => visiblePollInterval(10_000),
   });
 
   // Feature-detection for a host-provided active agent id (older hosts omit the prop entirely).

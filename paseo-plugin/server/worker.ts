@@ -6,6 +6,7 @@ import { NodeDriver } from "../../packages/core/src/drivers/node.ts";
 import { PaseoService } from "./service.ts";
 
 let service: PaseoService | undefined;
+let lastControlGeneration = 0;
 let queue = Promise.resolve();
 parentPort!.on("message", (request) => {
   queue = queue.then(async () => {
@@ -16,10 +17,28 @@ parentPort!.on("message", (request) => {
           new Store(new NodeDriver(request.path)),
           request.home,
         );
+        if (
+          request.decisions &&
+          typeof request.decisions === "object" &&
+          !Array.isArray(request.decisions)
+        ) {
+          service.restoreDecisions(request.decisions);
+        }
       }
+      if (
+        typeof request.controlGeneration === "number" &&
+        request.controlGeneration > lastControlGeneration
+      ) {
+        lastControlGeneration = request.controlGeneration;
+        service.invalidateControlCaches();
+      }
+      const reply = await service.handle(request.method, request.input);
       parentPort!.postMessage({
         id: request.id,
-        reply: await service.handle(request.method, request.input),
+        reply,
+        ...(request.syncDecisions === true
+          ? { decisions: service.exportDecisions() }
+          : {}),
       });
     } catch (error) {
       const code = error instanceof EngineError ? error.code : "engine_error";
@@ -28,10 +47,18 @@ parentPort!.on("message", (request) => {
         reply: {
           ok: false,
           error: code,
-          ...(["db_error", "db_full", "unsafe_journal_mode", "engine_protocol_incompatible"].includes(code)
+          ...([
+            "db_error",
+            "db_full",
+            "unsafe_journal_mode",
+            "engine_protocol_incompatible",
+          ].includes(code)
             ? { choices: ["abort_request", "send_original"] }
             : {}),
         },
+        ...(request.syncDecisions === true && service
+          ? { decisions: service.exportDecisions() }
+          : {}),
       });
     }
   });

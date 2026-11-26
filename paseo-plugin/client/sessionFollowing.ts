@@ -1,19 +1,460 @@
 import type { usePaseo } from "@getpaseo/plugin/client";
 import { identityMatches } from "./chatNavigation";
+import { recordClientPerf } from "./diagnostics";
 import type { SessionTab } from "./hostCompat";
-import { readTimelineHistory } from "./timelineHistory";
+import { readTimelineHistory, type TimelineHistory } from "./timelineHistory";
 
 type PaseoAgentTimelineHandle = ReturnType<ReturnType<typeof usePaseo>["agents"]["ref"]>["timeline"];
 
+function extractIdsFromEntries(entries: TimelineHistory["entries"]): string[] {
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const item = entry.item;
+    if (!item) continue;
+    for (const key of ["messageId", "callId", "id"] as const) {
+      const value = item[key];
+      if (typeof value === "string" && value.length > 0) ids.push(value);
+    }
+  }
+  return ids;
+}
+
+export function compileVisibleMatcher(
+  visibleValues: readonly string[],
+): (identity: string) => boolean {
+  const exact = new Set(visibleValues);
+  return (identity: string) => {
+    if (exact.has(identity)) return true;
+    return visibleValues.some((value) => identityMatches(value, identity));
+  };
+}
+
+export type SessionTimelineCursor = { epoch: string; seq: number };
+
+export interface SessionTimelinePage {
+  ids: string[];
+  complete: boolean;
+  startCursor?: SessionTimelineCursor;
+}
+
+export interface ProgressiveSessionTargetResult {
+  targetId: string | null;
+  confirmed: boolean;
+  incompleteIds: string[];
+  failedIds: string[];
+}
+
 export async function readSessionTimelineIds(timeline: Pick<PaseoAgentTimelineHandle, "refetch">) {
   const { entries, complete } = await readTimelineHistory(timeline, { allowPartial: true });
-  const ids = entries.flatMap((entry) => ["messageId", "callId", "id"].map((key) => entry.item?.[key]))
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
-  return { ids, complete };
+  return { ids: extractIdsFromEntries(entries), complete };
+}
+
+export async function readSessionTailIds(
+  timeline: Pick<PaseoAgentTimelineHandle, "refetch">,
+  limit = 200,
+): Promise<{ ids: string[]; complete: boolean }> {
+  const page = await readSessionTimelinePage(timeline, undefined, limit);
+  return { ids: page.ids, complete: page.complete };
+}
+
+export async function readSessionTimelinePage(
+  timeline: Pick<PaseoAgentTimelineHandle, "refetch">,
+  cursor?: SessionTimelineCursor,
+  limit?: number,
+): Promise<SessionTimelinePage> {
+  const page = cursor
+    ? await timeline.refetch({
+        direction: "before",
+        cursor,
+        limit: limit ?? 1000,
+        projection: "canonical",
+      })
+    : await timeline.refetch({
+        direction: "tail",
+        limit: limit ?? 200,
+        projection: "canonical",
+      });
+  if (page.error) throw new Error(page.error);
+  if (
+    cursor &&
+    (!page.entries.length ||
+      (page.startCursor &&
+        page.startCursor.epoch === cursor.epoch &&
+        page.startCursor.seq >= cursor.seq))
+  ) {
+    return {
+      ids: [],
+      complete: page.hasOlder === false,
+      startCursor: undefined,
+    };
+  }
+  const complete = page.hasOlder === false;
+  return {
+    ids: extractIdsFromEntries(page.entries as TimelineHistory["entries"]),
+    complete,
+    startCursor: complete ? undefined : (page.startCursor ?? undefined),
+  };
 }
 
 export function sessionFollowCandidates(workspaceAgentIds: readonly string[] | undefined, scopeAgentIds: readonly string[]): readonly string[] {
   return workspaceAgentIds ?? scopeAgentIds;
+}
+
+export async function resolveSessionTargetProgressive({
+  followVisible,
+  boundAgentId,
+  visibleValues,
+  candidates,
+  getCachedTimelineIds,
+  getCachedTailPage,
+  loadPage,
+  onTailLoaded,
+  onCompleteTimelineIds,
+  maxPagesPerCandidate,
+  isStale,
+}: {
+  followVisible: boolean;
+  boundAgentId: string;
+  visibleValues: string[] | null;
+  candidates: readonly string[];
+  getCachedTimelineIds?: (id: string) => { ids: string[]; complete: boolean } | undefined;
+  getCachedTailPage?: (id: string) => SessionTimelinePage | undefined;
+  loadPage: (id: string, cursor?: SessionTimelineCursor) => Promise<SessionTimelinePage>;
+  onTailLoaded?: (id: string, page: SessionTimelinePage) => void;
+  onCompleteTimelineIds?: (id: string, ids: string[]) => void;
+  maxPagesPerCandidate?: number;
+  isStale?: () => boolean;
+}): Promise<ProgressiveSessionTargetResult> {
+  if (!followVisible) {
+    return { targetId: boundAgentId || null, confirmed: true, incompleteIds: [], failedIds: [] };
+  }
+  if (visibleValues === null || visibleValues.length === 0) {
+    return { targetId: null, confirmed: true, incompleteIds: [], failedIds: [] };
+  }
+
+  const started = performance.now();
+  const ordered = [...new Set([boundAgentId, ...candidates].filter(Boolean))];
+  if (ordered.length === 0) {
+    return { targetId: null, confirmed: true, incompleteIds: [], failedIds: [] };
+  }
+
+  const matcher = compileVisibleMatcher(visibleValues);
+  const scoreIds = (ids: readonly string[]): number => {
+    let score = 0;
+    for (const id of ids) {
+      if (matcher(id)) score += 1;
+    }
+    return score;
+  };
+
+  interface CandidateState {
+    id: string;
+    index: number;
+    pages: string[][];
+    score: number;
+    complete: boolean;
+    failed: boolean;
+    truncated: boolean;
+    fromCompleteCache: boolean;
+    usedCachedTail: boolean;
+    pagesLoaded: number;
+    cursor?: SessionTimelineCursor;
+  }
+
+  const states: CandidateState[] = ordered.map((id, index) => {
+    const cached = getCachedTimelineIds?.(id);
+    if (cached && cached.complete) {
+      return {
+        id,
+        index,
+        pages: [cached.ids],
+        score: scoreIds(cached.ids),
+        complete: true,
+        failed: false,
+        truncated: false,
+        fromCompleteCache: true,
+        usedCachedTail: false,
+        pagesLoaded: 0,
+        cursor: undefined,
+      };
+    }
+    return {
+      id,
+      index,
+      pages: [],
+      score: 0,
+      complete: false,
+      failed: false,
+      truncated: false,
+      fromCompleteCache: false,
+      usedCachedTail: false,
+      pagesLoaded: 0,
+      cursor: undefined,
+    };
+  });
+
+  const flattenChronological = (pages: readonly string[][]): string[] => {
+    const combined: string[] = [];
+    for (let i = pages.length - 1; i >= 0; i--) {
+      combined.push(...pages[i]);
+    }
+    return combined;
+  };
+
+  const incompleteIds = (): string[] =>
+    states.filter((s) => !s.complete).map((s) => s.id);
+
+  const failedIds = (): string[] =>
+    states.filter((s) => s.failed).map((s) => s.id);
+
+  // A candidate w with positive score is provably identical to the full-history
+  // winner iff every OTHER competitor j != w is strictly complete (never failed or
+  // truncated — unread history has no upper bound) and cannot tie-beat or outscore
+  // w's current score (lower index wins exact ties).
+  const evaluateProof = (): ProgressiveSessionTargetResult | null => {
+    for (let w = 0; w < states.length; w++) {
+      const winner = states[w];
+      if (winner.score <= 0) continue;
+      let proven = true;
+      for (let j = 0; j < states.length; j++) {
+        if (j === w) continue;
+        const other = states[j];
+        if (!other.complete) {
+          proven = false;
+          break;
+        }
+        const beats = w < j ? winner.score >= other.score : winner.score > other.score;
+        if (!beats) {
+          proven = false;
+          break;
+        }
+      }
+      if (proven) {
+        return {
+          targetId: winner.id,
+          confirmed: true,
+          incompleteIds: incompleteIds(),
+          failedIds: failedIds(),
+        };
+      }
+    }
+
+    if (states.every((s) => s.complete)) {
+      let best: CandidateState | null = null;
+      for (const s of states) {
+        if (s.score > 0 && (!best || s.score > best.score)) {
+          best = s;
+        }
+      }
+      return {
+        targetId: best ? best.id : null,
+        confirmed: true,
+        incompleteIds: [],
+        failedIds: [],
+      };
+    }
+
+    return null;
+  };
+
+  // Early-exit guard when failure or truncation makes proving ANY winner in this pass
+  // mathematically impossible, avoiding wasted RPCs on remaining pages.
+  const canStillProveAnyWinner = (): boolean => {
+    const blocked = states.filter((s) => !s.complete && (s.failed || s.truncated));
+    if (blocked.length === 0) return true;
+    if (blocked.length >= 2) return false;
+    const onlyBlocked = blocked[0];
+    if (onlyBlocked.score <= 0) return false;
+    for (let j = 0; j < states.length; j++) {
+      if (j === onlyBlocked.index) continue;
+      const other = states[j];
+      const beats =
+        onlyBlocked.index < j
+          ? onlyBlocked.score >= other.score
+          : onlyBlocked.score > other.score;
+      if (!beats) return false;
+    }
+    return true;
+  };
+
+  let rpcPagesLoaded = 0;
+  const finish = (result: ProgressiveSessionTargetResult): ProgressiveSessionTargetResult => {
+    recordClientPerf({
+      op: "sessionFollow.resolve",
+      duration_ms: performance.now() - started,
+      ok: result.confirmed,
+      candidate_count: ordered.length,
+      page_count: rpcPagesLoaded,
+    });
+    return result;
+  };
+
+  const abortedResult = (): ProgressiveSessionTargetResult => ({
+    targetId: null,
+    confirmed: false,
+    incompleteIds: incompleteIds(),
+    failedIds: failedIds(),
+  });
+
+  if (isStale?.()) {
+    return finish(abortedResult());
+  }
+
+  const cachedProof = evaluateProof();
+  if (cachedProof) {
+    return finish(cachedProof);
+  }
+
+  // Check cached tail snapshots speculatively first (0 RPCs if sufficient).
+  const uncachedStates = states.filter((s) => !s.fromCompleteCache);
+  if (getCachedTailPage && uncachedStates.length > 0) {
+    let anyCachedTail = false;
+    for (const s of uncachedStates) {
+      const tail = getCachedTailPage(s.id);
+      if (!tail) continue;
+      anyCachedTail = true;
+      s.pages = [tail.ids];
+      s.score = scoreIds(tail.ids);
+      s.complete = tail.complete;
+      s.cursor = tail.complete ? undefined : tail.startCursor;
+      s.usedCachedTail = true;
+      s.pagesLoaded = 1;
+      if (!s.complete && !s.cursor) {
+        s.failed = true;
+      }
+    }
+    if (anyCachedTail) {
+      const cachedTailProof = evaluateProof();
+      if (cachedTailProof) {
+        return finish(cachedTailProof);
+      }
+    }
+  }
+
+  if (isStale?.()) {
+    return finish(abortedResult());
+  }
+
+  // Fetch fresh tail pages for all candidates not backed by complete full-history cache.
+  if (uncachedStates.length > 0) {
+    await Promise.all(
+      uncachedStates.map(async (s) => {
+        if (isStale?.()) return;
+        s.usedCachedTail = false;
+        s.failed = false;
+        s.truncated = false;
+        try {
+          rpcPagesLoaded += 1;
+          const page = await loadPage(s.id, undefined);
+          if (isStale?.()) return;
+          s.pages = [page.ids];
+          s.score = scoreIds(page.ids);
+          s.pagesLoaded = 1;
+          s.complete = page.complete;
+          s.cursor = page.complete ? undefined : page.startCursor;
+          onTailLoaded?.(s.id, page);
+          if (s.complete) {
+            onCompleteTimelineIds?.(s.id, page.ids);
+          } else if (!s.cursor) {
+            s.failed = true;
+          }
+        } catch {
+          if (isStale?.()) return;
+          s.pages = [];
+          s.score = 0;
+          s.pagesLoaded = 0;
+          s.complete = false;
+          s.cursor = undefined;
+          s.failed = true;
+        }
+      }),
+    );
+
+    if (isStale?.()) {
+      return finish(abortedResult());
+    }
+
+    const tailProof = evaluateProof();
+    if (tailProof) {
+      return finish(tailProof);
+    }
+  }
+
+  // Incremental expansion: prioritize paging incomplete non-leaders first so
+  // small/medium competitors finish cleanly and can prove a large leader
+  // without scanning older pages of the leader unless strictly necessary.
+  while (true) {
+    if (isStale?.()) {
+      return finish(abortedResult());
+    }
+
+    if (typeof maxPagesPerCandidate === "number" && maxPagesPerCandidate > 0) {
+      for (const s of states) {
+        if (!s.complete && !s.failed && !s.truncated && s.pagesLoaded >= maxPagesPerCandidate) {
+          s.truncated = true;
+        }
+      }
+    }
+
+    const stepProof = evaluateProof();
+    if (stepProof) {
+      return finish(stepProof);
+    }
+
+    if (!canStillProveAnyWinner()) {
+      break;
+    }
+
+    const expandable = states.filter(
+      (s) => !s.complete && !s.failed && !s.truncated && Boolean(s.cursor),
+    );
+    if (expandable.length === 0) {
+      break;
+    }
+
+    let leader: CandidateState | null = null;
+    for (const s of states) {
+      if (s.score > 0 && (!leader || s.score > leader.score)) {
+        leader = s;
+      }
+    }
+    const nonLeaders = leader ? expandable.filter((s) => s !== leader) : expandable;
+    const batch = nonLeaders.length > 0 ? nonLeaders : expandable;
+
+    await Promise.all(
+      batch.map(async (s) => {
+        if (isStale?.()) return;
+        try {
+          rpcPagesLoaded += 1;
+          const page = await loadPage(s.id, s.cursor);
+          if (isStale?.()) return;
+          s.pages.push(page.ids);
+          s.score += scoreIds(page.ids);
+          s.pagesLoaded += 1;
+          s.complete = page.complete;
+          s.cursor = page.complete ? undefined : page.startCursor;
+          if (s.complete) {
+            onCompleteTimelineIds?.(s.id, flattenChronological(s.pages));
+          } else if (!s.cursor) {
+            s.failed = true;
+          }
+        } catch {
+          if (!isStale?.()) s.failed = true;
+        }
+      }),
+    );
+
+    if (isStale?.()) {
+      return finish(abortedResult());
+    }
+
+    const afterProof = evaluateProof();
+    if (afterProof) {
+      return finish(afterProof);
+    }
+  }
+
+  return finish(abortedResult());
 }
 
 export async function resolveSessionTarget({
@@ -28,10 +469,11 @@ export async function resolveSessionTarget({
   if (!followVisible) return boundAgentId || null;
   if (visibleValues === null) return null;
   if (visibleValues.length === 0) return null;
+  const matcher = compileVisibleMatcher(visibleValues);
   let best = { id: "", score: 0 };
   for (const id of new Set([boundAgentId, ...candidates].filter(Boolean))) {
     const ids = await timelineIds(id).catch(() => []);
-    const score = ids.filter((identity) => visibleValues.some((value) => identityMatches(value, identity))).length;
+    const score = ids.filter((identity) => matcher(identity)).length;
     if (score > best.score) best = { id, score };
   }
   return best.id || null;
@@ -235,4 +677,408 @@ export function selectMainOrFallbackAgent({ tab, followVisible, resolvedTarget }
 }): { agentId: string | null; inView: boolean } {
   const agentId = tab?.kind === "agent" && followVisible ? tab.agentId : resolvedTarget;
   return { agentId, inView: !!agentId };
+}
+
+export interface FollowUiSelection {
+  agentId: string | null;
+  inView: boolean;
+  followResolved: boolean;
+  followUncertain: boolean;
+  retryable: boolean;
+}
+
+export function reconcileFollowSelection({
+  tab,
+  followVisible,
+  followResult,
+  boundAgentId,
+}: {
+  tab: SessionTab | null;
+  followVisible: boolean;
+  followResult: ProgressiveSessionTargetResult | null;
+  boundAgentId: string;
+}): FollowUiSelection {
+  if (!followVisible) {
+    const agentId = boundAgentId || null;
+    return {
+      agentId,
+      inView: !!agentId,
+      followResolved: true,
+      followUncertain: false,
+      retryable: false,
+    };
+  }
+  if (tab?.kind === "agent") {
+    return {
+      agentId: tab.agentId,
+      inView: true,
+      followResolved: true,
+      followUncertain: false,
+      retryable: false,
+    };
+  }
+  if (followResult && !followResult.confirmed) {
+    return {
+      agentId: null,
+      inView: false,
+      followResolved: true,
+      followUncertain: true,
+      retryable: true,
+    };
+  }
+  const selection = selectMainOrFallbackAgent({
+    tab,
+    followVisible,
+    resolvedTarget: followResult ? followResult.targetId : null,
+  });
+  return {
+    agentId: selection.agentId,
+    inView: selection.inView,
+    followResolved: true,
+    followUncertain: false,
+    retryable: false,
+  };
+}
+
+export interface FollowObservation {
+  tab: SessionTab | null;
+  visibleValues: readonly string[] | null;
+}
+
+export interface ConfirmedFollowContext {
+  agentId: string | null;
+  inView: boolean;
+  tab: SessionTab | null;
+  snapshotKey: string;
+}
+
+export interface FollowCoordinatorUiState {
+  agentId: string | null;
+  inView: boolean;
+  followResolved: boolean;
+  followUncertain: boolean;
+  followSwitching: boolean;
+  actionBlocked: boolean;
+  retryable: boolean;
+  failedIds: string[];
+}
+
+export type FollowAttemptStart =
+  | { kind: "dedup"; state: FollowCoordinatorUiState }
+  | {
+      kind: "run";
+      generation: number;
+      snapshotKey: string;
+      enteredSwitching: boolean;
+      state: FollowCoordinatorUiState;
+    };
+
+export type FollowCommitOutcome =
+  | {
+      committed: true;
+      state: FollowCoordinatorUiState;
+    }
+  | {
+      committed: false;
+      staleReason: "superseded" | "snapshot_changed";
+      needsFollowUp: boolean;
+      enteredSwitching: boolean;
+      state: FollowCoordinatorUiState;
+    };
+
+export function followTabKey(tab: SessionTab | null): string {
+  return tab?.kind === "agent" ? `agent:${tab.agentId}` : "chat";
+}
+
+export function visibleValuesKey(values: readonly string[] | null): string {
+  if (values === null) return "null";
+  if (values.length === 0) return "empty";
+  return JSON.stringify(values);
+}
+
+export function followSnapshotKey(observation: FollowObservation): string {
+  return `${followTabKey(observation.tab)}\n${visibleValuesKey(observation.visibleValues)}`;
+}
+
+/**
+ * Determine whether a live focus/DOM observation belongs to the already
+ * confirmed session without relying on raw DOM string reuse across chats
+ * (shared element chrome `id`s must never mask an A -> B session switch).
+ */
+export function isSameConfirmedFollowSession({
+  confirmed,
+  observation,
+  getKnownAgentTimelineIds,
+}: {
+  confirmed: ConfirmedFollowContext | null;
+  observation: FollowObservation;
+  getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined;
+}): boolean {
+  if (!confirmed) return false;
+  if (followSnapshotKey(observation) === confirmed.snapshotKey) {
+    return true;
+  }
+  if (!confirmed.inView || !confirmed.agentId) {
+    return (
+      !confirmed.inView &&
+      observation.tab?.kind !== "agent" &&
+      (!observation.visibleValues || observation.visibleValues.length === 0)
+    );
+  }
+  if (observation.tab?.kind === "agent") {
+    return observation.tab.agentId === confirmed.agentId;
+  }
+  if (!observation.visibleValues || observation.visibleValues.length === 0) {
+    return false;
+  }
+  const knownIds = getKnownAgentTimelineIds?.(confirmed.agentId);
+  if (!knownIds || knownIds.length === 0) {
+    return false;
+  }
+  const matcher = compileVisibleMatcher(observation.visibleValues);
+  return knownIds.some((id) => matcher(id));
+}
+
+function initialCoordinatorState(
+  initialPending: boolean,
+  boundAgentId: string,
+): FollowCoordinatorUiState {
+  if (initialPending) {
+    return {
+      agentId: null,
+      inView: false,
+      followResolved: false,
+      followUncertain: false,
+      followSwitching: false,
+      actionBlocked: true,
+      retryable: false,
+      failedIds: [],
+    };
+  }
+  return {
+    agentId: boundAgentId || null,
+    inView: Boolean(boundAgentId),
+    followResolved: true,
+    followUncertain: false,
+    followSwitching: false,
+    actionBlocked: false,
+    retryable: false,
+    failedIds: [],
+  };
+}
+
+/**
+ * Coordinates async follow resolution with monotonic generation tokens,
+ * immediate switch-time action blocking, same-session flicker avoidance,
+ * and pre-commit live snapshot re-verification.
+ */
+export class FollowSelectionCoordinator {
+  private generation = 0;
+  private confirmed: ConfirmedFollowContext | null = null;
+  private inFlight: { generation: number; snapshotKey: string } | null = null;
+  private state: FollowCoordinatorUiState;
+
+  constructor(initialPending: boolean, boundAgentId = "") {
+    this.state = initialCoordinatorState(initialPending, boundAgentId);
+  }
+
+  reset(initialPending: boolean, boundAgentId = ""): FollowCoordinatorUiState {
+    this.generation += 1;
+    this.confirmed = null;
+    this.inFlight = null;
+    this.state = initialCoordinatorState(initialPending, boundAgentId);
+    return this.state;
+  }
+
+  getState(): FollowCoordinatorUiState {
+    return this.state;
+  }
+
+  getGeneration(): number {
+    return this.generation;
+  }
+
+  getConfirmed(): ConfirmedFollowContext | null {
+    return this.confirmed;
+  }
+
+  isCurrent(generation: number): boolean {
+    return generation === this.generation;
+  }
+
+  /**
+   * Supersede any in-flight scan (for example during effect cleanup) without
+   * clearing the confirmed session state or inducing unnecessary UI flicker.
+   */
+  invalidateInFlight(): void {
+    if (this.inFlight !== null) {
+      this.generation += 1;
+      this.inFlight = null;
+    }
+  }
+
+  abortAttempt(generation: number): void {
+    if (this.inFlight?.generation === generation) {
+      this.inFlight = null;
+    }
+  }
+
+  observeLiveChange(
+    observation: FollowObservation,
+    followVisible: boolean,
+    getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined,
+  ): {
+    invalidatedInFlight: boolean;
+    enteredSwitching: boolean;
+    state: FollowCoordinatorUiState;
+  } {
+    if (!followVisible) {
+      return {
+        invalidatedInFlight: false,
+        enteredSwitching: false,
+        state: this.state,
+      };
+    }
+
+    const liveKey = followSnapshotKey(observation);
+    let invalidatedInFlight = false;
+    if (this.inFlight !== null && this.inFlight.snapshotKey !== liveKey) {
+      this.generation += 1;
+      this.inFlight = null;
+      invalidatedInFlight = true;
+    }
+
+    const sameConfirmed = isSameConfirmedFollowSession({
+      confirmed: this.confirmed,
+      observation,
+      getKnownAgentTimelineIds,
+    });
+    let enteredSwitching = false;
+    if (!sameConfirmed && this.confirmed?.inView && !this.state.followSwitching) {
+      this.state = {
+        ...this.state,
+        agentId: null,
+        followSwitching: true,
+        actionBlocked: true,
+      };
+      enteredSwitching = true;
+    }
+
+    return {
+      invalidatedInFlight,
+      enteredSwitching,
+      state: this.state,
+    };
+  }
+
+  beginAttempt(
+    observation: FollowObservation,
+    followVisible: boolean,
+    getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined,
+  ): FollowAttemptStart {
+    const snapshotKey = followSnapshotKey(observation);
+    if (this.inFlight !== null && this.inFlight.snapshotKey === snapshotKey) {
+      return {
+        kind: "dedup",
+        state: this.state,
+      };
+    }
+
+    const liveCheck = this.observeLiveChange(
+      observation,
+      followVisible,
+      getKnownAgentTimelineIds,
+    );
+    this.generation += 1;
+    const generation = this.generation;
+    this.inFlight = { generation, snapshotKey };
+
+    return {
+      kind: "run",
+      generation,
+      snapshotKey,
+      enteredSwitching: liveCheck.enteredSwitching,
+      state: this.state,
+    };
+  }
+
+  commitAttempt({
+    generation,
+    startObservation,
+    startSnapshotKey,
+    liveObservation,
+    followVisible,
+    followResult,
+    boundAgentId,
+    getKnownAgentTimelineIds,
+  }: {
+    generation: number;
+    startObservation: FollowObservation;
+    startSnapshotKey: string;
+    liveObservation: FollowObservation;
+    followVisible: boolean;
+    followResult: ProgressiveSessionTargetResult | null;
+    boundAgentId: string;
+    getKnownAgentTimelineIds?: (agentId: string) => readonly string[] | undefined;
+  }): FollowCommitOutcome {
+    if (this.inFlight?.generation === generation) {
+      this.inFlight = null;
+    }
+
+    if (generation !== this.generation) {
+      return {
+        committed: false,
+        staleReason: "superseded",
+        needsFollowUp: false,
+        enteredSwitching: false,
+        state: this.state,
+      };
+    }
+
+    if (followVisible && followSnapshotKey(liveObservation) !== startSnapshotKey) {
+      const liveCheck = this.observeLiveChange(
+        liveObservation,
+        followVisible,
+        getKnownAgentTimelineIds,
+      );
+      this.generation += 1;
+      return {
+        committed: false,
+        staleReason: "snapshot_changed",
+        needsFollowUp: true,
+        enteredSwitching: liveCheck.enteredSwitching,
+        state: this.state,
+      };
+    }
+
+    const nextUi = reconcileFollowSelection({
+      tab: startObservation.tab,
+      followVisible,
+      followResult,
+      boundAgentId,
+    });
+    const actionBlocked = followVisible && (!nextUi.inView || nextUi.followUncertain);
+    this.confirmed = nextUi.followUncertain
+      ? null
+      : {
+          agentId: nextUi.agentId,
+          inView: nextUi.inView,
+          tab: startObservation.tab,
+          snapshotKey: startSnapshotKey,
+        };
+    this.state = {
+      agentId: nextUi.agentId,
+      inView: nextUi.inView,
+      followResolved: nextUi.followResolved,
+      followUncertain: nextUi.followUncertain,
+      followSwitching: false,
+      actionBlocked,
+      retryable: nextUi.retryable,
+      failedIds: followResult && !followResult.confirmed ? followResult.failedIds : [],
+    };
+    return {
+      committed: true,
+      state: this.state,
+    };
+  }
 }

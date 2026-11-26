@@ -415,7 +415,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     const progress = (event.details as { progress?: unknown })?.progress;
     if (event.toolName !== "task" || !Array.isArray(progress)) return;
     await rpc("link_children", { session_id: sessionId(ctx), tool_call_id: event.toolCallId,
-      subagent_ids: progress.filter((entry) => entry && typeof entry.id === "string").map((entry) => entry.id) }, 2000);
+      subagent_ids: progress.filter((entry) => entry && typeof entry.id === "string").map((entry) => entry.id) }, ADAPTER_RPC_TIMEOUT_MS);
   });
   async function tool(
     method: string,
@@ -451,7 +451,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
         session_id: session,
         snapshot_id: candidate?.token,
       },
-      method === "summarize" || method === "manage" ? 25_000 : 5000,
+      method === "summarize" || method === "manage" ? 25_000 : ADAPTER_RPC_TIMEOUT_MS,
       signal,
     );
   }
@@ -635,7 +635,9 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
             total_tokens: num(rawUsage, "totalTokens"),
             cost_usd: totalCost,
           },
-          2000,
+          ADAPTER_RPC_TIMEOUT_MS,
+          undefined,
+          { invalidateOnTimeout: false },
         );
       } catch {}
       const blocks = msg.content;
@@ -751,7 +753,7 @@ async function activateExtension(pi: ExtensionAPI, options: ExtensionOptions, st
     releaseExtension(owner);
   });
   if (child) {
-    await rpc("register", { session_id: sessionId(startContext) }, 2000);
+    await rpc("register", { session_id: sessionId(startContext) }, ADAPTER_RPC_TIMEOUT_MS);
     return;
   }
   pi.registerTool({

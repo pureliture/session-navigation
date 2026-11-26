@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: paseo-plugin/package-lock.json
+          cache-dependency-path: paseo-plugin/npm-shrinkwrap.json
       - run: npm ci
         working-directory: paseo-plugin
       - run: npm run build

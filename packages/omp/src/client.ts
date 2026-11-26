@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Reply } from "./service.ts";
+import { recordOmpPerf, sanitizeOmpErrorCode } from "./diagnostics.ts";
 
 export interface WorkerTransport {
   postMessage(value: unknown): void;
@@ -57,7 +58,10 @@ export class WorkerClient implements ServiceClient {
   ) {}
 
   request(method: string, params: object, timeout: number, signal?: AbortSignal, options?: RequestOptions): Promise<Reply> {
-    const request = this.queue.then(() => this.exchange(method, params, timeout, signal, options));
+    const enqueuedAt = performance.now();
+    const request = this.queue.then(() =>
+      this.exchange(method, params, timeout, signal, options, enqueuedAt),
+    );
     this.queue = request.catch(() => undefined);
     return request;
   }
@@ -96,21 +100,45 @@ export class WorkerClient implements ServiceClient {
     timeout: number,
     signal?: AbortSignal,
     options?: RequestOptions,
+    enqueuedAt = performance.now(),
   ): Promise<Reply> {
-    if (this.closed) return Promise.resolve({ ok: false, error: "shutdown" });
+    const startedAt = performance.now();
+    const queueWaitMs = Math.max(0, startedAt - enqueuedAt);
+    const finishDiag = (reply: Reply, timedOut = false): void => {
+      recordOmpPerf({
+        op: `worker.${method}`,
+        duration_ms: Math.max(0, performance.now() - startedAt),
+        queue_wait_ms: queueWaitMs,
+        ok: Boolean(reply.ok),
+        ...(reply.ok ? {} : { error_code: sanitizeOmpErrorCode(reply.error ?? "error") }),
+        ...(timedOut ? { timed_out: true, invalidated: options?.invalidateOnTimeout !== false } : {}),
+      });
+    };
+    if (this.closed) {
+      const reply = { ok: false, error: "shutdown" };
+      finishDiag(reply);
+      return Promise.resolve(reply);
+    }
     if (signal?.aborted) {
       if (this.worker) this.invalidate(this.worker, "cancelled");
       else this.invalidateSnapshot();
-      return Promise.resolve({ ok: false, error: "cancelled" });
+      const reply = { ok: false, error: "cancelled" };
+      finishDiag(reply);
+      return Promise.resolve(reply);
     }
-    if (!this.worker && Date.now() < this.cooldownUntil)
-      return Promise.resolve({ ok: false, error: "cooldown" });
+    if (!this.worker && Date.now() < this.cooldownUntil) {
+      const reply = { ok: false, error: "cooldown" };
+      finishDiag(reply);
+      return Promise.resolve(reply);
+    }
     let worker: WorkerTransport;
     try {
       worker = this.worker ?? this.start();
     } catch {
       this.invalidateSnapshot();
-      return Promise.resolve({ ok: false, error: "worker_error" });
+      const reply = { ok: false, error: "worker_error" };
+      finishDiag(reply);
+      return Promise.resolve(reply);
     }
     return new Promise((resolve) => {
       const id = this.nextId++;
@@ -120,7 +148,9 @@ export class WorkerClient implements ServiceClient {
         // A late reply no longer matches pending and is ignored.
         if (this.pending?.id === id) this.pending = undefined;
         signal?.removeEventListener("abort", abort);
-        resolve({ ok: false, error: "timeout" });
+        const reply = { ok: false, error: "timeout" };
+        finishDiag(reply, true);
+        resolve(reply);
       };
       const timer = setTimeout(
         () => {
@@ -135,6 +165,7 @@ export class WorkerClient implements ServiceClient {
         finish: (reply) => {
           clearTimeout(timer);
           signal?.removeEventListener("abort", abort);
+          finishDiag(reply, reply.error === "timeout");
           resolve(reply);
         },
       };

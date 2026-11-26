@@ -68,10 +68,15 @@ accepted summary without another call, and retries factual validation once.
 A failed upgrade returns an error and preserves the existing Hide replacement.
 
 Originals, replacements and mutation state are stored in the local SQLite state
-file; only outgoing request copies change. When the middleware adds an eligible
-`[context-navigation]` note, it also sets `tool_choice` to `manage_context` for
-that one outgoing request if the tool is available and no other tool is
-explicitly forced. The stored history and the next request are unchanged.
+file; only outgoing request copies change. When a `[context-navigation]`
+cleanup candidate boundary is eligible, the session model classifies the latest
+genuine user instruction. Forced cleanup (and any deferred-bridge `tool_call`
+hint) happens only for an explicit `cleanup_allowed` result. Explicit `defer`
+or `restore` intent suppresses both the trailing `[context-navigation]` reminder
+and forced tool selection, while `unclear` or malformed output, timeout, missing
+trusted input, list/restore tool activity, and host-specified tool choices leave
+only the advisory note without a forced choice. The stored history and the next
+request are unchanged.
 Unhide restores the original without rerunning the host tool. The local state
 file must be shared with a local Paseo panel for that panel to manage the
 session; there is no cross-machine sync.
@@ -164,8 +169,8 @@ Registered surfaces:
 - Hooks: `post_api_request`, `subagent_start`.
 - Middleware: `llm_request`, `tool_request`.
 - Optional system-prompt supervision section and `/nav` command.
-- Child scopes stay separate; missing/unsupported child registration is shown
-  as **subagent context is not managed** in Paseo.
+- Child scopes remain separate for session binding; Paseo's outline does not
+  display subagent child rows or open child tabs.
 
 ## Admission and private dependencies
 

@@ -429,7 +429,13 @@ function* prepareChunks(
       JSON.stringify({
         id: Number.MAX_SAFE_INTEGER,
         method: "prepare",
-        params: { session_id: session, snapshot_id: token, records: [], append: true },
+        params: {
+          session_id: session,
+          snapshot_id: token,
+          records: [],
+          append: true,
+          include_candidates: false,
+        },
       }),
       "utf8",
     ) + 1;
@@ -460,16 +466,19 @@ export async function prepareSnapshot(
     pending: unknown[] = [],
     hidden = new Set<string>(),
     evicted = new Set<string>();
-  let append = false,
-    response: Reply = { ok: true };
-  for (const chunk of prepareChunks(records, session, token)) {
+  const chunks = [...prepareChunks(records, session, token)];
+  const lastIndex = chunks.length - 1;
+  let response: Reply = { ok: true };
+  for (let i = 0; i < chunks.length; i++) {
+    const isIntermediate = i > 0 && i < lastIndex;
     response = await send(
       "prepare",
       {
         session_id: session,
         snapshot_id: token,
-        records: chunk,
-        ...(append ? { append: true } : {}),
+        records: chunks[i],
+        ...(i > 0 ? { append: true } : {}),
+        ...(isIntermediate ? { include_candidates: false } : {}),
       },
       ADAPTER_RPC_TIMEOUT_MS,
     );
@@ -481,7 +490,6 @@ export async function prepareSnapshot(
       for (const key of response.hidden_messages) if (typeof key === "string") hidden.add(key);
     if (Array.isArray(response.evicted_snapshots))
       for (const key of response.evicted_snapshots) if (typeof key === "string") evicted.add(key);
-    append = true;
   }
   return {
     ...response,
