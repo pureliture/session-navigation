@@ -377,9 +377,49 @@ def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
     assert request == original
 
 
+@pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
+@pytest.mark.parametrize("reply", ['{"intent":"defer"}', '{"intent":"restore"}'])
+def test_cleanup_intent_defer_or_restore_suppresses_reminder_and_force(mode, reply):
+    body = "A safe result row.\n" * 2500
+    instruction = "Wait; do not clean or hide any results until I ask again."
+    if mode == "chat_completions":
+        request = {
+            "messages": [
+                {"role": "system", "content": "Base."},
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "call-big", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"big.txt"}'}}
+                ]},
+                {"role": "tool", "tool_call_id": "call-big", "content": body},
+            ],
+            "tools": [{"type": "function", "function": {"name": "manage_context"}}],
+        }
+    else:
+        request = {
+            "instructions": "Base.",
+            "input": [
+                {"type": "message", "role": "user", "content": instruction},
+                {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+                {"type": "function_call_output", "call_id": "call-big", "output": body},
+            ],
+            "tools": [{"type": "function", "name": "manage_context"}],
+        }
+    original = copy.deepcopy(request)
+    llm = _FakeIntentLlm(reply)
+    outgoing = plugin.make_middleware(_state(intent_llm=llm))(
+        request=request, session_id="defer-restore-suppress", api_mode=mode)["request"]
+    orig_conv = original["messages"] if mode == "chat_completions" else original["input"]
+    conversation = outgoing["messages"] if mode == "chat_completions" else outgoing["input"]
+    assert len(conversation) == len(orig_conv)
+    non_system = [m for m in conversation if m.get("role") not in ("system", "developer")]
+    assert "[context-navigation]" not in json.dumps(non_system, ensure_ascii=False)
+    assert "[context-navigation] eligible=" not in json.dumps(outgoing, ensure_ascii=False)
+    assert "tool_choice" not in outgoing
+    assert llm.kwargs["purpose"] == "session-navigation-cleanup-intent"
+    assert instruction in llm.kwargs["messages"][1]["content"]
+
+
 @pytest.mark.parametrize("reply,error,with_llm", [
-    ('{"intent":"defer"}', None, True),
-    ('{"intent":"restore"}', None, True),
     ('{"intent":"unclear"}', None, True),
     ("not-json", None, True),
     ("", None, True),
@@ -388,7 +428,7 @@ def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
     (None, TimeoutError("timeout"), True),
     (None, None, False),
 ])
-def test_cleanup_intent_fail_closed_keeps_advisory_only(reply, error, with_llm):
+def test_cleanup_intent_unclear_or_error_keeps_advisory_only(reply, error, with_llm):
     body = "A safe result row.\n" * 2500
     instruction = "Wait; do not clean any results until I ask again."
     request = {
@@ -406,6 +446,7 @@ def test_cleanup_intent_fail_closed_keeps_advisory_only(reply, error, with_llm):
     if isinstance(reminder, list):
         reminder = reminder[0]["text"]
     assert "[context-navigation] eligible=1" in reminder
+    assert "Deferred bridge active" not in reminder
     assert "tool_choice" not in outgoing
     if llm is not None:
         assert llm.kwargs["purpose"] == "session-navigation-cleanup-intent"
@@ -985,3 +1026,24 @@ def test_deferred_bridge_does_not_force_on_defer_or_restore(intent):
     outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm(json.dumps({"intent": intent}))))(
         request=request, session_id="deferred-defer", api_mode="codex_responses")["request"]
     assert "tool_choice" not in outgoing
+    serialized = json.dumps(outgoing["input"], ensure_ascii=False)
+    assert "[context-navigation]" not in serialized
+    assert "Deferred bridge active" not in serialized
+
+
+def test_deferred_bridge_unclear_keeps_advisory_without_bridge_hint():
+    body = "A safe result row.\n" * 2500
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": "Do the task; maybe keep outputs?"},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": _deferred_tools("codex_responses", include_cleanup=True),
+    }
+    outgoing = plugin.make_middleware(_state(intent_llm=_FakeIntentLlm('{"intent":"unclear"}')))(
+        request=request, session_id="deferred-unclear", api_mode="codex_responses")["request"]
+    assert "tool_choice" not in outgoing
+    reminder = outgoing["input"][-1]["content"][0]["text"]
+    assert "[context-navigation] eligible=1" in reminder
+    assert "Deferred bridge active" not in reminder

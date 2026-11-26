@@ -15,9 +15,10 @@ packages, opened a release PR, or contacted either registry/catalog.
 - [ ] Back up state and follow the README's daemon-retirement migration.
 - [ ] Verify Hermes cleanup intent classification with the intended ACP model.
   The session model classifies the latest genuine user instruction before a
-  forced `manage_context` choice. Ambiguity, timeout/failure, invalid output,
-  missing trusted input, list/restore activity, or a host-specified tool choice
-  leaves only the advisory note. Verify both user control and automatic cleanup.
+  forced `manage_context` choice: explicit `defer` or `restore` suppresses both
+  the trailing reminder and forced tool choice, while ambiguity, timeout/failure,
+  invalid output, missing trusted input, list/restore activity, or a host-specified
+  tool choice leaves only the advisory note. Verify both user control and automatic cleanup.
 
 ```sh
 git fetch origin main
