@@ -31,10 +31,15 @@ def test_daemon_listens_on_loopback_only(seed, tmp_path):
     assert port == "17680"
 
     paseo_home = tmp_path / "home"
-    config_path = seed.write_sandbox_config(paseo_home)
+    fakehome = tmp_path / "fakehome"
+    config_path = seed.write_sandbox_config(paseo_home, fakehome)
     config_text = config_path.read_text(encoding="utf-8")
     assert "0.0.0.0" not in config_text
     assert seed.LISTEN_ADDR in config_text
+    wrapper = fakehome / ".hermes" / "direct_acp.py"
+    assert wrapper.is_file()
+    assert stat.S_IMODE(wrapper.stat().st_mode) == 0o700
+    assert str(fakehome / ".hermes") in config_text
 
 
 @pytest.mark.parametrize("raw", ["0", "-1", "1", "", "   ", "not-a-pid", "{bad json"])

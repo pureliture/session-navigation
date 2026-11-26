@@ -149,6 +149,7 @@ def write_direct_acp_wrapper(fakehome: Path) -> Path:
     """Run Hermes ACP in-process so the sandbox never needs a gateway."""
     hermes_root = real_home() / ".hermes" / "hermes-agent"
     wrapper = fakehome / ".hermes" / "direct_acp.py"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
     source = f'''\
 #!/usr/bin/env python3
 import asyncio

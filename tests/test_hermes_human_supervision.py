@@ -382,6 +382,8 @@ def test_missing_guidance_is_in_the_same_request_as_a_candidate_reminder(mode):
     ('{"intent":"restore"}', None, True),
     ('{"intent":"unclear"}', None, True),
     ("not-json", None, True),
+    ("", None, True),
+    ('```json\n{"intent":"cleanup_allowed"}\n```', None, True),
     ('{"intent":"cleanup_allowed","extra":1}', None, True),
     (None, TimeoutError("timeout"), True),
     (None, None, False),
@@ -408,6 +410,28 @@ def test_cleanup_intent_fail_closed_keeps_advisory_only(reply, error, with_llm):
     if llm is not None:
         assert llm.kwargs["purpose"] == "session-navigation-cleanup-intent"
         assert instruction in llm.kwargs["messages"][1]["content"]
+
+
+def test_cleanup_intent_allows_whitespace_padded_json_and_defines_intents():
+    body = "A safe result row.\n" * 2500
+    instruction = "Read the log file and summarize the key error."
+    request = {
+        "input": [
+            {"type": "message", "role": "user", "content": instruction},
+            {"type": "function_call", "call_id": "call-big", "name": "read_file", "arguments": '{"path":"big.txt"}'},
+            {"type": "function_call_output", "call_id": "call-big", "output": body},
+        ],
+        "tools": [{"type": "function", "name": "manage_context"}],
+    }
+    llm = _FakeIntentLlm('  {"intent":"cleanup_allowed"}\n')
+    outgoing = plugin.make_middleware(_state(intent_llm=llm))(
+        request=request, session_id="allow-padded", api_mode="codex_responses")["request"]
+    assert outgoing["tool_choice"] == {"type": "function", "name": "manage_context"}
+    assert llm.kwargs["timeout"] == 12.0
+    assert llm.kwargs["max_tokens"] == 256
+    system_prompt = llm.kwargs["messages"][0]["content"]
+    for token in ("cleanup_allowed =", "defer =", "restore =", "unclear ="):
+        assert token in system_prompt
 
 @pytest.mark.parametrize("mode", ["chat_completions", "codex_responses"])
 @pytest.mark.parametrize("choice_kind", ["allowed_auto", "allowed_required", "required", "typed_required"])
