@@ -2,18 +2,41 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
 
+# Adapted from Nous Research's hermes-agent (agent/model_metadata.py, MIT License,
+# Copyright (c) 2025 Nous Research; see THIRD_PARTY_NOTICES.md).
+# Kept locally so the Hermes plugin uses only public runtime surfaces with zero
+# external dependencies.
+_CHARS_PER_TOKEN = 4
+_CJK_DENSE_RE = re.compile(
+    "[\u1100-\u11ff\u2e80-\u9fff\ua960-\ua97f\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]"
+)
+
+
 def estimate_tokens(text: str) -> int:
-    try:
-        from agent.model_metadata import estimate_tokens_rough
-    except ImportError:
-        return (len(text) + 3) // 4
-    return estimate_tokens_rough(text)
+    """Return a rough, dependency-free Unicode-aware token estimate.
+
+    Approximates CJK/Hangul/Kana codepoints as ~1 token each and all other text
+    as ``ceil(UTF-8 bytes / 4)`` (using ``errors="replace"`` so lone surrogates
+    never raise). Used only for approximate ``next ≈`` footer deltas in ``/nav``
+    — never for byte-based reminder triggers or exact restoration. Estimates
+    differ from actual model tokenization and may drift from future Hermes host
+    releases.
+    """
+    if not text:
+        return 0
+    text = str(text)
+    if text.isascii():
+        return (len(text) + 3) // _CHARS_PER_TOKEN
+    stripped = _CJK_DENSE_RE.sub("", text)
+    dense = len(text) - len(stripped)
+    return dense + ((len(stripped.encode("utf-8", "replace")) + 3) // _CHARS_PER_TOKEN)
 
 
 def compact_tokens(value: int) -> str:

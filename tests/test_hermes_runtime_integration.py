@@ -284,3 +284,79 @@ def test_scope_is_isolated_by_session() -> None:
     listed_b = json.loads(ctx.tools["list_context_items"]["handler"](
         {}, session_id="sess-B"))
     assert listed_b["count"] == 0, "sess-B has not compacted anything yet"
+
+
+def test_full_hermes_lifecycle_imports_zero_private_host_modules(tmp_path: Path) -> None:
+    """Even with HERMES_REPO on sys.path, full plugin lifecycle never imports Hermes internals."""
+    import subprocess
+
+    script = f"""
+import importlib.util, json, os, sys
+sys.path.insert(0, {str(HERMES_REPO)!r})
+os.environ["SESSION_NAVIGATION_STATE_PATH"] = {str(tmp_path / "lifecycle.sqlite3")!r}
+
+class Ctx:
+    def __init__(self):
+        self.profile_name = "default"
+        self.tools = {{}}
+        self.middlewares = {{}}
+        self.hooks = {{}}
+        self.commands = {{}}
+    def get_config(self, key, default=None):
+        return True if key == "enabled" else default
+    def register_tool(self, name, toolset, schema, handler, description="", **_extra):
+        self.tools[name] = handler
+    def register_middleware(self, kind, callback):
+        self.middlewares.setdefault(kind, []).append(callback)
+    def register_hook(self, name, callback):
+        self.hooks[name] = callback
+    def register_command(self, name, handler, description=""):
+        self.commands[name] = handler
+
+spec = importlib.util.spec_from_file_location(
+    "session_navigation_plugin_root_isolated",
+    {str(PLUGIN / "__init__.py")!r},
+    submodule_search_locations=[{str(PLUGIN)!r}],
+)
+mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
+spec.loader.exec_module(mod)
+
+ctx = Ctx()
+mod.register(ctx)
+body = "\\n".join(f"row {{i:03d}} 한국어 테스트 🚀 " + "x" * 60 for i in range(60))
+req = {{
+    "messages": [
+        {{"role": "user", "content": "안녕하세요 🚀"}},
+        {{"role": "assistant", "content": "", "tool_calls": [
+            {{"id": "call_1", "type": "function", "function": {{"name": "read_file", "arguments": json.dumps({{"path": "a.txt"}})}}}}
+        ]}},
+        {{"role": "tool", "tool_call_id": "call_1", "content": body}},
+    ]
+}}
+mw = ctx.middlewares["llm_request"][0]
+mw(request=req, session_id="s-life", api_mode="chat_completions")
+ctx.hooks["post_api_request"](session_id="s-life", usage={{"prompt_tokens": 1200}}, context_length=65536)
+hid = json.loads(ctx.tools["hide_context"]({{"tool_call_id": "call_1"}}, session_id="s-life"))
+assert hid["ok"] is True
+comp = mw(request=req, session_id="s-life", api_mode="chat_completions")
+assert comp["request"]["messages"][2]["content"] != body
+assert json.loads(ctx.tools["list_context_items"]({{}}, session_id="s-life"))["count"] == 1
+assert json.loads(ctx.tools["unhide_context"]({{"item_id": hid["item_id"]}}, session_id="s-life"))["ok"] is True
+rest = mw(request=req, session_id="s-life", api_mode="chat_completions")
+assert rest["request"]["messages"][2]["content"] == body
+assert "context" in ctx.commands["nav"]("list", session_id="s-life")
+assert "context" in ctx.commands["nav"]("messages", session_id="s-life")
+assert "Hidden" in ctx.commands["nav"]("hide-msg 1", session_id="s-life")
+assert "Unhidden" in ctx.commands["nav"]("unhide-msg 1", session_id="s-life")
+
+banned = sorted(
+    name for name in sys.modules
+    if name == "agent" or name.startswith("agent.")
+    or name == "hermes_cli" or name.startswith("hermes_cli.")
+    or name == "tools" or name.startswith("tools.")
+)
+assert not banned, f"imported Hermes internals: {{banned}}"
+"""
+    proc = subprocess.run([sys.executable, "-B", "-c", script], cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -165,12 +165,162 @@ def test_summarize_tracks_replacement_and_auxiliary_cannot_clear_it(setup, monke
     assert "next ≈ −" in nav(ctx)
 
 
-def test_uses_host_token_estimator_when_available(monkeypatch):
+def test_estimator_does_not_import_or_use_private_host_module(monkeypatch):
     host = types.ModuleType("agent.model_metadata")
-    host.estimate_tokens_rough = lambda text: len(text) * 2
+
+    def _fail(_text):
+        raise AssertionError("must not call private host estimate_tokens_rough")
+
+    host.estimate_tokens_rough = _fail
     monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
     monkeypatch.setitem(sys.modules, "agent.model_metadata", host)
-    assert adapter.usage.estimate_tokens("漢字") == 4
+    assert adapter.usage.estimate_tokens("漢字") == 2
+    assert adapter.usage.estimate_tokens("안녕하세요 hello 🚀") == 8
+
+
+@pytest.mark.parametrize(
+    ("sample", "expected"),
+    [
+        ("", 0),
+        ("a", 1),
+        ("abcd", 1),
+        ("abcde", 2),
+        ("x" * 400, 100),
+        ("\n\t\r!@#$%^&*()_+-=[]{}|;':\",./<>?", 8),
+        ("\ud800", 1),
+        ("한\ud800a", 2),
+        ("안녕", 2),
+        ("안녕하세요", 5),
+        ("ㅋㅋㅋ", 3),
+        ("\u1100\u1161", 2),
+        ("漢字", 2),
+        ("こんにちは", 5),
+        ("ＡＢ", 2),
+        ("🚀", 1),
+        ("🚀🔥✨🎉", 4),
+        ("👨‍👩‍👧‍👦", 7),
+        ("🇰🇷", 2),
+        ("café", 2),
+        ("привет", 3),
+        ("مرحبا", 3),
+        ("오류 발생: read_file 실패 🚨 (line 42)", 13),
+        ("a" * 100_000, 25_000),
+        ("가" * 50_000, 50_000),
+        ("가a🚀" * 10_000, 22_500),
+    ],
+)
+def test_estimate_tokens_unicode_boundaries(sample, expected):
+    assert adapter.usage.estimate_tokens(sample) == expected
+
+
+def test_estimate_tokens_matches_current_hermes_reference_if_installed():
+    import importlib.util
+    import os
+    from pathlib import Path
+
+    hermes_root = Path(
+        os.environ.get("HERMES_REPO", str(Path.home() / ".hermes" / "hermes-agent"))
+    ).resolve()
+    metadata_path = hermes_root / "agent" / "model_metadata.py"
+    if not metadata_path.is_file():
+        pytest.skip(f"installed Hermes reference not found at {metadata_path}")
+
+    spec = importlib.util.spec_from_file_location("hermes_ref_model_metadata", metadata_path)
+    assert spec is not None and spec.loader is not None
+    host = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(host)
+    except Exception as exc:
+        pytest.skip(f"could not load installed Hermes model_metadata: {exc}")
+
+    samples = [
+        "",
+        "a",
+        "abcd",
+        "abcde",
+        "\n\t\r!@#$%^&*()_+-=[]{}|;':\",./<>?",
+        "\ud800",
+        "한\ud800a",
+        "안녕",
+        "안녕하세요",
+        "ㅋㅋㅋ",
+        "\u1100\u1161",
+        "漢字",
+        "こんにちは",
+        "ＡＢ",
+        "🚀",
+        "🚀🔥✨🎉",
+        "👨‍👩‍👧‍👦",
+        "🇰🇷",
+        "café",
+        "привет",
+        "مرحبا",
+        "오류 발생: read_file 실패 🚨 (line 42)",
+        "a" * 10_000,
+        "가" * 5_000,
+        "가a🚀" * 2_000,
+    ]
+    for sample in samples:
+        assert adapter.usage.estimate_tokens(sample) == host.estimate_tokens_rough(sample)
+
+
+def test_reminders_and_restore_do_not_depend_on_estimate_tokens(setup, monkeypatch):
+    from session_navigation.reminders import BoundaryReminders, WORTHWHILE_BYTES
+
+    reminders = BoundaryReminders()
+    small = [{"tool_call_id": "t1", "bytes_size": WORTHWHILE_BYTES - 1}]
+    large = [{"tool_call_id": "t2", "bytes_size": WORTHWHILE_BYTES}]
+    # Reminder eligibility depends on byte size, never _tokens/_window.
+    assert reminders.note("s", "1", 999_999, 100, small, after_tool=True) is None
+    assert reminders.note("s", "1", 0, None, large, after_tool=True) is not None
+
+    ctx, state = setup
+    observe(ctx)
+    scope = adapter.factories.scope_for(state, SESSION)
+    large_body = "\n".join(f"row {i:04d}: " + "details " * 14 for i in range(300))
+
+    def _boom(_text):
+        raise AssertionError("middleware reminder path must not call estimate_tokens")
+
+    monkeypatch.setattr(adapter.factories, "estimate_tokens", _boom)
+    mw_out = ctx.middlewares["llm_request"][0](
+        request={
+            "messages": [
+                {"role": "user", "content": "한글 요청 🚀"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c2",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path":"big2.txt"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c2", "content": large_body},
+            ]
+        },
+        session_id=SESSION,
+        api_mode="chat_completions",
+    )
+    assert any(
+        isinstance(m.get("content"), str) and "[context-navigation]" in m["content"]
+        for m in mw_out["request"]["messages"]
+    )
+
+    monkeypatch.setattr(
+        adapter.factories, "estimate_tokens", lambda text: 50_000 if len(text) > 5_000 else 100
+    )
+    hidden = json.loads(ctx.tools["hide_context"]["handler"]({"tool_call_id": "c2"}, session_id=SESSION))
+    assert hidden["ok"] is True, hidden
+    # Only the display footer uses the estimator; exact restoration is unaffected.
+    assert "next ≈ −49.9K" in nav(ctx)
+    restored = json.loads(
+        ctx.tools["unhide_context"]["handler"]({"item_id": hidden["item_id"]}, session_id=SESSION)
+    )
+    assert restored["ok"] is True
+    assert state.engine.store.get(scope, hidden["item_id"]).original == large_body
 
 
 def test_usage_cache_is_bounded():

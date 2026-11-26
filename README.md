@@ -175,7 +175,7 @@ hermes plugins install session-navigation
 Until approval, install the public Git repository as below. The catalog and Git
 routes both use `hermes-plugin/`, not the repository root or the Python wheel.
 
-Live ACP verification used Hermes source commit `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8` (earlier plugin tests used `109fd8161a509db5a00942152ba48882e446e8b0`). The `hermes-plugin/` directory contains the standalone manifest, loader, MIT LICENSE and vendored Python engine/adapter. Hermes requires Python through its own managed runtime; Paseo and OMP do not. No shared CLI installation is needed.
+Live ACP verification used Hermes source commit `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8` (earlier plugin tests used `109fd8161a509db5a00942152ba48882e446e8b0`). The `hermes-plugin/` directory contains the standalone manifest, loader, MIT LICENSE, `THIRD_PARTY_NOTICES.md`, and vendored Python engine/adapter. Hermes requires Python through its own managed runtime; Paseo and OMP do not. No shared CLI installation is needed.
 
 ```bash
 hermes plugins install pureliture/session-navigation/hermes-plugin --ref main --no-enable
@@ -314,8 +314,9 @@ require a publishable locked dependency tree under its publishing policy.
 
 Hermes now declares all five tools, both observer hooks and both middleware
 registrations, with `requires_hermes: ">=0.20.1"`. Admission validation with
-dependency preparation passes against the committed `hermes-plugin/` distribution;
-the intentionally retained runtime private-import warnings still need maintainer review.
+dependency preparation passes against the committed `hermes-plugin/` distribution
+with zero runtime private-import warnings; competing `llm_request` middlewares
+remain unobservable through public APIs, so safe coexistence is not guaranteed.
 The repository root is no longer a plugin installation unit. Its fixture corpus
 still produces dangerous scanner findings; no strings were concealed or scanner
 rules bypassed to obtain the subdirectory result. A passing validator does not guarantee catalog admission.

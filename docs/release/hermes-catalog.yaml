@@ -9,8 +9,8 @@ description: >-
   Reversible request-side context management using deterministic Hide, session-model
   Summarize and exact Unhide. Disclosure: stores selected session originals and
   replacements in local SQLite; Summarize sends selected originals through the
-  configured Hermes model provider. Uses two guarded private read-only helpers;
-  see the review disclosure. No telemetry, credential-file access or self-updater.
+  configured Hermes model provider. Uses only public Hermes plugin surfaces. No
+  telemetry, credential-file access or self-updater.
 maintainer: pureliture
 tier: community
 category: memory
@@ -20,7 +20,8 @@ docs_url: https://github.com/pureliture/session-navigation/blob/main/docs/hermes
 readme: false
 platforms: []
 known_issues:
-  - Two guarded private Hermes helpers require maintainer review and may change between releases.
+  - Competing `llm_request` middlewares cannot be enumerated via a public Hermes API; safe coexistence and exclusive rewrite ownership are not guaranteed.
+  - Local `next ≈` footer token estimates are rough Unicode-aware approximations (display-only) and may drift from actual model tokenization or future Hermes releases.
   - Requires both host activation and settings.enabled true; settings default to false.
   - Local state must be shared with Paseo; cross-machine synchronization is not provided.
 capabilities:

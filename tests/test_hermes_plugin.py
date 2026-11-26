@@ -6,7 +6,8 @@ synthetic provider-format kwargs shaped like the real contract.
 """
 
 from __future__ import annotations
-import os, tempfile, gc, pytest
+import logging
+import os, sys, tempfile, gc, pytest
 
 import copy
 import json
@@ -222,31 +223,101 @@ def test_compact_missing_target_and_unknown_item():
                               session_id="sess-x"))["ok"] is False
 
 
-def test_count_middlewares_counts_others_not_self() -> None:
-    """The probe counts OTHER callbacks, so 0 means "we are the only one"."""
+def test_count_middlewares_counts_others_not_self(caplog, monkeypatch) -> None:
+    """Default probe reports None (unknown) without importing Hermes internals."""
     assert plugin._default_count_llm_middlewares.__doc__
-    # Host import fails in a bare test process -> 0, not 1.
-    assert plugin._default_count_llm_middlewares() == 0
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", None)
+    assert plugin._default_count_llm_middlewares() is None
     state = plugin.PluginState()
-    assert state.count_middlewares() == 0
+    assert state.count_middlewares() is None
+
+    traces: list[dict] = []
+    orig_step = factories._engine_step
+
+    def _capture_step(*args, **kwargs):
+        result = orig_step(*args, **kwargs)
+        if isinstance(result.get("trace"), dict):
+            traces.append(result["trace"])
+        return result
+
+    monkeypatch.setattr(factories, "_engine_step", _capture_step)
     ctx = _enabled_ctx()
     registered = plugin.register(ctx)
-    registered.count_middlewares = lambda: 1  # one other middleware exists
     mw = ctx.middlewares["llm_request"][0]
     body = _long_body()
-    out = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
+
+    with caplog.at_level(logging.DEBUG, logger=factories.logger.name):
+        out = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
     assert out["reason"] == "applied 0, skipped 0"
     assert out["request"]["input"][1]["output"] == body
+    assert traces[-1]["other_middlewares"] is None
+    assert "other_middlewares=unknown" in caplog.text
+    assert "other_middlewares=0" not in caplog.text
+
     scope = factories.scope_for(registered, "sess-other")
     assert scope is not None
     assert registered.engine.store.adapter_can(scope, "hide") is True
     compacted = json.loads(ctx.tools["hide_context"]["handler"](
         {"tool_call_id": "call_1"}, session_id="sess-other"))
     assert compacted["ok"] is True, "recording must still feed the tool handlers"
-    projected = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
+
+    caplog.clear()
+    registered.count_middlewares = lambda: 1  # explicit injected counter
+    with caplog.at_level(logging.DEBUG, logger=factories.logger.name):
+        projected = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
     assert projected["reason"] == "applied 1, skipped 0"
     assert projected["request"]["input"][1]["output"] != body
     assert compacted["item_id"] in projected["request"]["input"][1]["output"]
+    assert traces[-1]["other_middlewares"] == 1
+    assert "other_middlewares=1" in caplog.text
+
+    caplog.clear()
+    registered.count_middlewares = lambda: 0
+    with caplog.at_level(logging.DEBUG, logger=factories.logger.name):
+        zero_projected = mw(**_mw_kwargs(_codex_request(body), "sess-other", "codex_responses"))
+    assert zero_projected["reason"] == "applied 1, skipped 0"
+    assert traces[-1]["other_middlewares"] == 0
+    assert "other_middlewares=0" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "bad_counter",
+    [
+        lambda: (_ for _ in ()).throw(RuntimeError("probe failed")),
+        lambda: True,
+        lambda: -1,
+        lambda: "1",
+    ],
+)
+def test_invalid_or_failing_count_middlewares_degrades_to_unknown(caplog, monkeypatch, bad_counter) -> None:
+    traces: list[dict] = []
+    orig_step = factories._engine_step
+
+    def _capture_step(*args, **kwargs):
+        result = orig_step(*args, **kwargs)
+        if isinstance(result.get("trace"), dict):
+            traces.append(result["trace"])
+        return result
+
+    monkeypatch.setattr(factories, "_engine_step", _capture_step)
+    ctx = _enabled_ctx()
+    registered = plugin.register(ctx)
+    registered.count_middlewares = bad_counter
+    mw = ctx.middlewares["llm_request"][0]
+    body = _long_body()
+
+    mw(**_mw_kwargs(_codex_request(body), "sess-bad-cnt", "codex_responses"))
+    compacted = json.loads(ctx.tools["hide_context"]["handler"](
+        {"tool_call_id": "call_1"}, session_id="sess-bad-cnt"))
+    assert compacted["ok"] is True
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=factories.logger.name):
+        out = mw(**_mw_kwargs(_codex_request(body), "sess-bad-cnt", "codex_responses"))
+    assert out["reason"] == "applied 1, skipped 0"
+    assert compacted["item_id"] in out["request"]["input"][1]["output"]
+    assert traces[-1]["other_middlewares"] is None
+    assert "other_middlewares=unknown" in caplog.text
 
 
 def test_coexistence_applies_tool_and_message_hiding() -> None:

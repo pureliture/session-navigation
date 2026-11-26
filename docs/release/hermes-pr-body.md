@@ -3,7 +3,7 @@
 **Draft only. No catalog PR has been opened.**
 Replace `<FILL_AFTER_MERGE>` with the full reviewed merge SHA in the entry.
 The distribution unit is `hermes-plugin/`, selected by `subdir: hermes-plugin`.
-It contains the manifest, loader, MIT LICENSE and vendored Python runtime only.
+It contains the manifest, loader, MIT LICENSE, THIRD_PARTY_NOTICES.md and vendored Python runtime only.
 Canonical engine/adapter sources remain in `src/session_navigation/` and
 `adapters/hermes/`; `tools/sync_hermes_vendor.py --check` verifies both mirrors.
 The runtime adapter equivalent is `vendor/session_navigation_hermes/` within
@@ -24,42 +24,40 @@ Original host history is not mutated. The entry declares all five tools, hooks
 and no required environment secrets. Minimum Hermes is >=0.20.1 by source/API
 availability; this is not a live qualification of that old release.
 
-## Retained private API warnings — requesting explicit review
+## Public surfaces only in the runtime distribution — known limitations
 
-We intentionally retain these dependencies, with no claim that warning-level
-validation waives catalog rule 9:
+Both previously retained runtime private imports (`hermes_cli.plugins._delivery_manager`
+and `agent.model_metadata.estimate_tokens_rough`) have been removed from
+`adapters/hermes/` and its identical runtime mirror
+`hermes-plugin/vendor/session_navigation_hermes/`:
 
-1. **`hermes_cli.plugins._delivery_manager`** in
-   canonical `adapters/hermes/factories.py:100` and its identical runtime mirror
-   `hermes-plugin/vendor/session_navigation_hermes/factories.py:100`. It reads the
-   active manager's middleware list to count other `llm_request` callbacks.
-   If another callback exists, the plugin records results but leaves requests
-   untouched instead of claiming sole rewrite ownership. No public middleware
-   enumeration API is documented. The import/probe is guarded by try/except;
-   failure returns zero. **That fallback loses coexistence detection**, not a
-   guaranteed equivalent behavior. We would adopt a public enumeration seam.
+1. **Middleware coexistence is unobserved and unguaranteed.** Hermes exposes no
+   documented public API to enumerate other registered `llm_request` middleware
+   callbacks. The plugin performs no private manager lookup, records
+   `other_middlewares` as `None` (debug log `other_middlewares=unknown`, never
+   fabricated as `0`), and applies request-copy rewrites when enabled. Because
+   Hermes's `llm_request` middleware chain composes in registration order,
+   neither safe coexistence nor exclusive rewrite ownership with other
+   `llm_request` middlewares is guaranteed (a later callback can overwrite our
+   replacements and vice versa).
 
-2. **`agent.model_metadata.estimate_tokens_rough`** in
-   canonical `adapters/hermes/usage.py:13` and its identical runtime mirror
-   `hermes-plugin/vendor/session_navigation_hermes/usage.py:13`. It supplies Hermes's
-   Unicode-aware token estimates for item allocation, savings/footer information
-   and pressure reminders. No public token-estimation helper is documented.
-   ImportError falls back to ceiling(character count/4), which is less accurate
-   for non-ASCII text. Exact restoration does not depend on that estimate.
+2. **Token estimates are local, rough, display-only approximations.**
+   `usage.py` implements a local, dependency-free Unicode-aware heuristic
+   adapted from Hermes's MIT-licensed `estimate_tokens_rough` (attributed in
+   `THIRD_PARTY_NOTICES.md`), used **only** for approximate `next ≈` footer
+   deltas in `/nav`. It is **not** used for reminder trigger decisions (which
+   are byte-based in `BoundaryReminders`), item allocation, or exact restoration
+   (`unhide_context` / `/nav unhide`). Output is an approximation that differs
+   from actual model tokenization and may drift from future Hermes host releases.
 
-These two lookups are **in-process only**, initiate **no network request**, and
-do not mutate core methods or registry dictionaries. Their guarded fallbacks
-preserve operation but have the limitations stated above. They are private and
-can break on a future release; we request a maintainer decision on these seams.
-
-Other warnings are from `eval/{hermes,quality_hermes,v2_hermes}.py`
+Other private-import findings in the repository are from
+`eval/{hermes,quality_hermes,v2_hermes}.py`
 (`AIAgent`, discovery and manager access) and
 `tools/probe_{plugin_manager,supervision}.py` (`PluginManager`).
 Those are development-only evaluation/probe programs, not imports performed
 by plugin registration or session handling. They remain in the public repository
-for review but are outside the installed/scanned subdirectory. Admission reports
-two runtime import sites, both in the vendor adapter; their canonical sources
-are retained outside the distribution.
+for review but are outside the installed/scanned subdirectory. Admission against
+`hermes-plugin/` reports zero runtime private-import or private-attribute warnings.
 
 Public-surface references in the Hermes source:
 `hermes_cli/data/plugin_api.json`,
@@ -78,14 +76,17 @@ rule or exclusion setting has been changed.
 The catalog installs only the Python runtime at `hermes-plugin/`. It does not
 install the repository's tests, evaluation harnesses, TypeScript hosts, build
 outputs or documentation. The committed subdirectory passes the real admission
-validator with dependency preparation and a safe security verdict.
+validator with dependency preparation, zero runtime private-import warnings,
+and a `safe` security scan verdict.
 
 Three medium `sudo_usage` notes remain in
-`vendor/session_navigation/policy.py:350,352,368` (paths relative to the plugin
-directory). These are a flag-parser comment, a quoted wrapper-option key and
-quoted wrapper-name membership. They are legitimate detection logic, not
-execution. The unmodified scanner's comment/whole-literal context rules demote
-them to medium; they are retained in the scan report and are verdict-neutral.
+`vendor/session_navigation/policy.py:363,365,381` and one medium
+`unicode_escape_chain` note appears in
+`vendor/session_navigation_hermes/usage.py:18` for the CJK Unicode-range regex
+(paths relative to the plugin directory). The `sudo_usage` hits are a
+flag-parser comment, a quoted wrapper-option key and quoted wrapper-name
+membership (legitimate detection logic, not execution); all four medium notes
+are verdict-neutral under the unmodified scanner (`safe`).
 
 ## Risk/data disclosure
 
@@ -109,8 +110,12 @@ them to medium; they are retained in the scan report and are verdict-neutral.
 hermes plugins validate --install-deps /path/to/session-navigation/hermes-plugin
 ```
 
-Clean committed-subdirectory release-preparation validation passed with `security scan — safe`, matching
-capabilities and the expected private-import warnings. Attach a fresh log at
-the exact merged SHA before submission. See the release checklist for wheel,
-parity, conformance and host checks. Catalog admission still requires human
-review and may require a public seam despite a passing validator.
+Clean committed-subdirectory validation passes with `ok: true`, `security scan — safe`,
+matching capabilities, and zero runtime private-import/attribute warnings (while
+retaining the four verdict-neutral medium notes: three `sudo_usage` notes in
+`vendor/session_navigation/policy.py` and one `unicode_escape_chain` note in
+`vendor/session_navigation_hermes/usage.py`). Attach a fresh log at the exact
+merged SHA before submission. See the release checklist for wheel, parity,
+conformance and host checks. A passing validator (`ok: true`, `security scan — safe`)
+is neither a guarantee of catalog admission nor a guarantee of safe coexistence
+with other `llm_request` middlewares; catalog admission still requires human review.

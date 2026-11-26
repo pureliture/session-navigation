@@ -20,6 +20,10 @@ def test_wheel_plugin_root_imports_in_fresh_processes(tmp_path: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert not any(name.endswith((".pyc", ".pyo")) for name in names)
+        assert (
+            archive.read("session_navigation_plugin_root/THIRD_PARTY_NOTICES.md")
+            == (repo / "hermes-plugin/THIRD_PARTY_NOTICES.md").read_bytes()
+        )
         for source, package in [
             (repo / "hermes-plugin/vendor/session_navigation", "session_navigation"),
             (repo / "hermes-plugin/vendor/session_navigation_hermes", "session_navigation_hermes"),

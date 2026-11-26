@@ -63,8 +63,10 @@ hermes plugins validate --install-deps "$PWD/hermes-plugin"
   not a worktree with build outputs. The catalog entry must retain
   `subdir: hermes-plugin`. Confirm the local Git subdirectory installation loads
   all five tools, two hooks and both middleware callbacks in an isolated home.
-- [ ] Review retained runtime private-import warnings; safe scanner output is not a
-  waiver of the Hermes catalog's public-surface policy.
+- [ ] Confirm `hermes plugins validate --install-deps` reports zero runtime
+  private-import/attribute warnings on `hermes-plugin/`; safe scanner output and
+  clean validation do not guarantee catalog acceptance or safe middleware
+  coexistence.
 - [ ] Use a clean host profile to load the OMP tarball via Bun in its plugin
   dependency directory; OMP 18.18.3 does not install local tarballs directly.
 - [ ] Confirm post-publication installation and a running Paseo plugin on a
@@ -138,11 +140,12 @@ gh pr create --repo NousResearch/hermes-agent --title "Add session-navigation 0.
 ```
 
 Attach exact-SHA subdirectory validation and isolated install/load evidence,
-and disclose both retained private APIs in the canonical adapter and vendor
-mirror. The catalog disables inline README rendering because its runtime-only
-subdirectory has no README; `docs_url` links the repository's installation guide.
-Wait for CI and maintainer review; never self-mark the entry verified/official.
-A maintainer may require public replacements before admission.
+confirm zero runtime private-import/attribute warnings on `hermes-plugin/`, and
+note that competing `llm_request` middleware coexistence is unobserved/unguaranteed
+and `next ≈` token footer deltas are local rough approximations. The catalog
+disables inline README rendering because its runtime-only subdirectory has no
+README; `docs_url` links the repository's installation guide. Wait for CI and
+maintainer review; never self-mark the entry verified/official.
 
 After approval/merge, in the intended profile:
 
