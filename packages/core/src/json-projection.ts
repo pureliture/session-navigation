@@ -328,9 +328,9 @@ function appendChunks(
   maxLine: number,
 ): boolean {
   const characters = [...value];
-  if (characters.length === 0) {
-    out.push(`projected ${schema} ${field}+0: ""`);
-    return true;
+  const wholePrefix = `projected ${schema} ${field}+0: `;
+  if (requiredEvidence(value).length > 0 && length(wholePrefix) + length(encoded(value)) > maxLine) {
+    return false;
   }
   let start = 0;
   let chunk: string[] = [];
@@ -373,6 +373,7 @@ function metadataLine(schema: string, field: string, value: ParsedValue): string
 function finish(
   schema: string,
   lines: string[],
+  metadataLines: string[],
   original: string,
   config: Config,
 ): ProjectionDecision {
@@ -386,21 +387,14 @@ function finish(
   ) {
     return { refusal: "verification_failed" };
   }
-  const metadataTokens = schema === MATCHES_SCHEMA
-    ? ["schema-version", "total_count", "total_count_is_lower_bound", "truncated"]
-    : ["schema-version", "total_count"];
   const required: string[] = [];
-  for (const line of lines) {
-    if (metadataTokens.some((token) => line.includes(token)) && !required.includes(line)) {
+  for (const line of metadataLines) {
+    if (!required.includes(line)) {
       required.push(line);
     }
   }
   for (const line of requiredEvidence(source)) {
-    if (
-      !required.includes(line) &&
-      (lines.slice(0, config.head_excerpts).includes(line) ||
-        lines.slice(-config.tail_excerpts).includes(line))
-    ) {
+    if (!required.includes(line)) {
       required.push(line);
     }
   }
@@ -462,12 +456,11 @@ function projectMatches(
   if (maxLine < MIN_LINE_BUDGET) {
     return { refusal: "verification_failed" };
   }
-  const lines = [
-    `projected ${MATCHES_SCHEMA} schema-version = ${PROJECTION_VERSION} digest = ${digest}`,
-    metadataLine(MATCHES_SCHEMA, "total_count", count),
-    metadataLine(MATCHES_SCHEMA, "total_count_is_lower_bound", lowerBound),
-    metadataLine(MATCHES_SCHEMA, "truncated", truncated),
-  ];
+  const header = `projected ${MATCHES_SCHEMA} schema-version = ${PROJECTION_VERSION} digest = ${digest}`;
+  const totalLine = metadataLine(MATCHES_SCHEMA, "total_count", count);
+  const lowerLine = metadataLine(MATCHES_SCHEMA, "total_count_is_lower_bound", lowerBound);
+  const truncatedLine = metadataLine(MATCHES_SCHEMA, "truncated", truncated);
+  const lines = [header, totalLine, lowerLine, truncatedLine];
   if (!appendChunks(lines, MATCHES_SCHEMA, "matches_format", format.value, maxLine)) {
     return { refusal: "verification_failed" };
   }
@@ -482,7 +475,7 @@ function projectMatches(
       return { refusal: "verification_failed" };
     }
   }
-  return finish(MATCHES_SCHEMA, lines, original, config);
+  return finish(MATCHES_SCHEMA, lines, [header, totalLine, lowerLine, truncatedLine], original, config);
 }
 
 function projectFiles(
@@ -523,10 +516,9 @@ function projectFiles(
   if (maxLine < MIN_LINE_BUDGET) {
     return { refusal: "verification_failed" };
   }
-  const lines = [
-    `projected ${FILES_SCHEMA} schema-version = ${PROJECTION_VERSION} digest = ${digest}`,
-    metadataLine(FILES_SCHEMA, "total_count", count),
-  ];
+  const header = `projected ${FILES_SCHEMA} schema-version = ${PROJECTION_VERSION} digest = ${digest}`;
+  const totalLine = metadataLine(FILES_SCHEMA, "total_count", count);
+  const lines = [header, totalLine];
   for (const [index, item] of files.items.entries()) {
     if (item.kind !== "string" || item.value === "") {
       continue;
@@ -535,7 +527,7 @@ function projectFiles(
       return { refusal: "verification_failed" };
     }
   }
-  return finish(FILES_SCHEMA, lines, original, config);
+  return finish(FILES_SCHEMA, lines, [header, totalLine], original, config);
 }
 
 export function projectJsonToolResult(
@@ -544,6 +536,11 @@ export function projectJsonToolResult(
   config: Config = defaults,
 ): ProjectionDecision {
   if (toolName !== "search_files") {
+    return {};
+  }
+  const stripped = content.trimStart();
+  const jsonLike = stripped.startsWith("{") || stripped.startsWith("[");
+  if (!jsonLike) {
     return {};
   }
   if (bytes(content) > MAX_JSON_BYTES || hasUnsafeUnicode(content)) {
@@ -556,7 +553,7 @@ export function projectJsonToolResult(
     return { refusal: "verification_failed" };
   }
   if (parsed.kind !== "object") {
-    return { refusal: "verification_failed" };
+    return {};
   }
   const digest = sha256(content);
   const matches = projectMatches(parsed.members, content, config, digest);

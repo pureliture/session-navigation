@@ -115,11 +115,19 @@ def _append_chunks(
     value: str,
     max_line: int,
 ) -> bool:
-    """Append bounded, provenance-labelled JSON-escaped chunks."""
+    """Append bounded, provenance-labelled JSON-escaped chunks.
+
+    A semantic unit containing required evidence must fit in one projected
+    line; splitting it would make the evidence unverifiable, so it fails
+    closed instead.
+    """
     chars = list(value)
     if not chars:
         out.append(f"projected {schema} {field}+0: \"\"")
         return True
+    whole_prefix = f"projected {schema} {field}+0: "
+    if required_evidence_lines(value) and len(whole_prefix) + len(_encoded(value)) > max_line:
+        return False
     start = 0
     chunk: list[str] = []
     for char in chars:
@@ -156,6 +164,7 @@ def _finish(
     *,
     schema: str,
     lines: list[str],
+    metadata_lines: tuple[str, ...],
     original: str,
     config: EngineConfig,
 ) -> ProjectionDecision:
@@ -166,15 +175,12 @@ def _finish(
         return ProjectionDecision(refusal="verification_failed")
     if any(len(line) > config.max_excerpt_line_length for line in lines):
         return ProjectionDecision(refusal="verification_failed")
-    metadata_tokens = ("schema-version", "total_count")
-    if schema == MATCHES_SCHEMA:
-        metadata_tokens += ("total_count_is_lower_bound", "truncated")
-    required = tuple(
-        line for line in lines if any(token in line for token in metadata_tokens)
-    )
+    required = tuple(metadata_lines)
     for line in required_evidence_lines(source):
-        if line not in required and (line in lines[:config.head_excerpts] or line in lines[-config.tail_excerpts:]):
+        if line not in required:
             required += (line,)
+    if len(required) > config.max_evidence_excerpts:
+        return ProjectionDecision(refusal="verification_failed")
     return ProjectionDecision(
         projection=JsonProjection(
             schema=schema,
@@ -214,10 +220,11 @@ def _project_matches(
     max_line = min(config.max_excerpt_line_length, 240)
     if max_line < MIN_LINE_BUDGET:
         return ProjectionDecision(refusal="verification_failed")
-    lines = [f"projected {schema} schema-version = {PROJECTION_VERSION} digest = {digest}"]
-    lines.append(_metadata_line(schema, "total_count", obj["total_count"]))
-    lines.append(_metadata_line(schema, "total_count_is_lower_bound", obj["total_count_is_lower_bound"]))
-    lines.append(_metadata_line(schema, "truncated", obj["truncated"]))
+    header = f"projected {schema} schema-version = {PROJECTION_VERSION} digest = {digest}"
+    total_line = _metadata_line(schema, "total_count", obj["total_count"])
+    lower_line = _metadata_line(schema, "total_count_is_lower_bound", obj["total_count_is_lower_bound"])
+    truncated_line = _metadata_line(schema, "truncated", obj["truncated"])
+    lines = [header, total_line, lower_line, truncated_line]
     if not _append_chunks(out=lines, schema=schema, field="matches_format", value=obj["matches_format"], max_line=max_line):
         return ProjectionDecision(refusal="verification_failed")
     if "_hint" in obj and not _append_chunks(out=lines, schema=schema, field="_hint", value=obj["_hint"], max_line=max_line):
@@ -227,7 +234,11 @@ def _project_matches(
             continue
         if not _append_chunks(out=lines, schema=schema, field=f"matches_text[{index}]", value=line, max_line=max_line):
             return ProjectionDecision(refusal="verification_failed")
-    return _finish(schema=schema, lines=lines, original=original, config=config)
+    return _finish(
+        schema=schema, lines=lines,
+        metadata_lines=(header, total_line, lower_line, truncated_line),
+        original=original, config=config,
+    )
 
 
 def _project_files(
@@ -251,23 +262,35 @@ def _project_files(
     max_line = min(config.max_excerpt_line_length, 240)
     if max_line < MIN_LINE_BUDGET:
         return ProjectionDecision(refusal="verification_failed")
-    lines = [f"projected {schema} schema-version = {PROJECTION_VERSION} digest = {digest}"]
-    lines.append(_metadata_line(schema, "total_count", obj["total_count"]))
+    header = f"projected {schema} schema-version = {PROJECTION_VERSION} digest = {digest}"
+    total_line = _metadata_line(schema, "total_count", obj["total_count"])
+    lines = [header, total_line]
     for index, value in enumerate(files):
         if not value:
             continue
         if not _append_chunks(out=lines, schema=schema, field=f"files[{index}]", value=value, max_line=max_line):
             return ProjectionDecision(refusal="verification_failed")
-    return _finish(schema=schema, lines=lines, original=original, config=config)
+    return _finish(
+        schema=schema, lines=lines, metadata_lines=(header, total_line),
+        original=original, config=config,
+    )
 
 
 def project_json_tool_result(
     content: str, tool_name: Any, config: EngineConfig | None = None
 ) -> ProjectionDecision:
-    """Return a strict projection for supported search_files outputs."""
+    """Return a strict projection for supported search_files outputs.
+
+    Clearly plain text and oversized plain text fall back to the legacy path.
+    Only JSON-looking input that is malformed or untrusted is fail-closed.
+    """
     if tool_name != "search_files":
         return ProjectionDecision()
     cfg = config or EngineConfig()
+    stripped = content.lstrip()
+    json_like = stripped.startswith("{") or stripped.startswith("[")
+    if not json_like:
+        return ProjectionDecision()
     try:
         raw_bytes = content.encode("utf-8")
     except UnicodeEncodeError:

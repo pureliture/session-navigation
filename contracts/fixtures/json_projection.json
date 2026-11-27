@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "note": "Fully synthetic JSON projection vectors. No production content or identifiers.",
   "serialization": { "ensure_ascii": false, "separators": [",", ":"] },
   "cases": [
@@ -11,15 +11,27 @@
         "line_count": 24,
         "line_chars": 180,
         "special_line": 7,
-        "special_text": "배송 상태 확인 synthetic marker"
+        "special_text": "배송 상태 확인 synthetic/middle/evidence.txt status=ok"
       },
       "expected": { "schema": "search_files_matches_v1", "refusal": null }
     },
     {
       "id": "files_success",
       "tool_name": "search_files",
-      "generate": { "kind": "files", "file_count": 40, "path_chars": 96 },
+      "generate": { "kind": "files", "file_count": 40, "evidence_count": 12, "path_chars": 96, "padding_chars": 320 },
       "expected": { "schema": "search_files_files_v1", "refusal": null }
+    },
+    {
+      "id": "plain_text_success",
+      "tool_name": "search_files",
+      "generate": { "kind": "plain_text", "line_count": 24, "line_chars": 160 },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "plain_text_large",
+      "tool_name": "search_files",
+      "generate": { "kind": "plain_text", "line_count": 900, "line_chars": 160 },
+      "expected": { "schema": null, "refusal": null }
     },
     {
       "id": "unknown_shape",
@@ -44,6 +56,24 @@
       "tool_name": "search_files",
       "raw": "{\"files\":[\"synthetic/a.txt\"],\"total_count\":1,\"total_count\":2}",
       "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "malformed_json",
+      "tool_name": "search_files",
+      "raw": "{\"files\":[\"synthetic/a.txt\"],",
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "metadata_substring",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "total_count = synthetic note without evidence.",
+        "total_count": 1,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
     },
     {
       "id": "protected_error",
@@ -105,6 +135,19 @@
         "truncated": true
       },
       "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    },
+    {
+      "id": "split_evidence_boundary",
+      "tool_name": "search_files",
+      "generate": { "kind": "repeat", "prefix": "synthetic/evidence-", "char": "가", "count": 300 },
+      "total_count": 1,
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "evidence_budget",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 25, "evidence_count": 25, "path_chars": 96 },
+      "expected": { "schema": null, "refusal": "verification_failed" }
     }
   ]
 }

@@ -18,6 +18,7 @@ from session_navigation.model import (
     compute_invocation_digest,
     compute_sha256,
 )
+from session_navigation.policy import required_evidence_lines
 
 FIXTURES = json.loads(
     (Path(__file__).resolve().parents[1] / "contracts/fixtures/json_projection.json").read_text()
@@ -36,6 +37,8 @@ def _record(content: str, tool_name: str, call_id: str = "call_json") -> ToolRes
         status="ok",
         host_handle={"index": 1},
     )
+
+
 def _content(case: dict) -> str:
     if "raw" in case:
         return case["raw"]
@@ -64,16 +67,29 @@ def _content(case: dict) -> str:
             }
         elif kind == "files":
             count = spec["file_count"]
-            width = spec["path_chars"]
+            evidence_count = spec.get("evidence_count", count)
+            path_width = spec["path_chars"]
+            padding_width = spec.get("padding_chars", path_width)
             files = []
             for index in range(count):
-                suffix = f"row-{index:03d}.txt"
-                files.append("synthetic/fixtures/" + ("x" * max(0, width - 19 - len(suffix))) + suffix)
+                if index < evidence_count:
+                    suffix = f"row-{index:03d}.txt"
+                    files.append("synthetic/fixtures/" + ("x" * max(0, path_width - 19 - len(suffix))) + suffix)
+                else:
+                    files.append(("synthetic filler " + "alpha beta gamma " * 40)[:padding_width])
             data = {"files": files, "total_count": count}
+        elif kind == "plain_text":
+            width = spec["line_chars"]
+            lines = []
+            for index in range(spec["line_count"]):
+                text = f"Synthetic plain text row {index:03d} " + "alpha beta gamma " * 20
+                lines.append(text[:width])
+            return "\n".join(lines)
         else:
             raise AssertionError(f"unknown fixture generator: {kind}")
         return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return json.dumps(case["data"], ensure_ascii=False, separators=(",", ":"))
+
 
 def _case(case_id: str) -> dict:
     return next(case for case in FIXTURES["cases"] if case["id"] == case_id)
@@ -97,6 +113,7 @@ def test_fixture_decision_matches_contract(case: dict):
     assert verify_projection(raw, case["tool_name"], decision.projection)
     assert all(len(line) <= 240 for line in decision.projection.lines)
     assert all(line in decision.projection.lines for line in decision.projection.required)
+    assert set(required_evidence_lines(decision.projection.source)).issubset(decision.projection.required)
 
 
 def test_matches_projection_compacts_and_restores_byte_exact():
@@ -131,8 +148,37 @@ def test_files_projection_compacts_and_restores_byte_exact():
     assert engine.restore(scope, result.item.item_id).ok is True
 
 
+def test_middle_evidence_is_required_and_rendered():
+    case = _case("matches_success")
+    raw = _content(case)
+    decision = project_json_tool_result(raw, case["tool_name"])
+    projection = decision.projection
+    assert projection is not None
+    evidence = [line for line in projection.lines if "synthetic/middle/evidence.txt" in line]
+    assert len(evidence) == 1
+    assert evidence[0] in projection.required
+    engine = SessionNavigationEngine()
+    result = engine.compact_sync(Scope("hermes", "test", "sess-json-middle"), _record(raw, case["tool_name"]))
+    assert result.ok is True, result.error
+    assert evidence[0] in result.plan.replacement_text
+
+
+def test_metadata_substring_does_not_create_required_line():
+    case = _case("metadata_substring")
+    raw = _content(case)
+    decision = project_json_tool_result(raw, case["tool_name"])
+    projection = decision.projection
+    assert projection is not None
+    assert len(projection.required) == 4
+    assert not any("total_count = synthetic note" in line for line in projection.required)
+
+
 def test_long_single_line_failures_stay_fail_closed():
-    for case_id in ("duplicate_key", "protected_error", "protected_business_state", "sensitive_value", "nested_value", "oversized_value"):
+    for case_id in (
+        "duplicate_key", "malformed_json", "protected_error", "protected_business_state",
+        "sensitive_value", "nested_value", "oversized_value", "split_evidence_boundary",
+        "evidence_budget",
+    ):
         case = _case(case_id)
         raw = _content(case)
         engine = SessionNavigationEngine()
@@ -144,6 +190,23 @@ def test_long_single_line_failures_stay_fail_closed():
         assert result.plan is None
 
 
+@pytest.mark.parametrize("case_id", ["plain_text_success", "plain_text_large"])
+def test_plain_text_falls_back_to_legacy_path(case_id: str):
+    case = _case(case_id)
+    raw = _content(case)
+    decision = project_json_tool_result(raw, case["tool_name"])
+    assert decision.projection is None
+    assert decision.refusal is None
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", f"sess-json-{case_id}")
+    result = engine.compact_sync(scope, _record(raw, case["tool_name"]))
+    assert result.ok is True, result.error
+    assert "Original excerpt:" in result.plan.replacement_text
+    assert "Projected JSON excerpt:" not in result.plan.replacement_text
+    assert result.item is not None and result.item.original == raw
+    assert engine.restore(scope, result.item.item_id).ok is True
+
+
 def test_keep_lines_are_normalized_against_projection_source():
     case = _case("matches_success")
     raw = _content(case)
@@ -152,6 +215,7 @@ def test_keep_lines_are_normalized_against_projection_source():
     result = engine.compact_sync(
         scope, _record(raw, case["tool_name"]), keep_lines=["배송 상태 확인", "Synthetic match row 03"]
     )
+    assert result.ok is True, result.error
     assert result.keep_lines_ignored == ()
     assert "배송 상태 확인" in result.plan.replacement_text
 
