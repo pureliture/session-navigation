@@ -1300,7 +1300,6 @@ export function SessionNavPanel({
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
-    scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
   useEffect(() => () => {
