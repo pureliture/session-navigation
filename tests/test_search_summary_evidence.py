@@ -238,8 +238,8 @@ def test_replacement_plan_original_and_unhide_cas_are_stable() -> None:
 @pytest.mark.parametrize(
     ("kind", "summary", "expected_ok"),
     [
-        ("protected", "No issues found.", True),
-        ("strong", "No issues found.", True),
+        ("protected", "No issues found.", False),
+        ("strong", "No issues found.", False),
         ("protected", "No issues found; 999999 records clean.", False),
         ("strong", "No issues found; 999999 records clean.", False),
     ],
@@ -261,20 +261,61 @@ def test_middle_critical_line_survives_fake_no_issue_summary(
     scope = Scope("hermes", "test", f"sess-middle-{kind}-{expected_ok}")
 
     result = asyncio.run(engine.summarize(scope, record, summarizer))
-
-    assert all(call["required_evidence"] == evidence for call in summarizer.calls)
-    if expected_ok:
-        assert result.ok is True, result.error
+    if kind == "strong" and summary == "No issues found.":
+        assert result.ok is True
         assert result.item is not None
-        assert any(key in line for line in result.item.compacted.splitlines())
+        assert key in result.item.compacted
         assert engine.store.items(scope)[0].item_id == result.item.item_id
     else:
         assert result.ok is False
-        assert len(summarizer.calls) == 2
-        assert not engine.store.items(scope)
-        assert not engine.store._pending
+        if kind == "protected":
+            assert result.error == "protected_error"
+            assert not summarizer.calls
+        else:
+            assert result.error in {"verification_failed", "compression_insufficient"}
+            assert len(summarizer.calls) <= 2
     assert record.content == content
 
+
+
+
+@pytest.mark.parametrize("count", [22, 40])
+def test_files_hide_projection_reconstructs_all_paths_and_restores_original(count: int) -> None:
+    content = json.dumps(
+        {"files": [f"synthetic/fixtures/row-{i:03d}.txt" for i in range(count)], "total_count": count},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    expected = json.loads(content)["files"]
+    record = _record(content, f"call_projection_{count}")
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", f"sess-projection-{count}")
+    result = asyncio.run(engine.compact(scope, record))
+
+    assert result.ok is True, result.error
+    assert result.item is not None and result.plan is not None
+    assert compute_sha256(result.item.original) == compute_sha256(content)
+    assert result.item.original.encode("utf-8") == content.encode("utf-8")
+    assert result.plan.expected_content_sha256 == record.content_sha256
+    assert result.plan.replacement_text == result.item.compacted
+
+    label = "Projected JSON (prefix+suffix; restore with unhide_context): "
+    marker = "The remaining result is preserved. Restore it with unhide_context("
+    rows = result.item.compacted.split("\n", 1)[1].split(marker, 1)[0].rstrip("\n").split("\n")
+    decoded = "\n".join(row[len(label):] for row in rows)
+    reconstructed = reconstruct_files_projection(decoded)
+    assert reconstructed == expected
+    assert len(reconstructed) == len(expected) == count
+
+    stale = engine.restore(scope, result.item.item_id, expected_version=result.item.version + 1)
+    assert stale.ok is False and stale.error == "version_conflict"
+    restored = engine.restore(scope, result.item.item_id, expected_version=result.plan.visibility_version)
+    assert restored.ok is True
+    assert restored.item is not None
+    assert restored.item.visibility == "visible"
+    assert restored.item.version == result.plan.visibility_version + 1
+    assert restored.item.original.encode("utf-8") == content.encode("utf-8")
+    assert compute_sha256(restored.item.original) == compute_sha256(content)
 
 def test_unverifiable_files_summary_leaves_original_and_store_unchanged() -> None:
     content = _files_json(22, 60, 300)

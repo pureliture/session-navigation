@@ -7,7 +7,7 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from session_navigation.generic_json import inspect_generic_json_with_evidence, parsed_json_policy_lines
+from session_navigation.generic_json import inspect_generic_json_with_evidence
 from session_navigation.json_projection import FILES_SCHEMA, MAX_PROJECTION_BYTES, MAX_PROJECTION_EVIDENCE_LINES, MAX_PROJECTION_LINE_LENGTH, JsonProjection, ProjectionDecision, project_json_tool_result, verify_projection, verify_projection_render
 from session_navigation.model import (
     ContextItem,
@@ -23,6 +23,7 @@ from session_navigation.model import (
 from session_navigation.policy import (
     MAX_EXCERPT_BYTES,
     RuleSpanSelector,
+    check_parsed_json_refusal,
     excerpts_are_exact,
     refusal_reason,
     render_compaction,
@@ -138,17 +139,11 @@ class SessionNavigationEngine:
             }
         rule_source = projection.source if projection else selectable_text(record.content)
         refusal = refusal_reason(record, self.config)
+        if summarizer is not None:
+            refusal = refusal or check_parsed_json_refusal(record.content)
         if projection is not None and refusal == "not_long":
             refusal = None
-        # Parsed policy evidence is enforced on the model's required lines; a
-        # protected pattern found only in the raw JSON envelope must not block
-        # that path when the parsed value itself carries the protected line.
-        if (
-            refusal == "protected_error"
-            and evidence_source
-            and parsed_json_policy_lines(record.content)
-        ):
-            refusal = None
+
         if refusal is not None:
             return MutationResult(ok=False, error=refusal)
 

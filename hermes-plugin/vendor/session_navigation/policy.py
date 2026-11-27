@@ -159,6 +159,29 @@ def is_business_state_critical(text: str) -> bool:
     targets = (text, decoded) if decoded != text else (text,)
     return any(pattern.search(target) for target in targets for pattern in _BUSINESS_STATE_PATTERNS)
 
+def check_parsed_json_refusal(content: str) -> str | None:
+    """Return protected_error when decoded JSON string values carry protected facts."""
+    stripped = content.lstrip()
+    if not stripped or stripped[0] not in '{["':
+        return None
+    try:
+        parsed = json.loads(content)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    stack = [parsed]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            for line in selectable_text(value).splitlines():
+                if is_protected_error(line) or is_business_state_critical(line):
+                    return "protected_error"
+        elif isinstance(value, dict):
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+    return None
+
+
 def check_refusal_reason(original: str, min_chars: int = 800) -> str | None:
     """Evaluate whether original content must be rejected from compaction."""
     if len(original) < min_chars:
@@ -168,7 +191,6 @@ def check_refusal_reason(original: str, min_chars: int = 800) -> str | None:
     if is_business_state_critical(original):
         return "protected_error"
     return None
-
 
 def refusal_reason(record: ToolResultRecord, config: EngineConfig | None = None) -> str | None:
     """Evaluate whether a tool result record must be rejected from compaction."""

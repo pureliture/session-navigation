@@ -372,22 +372,16 @@ test("fake no-issue summaries cannot drop a critical middle line", async () => {
     await withEngine(`adversarial-${kind}`, async (engine, store, scope) => {
       const record = recordFor(content, `call_adversarial_${kind}`);
       let calls = 0;
-      const summarizer: Summarizer = async (_original, supplied) => {
+      const summarizer: Summarizer = async () => {
         calls += 1;
-        assert.deepEqual(supplied, evidence);
         return { summary: "No issues found." };
       };
       const result = await engine.summarize(scope, record, summarizer);
-      assert.ok(isPreserved(result), `${kind}: ${result.error}`);
-      assert.ok(calls > 0);
-      if (result.ok) {
-        assert.ok(result.item?.compacted.includes(key), "critical line retained");
-        assert.equal(store.get(scope, result.plan!.item_id)?.compacted, result.plan?.replacement_text);
-      } else {
-        assert.equal(result.item, undefined);
-        assert.equal(result.plan, undefined);
-        assert.equal(store.items(scope).length, 0);
-      }
+      assert.equal(result.ok, false, `${kind}: expected refusal`);
+      assert.equal(calls, 0);
+      assert.equal(result.item, undefined);
+      assert.equal(result.plan, undefined);
+      assert.equal(store.items(scope).length, 0);
       assert.equal(record.content, content);
     });
   }
@@ -409,10 +403,7 @@ test("dense search evidence fails compression closed instead of inventing a clea
       summary: "Routine matches found; no issues reported.",
     }));
     assert.equal(result.ok, false);
-    assert.ok(
-      result.error === "verification_failed" || result.error === "compression_insufficient",
-      result.error ?? "failed",
-    );
+    assert.equal(result.error, "protected_error");
     assert.equal(result.item, undefined);
     assert.equal(result.plan, undefined);
     assert.equal(store.items(scope).length, 0);

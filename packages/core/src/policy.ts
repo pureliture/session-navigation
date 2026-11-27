@@ -105,6 +105,29 @@ export function containsSensitivePattern(text: string): boolean {
   return sensitivePattern.test(text);
 }
 
+export function checkParsedJsonRefusal(content: string): string | undefined {
+  const stripped = content.trimStart();
+  if (!stripped || (stripped[0] !== "{" && stripped[0] !== "[" && stripped[0] !== '"')) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(content);
+    const walk = (value: Json): boolean => {
+      if (typeof value === "string") {
+        return splitLines(selectableText(value)).some((line) =>
+          refusalPatterns.some((pattern) => pattern.test(line)),
+        );
+      }
+      if (Array.isArray(value)) return value.some(walk);
+      if (value && typeof value === "object") return Object.values(value).some(walk);
+      return false;
+    };
+    return walk(parsed) ? "protected_error" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function checkRefusalReason(
   text: string,
   minChars = defaults.min_chars,

@@ -1,4 +1,4 @@
-import { inspectGenericJsonWithEvidence, parsedJsonPolicyLines, type GenericJsonDecision } from "./generic-json.ts";
+import { inspectGenericJsonWithEvidence, type GenericJsonDecision } from "./generic-json.ts";
 import { EngineError } from "./driver.ts";
 import { evaluateCompaction, type Choice } from "./compaction.ts";
 import {
@@ -27,6 +27,7 @@ import {
   type ScopeLike,
 } from "./model.ts";
 import {
+  checkParsedJsonRefusal,
   isDestructive,
   normalizeKeepLines,
   refusalReason,
@@ -65,6 +66,7 @@ export interface HideOptions {
   options_omitted?: boolean;
   summarizer?: Summarizer;
   allow_fallback?: boolean;
+  parsed_protection?: boolean;
 }
 
 export class Engine {
@@ -159,7 +161,7 @@ export class Engine {
     summarizer: Summarizer,
     options_omitted = false,
   ): Promise<Result> {
-    return this.hide(scope, record, { summarizer, allow_fallback: false, options_omitted });
+    return this.hide(scope, record, { summarizer, allow_fallback: false, options_omitted, parsed_protection: true });
   }
 
   private async apply(
@@ -172,19 +174,13 @@ export class Engine {
     evidence?: string[],
   ): Promise<Result> {
     let refused = refusalReason(record, this.config);
+    if (options.parsed_protection && !refused) {
+      refused = checkParsedJsonRefusal(record.content);
+    }
     if (projection !== undefined && refused === "not_long") {
       refused = undefined;
     }
-    // Parsed policy evidence is enforced on the model's required lines; a
-    // protected pattern found only in the raw JSON envelope must not block
-    // that path when the parsed value itself carries the protected line.
-    if (
-      refused === "protected_error" &&
-      evidence?.length &&
-      parsedJsonPolicyLines(record.content).length
-    ) {
-      refused = undefined;
-    }
+
     if (refused) {
       return { ok: false, error: refused };
     }
