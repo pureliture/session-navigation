@@ -1,4 +1,5 @@
 export * from "./model.ts";
+export * from "./json-projection.ts";
 export * from "./driver.ts";
 export * from "./schema.ts";
 export * from "./store.ts";

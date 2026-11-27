@@ -1,6 +1,11 @@
 import { EngineError } from "./driver.ts";
 import { evaluateCompaction, type Choice } from "./compaction.ts";
 import {
+  projectJsonToolResult,
+  type JsonProjection,
+  type ProjectionDecision,
+} from "./json-projection.ts";
+import {
   defaults,
   itemId,
   scopeKey,
@@ -64,16 +69,21 @@ export class Engine {
     if (options.keep_lines !== undefined && !Array.isArray(options.keep_lines)) {
       return { ok: false, error: "invalid_keep_lines" };
     }
-    const retention = normalizeKeepLines(
-      selectableText(record.content),
-      (options.keep_lines ?? []) as Json[],
-    );
+    const decision: ProjectionDecision = options.summarizer
+      ? {}
+      : projectJsonToolResult(record.content, record.invocation.tool_name, this.config);
+    if (decision.refusal) {
+      return { ok: false, error: decision.refusal };
+    }
+    const projection = decision.projection;
+    const source = projection?.source ?? selectableText(record.content);
+    const retention = normalizeKeepLines(source, (options.keep_lines ?? []) as Json[]);
     const diagnostics = {
       keep_lines_ignored: retention.ignored,
       keep_lines_normalized: retention.normalized,
     };
     try {
-      return { ...(await this.apply(scope, record, retention.accepted, options)), ...diagnostics };
+      return { ...(await this.apply(scope, record, retention.accepted, options, projection)), ...diagnostics };
     } catch (error) {
       if (error instanceof EngineError) {
         return { ok: false, error: error.code, ...diagnostics };
@@ -96,11 +106,16 @@ export class Engine {
     record: RecordInput,
     keepLines: string[],
     options: HideOptions,
+    projection?: JsonProjection,
   ): Promise<Result> {
-    const refused = refusalReason(record, this.config);
+    let refused = refusalReason(record, this.config);
+    if (projection !== undefined && refused === "not_long") {
+      refused = undefined;
+    }
     if (refused) {
       return { ok: false, error: refused };
     }
+    const source = projection?.source ?? selectableText(record.content);
     const itemIdentity = itemId(
       scope,
       record.call_id,
@@ -115,9 +130,9 @@ export class Engine {
     }
     if (existing && existing.invocation_digest !== record.invocation_digest)
       return { ok: false, error: "invocation_conflict" };
-    const baseline = selectRule(selectableText(record.content), keepLines, this.config);
+    const baseline = selectRule(source, keepLines, this.config, projection?.required);
     if (!baseline && (!options.summarizer || options.allow_fallback !== false)) {
-      return { ok: false, error: keepLines.length && selectRule(selectableText(record.content), [], this.config)
+      return { ok: false, error: keepLines.length && selectRule(source, [], this.config, projection?.required)
         ? "keep_lines_too_broad" : "verification_failed" };
     }
     const reservationKey = `${scopeKey(scope)}\0${itemIdentity}`;
@@ -149,12 +164,15 @@ export class Engine {
       const evaluated = evaluateCompaction(
         record.content,
         itemIdentity,
-        selectableText(record.content),
+        source,
         baseline ?? [],
         summary,
         record.invocation,
         options.options_omitted,
         options.allow_fallback !== false,
+        projection?.required,
+        projection?.required,
+        projection ? "Projected JSON excerpt" : "Original excerpt",
       );
       if (evaluated.error || !evaluated.choice || evaluated.rendered === undefined) {
         return { ok: false, error: evaluated.error ?? "verification_failed" };

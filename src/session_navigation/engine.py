@@ -6,6 +6,7 @@ import copy
 from dataclasses import replace
 from typing import Any
 
+from session_navigation.json_projection import JsonProjection, ProjectionDecision, project_json_tool_result
 from session_navigation.model import (
     ContextItem,
     EngineConfig,
@@ -68,8 +69,16 @@ class SessionNavigationEngine:
             return MutationResult(ok=False, error="invalid_keep_lines_action")
         if keep_lines is not None and not isinstance(keep_lines, list):
             return MutationResult(ok=False, error="invalid_keep_lines")
-        accepted, ignored, normalized = normalize_keep_lines(selectable_text(record.content), keep_lines or [])
-        result = await self._apply_validated(scope, record, summarizer,
+        decision = (
+            project_json_tool_result(record.content, record.invocation.get("tool_name"), self.config)
+            if summarizer is None else ProjectionDecision()
+        )
+        if decision.refusal is not None:
+            return MutationResult(ok=False, error=decision.refusal)
+        projection = decision.projection
+        projected_source = projection.source if projection else selectable_text(record.content)
+        accepted, ignored, normalized = normalize_keep_lines(projected_source, keep_lines or [])
+        result = await self._apply_validated(scope, record, summarizer, projection,
             options_omitted=options_omitted, allow_fallback=allow_fallback, keep_lines=accepted)
         return replace(result, keep_lines_ignored=tuple(ignored), keep_lines_normalized=tuple(normalized))
 
@@ -78,6 +87,7 @@ class SessionNavigationEngine:
         scope: Scope,
         record: ToolResultRecord,
         summarizer: Summarizer | None = None,
+        projection: JsonProjection | None = None,
         *,
         options_omitted: bool = False,
         allow_fallback: bool = True,
@@ -86,9 +96,10 @@ class SessionNavigationEngine:
         """Compact/summarize a tool result. Fail-open on any failure.
         Guarantees: Fail-Open on any failure. Never crashes host loop.
         """
-        rule_source = selectable_text(record.content)
-        # 1. Policy & input validation
+        rule_source = projection.source if projection else selectable_text(record.content)
         refusal = refusal_reason(record, self.config)
+        if projection is not None and refusal == "not_long":
+            refusal = None
         if refusal is not None:
             return MutationResult(ok=False, error=refusal)
 
@@ -141,7 +152,7 @@ class SessionNavigationEngine:
             max_evidence=self.config.max_evidence_excerpts,
             max_line_length=self.config.max_excerpt_line_length,
         )
-        baseline = selector.select(rule_source, keep_lines=tuple(keep_lines)) if keep_lines else selector.select(rule_source)
+        baseline = selector.select(rule_source, keep_lines=tuple(keep_lines), required_override=tuple(projection.required) if projection else None) if keep_lines or projection else selector.select(rule_source)
         if baseline is None and (summarizer is None or allow_fallback):
             error = "keep_lines_too_broad" if keep_lines and selector.select(rule_source) is not None else "verification_failed"
             return MutationResult(ok=False, error=error)
@@ -153,8 +164,8 @@ class SessionNavigationEngine:
             return MutationResult(ok=False, error=reserve_err)
 
         try:
-            required = required_evidence_lines(record.content)
-            rule_required = required_evidence_lines(rule_source)
+            required = projection.required if projection else required_evidence_lines(record.content)
+            rule_required = projection.required if projection else required_evidence_lines(rule_source)
             choice: SpanChoice | None = None
 
             # 5. Summarization attempt
@@ -197,6 +208,9 @@ class SessionNavigationEngine:
                 invocation=record.invocation,
                 options_omitted=options_omitted,
                 allow_fallback=allow_fallback,
+                required_override=tuple(required),
+                rule_required_override=tuple(rule_required),
+                excerpt_label="Projected JSON excerpt" if projection else "Original excerpt",
             )
             if err is not None:
                 self.store.release(scope, item_id, token)

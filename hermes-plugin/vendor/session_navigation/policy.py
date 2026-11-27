@@ -129,6 +129,10 @@ _EXIT_CLAIM = re.compile(
 )
 
 
+def contains_sensitive_pattern(text: str) -> bool:
+    """Return True when text contains a credential-like token pattern."""
+    return bool(_SENSITIVE_PATTERN.search(text))
+
 def is_protected_error(text: str) -> bool:
     """Return True if text or its decoded envelope matches any unresolved error pattern."""
     decoded = selectable_text(text)
@@ -264,13 +268,19 @@ class RuleSpanSelector:
         self.max_evidence = max_evidence
         self.max_line_length = max_line_length
 
-    def select(self, original: str, *, keep_lines: tuple[str, ...] = ()) -> SpanChoice | None:
+    def select(self, original: str, *, keep_lines: tuple[str, ...] = (), required_override: tuple[str, ...] | list[str] | None = None) -> SpanChoice | None:
         lines = original.splitlines()
         eligible = [index for index, line in enumerate(lines) if 0 < len(line) <= self.max_line_length]
         if not eligible:
             return None
 
-        selected = _required_evidence_indexes(lines)
+        if required_override is not None:
+            index_by_line = {line: index for index, line in enumerate(lines)}
+            selected = [index_by_line[line] for line in required_override if line in index_by_line]
+            if len(selected) != len(tuple(required_override)):
+                return None
+        else:
+            selected = _required_evidence_indexes(lines)
         if len(selected) > self.max_evidence or any(len(lines[index]) > self.max_line_length for index in selected):
             return None
 
@@ -311,9 +321,10 @@ def render_compaction(
     context: dict[str, str] | None = None,
     facts: dict[str, Any] | None = None,
     options_omitted: bool = False,
+    excerpt_label: str = "Original excerpt",
 ) -> str:
     """Render compacted representation with [hidden:{item_id}] envelope."""
-    excerpts = "\n".join(f"Original excerpt: {line}" for line in lines)
+    excerpts = "\n".join(f"{excerpt_label}: {line}" for line in lines)
     if summary_text is not None:
         return (
             f"[hidden:{item_id}]\n"

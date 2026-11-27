@@ -97,6 +97,28 @@ function textExitFacts(original: string): { exit_code: number | null } {
   const codes = new Set([...original.matchAll(exitClaim)].map((match) => pythonInteger(match[1])));
   return { exit_code: codes.size === 1 ? [...codes][0] : null };
 }
+
+const sensitivePattern = pythonize(sensitive);
+const refusalPatterns = [...errors, ...business.map(pythonize)];
+
+export function containsSensitivePattern(text: string): boolean {
+  return sensitivePattern.test(text);
+}
+
+export function checkRefusalReason(
+  text: string,
+  minChars = defaults.min_chars,
+): string | undefined {
+  if (length(text) < minChars) {
+    return "not_long";
+  }
+  const decoded = selectableText(text);
+  const targets = decoded !== text ? [text, decoded] : [text];
+  if (refusalPatterns.some((pattern) => targets.some((target) => pattern.test(target)))) {
+    return "protected_error";
+  }
+  return undefined;
+}
 export function refusalReason(record: RecordInput, config: Config = defaults): string | undefined {
   if (record.status === "error") {
     return "protected_error";
@@ -114,18 +136,7 @@ export function refusalReason(record: RecordInput, config: Config = defaults): s
   if (pythonize(sensitive).test(invocation)) {
     return "sensitive_invocation";
   }
-  if (length(record.content) < config.min_chars) {
-    return "not_long";
-  }
-  const decoded = selectableText(record.content);
-  const targets = decoded !== record.content ? [record.content, decoded] : [record.content];
-  if (
-    [...errors, ...business.map(pythonize)].some((pattern) =>
-      targets.some((target) => pattern.test(target)),
-    )
-  ) {
-    return "protected_error";
-  }
+  return checkRefusalReason(record.content, config.min_chars);
 }
 export const evidenceIndexes = (lines: string[]): number[] => {
   const signal = pythonize(strong);
@@ -196,6 +207,7 @@ export function selectRule(
   original: string,
   keepLines: string[] = [],
   config: Config = defaults,
+  requiredOverride?: string[],
 ): string[] | undefined {
   const lines = splitLines(original);
   const eligible = lines.flatMap((line, index) =>
@@ -204,8 +216,12 @@ export function selectRule(
   if (!eligible.length) {
     return;
   }
-  const selected = evidenceIndexes(lines);
+  const lineIndex = new Map(lines.map((line, index) => [line, index]));
+  const selected = requiredOverride === undefined
+    ? evidenceIndexes(lines)
+    : requiredOverride.map((line) => lineIndex.get(line) ?? -1);
   if (
+    selected.some((index) => index < 0) ||
     selected.length > config.max_evidence_excerpts ||
     selected.some((index) => length(lines[index]) > config.max_excerpt_line_length)
   ) {
@@ -255,8 +271,9 @@ export function renderCompaction(
     exit_code: number | null;
   } = { exit_code: null },
   omitted = false,
+  excerptLabel = "Original excerpt",
 ): string {
-  const excerpts = lines.map((line) => `Original excerpt: ${line}`).join("\n");
+  const excerpts = lines.map((line) => `${excerptLabel}: ${line}`).join("\n");
   if (summary) {
     return (
       `[hidden:${id}]\n` +

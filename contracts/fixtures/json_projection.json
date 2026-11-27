@@ -1,0 +1,110 @@
+{
+  "version": 2,
+  "note": "Fully synthetic JSON projection vectors. No production content or identifiers.",
+  "serialization": { "ensure_ascii": false, "separators": [",", ":"] },
+  "cases": [
+    {
+      "id": "matches_success",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches",
+        "line_count": 24,
+        "line_chars": 180,
+        "special_line": 7,
+        "special_text": "배송 상태 확인 synthetic marker"
+      },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    },
+    {
+      "id": "files_success",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 40, "path_chars": 96 },
+      "expected": { "schema": "search_files_files_v1", "refusal": null }
+    },
+    {
+      "id": "unknown_shape",
+      "tool_name": "search_files",
+      "data": { "unrecognized": "Synthetic payload that must not be projected." },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "wrong_tool",
+      "tool_name": "read_file",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "Synthetic text long enough to satisfy the rule selector in the raw path.",
+        "total_count": 1,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "duplicate_key",
+      "tool_name": "search_files",
+      "raw": "{\"files\":[\"synthetic/a.txt\"],\"total_count\":1,\"total_count\":2}",
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "protected_error",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "Synthetic match line one.\nERROR: unresolved synthetic failure remains protected.",
+        "total_count": 2,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "protected_business_state",
+      "tool_name": "search_files",
+      "data": {
+        "files": ["synthetic/주문/배송 지연 미확인.txt"],
+        "total_count": 1
+      },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "sensitive_value",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "Synthetic line with api_key=synthetic-secret-value.",
+        "total_count": 1,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "nested_value",
+      "tool_name": "search_files",
+      "data": {
+        "files": [{ "path": "synthetic/a.txt" }],
+        "total_count": 1
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "oversized_value",
+      "tool_name": "search_files",
+      "generate": { "kind": "repeat", "prefix": "synthetic/", "char": "가", "count": 9000 },
+      "total_count": 1,
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "escapes_unicode",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic\tformat \"quoted\" \\ backslash",
+        "matches_text": "Synthetic escape line 가나다 😀 with \u001b[31mANSI\u001b[0m and tab\ttoken.",
+        "total_count": 1,
+        "total_count_is_lower_bound": true,
+        "truncated": true
+      },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    }
+  ]
+}

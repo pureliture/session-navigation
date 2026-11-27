@@ -23,12 +23,15 @@ export function evaluateCompaction(
   invocation?: Json,
   omitted = false,
   allowFallback = true,
+  addedRequired?: string[],
+  addedRuleRequired?: string[],
+  excerptLabel = "Original excerpt",
 ): {
   choice?: Choice;
   rendered?: string;
   error?: string;
 } {
-  const required = requiredEvidence(original);
+  const required = addedRequired ?? requiredEvidence(original);
   let choice: Choice = { lines: baseline, source: "rule" };
   if (summary !== undefined) {
     const valid = validateSummary(original, summary, required, invocation);
@@ -46,6 +49,7 @@ export function evaluateCompaction(
     choice.summary_text,
     verifiedFacts(original),
     omitted,
+    excerptLabel,
   );
   if (
     choice.source === "llm" &&
@@ -55,12 +59,13 @@ export function evaluateCompaction(
       return { error: "compression_insufficient" };
     }
     choice = { lines: baseline, source: "rule" };
-    rendered = renderCompaction(id, baseline);
+    rendered = renderCompaction(id, baseline, undefined, verifiedFacts(original), omitted, excerptLabel);
   }
   const source = choice.source === "llm" ? original : ruleSource;
+  const ruleRequired = addedRuleRequired ?? requiredEvidence(source);
   if (
     choice.lines.some((line) => !splitLines(selectableText(source)).includes(line)) ||
-    requiredEvidence(source).some((line) => !choice.lines.includes(line)) ||
+    ruleRequired.some((line) => !choice.lines.includes(line)) ||
     length(rendered) >= length(original)
   ) {
     return { error: "verification_failed" };
