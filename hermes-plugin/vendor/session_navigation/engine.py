@@ -6,7 +6,7 @@ import copy
 from dataclasses import replace
 from typing import Any
 
-from session_navigation.json_projection import JsonProjection, ProjectionDecision, project_json_tool_result
+from session_navigation.json_projection import FILES_SCHEMA, MAX_PROJECTION_BYTES, MAX_PROJECTION_EVIDENCE_LINES, JsonProjection, ProjectionDecision, project_json_tool_result, verify_projection
 from session_navigation.model import (
     ContextItem,
     EngineConfig,
@@ -19,6 +19,7 @@ from session_navigation.model import (
     _item_id,
 )
 from session_navigation.policy import (
+    MAX_EXCERPT_BYTES,
     RuleSpanSelector,
     excerpts_are_exact,
     refusal_reason,
@@ -76,10 +77,17 @@ class SessionNavigationEngine:
         if decision.refusal is not None:
             return MutationResult(ok=False, error=decision.refusal)
         projection = decision.projection
+        if projection is not None and not verify_projection(record.content, record.invocation.get("tool_name"), projection, self.config):
+            return MutationResult(ok=False, error="verification_failed")
         projected_source = projection.source if projection else selectable_text(record.content)
+        if projection is not None:
+            original_source = selectable_text(record.content)
+            for entry in keep_lines or []:
+                if isinstance(entry, str) and entry in original_source and entry not in projected_source:
+                    return MutationResult(ok=False, error="keep_lines_conflict")
         accepted, ignored, normalized = normalize_keep_lines(projected_source, keep_lines or [])
         result = await self._apply_validated(scope, record, summarizer, projection,
-            options_omitted=options_omitted, allow_fallback=allow_fallback, keep_lines=accepted)
+            keep_lines=accepted, options_omitted=options_omitted, allow_fallback=allow_fallback)
         return replace(result, keep_lines_ignored=tuple(ignored), keep_lines_normalized=tuple(normalized))
 
     async def _apply_validated(
@@ -149,8 +157,9 @@ class SessionNavigationEngine:
         selector = RuleSpanSelector(
             head_excerpts=self.config.head_excerpts,
             tail_excerpts=self.config.tail_excerpts,
-            max_evidence=self.config.max_evidence_excerpts,
+            max_evidence=MAX_PROJECTION_EVIDENCE_LINES if projection and projection.schema == FILES_SCHEMA else self.config.max_evidence_excerpts,
             max_line_length=self.config.max_excerpt_line_length,
+            max_bytes=MAX_PROJECTION_BYTES if projection and projection.schema == FILES_SCHEMA else MAX_EXCERPT_BYTES,
         )
         baseline = selector.select(rule_source, keep_lines=tuple(keep_lines), required_override=tuple(projection.required) if projection else None) if keep_lines or projection else selector.select(rule_source)
         if baseline is None and (summarizer is None or allow_fallback):
@@ -210,7 +219,7 @@ class SessionNavigationEngine:
                 allow_fallback=allow_fallback,
                 required_override=tuple(required),
                 rule_required_override=tuple(rule_required),
-                excerpt_label="Projected JSON excerpt" if projection else "Original excerpt",
+                excerpt_label="Projected JSON (prefix+suffix; restore with unhide_context)" if projection and projection.schema == FILES_SCHEMA else ("Projected JSON excerpt" if projection else "Original excerpt"),
             )
             if err is not None:
                 self.store.release(scope, item_id, token)

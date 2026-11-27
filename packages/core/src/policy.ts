@@ -147,6 +147,36 @@ export const requiredEvidence = (content: string): string[] => {
   const lines = splitLines(selectableText(content));
   return evidenceIndexes(lines).map((index) => lines[index]);
 };
+
+// Code-point spans of the patterns that make a line required evidence. Chunk
+// boundaries must not cut through one of these spans.
+export function evidenceSpans(text: string): [number, number][] {
+  const indices = [0];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const width = (text.codePointAt(cursor) ?? 0) > 0xffff ? 2 : 1;
+    cursor += width;
+    indices[cursor] = indices[cursor - width] + 1;
+  }
+  const spans: [number, number][] = [];
+  for (const pattern of [pythonize(strong), pythonize(pathEvidence)]) {
+    const global = new RegExp(pattern.source, [...new Set(pattern.flags + "g")].join(""));
+    for (const match of text.matchAll(global)) {
+      spans.push([indices[match.index], indices[match.index + match[0].length]]);
+    }
+  }
+  spans.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const merged: [number, number][] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && span[0] <= last[1]) {
+      last[1] = Math.max(last[1], span[1]);
+    } else {
+      merged.push(span);
+    }
+  }
+  return merged;
+}
 export function normalizeKeepLines(
   original: string,
   entries: Json[],
@@ -208,6 +238,7 @@ export function selectRule(
   keepLines: string[] = [],
   config: Config = defaults,
   requiredOverride?: string[],
+  maxExcerptBytes = 3072,
 ): string[] | undefined {
   const lines = splitLines(original);
   const eligible = lines.flatMap((line, index) =>
@@ -242,7 +273,7 @@ export function selectRule(
   });
   let excerptBytes = selected.reduce((sum, index) => sum + bytes(lines[index]) + 1, 0);
   let extraBytes = 0;
-  if (excerptBytes > 3072) {
+  if (excerptBytes > maxExcerptBytes) {
     return;
   }
   const highSignalPattern = pythonize(highSignal);
@@ -251,7 +282,7 @@ export function selectRule(
       continue;
     }
     const lineBytes = bytes(lines[index]) + 1;
-    if (extraBytes + lineBytes <= 768 && excerptBytes + lineBytes <= 3072) {
+    if (extraBytes + lineBytes <= 768 && excerptBytes + lineBytes <= maxExcerptBytes) {
       selected.push(index);
       extraBytes += lineBytes;
       excerptBytes += lineBytes;

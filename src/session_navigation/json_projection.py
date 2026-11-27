@@ -1,10 +1,10 @@
-"""Strict, deterministic JSON-aware projection for known ``search_files`` shapes.
+"""Strict JSON-aware projection for known ``search_files`` outputs.
 
-This module is intentionally narrow: it recognizes only two explicit schemas and
-refuses everything else.  The canonical projection is derived from the parsed
-JSON, never from a prefix of the raw bytes.  Excerpts selected by the rule
-selector are therefore excerpts of the projection, not claims about raw lines.
-The original bytes, digest and restore path remain owned by the engine/store.
+Two schemas are recognized. ``matches`` remains fail-closed for long evidence
+lines. ``files`` uses a deterministic v2 prefix+suffix projection: the common
+path prefix is separated once, suffixes are emitted in order, and a verifier
+reconstructs the original path list from the original JSON independently of
+the projection text. Raw bytes, digest, storage and restore stay engine-owned.
 """
 from __future__ import annotations
 
@@ -16,16 +16,18 @@ from session_navigation.model import EngineConfig, compute_sha256
 from session_navigation.policy import (
     check_refusal_reason,
     contains_sensitive_pattern,
+    evidence_spans,
     required_evidence_lines,
 )
 
 PROJECTION_VERSION = 1
 MATCHES_SCHEMA = "search_files_matches_v1"
-FILES_SCHEMA = "search_files_files_v1"
+FILES_SCHEMA = "search_files_files_v2"
 MAX_JSON_BYTES = 64 * 1024
 MAX_FIELD_CHARS = 8192
 MAX_LIST_ITEMS = 128
 MAX_PROJECTION_LINES = 512
+MAX_PROJECTION_EVIDENCE_LINES = 640
 MAX_PROJECTION_BYTES = 32 * 1024
 MIN_LINE_BUDGET = 96
 
@@ -34,13 +36,11 @@ _MATCHES_KEYS = frozenset(
 )
 _MATCHES_REQUIRED = _MATCHES_KEYS - {"_hint"}
 _FILES_KEYS = frozenset({"files", "total_count"})
-_UNSAFE_UNICODE = frozenset({"\u2028", "\u2029"})
+_UNSAFE_CODEPOINTS = frozenset({0x2028, 0x2029})
 
 
 @dataclass(frozen=True)
 class JsonProjection:
-    """Canonical projected source plus the evidence lines required from it."""
-
     schema: str
     source: str
     lines: tuple[str, ...]
@@ -50,8 +50,6 @@ class JsonProjection:
 
 @dataclass(frozen=True)
 class ProjectionDecision:
-    """Either a usable projection or a fail-closed refusal code."""
-
     projection: JsonProjection | None = None
     refusal: str | None = None
 
@@ -70,11 +68,7 @@ def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _loads_strict(content: str) -> dict[str, Any]:
-    obj = json.loads(
-        content,
-        object_pairs_hook=_strict_object,
-        parse_constant=_reject_constant,
-    )
+    obj = json.loads(content, object_pairs_hook=_strict_object, parse_constant=_reject_constant)
     if not isinstance(obj, dict):
         raise ValueError("JSON value is not an object")
     return obj
@@ -93,7 +87,7 @@ def _encoded(value: str) -> str:
 
 
 def _has_unsafe_unicode(value: str) -> bool:
-    return any(char in _UNSAFE_UNICODE for char in value)
+    return any(ord(char) in _UNSAFE_CODEPOINTS or 0xD800 <= ord(char) <= 0xDFFF for char in value)
 
 
 def _value_refusal(value: str) -> str | None:
@@ -102,32 +96,23 @@ def _value_refusal(value: str) -> str | None:
     if contains_sensitive_pattern(value):
         return "protected_error"
     reason = check_refusal_reason(value, min_chars=0)
-    if reason is not None:
-        return "protected_error" if reason == "protected_error" else "verification_failed"
-    return None
+    if reason == "protected_error":
+        return "protected_error"
+    return "verification_failed" if reason is not None else None
 
 
 def _append_chunks(
-    out: list[str],
-    *,
-    schema: str,
-    field: str,
-    value: str,
-    max_line: int,
+    out: list[str], *, schema: str, field: str, value: str, max_line: int
 ) -> bool:
-    """Append bounded, provenance-labelled JSON-escaped chunks.
-
-    A semantic unit containing required evidence must fit in one projected
-    line; splitting it would make the evidence unverifiable, so it fails
-    closed instead.
-    """
+    """Append bounded, provenance-labelled JSON-escaped chunks."""
     chars = list(value)
     if not chars:
         out.append(f"projected {schema} {field}+0: \"\"")
         return True
     whole_prefix = f"projected {schema} {field}+0: "
-    if required_evidence_lines(value) and len(whole_prefix) + len(_encoded(value)) > max_line:
-        return False
+    if len(whole_prefix) + len(_encoded(value)) <= max_line:
+        out.append(whole_prefix + _encoded(value))
+        return True
     start = 0
     chunk: list[str] = []
     for char in chars:
@@ -183,11 +168,8 @@ def _finish(
         return ProjectionDecision(refusal="verification_failed")
     return ProjectionDecision(
         projection=JsonProjection(
-            schema=schema,
-            source=source,
-            lines=tuple(lines),
-            required=required,
-            digest=compute_sha256(original),
+            schema=schema, source=source, lines=tuple(lines),
+            required=required, digest=compute_sha256(original),
         )
     )
 
@@ -224,7 +206,8 @@ def _project_matches(
     total_line = _metadata_line(schema, "total_count", obj["total_count"])
     lower_line = _metadata_line(schema, "total_count_is_lower_bound", obj["total_count_is_lower_bound"])
     truncated_line = _metadata_line(schema, "truncated", obj["truncated"])
-    lines = [header, total_line, lower_line, truncated_line]
+    metadata = (header, total_line, lower_line, truncated_line)
+    lines = list(metadata)
     if not _append_chunks(out=lines, schema=schema, field="matches_format", value=obj["matches_format"], max_line=max_line):
         return ProjectionDecision(refusal="verification_failed")
     if "_hint" in obj and not _append_chunks(out=lines, schema=schema, field="_hint", value=obj["_hint"], max_line=max_line):
@@ -234,11 +217,97 @@ def _project_matches(
             continue
         if not _append_chunks(out=lines, schema=schema, field=f"matches_text[{index}]", value=line, max_line=max_line):
             return ProjectionDecision(refusal="verification_failed")
-    return _finish(
-        schema=schema, lines=lines,
-        metadata_lines=(header, total_line, lower_line, truncated_line),
-        original=original, config=config,
-    )
+    return _finish(schema=schema, lines=lines, metadata_lines=metadata, original=original, config=config)
+
+
+def _common_prefix(values: list[str]) -> str:
+    if not values:
+        return ""
+    prefix = values[0]
+    for value in values[1:]:
+        index = 0
+        while index < len(prefix) and index < len(value) and prefix[index] == value[index]:
+            index += 1
+        prefix = prefix[:index]
+    return prefix
+
+
+def _prefix_lines(prefix: str, max_line: int) -> list[str] | None:
+    lines: list[str] = []
+    start = 0
+    chunk: list[str] = []
+    for char in prefix:
+        candidate = "".join(chunk + [char])
+        line = f"p;prefix+{start}={_encoded(candidate)}"
+        if len(line) > max_line:
+            if not chunk:
+                return None
+            lines.append(f"p;prefix+{start}={_encoded(''.join(chunk))}")
+            start += len(chunk)
+            chunk = [char]
+            if len(f"p;prefix+{start}={_encoded(char)}") > max_line:
+                return None
+        else:
+            chunk = list(candidate)
+    if chunk:
+        lines.append(f"p;prefix+{start}={_encoded(''.join(chunk))}")
+    return lines or [f"p;prefix+0=\"\""]
+
+
+def _suffix_lines(
+    suffixes: list[str], evidence: list[bool], max_line: int
+) -> tuple[list[str], list[bool]] | None:
+    lines: list[str] = []
+    flags: list[bool] = []
+    current = "p;suffixes=["
+    current_evidence = False
+    for index, suffix in enumerate(suffixes):
+        token = _encoded(suffix)
+        whole = "p;suffixes=[" + token + "]"
+        if len(whole) <= max_line:
+            candidate = current + token if current.endswith("[") else current + "," + token
+            candidate += "]"
+            if len(candidate) <= max_line:
+                current = candidate[:-1]
+                current_evidence = current_evidence or evidence[index]
+                continue
+            lines.append(current + "]")
+            flags.append(current_evidence)
+            current = "p;suffixes=[" + _encoded(suffix)
+            current_evidence = evidence[index]
+            continue
+
+        lines.append(current + "]")
+        flags.append(current_evidence)
+        current = "p;suffixes=["
+        current_evidence = False
+        spans = evidence_spans(suffix)
+        start = 0
+        chunk: list[str] = []
+        for position, char in enumerate(suffix):
+            label = f"p;suffix+{index}+{start}="
+            candidate_value = "".join(chunk + [char])
+            cuts_evidence = any(a < position < b for a, b in spans)
+            if len(label) + len(_encoded(candidate_value)) > max_line and chunk and not cuts_evidence:
+                end = start + len(chunk)
+                carries = any(a < end and b > start for a, b in spans)
+                lines.append(label + _encoded("".join(chunk)))
+                flags.append(carries or evidence[index])
+                start = end
+                chunk = [char]
+                continue
+            if len(f"p;suffix+{index}+{start}=") + len(_encoded(char)) > max_line:
+                return None
+            chunk.append(char)
+        if chunk:
+            end = start + len(chunk)
+            carries = any(a < end and b > start for a, b in spans)
+            lines.append(f"p;suffix+{index}+{start}=" + _encoded("".join(chunk)))
+            flags.append(carries or evidence[index])
+    if current != "p;suffixes=[":
+        lines.append(current + "]")
+        flags.append(current_evidence)
+    return lines, flags
 
 
 def _project_files(
@@ -253,49 +322,63 @@ def _project_files(
         return ProjectionDecision(refusal="verification_failed")
     if any(not isinstance(value, str) or len(value) > MAX_FIELD_CHARS for value in files):
         return ProjectionDecision(refusal="verification_failed")
+    raw_reason = check_refusal_reason(original, min_chars=0)
+    if raw_reason is not None:
+        return ProjectionDecision(refusal="protected_error" if raw_reason == "protected_error" else "verification_failed")
     for value in files:
         refusal = _value_refusal(value)
         if refusal is not None:
             return ProjectionDecision(refusal=refusal)
 
-    schema = FILES_SCHEMA
     max_line = min(config.max_excerpt_line_length, 240)
     if max_line < MIN_LINE_BUDGET:
         return ProjectionDecision(refusal="verification_failed")
-    header = f"projected {schema} schema-version = {PROJECTION_VERSION} digest = {digest}"
-    total_line = _metadata_line(schema, "total_count", obj["total_count"])
-    lines = [header, total_line]
-    for index, value in enumerate(files):
-        if not value:
-            continue
-        if not _append_chunks(out=lines, schema=schema, field=f"files[{index}]", value=value, max_line=max_line):
-            return ProjectionDecision(refusal="verification_failed")
-    return _finish(
-        schema=schema, lines=lines, metadata_lines=(header, total_line),
-        original=original, config=config,
+    prefix = "" if any(value == "" for value in files) else _common_prefix(files)
+    suffixes = [value[len(prefix):] for value in files]
+    evidence = [bool(required_evidence_lines(value)) for value in files]
+    evidence_units = sum(evidence)
+    header = (
+        f"projected {FILES_SCHEMA} v=2 digest={digest} total_count={obj['total_count']} "
+        f"items={len(files)} verified={len(files)} evidence={evidence_units} "
+        "note=prefix+suffix;restore=unhide_context"
+    )
+    if len(header) > max_line:
+        return ProjectionDecision(refusal="verification_failed")
+    prefix_part = _prefix_lines(prefix, max_line)
+    if prefix_part is None:
+        return ProjectionDecision(refusal="verification_failed")
+    suffix_part = _suffix_lines(suffixes, evidence, max_line)
+    if suffix_part is None:
+        return ProjectionDecision(refusal="verification_failed")
+    suffix_lines, suffix_flags = suffix_part
+    lines = [header] + prefix_part + suffix_lines
+    required = (header, *prefix_part) + tuple(line for line, flag in zip(suffix_lines, suffix_flags) if flag)
+    if len(required) > MAX_PROJECTION_EVIDENCE_LINES:
+        return ProjectionDecision(refusal="verification_failed")
+    source = "\n".join(lines)
+    if len(source.encode("utf-8")) > MAX_PROJECTION_BYTES or len(lines) > MAX_PROJECTION_LINES:
+        return ProjectionDecision(refusal="verification_failed")
+    return ProjectionDecision(
+        projection=JsonProjection(
+            schema=FILES_SCHEMA, source=source, lines=tuple(lines),
+            required=tuple(dict.fromkeys(required)), digest=compute_sha256(original),
+        )
     )
 
 
 def project_json_tool_result(
     content: str, tool_name: Any, config: EngineConfig | None = None
 ) -> ProjectionDecision:
-    """Return a strict projection for supported search_files outputs.
-
-    Clearly plain text and oversized plain text fall back to the legacy path.
-    Only JSON-looking input that is malformed or untrusted is fail-closed.
-    """
     if tool_name != "search_files":
         return ProjectionDecision()
     cfg = config or EngineConfig()
     stripped = content.lstrip()
-    json_like = stripped.startswith("{") or stripped.startswith("[")
-    if not json_like:
+    if not (stripped.startswith("{") or stripped.startswith("[")):
         return ProjectionDecision()
     try:
-        raw_bytes = content.encode("utf-8")
+        if len(content.encode("utf-8")) > MAX_JSON_BYTES:
+            return ProjectionDecision(refusal="verification_failed")
     except UnicodeEncodeError:
-        return ProjectionDecision(refusal="verification_failed")
-    if len(raw_bytes) > MAX_JSON_BYTES:
         return ProjectionDecision(refusal="verification_failed")
     try:
         obj = _loads_strict(content)
@@ -308,15 +391,102 @@ def project_json_tool_result(
     return _project_files(obj, content, cfg, digest)
 
 
-def verify_projection(content: str, tool_name: Any, projection: JsonProjection, config: EngineConfig | None = None) -> bool:
-    """Recompute the canonical projection and compare all identity fields."""
+def reconstruct_files_projection(source: str) -> list[str] | None:
+    """Reconstruct the full path list from a v2 projection, independently."""
+    lines = source.splitlines()
+    if not lines or not lines[0].startswith(f"projected {FILES_SCHEMA} v=2 "):
+        return None
+    prefix_parts: list[tuple[int, str]] = []
+    suffix_parts: dict[int, list[tuple[int, str]]] = {}
+    next_index = 0
+    for line in lines[1:]:
+        if line.startswith("p;prefix+"):
+            head, _, encoded_value = line.partition("=")
+            try:
+                offset = int(head[len("p;prefix+"):])
+            except ValueError:
+                return None
+            value = json.loads(encoded_value)
+            if not isinstance(value, str):
+                return None
+            prefix_parts.append((offset, value))
+        elif line.startswith("p;suffixes=["):
+            values = json.loads(line[len("p;suffixes="):])
+            if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+                return None
+            for value in values:
+                suffix_parts.setdefault(next_index, []).append((0, value))
+                next_index += 1
+        elif line.startswith("p;suffix+"):
+            head, _, encoded_value = line.partition("=")
+            bits = head.split("+")
+            if len(bits) != 3:
+                return None
+            try:
+                index, offset = int(bits[1]), int(bits[2])
+            except ValueError:
+                return None
+            value = json.loads(encoded_value)
+            if not isinstance(value, str):
+                return None
+            suffix_parts.setdefault(index, []).append((offset, value))
+            next_index = max(next_index, index + 1)
+        else:
+            return None
+    if not prefix_parts:
+        return None
+    prefix_parts.sort()
+    prefix = ""
+    expected = 0
+    for offset, value in prefix_parts:
+        if offset != expected:
+            return None
+        prefix += value
+        expected += len(value)
+    if not suffix_parts:
+        return []
+    result: list[str] = []
+    for index in range(max(suffix_parts) + 1):
+        parts = suffix_parts.get(index)
+        if parts is None:
+            return None
+        parts.sort()
+        suffix = ""
+        expected = 0
+        for offset, value in parts:
+            if offset != expected:
+                return None
+            suffix += value
+            expected += len(value)
+        result.append(prefix + suffix)
+    return result
+
+
+def verify_projection(
+    content: str, tool_name: Any, projection: JsonProjection, config: EngineConfig | None = None
+) -> bool:
+    if not isinstance(content, str) or tool_name != "search_files":
+        return False
     decision = project_json_tool_result(content, tool_name, config)
     if decision.projection is None:
         return False
-    return (
-        decision.projection.schema == projection.schema
-        and decision.projection.source == projection.source
-        and decision.projection.lines == projection.lines
-        and decision.projection.required == projection.required
-        and decision.projection.digest == projection.digest
-    )
+    candidate = decision.projection
+    if (
+        candidate.schema != projection.schema
+        or candidate.source != projection.source
+        or candidate.lines != projection.lines
+        or candidate.required != projection.required
+        or candidate.digest != projection.digest
+        or projection.digest != compute_sha256(content)
+    ):
+        return False
+    if candidate.schema == FILES_SCHEMA:
+        try:
+            original = json.loads(content)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(original, dict) or not isinstance(original.get("files"), list):
+            return False
+        if reconstruct_files_projection(candidate.source) != original["files"]:
+            return False
+    return True

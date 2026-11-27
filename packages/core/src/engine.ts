@@ -1,7 +1,11 @@
 import { EngineError } from "./driver.ts";
 import { evaluateCompaction, type Choice } from "./compaction.ts";
 import {
+  FILES_EVIDENCE_CAP,
+  FILES_EXCERPT_BYTES,
+  FILES_SCHEMA,
   projectJsonToolResult,
+  verifyProjection,
   type JsonProjection,
   type ProjectionDecision,
 } from "./json-projection.ts";
@@ -76,12 +80,34 @@ export class Engine {
       return { ok: false, error: decision.refusal };
     }
     const projection = decision.projection;
+    if (
+      projection !== undefined &&
+      !verifyProjection(record.content, record.invocation.tool_name, projection, this.config)
+    ) {
+      return { ok: false, error: "verification_failed" };
+    }
     const source = projection?.source ?? selectableText(record.content);
-    const retention = normalizeKeepLines(source, (options.keep_lines ?? []) as Json[]);
+    const entries = (options.keep_lines ?? []) as Json[];
+    const retention = normalizeKeepLines(source, entries);
     const diagnostics = {
       keep_lines_ignored: retention.ignored,
       keep_lines_normalized: retention.normalized,
     };
+    if (projection !== undefined) {
+      const originalSource = selectableText(record.content);
+      const acceptedOriginal = new Set(normalizeKeepLines(originalSource, entries).accepted);
+      if (
+        entries.some(
+          (entry) =>
+            typeof entry === "string" &&
+            acceptedOriginal.has(entry) &&
+            originalSource.includes(entry) &&
+            !source.includes(entry),
+        )
+      ) {
+        return { ok: false, error: "keep_lines_conflict", ...diagnostics };
+      }
+    }
     try {
       return { ...(await this.apply(scope, record, retention.accepted, options, projection)), ...diagnostics };
     } catch (error) {
@@ -130,9 +156,14 @@ export class Engine {
     }
     if (existing && existing.invocation_digest !== record.invocation_digest)
       return { ok: false, error: "invocation_conflict" };
-    const baseline = selectRule(source, keepLines, this.config, projection?.required);
+    const projected = projection?.schema === FILES_SCHEMA;
+    const selectorConfig = projected
+      ? { ...this.config, max_evidence_excerpts: FILES_EVIDENCE_CAP }
+      : this.config;
+    const selectorBytes = projected ? FILES_EXCERPT_BYTES : 3072;
+    const baseline = selectRule(source, keepLines, selectorConfig, projection?.required, selectorBytes);
     if (!baseline && (!options.summarizer || options.allow_fallback !== false)) {
-      return { ok: false, error: keepLines.length && selectRule(source, [], this.config, projection?.required)
+      return { ok: false, error: keepLines.length && selectRule(source, [], selectorConfig, projection?.required, selectorBytes)
         ? "keep_lines_too_broad" : "verification_failed" };
     }
     const reservationKey = `${scopeKey(scope)}\0${itemIdentity}`;
@@ -172,7 +203,11 @@ export class Engine {
         options.allow_fallback !== false,
         projection?.required,
         projection?.required,
-        projection ? "Projected JSON excerpt" : "Original excerpt",
+        projection
+          ? projection.schema === FILES_SCHEMA
+            ? "Projected JSON (prefix+suffix; restore with unhide_context)"
+            : "Projected JSON excerpt"
+          : "Original excerpt",
       );
       if (evaluated.error || !evaluated.choice || evaluated.rendered === undefined) {
         return { ok: false, error: evaluated.error ?? "verification_failed" };

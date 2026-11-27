@@ -1,8 +1,41 @@
 {
-  "version": 3,
+  "version": 4,
   "note": "Fully synthetic JSON projection vectors. No production content or identifiers.",
   "serialization": { "ensure_ascii": false, "separators": [",", ":"] },
   "cases": [
+    {
+      "id": "files_success",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 40, "evidence_count": 12, "path_chars": 96, "padding_chars": 320 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_realistic_shape",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 22, "evidence_count": 22, "path_chars": 128 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "evidence_budget",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 25, "evidence_count": 25, "path_chars": 96 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_varied",
+      "tool_name": "search_files",
+      "generate": { "kind": "files_varied" },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_unicode_escape",
+      "tool_name": "search_files",
+      "data": {
+        "files": ["synthetic/가나다/😀.txt", "synthetic/tab\tvalue.txt", "synthetic/quote\"value.txt", "synthetic/backslash\\value.txt"],
+        "total_count": 4
+      },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
     {
       "id": "matches_success",
       "tool_name": "search_files",
@@ -16,10 +49,17 @@
       "expected": { "schema": "search_files_matches_v1", "refusal": null }
     },
     {
-      "id": "files_success",
+      "id": "matches_realistic_shape",
       "tool_name": "search_files",
-      "generate": { "kind": "files", "file_count": 40, "evidence_count": 12, "path_chars": 96, "padding_chars": 320 },
-      "expected": { "schema": "search_files_files_v1", "refusal": null }
+      "generate": {
+        "kind": "matches_realistic",
+        "line_count": 32,
+        "evidence_count": 26,
+        "long_count": 6,
+        "line_chars": 180,
+        "long_chars": 361
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
     },
     {
       "id": "plain_text_success",
@@ -90,10 +130,7 @@
     {
       "id": "protected_business_state",
       "tool_name": "search_files",
-      "data": {
-        "files": ["synthetic/주문/배송 지연 미확인.txt"],
-        "total_count": 1
-      },
+      "data": { "files": ["synthetic/주문/배송 지연 미확인.txt"], "total_count": 1 },
       "expected": { "schema": null, "refusal": "protected_error" }
     },
     {
@@ -111,17 +148,26 @@
     {
       "id": "nested_value",
       "tool_name": "search_files",
-      "data": {
-        "files": [{ "path": "synthetic/a.txt" }],
-        "total_count": 1
-      },
+      "data": { "files": [{ "path": "synthetic/a.txt" }], "total_count": 1 },
       "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "empty_value",
+      "tool_name": "search_files",
+      "generate": { "kind": "files_empty" },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
     },
     {
       "id": "oversized_value",
       "tool_name": "search_files",
       "generate": { "kind": "repeat", "prefix": "synthetic/", "char": "가", "count": 9000 },
       "total_count": 1,
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "lone_surrogate",
+      "tool_name": "search_files",
+      "raw": "{\"files\":[\"synthetic/\\ud800.txt\"],\"total_count\":1}",
       "expected": { "schema": null, "refusal": "verification_failed" }
     },
     {
@@ -141,13 +187,7 @@
       "tool_name": "search_files",
       "generate": { "kind": "repeat", "prefix": "synthetic/evidence-", "char": "가", "count": 300 },
       "total_count": 1,
-      "expected": { "schema": null, "refusal": "verification_failed" }
-    },
-    {
-      "id": "evidence_budget",
-      "tool_name": "search_files",
-      "generate": { "kind": "files", "file_count": 25, "evidence_count": 25, "path_chars": 96 },
-      "expected": { "schema": null, "refusal": "verification_failed" }
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
     }
   ]
 }

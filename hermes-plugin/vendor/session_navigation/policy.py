@@ -132,6 +132,19 @@ _EXIT_CLAIM = re.compile(
 def contains_sensitive_pattern(text: str) -> bool:
     """Return True when text contains a credential-like token pattern."""
     return bool(_SENSITIVE_PATTERN.search(text))
+def evidence_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Return merged code-point ranges matching required-evidence patterns."""
+    spans: list[tuple[int, int]] = []
+    for pattern in (_STRONG_EVIDENCE_PATTERN, _PATH_EVIDENCE_PATTERN):
+        spans.extend(match.span() for match in pattern.finditer(text))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
 
 def is_protected_error(text: str) -> bool:
     """Return True if text or its decoded envelope matches any unresolved error pattern."""
@@ -262,11 +275,13 @@ class RuleSpanSelector:
         tail_excerpts: int = TAIL_EXCERPTS,
         max_evidence: int = MAX_EVIDENCE_EXCERPTS,
         max_line_length: int = MAX_EXCERPT_LINE,
+        max_bytes: int = MAX_EXCERPT_BYTES,
     ) -> None:
         self.head_excerpts = head_excerpts
         self.tail_excerpts = tail_excerpts
         self.max_evidence = max_evidence
         self.max_line_length = max_line_length
+        self.max_bytes = max_bytes
 
     def select(self, original: str, *, keep_lines: tuple[str, ...] = (), required_override: tuple[str, ...] | list[str] | None = None) -> SpanChoice | None:
         lines = original.splitlines()
@@ -295,18 +310,17 @@ class RuleSpanSelector:
             if any(part in line for part in keep_lines) and index not in selected:
                 selected.append(index)
         size = sum(len(lines[index].encode("utf-8")) + 1 for index in selected)
-        if size > MAX_EXCERPT_BYTES:
+        if size > self.max_bytes:
             return None
         extra = 0
         for index in eligible:
             if index in selected or not _HIGH_SIGNAL_PATTERN.search(lines[index]):
                 continue
             cost = len(lines[index].encode("utf-8")) + 1
-            if extra + cost <= HIGH_SIGNAL_BYTES and size + cost <= MAX_EXCERPT_BYTES:
+            if extra + cost <= HIGH_SIGNAL_BYTES and size + cost <= self.max_bytes:
                 selected.append(index)
                 extra += cost
                 size += cost
-
         ordered = tuple(lines[index] for index in sorted(selected))
         if not ordered or not excerpts_are_exact(original, ordered):
             return None

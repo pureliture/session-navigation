@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   Engine,
+  FILES_EVIDENCE_CAP,
   Store,
   bytes,
   defaults,
@@ -19,7 +20,14 @@ import {
 } from "../src/index.ts";
 import { makeDriver } from "./runtime.ts";
 interface GenerateSpec {
-  kind: "repeat" | "matches" | "files" | "plain_text";
+  kind:
+    | "repeat"
+    | "matches"
+    | "matches_realistic"
+    | "files"
+    | "files_varied"
+    | "files_empty"
+    | "plain_text";
   prefix?: string;
   char?: string;
   count?: number;
@@ -29,6 +37,8 @@ interface GenerateSpec {
   special_text?: string;
   file_count?: number;
   evidence_count?: number;
+  long_count?: number;
+  long_chars?: number;
   path_chars?: number;
   padding_chars?: number;
 }
@@ -76,6 +86,29 @@ function generatedContent(entry: FixtureCase): string {
       _hint: "Synthetic hint for the matches projection.",
     });
   }
+  if (spec.kind === "matches_realistic") {
+    const lineCount = spec.line_count ?? 0;
+    const evidenceCount = spec.evidence_count ?? lineCount;
+    const longCount = spec.long_count ?? 0;
+    const lines: string[] = [];
+    for (let index = 0; index < lineCount; index += 1) {
+      const prefix = index < evidenceCount
+        ? `synthetic/fixtures/row-${String(index).padStart(3, "0")}.txt evidence=stable `
+        : "synthetic filler ";
+      const width = index < evidenceCount && index < longCount
+        ? (spec.long_chars ?? 361)
+        : (spec.line_chars ?? 180);
+      lines.push((prefix + "alpha beta gamma ".repeat(40)).slice(0, width));
+    }
+    return JSON.stringify({
+      matches_format: "Synthetic format: path:line:text",
+      matches_text: lines.join("\n"),
+      total_count: lines.length,
+      total_count_is_lower_bound: false,
+      truncated: false,
+      _hint: "Synthetic hint for the realistic projection.",
+    });
+  }
   if (spec.kind === "plain_text") {
     const width = spec.line_chars ?? 160;
     const lines: string[] = [];
@@ -84,6 +117,22 @@ function generatedContent(entry: FixtureCase): string {
       lines.push(text.slice(0, width));
     }
     return lines.join("\n");
+  }
+  if (spec.kind === "files_varied") {
+    const files = [
+      "alpha/first/one.txt",
+      "beta/second/two.txt",
+      "alpha/first/one.txt",
+      "gamma/third/three.txt",
+      "",
+      "beta/second/two.txt",
+      "delta/four/four.txt",
+    ];
+    return JSON.stringify({ files, total_count: files.length });
+  }
+  if (spec.kind === "files_empty") {
+    const files = ["", "synthetic/alpha/one.txt", "synthetic/beta/two.txt", "synthetic/alpha/one.txt"];
+    return JSON.stringify({ files, total_count: files.length });
   }
   const count = spec.file_count ?? 0;
   const evidenceCount = spec.evidence_count ?? count;
@@ -108,6 +157,70 @@ function contentFor(entry: FixtureCase): string {
   return entry.generate ? generatedContent(entry) : JSON.stringify(entry.data);
 }
 
+function commonPrefix(values: string[]): string {
+  let prefix = [...values[0]];
+  for (const value of values.slice(1)) {
+    const characters = [...value];
+    let index = 0;
+    while (index < prefix.length && index < characters.length && prefix[index] === characters[index]) {
+      index += 1;
+    }
+    prefix = prefix.slice(0, index);
+  }
+  return prefix.join("");
+}
+
+function decodeFilesProjection(source: string): { prefix: string; suffixes: string[] } {
+  const lines = source.split("\n");
+  let prefix = "";
+  let offset = 0;
+  const suffixes: string[] = [];
+  let pending: { index: number; chunks: { offset: number; value: string }[] } | undefined;
+  const finishPending = (): void => {
+    if (!pending) return;
+    let expected = 0;
+    let value = "";
+    for (const chunk of pending.chunks) {
+      assert.equal(chunk.offset, expected);
+      value += chunk.value;
+      expected += [...chunk.value].length;
+    }
+    assert.equal(pending.index, suffixes.length);
+    suffixes.push(value);
+    pending = undefined;
+  };
+  for (const line of lines.slice(1)) {
+    if (line.startsWith("p;prefix+")) {
+      const separator = line.indexOf("=");
+      assert.equal(Number(line.slice("p;prefix+".length, separator)), offset);
+      const part: unknown = JSON.parse(line.slice(separator + 1));
+      assert.equal(typeof part, "string");
+      prefix += part as string;
+      offset += [...(part as string)].length;
+    } else if (line.startsWith("p;suffixes=[")) {
+      finishPending();
+      const values: unknown = JSON.parse(line.slice(line.indexOf("=") + 1));
+      assert.ok(Array.isArray(values));
+      assert.ok(values.every((value) => typeof value === "string"));
+      suffixes.push(...(values as string[]));
+    } else {
+      const match = /^p;suffix\+(\d+)\+(\d+)=/.exec(line);
+      assert.ok(match, line);
+      const index = Number(match![1]);
+      const part: unknown = JSON.parse(line.slice(line.indexOf("=") + 1));
+      assert.equal(typeof part, "string");
+      if (pending && pending.index !== index) finishPending();
+      if (!pending) {
+        assert.equal(index, suffixes.length);
+        pending = { index, chunks: [] };
+      }
+      pending.chunks.push({ offset: Number(match![2]), value: part as string });
+    }
+  }
+  finishPending();
+  return { prefix, suffixes };
+}
+
 test("shared synthetic JSON projection vectors", () => {
   for (const entry of fixture.cases) {
     const content = contentFor(entry);
@@ -122,23 +235,66 @@ test("shared synthetic JSON projection vectors", () => {
     assert.equal(projection.digest, sha256(content), entry.id);
     assert.ok(projection.lines.length <= 512, entry.id);
     assert.ok(bytes(projection.source) <= 32 * 1024, entry.id);
-    assert.ok(projection.required.length <= config.max_evidence_excerpts, entry.id);
+    assert.ok(
+      projection.required.length <=
+        (projection.schema === "search_files_files_v2" ? FILES_EVIDENCE_CAP : config.max_evidence_excerpts),
+      entry.id,
+    );
     assert.ok(
       projection.lines.every(
         (line) => length(line) <= Math.min(config.max_excerpt_line_length, 240),
       ),
       entry.id,
     );
-    assert.equal(
-      projection.lines[0],
-      `projected ${projection.schema} schema-version = 1 digest = ${projection.digest}`,
-      entry.id,
-    );
-    const tokens = projection.schema === "search_files_matches_v1"
-      ? ["schema-version", "total_count", "total_count_is_lower_bound", "truncated"]
-      : ["schema-version", "total_count"];
-    for (const token of tokens) {
-      assert.ok(projection.required.some((line) => line.includes(token)), `${entry.id}:${token}`);
+    if (projection.schema === "search_files_files_v2") {
+      const original = JSON.parse(content) as { files: string[]; total_count: number };
+      const { prefix, suffixes } = decodeFilesProjection(projection.source);
+      const expectedPrefix = original.files.some((path) => path === "")
+        ? ""
+        : commonPrefix(original.files);
+      assert.equal(prefix, expectedPrefix, `${entry.id}:prefix`);
+      assert.deepEqual(
+        suffixes.map((suffix) => prefix + suffix),
+        original.files,
+        `${entry.id}:reconstruction`,
+      );
+      const headerMatch =
+        /^projected search_files_files_v2 v=2 digest=([0-9a-f]{64}) total_count=(\d+) items=(\d+) verified=(\d+) evidence=(\d+) note=prefix\+suffix;restore=unhide_context$/.exec(
+          projection.lines[0],
+        );
+      assert.ok(headerMatch, `${entry.id}:header`);
+      assert.equal(headerMatch![1], sha256(content), `${entry.id}:digest`);
+      assert.equal(headerMatch![2], String(original.total_count), `${entry.id}:total_count`);
+      assert.equal(headerMatch![3], String(original.files.length), `${entry.id}:items`);
+      assert.equal(headerMatch![4], String(original.files.length), `${entry.id}:verified`);
+      assert.equal(
+        headerMatch![5],
+        String(original.files.filter((path) => requiredEvidence(path).length > 0).length),
+        `${entry.id}:evidence`,
+      );
+      assert.ok(projection.required.includes(projection.lines[0]), `${entry.id}:header-required`);
+      if (entry.id === "files_success") {
+        const chunked = projection.lines.filter((line) => line.startsWith("p;suffix+"));
+        const packed = projection.lines.filter((line) => line.startsWith("p;suffixes=["));
+        assert.ok(chunked.length > 0 && packed.length > 0, "long and short suffixes are packed and chunked");
+      }
+      if (entry.id === "files_varied") {
+        assert.equal(prefix, "", "empty value disables prefix splitting");
+        assert.equal(new Set(original.files).size, original.files.length - 2, "duplicates preserved");
+      }
+      if (entry.id === "files_empty") {
+        assert.equal(prefix, "", "empty value disables prefix splitting");
+        assert.ok(suffixes.includes(""), "empty value preserved in suffix array");
+      }
+    } else {
+      assert.equal(
+        projection.lines[0],
+        `projected search_files_matches_v1 schema-version = 1 digest = ${projection.digest}`,
+        entry.id,
+      );
+      for (const token of ["schema-version", "total_count", "total_count_is_lower_bound", "truncated"]) {
+        assert.ok(projection.required.some((line) => line.includes(token)), `${entry.id}:${token}`);
+      }
     }
     const evidence = requiredEvidence(projection.source);
     assert.ok(evidence.every((line) => projection.required.includes(line)), `${entry.id}:evidence`);
@@ -188,6 +344,58 @@ test("budget limits and digest verification fail closed", () => {
     projectJsonToolResult(content, "search_files", { ...config, max_evidence_excerpts: 2 }).refusal,
     "verification_failed",
   );
+});
+
+test("files v2 verifier fails closed on tampered projections", () => {
+  const entry = fixture.cases.find((candidate) => candidate.id === "files_realistic_shape")!;
+  const content = contentFor(entry);
+  const projection = projectJsonToolResult(content, "search_files", config).projection!;
+  assert.equal(verifyProjection(content, "search_files", projection, config), true);
+  const tamperedSuffix = {
+    ...projection,
+    source: projection.source.replace('p;prefix+0="', 'p;prefix+0="X'),
+  };
+  assert.equal(verifyProjection(content, "search_files", tamperedSuffix, config), false);
+  const tamperedHeader = projection.lines[0].replace("verified=", "verified=9x=");
+  assert.equal(
+    verifyProjection(
+      content,
+      "search_files",
+      { ...projection, lines: [tamperedHeader, ...projection.lines.slice(1)] },
+      config,
+    ),
+    false,
+  );
+  assert.equal(verifyProjection(content, "read_file", projection, config), false);
+});
+
+test("files v2 engine uses the prefix+suffix label and rejects lost verbatim keep lines", async () => {
+  const entry = fixture.cases.find((candidate) => candidate.id === "files_success")!;
+  const content = contentFor(entry);
+  const invocation = { tool_name: entry.tool_name, arguments: { pattern: "synthetic" } };
+  const record = {
+    call_id: "call_files_v2", result_position: 0, content,
+    content_sha256: sha256(content), invocation,
+    invocation_digest: invocationDigest(invocation), status: "ok", host_handle: { index: 1 },
+  };
+  const scope = { adapter_id: "hermes", host_profile: "test", session_id: "json-files-v2" };
+  const directory = mkdtempSync(join(tmpdir(), "navigation-json-files-v2-"));
+  const store = new Store(makeDriver(join(directory, "state.db")));
+  try {
+    const engine = new Engine(store, config);
+    const result = await engine.hide(scope, record);
+    assert.equal(result.ok, true, result.error ?? "hide failed");
+    assert.ok(
+      result.plan!.replacement_text.includes("Projected JSON (prefix+suffix; restore with unhide_context):"),
+      "files v2 label",
+    );
+    const conflict = await engine.hide(scope, record, { keep_lines: ["synthetic/fixtures/"] });
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.error, "keep_lines_conflict");
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 test("plain text fallback preserves legacy engine behavior", async () => {
   for (const id of ["plain_text_success", "plain_text_large"]) {
