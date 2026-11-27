@@ -141,6 +141,7 @@ export function validateSummary(
   summary: unknown,
   required: string[],
   _invocation?: Json,
+  evidenceSource?: string | readonly string[],
 ):
   | {
       summary: string;
@@ -159,13 +160,18 @@ export function validateSummary(
   if (typeof text !== "string" || !pythonTrim(text) || length(text) > 1600) {
     return;
   }
+  const suppliedEvidence = evidenceLines(evidenceSource);
+  const requiredLines = suppliedEvidence?.length ? suppliedEvidence : splitLines(selectableText(original));
+  const effectiveOriginal = suppliedEvidence?.length
+    ? `${original}\n${suppliedEvidence.join("\n")}`
+    : original;
   if (
-    required.some((line) => !splitLines(selectableText(original)).includes(line)) ||
-    !coversCriticalFacts(original, text)
+    required.some((line) => !requiredLines.includes(line)) ||
+    !coversCriticalFacts(effectiveOriginal, text)
   ) {
     return;
   }
-  const factual = factualSource(original);
+  const factual = factualSource(original, suppliedEvidence);
   if (
     !coversCriticalFacts(factual, text) ||
     injection.some((pattern) => pythonize(pattern).test(text)) ||
@@ -197,10 +203,15 @@ export function validateSummary(
   return { summary: pythonTrim(text) };
 }
 
-export function summaryFeedback(original: string, summary: unknown, required: string[]): string {
+export function summaryFeedback(
+  original: string,
+  summary: unknown,
+  required: string[],
+  evidenceSource?: string | readonly string[],
+): string {
   const text = summary && typeof summary === "object" && "summary" in summary && typeof summary.summary === "string"
     ? summary.summary : "";
-  const source = factualSource(original);
+  const source = factualSource(original, evidenceLines(evidenceSource));
   const numbers = new Set([...source.matchAll(pythonize(number))].map(m => normalizeNumber(m[0])));
   const unsupported = [...new Set([...text.matchAll(pythonize(number))].map(m => m[0])
     .filter(token => !numbers.has(normalizeNumber(token))))];
@@ -215,24 +226,37 @@ export function summaryFeedback(original: string, summary: unknown, required: st
 }
 
 export async function summaryWithRetry(
-  original: string, required: string[], request: (feedback?: string) => Promise<unknown>, invocation?: Json,
+  original: string,
+  required: string[],
+  request: (feedback?: string) => Promise<unknown>,
+  invocation?: Json,
+  evidenceSource?: string | readonly string[],
 ): Promise<unknown> {
   const first = await request();
   if (first == null) return first;
-  if (validateSummary(original, first, required, invocation)) return first;
-  return request(summaryFeedback(original, first, required));
+  if (validateSummary(original, first, required, invocation, evidenceSource)) return first;
+  return request(summaryFeedback(original, first, required, evidenceSource));
 }
 
-function factualSource(original: string): string {
+function evidenceLines(evidenceSource?: string | readonly string[]): string[] | undefined {
+  if (evidenceSource === undefined) return undefined;
+  return typeof evidenceSource === "string" ? splitLines(evidenceSource) : [...evidenceSource];
+}
+
+function factualSource(original: string, evidence?: readonly string[]): string {
+  let source = original;
   try {
     const decoded = JSON.parse(original);
     if (decoded && !Array.isArray(decoded) && typeof decoded === "object") {
-      return `${original}\n${valueText(decoded)}`;
+      source += `\n${valueText(decoded)}`;
     }
   } catch {
-    return original;
+    // Keep the untouched original as the factual baseline.
   }
-  return original;
+  if (evidence?.length) {
+    source += `\n${evidence.join("\n")}`;
+  }
+  return source;
 }
 
 export const SEQUENCE_CHUNK_BYTES = 32768;

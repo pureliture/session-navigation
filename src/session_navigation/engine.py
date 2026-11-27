@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from dataclasses import replace
 from typing import Any
 
+from session_navigation.generic_json import inspect_generic_json_with_evidence, parsed_json_policy_lines
 from session_navigation.json_projection import FILES_SCHEMA, MAX_PROJECTION_BYTES, MAX_PROJECTION_EVIDENCE_LINES, MAX_PROJECTION_LINE_LENGTH, JsonProjection, ProjectionDecision, project_json_tool_result, verify_projection, verify_projection_render
 from session_navigation.model import (
     ContextItem,
@@ -31,6 +33,11 @@ from session_navigation.policy import (
 from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.summary import selectable_text, validate_summary_text, summary_source, summary_feedback
 from session_navigation.transport import Summarizer
+
+
+def _is_json_like(content: str) -> bool:
+    stripped = content.lstrip()
+    return bool(stripped) and stripped[0] in "{[\""
 
 
 def _run_sync(coro):
@@ -104,9 +111,43 @@ class SessionNavigationEngine:
         """Compact/summarize a tool result. Fail-open on any failure.
         Guarantees: Fail-Open on any failure. Never crashes host loop.
         """
+
+        verified_json_context: dict[str, str] = {}
+        evidence_source: tuple[str, ...] = ()
+        if (
+            record.invocation.get("tool_name") == "search_files"
+            and summarizer is not None
+            and _is_json_like(record.content)
+        ):
+            decision, evidence = inspect_generic_json_with_evidence(record.content)
+            if not decision.ok:
+                return MutationResult(ok=False, error=decision.refusal or "verification_failed")
+            evidence_source = evidence
+            verified_json_context = {
+                "verified_json": json.dumps(
+                    {
+                        "kind": decision.kind,
+                        "nodes": decision.nodes,
+                        "depth": decision.depth,
+                        "digest": decision.digest,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            }
         rule_source = projection.source if projection else selectable_text(record.content)
         refusal = refusal_reason(record, self.config)
         if projection is not None and refusal == "not_long":
+            refusal = None
+        # Parsed policy evidence is enforced on the model's required lines; a
+        # protected pattern found only in the raw JSON envelope must not block
+        # that path when the parsed value itself carries the protected line.
+        if (
+            refusal == "protected_error"
+            and evidence_source
+            and parsed_json_policy_lines(record.content)
+        ):
             refusal = None
         if refusal is not None:
             return MutationResult(ok=False, error=refusal)
@@ -173,7 +214,7 @@ class SessionNavigationEngine:
             return MutationResult(ok=False, error=reserve_err)
 
         try:
-            required = projection.required if projection else required_evidence_lines(record.content)
+            required = evidence_source or (projection.required if projection else required_evidence_lines(record.content))
             rule_required = projection.required if projection else required_evidence_lines(rule_source)
             choice: SpanChoice | None = None
 
@@ -185,11 +226,20 @@ class SessionNavigationEngine:
                         summary_source(record.content),
                         required,
                         invocation=record.invocation,
+                        context=verified_json_context or None,
                     )
-                    if validate_summary_text(record.content, summary_dict, required, invocation=record.invocation) is None:
+                    if (
+                        validate_summary_text(
+                            record.content, summary_dict, required,
+                            invocation=record.invocation, evidence_source=evidence_source,
+                        ) is None
+                    ):
                         summary_dict = await summarizer.summarize(
                             record.content, required, invocation=record.invocation,
-                            context={"validation_feedback": summary_feedback(record.content, summary_dict, required)},
+                            context={
+                                **verified_json_context,
+                                "validation_feedback": summary_feedback(record.content, summary_dict, required),
+                            },
                         )
                     choice = SpanChoice(required, "llm", summary_dict)
                 except Exception as exc:
@@ -220,6 +270,7 @@ class SessionNavigationEngine:
                 required_override=tuple(required),
                 rule_required_override=tuple(rule_required),
                 excerpt_label="Projected JSON (prefix+suffix; restore with unhide_context)" if projection and projection.schema == FILES_SCHEMA else ("Projected JSON excerpt" if projection else "Original excerpt"),
+                evidence_source=evidence_source,
             )
             if err is not None:
                 self.store.release(scope, item_id, token)

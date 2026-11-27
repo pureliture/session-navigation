@@ -1,3 +1,4 @@
+import { inspectGenericJsonWithEvidence, parsedJsonPolicyLines, type GenericJsonDecision } from "./generic-json.ts";
 import { EngineError } from "./driver.ts";
 import { evaluateCompaction, type Choice } from "./compaction.ts";
 import {
@@ -13,6 +14,7 @@ import {
   type ProjectionDecision,
 } from "./json-projection.ts";
 import {
+  canonical,
   defaults,
   itemId,
   scopeKey,
@@ -39,7 +41,24 @@ export type Summarizer = (
   evidence: string[],
   invocation: Json,
   feedback?: string,
+  context?: Json,
 ) => Promise<unknown>;
+
+function isJsonLike(content: string): boolean {
+  const stripped = content.trimStart();
+  return stripped.length > 0 && (stripped.startsWith("{") || stripped.startsWith("[") || stripped.startsWith("\""));
+}
+
+function jsonStructureContext(decision: GenericJsonDecision): Json {
+  return {
+    verified_json: canonical({
+      depth: decision.depth,
+      digest: decision.digest,
+      kind: decision.kind,
+      nodes: decision.nodes,
+    }),
+  };
+}
 
 export interface HideOptions {
   keep_lines?: Json;
@@ -75,6 +94,19 @@ export class Engine {
     }
     if (options.keep_lines !== undefined && !Array.isArray(options.keep_lines)) {
       return { ok: false, error: "invalid_keep_lines" };
+    }
+    const summarizePath = !!options.summarizer && options.allow_fallback === false;
+    let jsonContext: Json | undefined;
+    let jsonEvidence: string[] | undefined;
+    if (summarizePath && isJsonLike(record.content)) {
+      const inspection = inspectGenericJsonWithEvidence(record.content);
+      if (!inspection.decision.ok) {
+        return { ok: false, error: inspection.decision.refusal ?? "verification_failed" };
+      }
+      jsonContext = jsonStructureContext(inspection.decision);
+      if (inspection.evidence.length) {
+        jsonEvidence = inspection.evidence;
+      }
     }
     const decision: ProjectionDecision = options.summarizer
       ? {}
@@ -112,7 +144,7 @@ export class Engine {
       }
     }
     try {
-      return { ...(await this.apply(scope, record, retention.accepted, options, projection)), ...diagnostics };
+      return { ...(await this.apply(scope, record, retention.accepted, options, projection, jsonContext, jsonEvidence)), ...diagnostics };
     } catch (error) {
       if (error instanceof EngineError) {
         return { ok: false, error: error.code, ...diagnostics };
@@ -136,9 +168,21 @@ export class Engine {
     keepLines: string[],
     options: HideOptions,
     projection?: JsonProjection,
+    context?: Json,
+    evidence?: string[],
   ): Promise<Result> {
     let refused = refusalReason(record, this.config);
     if (projection !== undefined && refused === "not_long") {
+      refused = undefined;
+    }
+    // Parsed policy evidence is enforced on the model's required lines; a
+    // protected pattern found only in the raw JSON envelope must not block
+    // that path when the parsed value itself carries the protected line.
+    if (
+      refused === "protected_error" &&
+      evidence?.length &&
+      parsedJsonPolicyLines(record.content).length
+    ) {
       refused = undefined;
     }
     if (refused) {
@@ -183,12 +227,20 @@ export class Engine {
     this.pending.add(reservationKey);
     try {
       let summary: unknown;
+      const requiredLines = evidence ?? requiredEvidence(record.content);
+      const summarizerContext = (feedback?: string): Json | undefined => {
+        if (context === undefined) return undefined;
+        if (feedback === undefined) return context;
+        return typeof context === "object" && context !== null && !Array.isArray(context)
+          ? { ...context, validation_feedback: feedback }
+          : { validation_feedback: feedback };
+      };
       if (options.summarizer) {
         try {
           summary =
-            (await summaryWithRetry(summarySource(record.content), requiredEvidence(record.content),
-              feedback => options.summarizer!(record.content, requiredEvidence(record.content), record.invocation, feedback),
-              record.invocation)) ?? null;
+            (await summaryWithRetry(summarySource(record.content), requiredLines,
+              feedback => options.summarizer!(record.content, requiredLines, record.invocation, feedback, summarizerContext(feedback)),
+              record.invocation, evidence)) ?? null;
         } catch (error) {
           if (options.allow_fallback === false) {
             return {
@@ -208,13 +260,14 @@ export class Engine {
         record.invocation,
         options.options_omitted,
         options.allow_fallback !== false,
-        projection?.required,
+        evidence ?? projection?.required,
         projection?.required,
         projection
           ? projection.schema === FILES_SCHEMA
             ? FILES_REPLACEMENT_LABEL
             : "Projected JSON excerpt"
           : "Original excerpt",
+        evidence,
       );
       if (evaluated.error || !evaluated.choice || evaluated.rendered === undefined) {
         return { ok: false, error: evaluated.error ?? "verification_failed" };

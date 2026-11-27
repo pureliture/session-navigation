@@ -148,6 +148,38 @@ export const requiredEvidence = (content: string): string[] => {
   return evidenceIndexes(lines).map((index) => lines[index]);
 };
 
+/**
+ * Policy-salient lines from a decoded scalar string. A JSON value can hide an
+ * error, business state or required-evidence line behind escapes; extracting
+ * the decoded line lets schema-agnostic evidence retain that fact without
+ * claiming preservation of the surrounding schema.
+ */
+export function parsedStringEvidenceLines(text: string): string[] {
+  if (typeof text !== "string") return [];
+  const decoded = selectableText(text);
+  const targets = decoded !== text ? [text, decoded] : [text];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const target of targets) {
+    const required = new Set(requiredEvidence(target));
+    const lines = splitLines(target);
+    let matched = lines.filter(
+      (line) => required.has(line) || refusalPatterns.some((pattern) => pattern.test(line)),
+    );
+    if (!matched.length && refusalPatterns.some((pattern) => pattern.test(target))) {
+      matched = lines;
+    }
+    for (const line of matched) {
+      if (seen.has(line)) continue;
+      seen.add(line);
+      result.push(line);
+    }
+  }
+  return result;
+}
+
+export const parsedStringProtectedLines = parsedStringEvidenceLines;
+
 // Code-point spans of the patterns that make a line required evidence. Chunk
 // boundaries must not cut through one of these spans.
 export function evidenceSpans(text: string): [number, number][] {

@@ -248,6 +248,32 @@ def required_evidence_lines(original: str) -> tuple[str, ...]:
     lines = selectable_text(original).splitlines()
     return tuple(lines[i] for i in required_evidence_indexes(lines))
 
+def parsed_string_evidence_lines(value: str) -> tuple[str, ...]:
+    """Return verbatim lines of a parsed value that existing policy requires.
+
+    The same required-evidence and protected-error/business-state rules used for
+    ordinary tool output are applied to every parsed string value, including
+    values nested inside objects and arrays. JSON-envelope strings are checked
+    in both their raw and decoded forms so a nested envelope cannot hide the
+    protected line.
+    """
+    if not isinstance(value, str):
+        return ()
+    lines: list[str] = []
+    for candidate in dict.fromkeys((value, selectable_text(value))):
+        required = set(required_evidence_lines(candidate))
+        candidate_lines = candidate.splitlines() or ([candidate] if candidate else [])
+        matched = [
+            line for line in candidate_lines
+            if line in required or is_protected_error(line) or is_business_state_critical(line)
+        ]
+        if not matched and (is_protected_error(candidate) or is_business_state_critical(candidate)):
+            matched = candidate_lines
+        for line in matched:
+            if line not in lines:
+                lines.append(line)
+    return tuple(lines)
+
 
 def excerpts_are_exact(original: str, lines: tuple[str, ...] | list[str]) -> bool:
     """Verify that excerpt lines exist verbatim in the decoded original text."""

@@ -10,6 +10,14 @@ from session_navigation.policy import (
 from session_navigation.summary import validate_summary_text
 
 
+def _lines_are_exact(
+    original: str, lines: tuple[str, ...] | list[str], evidence: tuple[str, ...]
+) -> bool:
+    if evidence:
+        return all(line in evidence for line in lines)
+    return excerpts_are_exact(original, lines)
+
+
 def evaluate_compaction(
     original: str,
     item_id: str,
@@ -22,19 +30,22 @@ def evaluate_compaction(
     required_override: tuple[str, ...] | list[str] | None = None,
     rule_required_override: tuple[str, ...] | list[str] | None = None,
     excerpt_label: str = "Original excerpt",
+    evidence_source: tuple[str, ...] | list[str] | None = None,
 ) -> tuple[object | None, str | None, str | None]:
     """Return (final_choice, rendered, error). error None means success."""
+    evidence = tuple(evidence_source) if evidence_source is not None else ()
     required = tuple(required_override) if required_override is not None else required_evidence_lines(original)
     rule_required = tuple(rule_required_override) if rule_required_override is not None else required_evidence_lines(rule_source)
 
     if choice is not None and getattr(choice, "source", None) == "llm":
         summary = validate_summary_text(
             original, getattr(choice, "summary_text", None), required, invocation=invocation,
+            evidence_source=evidence,
         )
         if (
             getattr(choice, "summary_text", None) is None
             or not set(required).issubset(getattr(choice, "lines", ()))
-            or not excerpts_are_exact(original, getattr(choice, "lines", ()))
+            or not _lines_are_exact(original, getattr(choice, "lines", ()), evidence)
             or summary is None
         ):
             if not allow_fallback:
@@ -79,10 +90,12 @@ def evaluate_compaction(
 
     if getattr(choice, "source", None) == "llm":
         check_source, check_required = original, required
+        evidence_for_check = evidence
     else:
         check_source, check_required = rule_source, rule_required
+        evidence_for_check = ()
     if (
-        not excerpts_are_exact(check_source, getattr(choice, "lines", ()))
+        not _lines_are_exact(check_source, getattr(choice, "lines", ()), evidence_for_check)
         or any(line not in getattr(choice, "lines", ()) for line in check_required)
         or len(rendered) >= len(original)
     ):
