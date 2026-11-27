@@ -193,9 +193,13 @@ Do not copy registrations or target caches on fork; child adapters publish anew.
 
 Hermes advertises only supported request modes while enabled and projecting.
 While disabled, capabilities report disabled: tools refuse mutations and the
-middleware applies only the protection-only rewrite. Coexisting middlewares do
-not revoke capabilities: the active rewrite still applies and their presence is
-only annotated in the trace (`other_middlewares`). Summarize is advertised only
+middleware applies only the protection-only rewrite. Because Hermes exposes no
+public `llm_request` middleware enumeration API, the default adapter does not
+observe competing middlewares (recording `other_middlewares` as `None`, logged
+as `unknown`, never `0`) and still applies active rewrites; safe coexistence
+and exclusive rewrite ownership are not guaranteed. When an explicit counter is
+injected on `PluginState`, its count is annotated in the trace
+(`other_middlewares`) without revoking capabilities. Summarize is advertised only
 with a session summarizer; Hide needs no LLM. Profile and session are bound by the
 host callback. ACP launch/viewer processes alone must not advertise projection.
 

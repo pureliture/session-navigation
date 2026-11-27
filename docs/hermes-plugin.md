@@ -46,9 +46,9 @@ retroactively; start a new ACP session after changing the list.
 
 The catalog distribution unit is `hermes-plugin/`, selected with
 `subdir: hermes-plugin` at the pinned repository SHA. It contains only the
-manifest, loader, MIT LICENSE and vendor Python packages. The adapter's runtime
-equivalent is `vendor/session_navigation_hermes/`; the canonical adapter source
-stays in `adapters/hermes/` outside the distribution.
+manifest, loader, MIT LICENSE, `THIRD_PARTY_NOTICES.md`, and vendor Python
+packages. The adapter's runtime equivalent is `vendor/session_navigation_hermes/`;
+the canonical adapter source stays in `adapters/hermes/` outside the distribution.
 
 For an existing repository-root installation, stop Hermes/gateway, preserve the
 shared SQLite database, remove the old plugin through Hermes's plugin manager,
@@ -182,25 +182,37 @@ hermes plugins validate --install-deps /path/to/session-navigation/hermes-plugin
 ```
 
 Validation of the committed subdirectory passes with `security scan — safe`.
-The unchanged Python policy still produces three medium `sudo_usage` notes
-(comment and quoted command-parser literals); medium notes are verdict-neutral.
+The unchanged Python policy produces three medium `sudo_usage` notes in
+`vendor/session_navigation/policy.py` (comment and quoted command-parser
+literals) and one medium `unicode_escape_chain` note in
+`vendor/session_navigation_hermes/usage.py` (CJK Unicode-range regex); medium
+notes are verdict-neutral.
 The repository-wide fixture corpus and TypeScript artifacts are not part of
 this Python runtime distribution. No scanner rules or detection strings changed.
 
-The manifest matches actual registrations. Private-import warnings remain
-intentionally: `_delivery_manager` counts competing middleware and
-`estimate_tokens_rough` supplies host-compatible estimates. Both imports are
-guarded; neither has a documented public equivalent. Their fallback is not
-feature-identical: a failed manager lookup assumes zero competing middleware,
-and token estimation falls back to character-count/4.
+The manifest matches actual registrations, and `hermes-plugin/` imports zero
+private Hermes core modules or private core attributes at runtime:
+
+- **Middleware coexistence unobserved/unguaranteed:** Hermes exposes no
+  documented public API to enumerate other `llm_request` middlewares. The
+  adapter performs no private manager lookup, records `other_middlewares` as
+  `None` (`other_middlewares=unknown` in debug logs, never fabricated as `0`),
+  and applies request-copy rewrites when enabled. Neither safe coexistence nor
+  exclusive rewrite ownership with other `llm_request` middlewares is guaranteed.
+- **Display-only local token approximation:** `usage.py` uses a local,
+  dependency-free Unicode-aware heuristic adapted from Hermes's MIT-licensed
+  `estimate_tokens_rough` (attributed in `THIRD_PARTY_NOTICES.md`) solely for
+  approximate `next ≈` deltas in the `/nav` footer. It is not used for
+  byte-based reminder triggers or exact restoration, and its values are rough
+  approximations that may differ from actual model tokenization or drift from
+  future Hermes host releases.
 
 Evaluation harnesses and developer probes also import private APIs but are
 outside the installed subdirectory and are not loaded or scanned as runtime
-plugin files. The two warnings inside the distribution are the vendor adapter
-imports; their canonical adapter sources remain identical. See the
-[review disclosure](release/hermes-pr-body.md) for all review implications.
-A warning-only validator result does not waive the catalog's public-surface
-policy or guarantee acceptance.
+plugin files. See the [review disclosure](release/hermes-pr-body.md) for
+limitations and scan details. A passing validator (`ok: true`, `security scan —
+safe`) neither guarantees catalog admission nor guarantees middleware
+coexistence.
 
 Canonical engine/adapter sources remain in `src/session_navigation/` and
 `adapters/hermes/`. Synchronize with `uv run python tools/sync_hermes_vendor.py`;

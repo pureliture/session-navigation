@@ -55,6 +55,7 @@ packages = ["src/session_navigation", "adapters/hermes"]
 [tool.hatch.build.targets.wheel.force-include]
 "hermes-plugin/__init__.py" = "session_navigation_plugin_root/__init__.py"
 "hermes-plugin/plugin.yaml" = "session_navigation_plugin_root/plugin.yaml"
+"hermes-plugin/THIRD_PARTY_NOTICES.md" = "session_navigation_plugin_root/THIRD_PARTY_NOTICES.md"
 "adapters/hermes" = "session_navigation_hermes"
 "hermes-plugin/vendor" = "session_navigation_plugin_root/vendor"
 

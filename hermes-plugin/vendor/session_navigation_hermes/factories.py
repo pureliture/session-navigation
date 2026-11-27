@@ -6,7 +6,7 @@ This is the host-process shim between Hermes and the pure helpers
 - tool registration (`hide_context`, `summarize_context`, `list_context_items`, `unhide_context`, `manage_context`)
 - the `llm_request` middleware (record -> plan -> apply on a copy)
 - scope derivation from host identifiers (never model arguments)
-- enabled-off default, coexistence record-only mode, fail-open errors
+- enabled-off default, protection-only fallback when paused, fail-open errors
 
 It owns nothing engine-specific: summarization, protection rules,
 storage, and visibility stay in `session_navigation`. The engine never
@@ -100,33 +100,22 @@ def _compute_runtime_bundle_fingerprint() -> str:
 
 RUNTIME_BUNDLE_FINGERPRINT = _compute_runtime_bundle_fingerprint()
 
-def _default_count_llm_middlewares() -> int:
-    """Count the OTHER registered `llm_request` middleware callbacks.
+def _default_count_llm_middlewares() -> int | None:
+    """Return the count of other `llm_request` middleware callbacks, or `None` when unobserved.
 
-    Verified on 2026-10-11 against the installed runtime
-    (``hermes_cli.middleware.apply_llm_request_middleware`` plus
-    ``PluginManager.invoke_middleware``): the request chain COMPOSES in
-    registration order -- each callback receives the previous callback's
-    payload, and the last dict returned under ``request`` is what the provider
-    sees. So a later middleware can overwrite our replacement and we can
-    overwrite theirs; the chain does not by itself guarantee a single compact
-    owner.
+    Hermes's `llm_request` middleware chain composes in registration order --
+    each callback receives the previous callback's payload, and the last dict
+    returned under ``request`` is what the provider sees. A later middleware can
+    overwrite our replacement and we can overwrite theirs; neither safe
+    coexistence nor exclusive rewrite ownership is guaranteed.
 
-    This probe therefore only reports how many OTHER callbacks exist. The
-    middleware reads that number and decides what to do (see
-    ``on_llm_request``). Runs inside the Hermes process, so a lazy host import
-    is fine here (the pure helpers stay host-free). Any import problem degrades
-    to 0 = "no evidence of others", which keeps the plugin's own behaviour
-    instead of silently withholding it.
+    Hermes exposes no documented public API to enumerate other registered
+    ``llm_request`` middlewares. This default probe therefore performs no
+    private host import and returns ``None`` (unobserved/unknown) rather than
+    fabricating ``0`` as if sole rewrite ownership had been verified. Callers
+    may still inject a custom counter on ``PluginState.count_middlewares``.
     """
-    try:
-        from hermes_cli.plugins import _delivery_manager
-
-        manager = _delivery_manager()
-        middlewares = getattr(manager, "_middleware", {}).get("llm_request", [])
-        return max(0, len(middlewares) - 1)
-    except Exception:
-        return 0
+    return None
 
 
 @dataclass
@@ -139,7 +128,7 @@ class PluginState:
     presentations: PresentationRegistry = field(default_factory=PresentationRegistry)
     profile: str = "default"
     is_enabled: Callable[[], bool] = field(default=lambda: False)
-    count_middlewares: Callable[[], int] = field(
+    count_middlewares: Callable[[], int | None] = field(
         default=_default_count_llm_middlewares)
     db_error_pending: bool = False
     usage: UsageTracker = field(default_factory=UsageTracker)
@@ -1395,7 +1384,15 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
             if child:
                 request = _child_request(request)
             state.usage.record_messages(scope.session_id, message_keys(api_mode, request))
-            other_middlewares = state.count_middlewares()
+            try:
+                raw_other_middlewares = state.count_middlewares()
+            except Exception:
+                raw_other_middlewares = None
+            other_middlewares: int | None = (
+                raw_other_middlewares
+                if type(raw_other_middlewares) is int and raw_other_middlewares >= 0
+                else None
+            )
             supported = api_mode in SUPPORTED_API_MODES
             # Registration is bookkeeping: guard its write so a read-only,
             # locked, or full database cannot skip the rewrite below.
@@ -1413,7 +1410,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 )
                 state.db_error_pending = True
                 return _protection_only_fallback(state, scope, api_mode, request)
-            if other_middlewares > 0 and isinstance(step.get("trace"), dict):
+            if isinstance(step.get("trace"), dict):
                 step["trace"]["other_middlewares"] = other_middlewares
             applied = step["applied"]
             skipped = step["skipped"]
@@ -1436,9 +1433,10 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                 }
             if not reason:
                 reason = f"applied {len(applied)}, skipped {len(skipped)}"
+            other_middlewares_label = "unknown" if other_middlewares is None else str(other_middlewares)
             logger.debug(
                 "session-navigation middleware: %s (found %s, other_middlewares=%s)",
-                reason, step["trace"].get("found", 0), other_middlewares)
+                reason, step["trace"].get("found", 0), other_middlewares_label)
             request_out = step["request"]
             if isinstance(request_out, dict):
                 found = message_keys(api_mode, request_out)
@@ -1530,7 +1528,7 @@ def make_middleware(state: PluginState) -> Callable[..., dict[str, Any] | None]:
                     turn = f"{len(users)}:{hashlib.sha256(users[-1][1].encode()).hexdigest()}"
                     note, reminder_reason, reminder_total, reminder_bytes = state.reminders.note_with_reason(
                         scope.scope_key(), turn,
-                        estimate_tokens(json.dumps(request_out, ensure_ascii=False)),
+                        0,  # _tokens is unused by BoundaryReminders (byte-based); positional compat arg
                         kwargs.get("context_length") or state.usage.context_window(scope.session_id),
                         candidates, after_tool=after_tool, step_key=seq_len)
                     if note is None:

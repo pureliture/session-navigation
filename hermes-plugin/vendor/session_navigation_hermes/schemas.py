@@ -6,7 +6,7 @@ This is the host-process shim between Hermes and the pure helpers
 - tool registration (`hide_context`, `summarize_context`, `list_context_items`, `unhide_context`, `manage_context`)
 - the `llm_request` middleware (record -> plan -> apply on a copy)
 - scope derivation from host identifiers (never model arguments)
-- enabled-off default, coexistence record-only mode, fail-open errors
+- enabled-off default, protection-only fallback when paused, fail-open errors
 
 It owns nothing engine-specific: summarization, protection rules,
 storage, and visibility stay in `session_navigation`. The engine never

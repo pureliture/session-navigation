@@ -236,3 +236,13 @@ def test_vendored_packages_match_source_trees() -> None:
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_third_party_notices_present_and_synced() -> None:
+    root_notice = REPO / "THIRD_PARTY_NOTICES.md"
+    plugin_notice = PLUGIN / "THIRD_PARTY_NOTICES.md"
+    assert root_notice.is_file() and plugin_notice.is_file()
+    text = plugin_notice.read_text(encoding="utf-8")
+    assert text == root_notice.read_text(encoding="utf-8")
+    assert "Nous Research" in text
+    assert "MIT License" in text

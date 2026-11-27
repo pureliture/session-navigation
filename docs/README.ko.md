@@ -167,7 +167,7 @@ upstream **pi**와의 호환성은 검증하지 않았습니다.
 
 실제 ACP 검증에는 Hermes 소스 `cdf7ea4d0893e3cdd4ea9b2c12a554bda1164dd8`을,
 이전 플러그인 검사에는 `109fd8161a509db5a00942152ba48882e446e8b0`을 사용했습니다.
-`hermes-plugin/`의 manifest, loader, MIT LICENSE와 vendor Python 트리가 독립 배포 단위입니다.
+`hermes-plugin/`의 manifest, loader, MIT LICENSE, `THIRD_PARTY_NOTICES.md`와 vendor Python 트리가 독립 배포 단위입니다.
 Python은 Hermes 자체 관리 런타임으로 제공하며 공통 CLI 설치는 필요하지 않습니다.
 
 ```bash
@@ -314,7 +314,7 @@ Python 패키지는 wheel/sdist가 빌드되지만 PyPI 게시 자동화는 아�
 - **Hermes:** 공식 카탈로그에서 `subdir: hermes-plugin`과 **40자리 SHA**를 고정합니다.
   다섯 도구, `post_api_request`/`subagent_start` 훅,
   `llm_request`/`tool_request` 미들웨어 및 `>=0.20.1`을 선언합니다.
-  커밋된 `hermes-plugin/`에 대한 의존성 준비 포함 validate는 통과하지만 runtime private import 경고는 심사가 필요합니다.
+  커밋된 `hermes-plugin/`에 대한 의존성 준비 포함 validate는 런타임 private import 경고 없이 통과합니다. 다만 공개 middleware 열거 API 부재로 다른 `llm_request` middleware와의 안전한 공존이나 배타적 소유권은 보장되지 않으며, 카탈로그 등재에는 사람의 심사가 필요합니다.
   저장소 루트는 더 이상 설치 단위가 아니며 fixture의 dangerous scanner 결과도 그대로입니다.
   탐지 문자열을 숨기거나 scanner 규칙을 우회하지 않았습니다.
 

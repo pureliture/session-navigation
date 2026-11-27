@@ -6,6 +6,7 @@ rule-only first-version decision with a direct assertion.
 """
 
 from __future__ import annotations
+import sys
 import pytest
 import os, tempfile
 
@@ -371,10 +372,26 @@ def test_first_version_is_rule_only_no_external_call():
     assert listed["items"][0]["source"] == "rule"
 
 
-def test_default_middleware_counter_degrades_to_no_others() -> None:
-    # Outside a Hermes process the lazy host import fails and must fall
-    # back to 0 ("no evidence of others") instead of raising.
-    assert plugin._default_count_llm_middlewares() == 0
+def test_default_middleware_counter_reports_unknown_without_host_import(monkeypatch) -> None:
+    # Default probe must not import hermes_cli.plugins and reports None (unknown).
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", None)
+    assert plugin._default_count_llm_middlewares() is None
+
+
+def test_failing_count_middlewares_fails_open_and_preserves_protection(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SESSION_NAVIGATION_STATE_PATH", str(tmp_path / "counter-fail.sqlite3"))
+    ctx, state = _enabled_pair()
+    state.count_middlewares = lambda: (_ for _ in ()).throw(RuntimeError("counter error"))
+    mw = ctx.middlewares["llm_request"][0]
+    body = _long_body()
+
+    first = mw(request=_codex_request(body), session_id="sess-cnt-err", api_mode="codex_responses")
+    assert first["request"]["input"][1]["output"] == body
+    hid = json.loads(ctx.tools["hide_context"]["handler"](
+        {"tool_call_id": "call_1"}, session_id="sess-cnt-err"))
+    assert hid["ok"] is True
+    second = mw(request=_codex_request(body), session_id="sess-cnt-err", api_mode="codex_responses")
+    assert hid["item_id"] in second["request"]["input"][1]["output"]
 
 
 def test_allowlist_single_definition_and_safety_invariants() -> None:
