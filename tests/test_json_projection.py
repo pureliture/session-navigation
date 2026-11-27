@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from session_navigation.engine import SessionNavigationEngine
 from session_navigation.json_projection import (
     project_json_tool_result,
     reconstruct_files_projection,
     verify_projection,
+    verify_projection_render,
 )
+from session_navigation.engine import SessionNavigationEngine
 from session_navigation.model import (
     Scope,
     ToolResultRecord,
@@ -81,6 +82,12 @@ def _content(case: dict) -> str:
                 "truncated": False,
                 "_hint": "Synthetic hint for the realistic projection.",
             }
+        elif kind == "files_basename":
+            files = []
+            for index in range(40):
+                value = "synthetic-shared-basename-" + "x" * 250 + f"-row-{index % 20:02d}.txt"
+                files.append(value)
+            data = {"files": files, "total_count": len(files)}
         elif kind == "files":
             count = spec["file_count"]
             evidence_count = spec.get("evidence_count", count)
@@ -136,7 +143,8 @@ def test_fixture_decision_matches_contract(case: dict):
     assert projection is not None
     assert projection.schema == expected["schema"]
     assert verify_projection(raw, case["tool_name"], projection)
-    assert all(len(line) <= 240 for line in projection.lines)
+    line_limit = 1024 if projection.schema == "search_files_files_v2" else 240
+    assert all(len(line) <= line_limit for line in projection.lines)
     assert all(line in projection.lines for line in projection.required)
     if projection.schema == "search_files_files_v2":
         parsed = json.loads(raw)
@@ -166,6 +174,12 @@ def test_files_projection_compacts_reconstructs_and_restores(case_id: str):
     assert "prefix+suffix" in rendered
     assert "restore with unhide_context" in rendered
     assert len(rendered.encode("utf-8")) < len(raw.encode("utf-8"))
+    assert verify_projection_render(rendered, raw, case["tool_name"], projection)
+    label = "Projected JSON (prefix+suffix; restore with unhide_context): "
+    marker = "The remaining result is preserved. Restore it with unhide_context("
+    rows = rendered.split("\n", 1)[1].split(marker, 1)[0].rstrip("\n").split("\n")
+    decoded = "\n".join(row[len(label):] for row in rows)
+    assert reconstruct_files_projection(decoded) == parsed["files"]
     assert result.item is not None and result.item.original == raw
     assert engine.restore(scope, result.item.item_id).ok is True
 
@@ -219,10 +233,17 @@ def test_keep_lines_are_normalized_against_projection_source():
     engine = SessionNavigationEngine()
     scope = Scope("hermes", "test", "sess-json-keep")
     result = engine.compact_sync(
-        scope, _record(raw, case["tool_name"]), keep_lines=["row-000", "alpha\nbeta", "x" * 1100]
+        scope, _record(raw, case["tool_name"]), keep_lines=["fixtures", "alpha\nbeta", "x" * 1100]
     )
     assert result.ok is True, result.error
     assert len(result.keep_lines_ignored) == 2
+    conflict = engine.compact_sync(
+        Scope("hermes", "test", "sess-json-keep-conflict"),
+        _record(raw, case["tool_name"], "call_conflict"),
+        keep_lines=["row-000"],
+    )
+    assert conflict.ok is False
+    assert conflict.error == "keep_lines_conflict"
 
 
 def test_summarizer_path_does_not_claim_projection():

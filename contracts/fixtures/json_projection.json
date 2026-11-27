@@ -6,7 +6,13 @@
     {
       "id": "files_success",
       "tool_name": "search_files",
-      "generate": { "kind": "files", "file_count": 40, "evidence_count": 12, "path_chars": 96, "padding_chars": 320 },
+      "generate": { "kind": "files", "file_count": 40, "evidence_count": 40, "path_chars": 320, "padding_chars": 320 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_basename",
+      "tool_name": "search_files",
+      "generate": { "kind": "files_basename" },
       "expected": { "schema": "search_files_files_v2", "refusal": null }
     },
     {

@@ -30,6 +30,7 @@ MAX_PROJECTION_LINES = 512
 MAX_PROJECTION_EVIDENCE_LINES = 640
 MAX_PROJECTION_BYTES = 32 * 1024
 MIN_LINE_BUDGET = 96
+MAX_PROJECTION_LINE_LENGTH = 1024
 
 _MATCHES_KEYS = frozenset(
     {"matches_format", "matches_text", "total_count", "total_count_is_lower_bound", "truncated", "_hint"}
@@ -330,9 +331,7 @@ def _project_files(
         if refusal is not None:
             return ProjectionDecision(refusal=refusal)
 
-    max_line = min(config.max_excerpt_line_length, 240)
-    if max_line < MIN_LINE_BUDGET:
-        return ProjectionDecision(refusal="verification_failed")
+    max_line = MAX_PROJECTION_LINE_LENGTH
     prefix = "" if any(value == "" for value in files) else _common_prefix(files)
     suffixes = [value[len(prefix):] for value in files]
     evidence = [bool(required_evidence_lines(value)) for value in files]
@@ -350,9 +349,9 @@ def _project_files(
     suffix_part = _suffix_lines(suffixes, evidence, max_line)
     if suffix_part is None:
         return ProjectionDecision(refusal="verification_failed")
-    suffix_lines, suffix_flags = suffix_part
+    suffix_lines, _suffix_flags = suffix_part
     lines = [header] + prefix_part + suffix_lines
-    required = (header, *prefix_part) + tuple(line for line, flag in zip(suffix_lines, suffix_flags) if flag)
+    required = tuple(lines)
     if len(required) > MAX_PROJECTION_EVIDENCE_LINES:
         return ProjectionDecision(refusal="verification_failed")
     source = "\n".join(lines)
@@ -361,7 +360,7 @@ def _project_files(
     return ProjectionDecision(
         projection=JsonProjection(
             schema=FILES_SCHEMA, source=source, lines=tuple(lines),
-            required=tuple(dict.fromkeys(required)), digest=compute_sha256(original),
+            required=required, digest=compute_sha256(original),
         )
     )
 
@@ -490,3 +489,35 @@ def verify_projection(
         if reconstruct_files_projection(candidate.source) != original["files"]:
             return False
     return True
+
+
+def verify_projection_render(
+    rendered: str,
+    content: str,
+    tool_name: Any,
+    projection: JsonProjection,
+    config: EngineConfig | None = None,
+) -> bool:
+    """Verify the actual model-facing replacement, not just the projection."""
+    if projection.schema != FILES_SCHEMA or not verify_projection(content, tool_name, projection, config):
+        return False
+    if not isinstance(rendered, str) or not rendered.startswith("[hidden:"):
+        return False
+    restore_marker = "The remaining result is preserved. Restore it with unhide_context("
+    if restore_marker not in rendered:
+        return False
+    label = "Projected JSON (prefix+suffix; restore with unhide_context): "
+    body = rendered.split("\n", 1)[1] if "\n" in rendered else ""
+    body = body.split(restore_marker, 1)[0].rstrip("\n")
+    rows = body.split("\n")
+    if len(rows) != len(projection.lines):
+        return False
+    for row, expected in zip(rows, projection.lines):
+        if not row.startswith(label) or row[len(label):] != expected:
+            return False
+    try:
+        original = json.loads(content)
+    except (ValueError, TypeError):
+        return False
+    decoded = "\n".join(row[len(label):] for row in rows)
+    return reconstruct_files_projection(decoded) == original.get("files")

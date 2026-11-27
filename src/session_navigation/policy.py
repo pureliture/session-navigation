@@ -290,10 +290,15 @@ class RuleSpanSelector:
             return None
 
         if required_override is not None:
-            index_by_line = {line: index for index, line in enumerate(lines)}
-            selected = [index_by_line[line] for line in required_override if line in index_by_line]
-            if len(selected) != len(tuple(required_override)):
-                return None
+            by_line: dict[str, list[int]] = {}
+            for index, line in enumerate(lines):
+                by_line.setdefault(line, []).append(index)
+            selected = []
+            for line in required_override:
+                candidates = by_line.get(line)
+                if not candidates:
+                    return None
+                selected.append(candidates.pop(0))
         else:
             selected = _required_evidence_indexes(lines)
         if len(selected) > self.max_evidence or any(len(lines[index]) > self.max_line_length for index in selected):

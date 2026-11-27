@@ -23,12 +23,14 @@ export interface ProjectionDecision {
 const PROJECTION_VERSION = 1;
 const MATCHES_SCHEMA = "search_files_matches_v1";
 export const FILES_SCHEMA = "search_files_files_v2";
+export const FILES_REPLACEMENT_LABEL = "Projected JSON (prefix+suffix; restore with unhide_context)";
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_FIELD_CHARS = 8192;
 const MAX_LIST_ITEMS = 128;
 const MAX_PROJECTION_LINES = 512;
 const MAX_PROJECTION_BYTES = 32 * 1024;
 const MIN_LINE_BUDGET = 96;
+export const MAX_PROJECTION_LINE_LENGTH = 1024;
 export const FILES_EVIDENCE_CAP = MAX_LIST_ITEMS + MAX_PROJECTION_LINES;
 export const FILES_EXCERPT_BYTES = MAX_PROJECTION_BYTES;
 const MAX_DEPTH = 256;
@@ -529,20 +531,12 @@ function prefixLines(prefix: string, maxLine: number): string[] | undefined {
   return lines.length ? lines : ['p;prefix+0=""'];
 }
 
-function suffixLines(
-  suffixes: string[],
-  evidence: boolean[],
-  maxLine: number,
-): { lines: string[]; flags: boolean[] } | undefined {
+function suffixLines(suffixes: string[], maxLine: number): string[] | undefined {
   const lines: string[] = [];
-  const flags: boolean[] = [];
   let current = "p;suffixes=[";
-  let currentEvidence = false;
   const flush = (): void => {
     lines.push(`${current}]`);
-    flags.push(currentEvidence);
     current = "p;suffixes=[";
-    currentEvidence = false;
   };
   for (const [index, suffix] of suffixes.entries()) {
     const token = encoded(suffix);
@@ -562,10 +556,8 @@ function suffixLines(
           if (length(line) > maxLine) {
             return undefined;
           }
-          const end = start + chunk.length;
           lines.push(line);
-          flags.push(evidence[index] || spans.some(([begin, stop]) => begin < end && stop > start));
-          start = end;
+          start += chunk.length;
           chunk = [character];
           continue;
         }
@@ -579,12 +571,9 @@ function suffixLines(
         if (length(line) > maxLine) {
           return undefined;
         }
-        const end = start + chunk.length;
         lines.push(line);
-        flags.push(evidence[index] || spans.some(([begin, stop]) => begin < end && stop > start));
       } else if (suffix === "") {
         lines.push(`p;suffix+${index}+0=""`);
-        flags.push(evidence[index]);
       }
       continue;
     }
@@ -592,17 +581,14 @@ function suffixLines(
     if (length(current) + length(addition) + 1 > maxLine) {
       flush();
       current = `p;suffixes=[${token}`;
-      currentEvidence = evidence[index];
     } else {
       current += addition;
-      currentEvidence = currentEvidence || evidence[index];
     }
   }
   if (current !== "p;suffixes=[" || lines.length === 0) {
     lines.push(`${current}]`);
-    flags.push(currentEvidence);
   }
-  return { lines, flags };
+  return lines;
 }
 
 function projectFiles(
@@ -640,10 +626,7 @@ function projectFiles(
       return { refusal };
     }
   }
-  const maxLine = Math.min(config.max_excerpt_line_length, 240);
-  if (maxLine < MIN_LINE_BUDGET) {
-    return { refusal: "verification_failed" };
-  }
+  const maxLine = MAX_PROJECTION_LINE_LENGTH;
   const prefix = paths.some((path) => path === "") ? "" : commonPrefix(paths);
   const prefixLength = length(prefix);
   const suffixes = paths.map((path) => [...path].slice(prefixLength).join(""));
@@ -661,16 +644,13 @@ function projectFiles(
   if (prefixPart === undefined) {
     return { refusal: "verification_failed" };
   }
-  const suffixPart = suffixLines(suffixes, evidence, maxLine);
+  const suffixPart = suffixLines(suffixes, maxLine);
   if (suffixPart === undefined) {
     return { refusal: "verification_failed" };
   }
-  const lines = [header, ...prefixPart, ...suffixPart.lines];
-  const required = [
-    header,
-    ...prefixPart,
-    ...suffixPart.lines.filter((_, index) => suffixPart.flags[index]),
-  ];
+  const lines = [header, ...prefixPart, ...suffixPart];
+  // Non-evidence suffix lines still encode paths the model must see.
+  const required = [...lines];
   if (required.length > FILES_EVIDENCE_CAP) {
     return { refusal: "verification_failed" };
   }
@@ -678,7 +658,7 @@ function projectFiles(
   if (
     bytes(source) > MAX_PROJECTION_BYTES ||
     lines.length > MAX_PROJECTION_LINES ||
-    lines.some((line) => length(line) > config.max_excerpt_line_length)
+    lines.some((line) => length(line) > MAX_PROJECTION_LINE_LENGTH)
   ) {
     return { refusal: "verification_failed" };
   }
@@ -687,7 +667,7 @@ function projectFiles(
       schema: FILES_SCHEMA,
       source,
       lines,
-      required: [...new Set(required)],
+      required,
       digest,
     },
   };
@@ -836,27 +816,7 @@ function parseFilesProjection(source: string): { prefix: string; suffixes: strin
   return { prefix, suffixes };
 }
 
-export function verifyProjection(
-  content: string,
-  toolName: unknown,
-  projection: JsonProjection,
-  config: Config = defaults,
-): boolean {
-  const decision = projectJsonToolResult(content, toolName, config);
-  const candidate = decision.projection;
-  if (
-    candidate === undefined ||
-    candidate.schema !== projection.schema ||
-    candidate.source !== projection.source ||
-    !sameLines(candidate.lines, projection.lines) ||
-    !sameLines(candidate.required, projection.required) ||
-    candidate.digest !== projection.digest
-  ) {
-    return false;
-  }
-  if (candidate.schema !== FILES_SCHEMA) {
-    return true;
-  }
+function filesProjectionMatches(content: string, lines: string[]): boolean {
   if (bytes(content) > MAX_JSON_BYTES) {
     return false;
   }
@@ -881,9 +841,9 @@ export function verifyProjection(
   const paths = items as string[];
   const headerMatch =
     /^projected search_files_files_v2 v=2 digest=([0-9a-f]{64}) total_count=(\d+) items=(\d+) verified=(\d+) evidence=(\d+) note=prefix\+suffix;restore=unhide_context$/.exec(
-      candidate.lines[0],
+      lines[0] ?? "",
     );
-  const parsedProjection = parseFilesProjection(candidate.source);
+  const parsedProjection = parseFilesProjection(lines.join("\n"));
   if (!headerMatch || !parsedProjection) {
     return false;
   }
@@ -899,4 +859,61 @@ export function verifyProjection(
     parsedProjection.prefix === expectedPrefix &&
     sameLines(restored, paths)
   );
+}
+
+function decodeFilesReplacement(rendered: string, itemId: string): string[] | undefined {
+  const rows = splitLines(rendered);
+  const restore = `The remaining result is preserved. Restore it with unhide_context(${itemId}).`;
+  if (
+    rows.length < 3 ||
+    rows[0] !== `[hidden:${itemId}]` ||
+    rows[rows.length - 1] !== restore
+  ) {
+    return undefined;
+  }
+  const label = `${FILES_REPLACEMENT_LABEL}: `;
+  const lines: string[] = [];
+  for (const row of rows.slice(1, -1)) {
+    if (!row.startsWith(label)) {
+      return undefined;
+    }
+    lines.push(row.slice(label.length));
+  }
+  return lines;
+}
+
+export function verifyFilesReplacement(
+  content: string,
+  itemId: string,
+  projection: JsonProjection,
+  rendered: string,
+): boolean {
+  if (projection.schema !== FILES_SCHEMA) {
+    return true;
+  }
+  const lines = decodeFilesReplacement(rendered, itemId);
+  return lines !== undefined && sameLines(lines, projection.lines) && filesProjectionMatches(content, lines);
+}
+export function verifyProjection(
+  content: string,
+  toolName: unknown,
+  projection: JsonProjection,
+  config: Config = defaults,
+): boolean {
+  const decision = projectJsonToolResult(content, toolName, config);
+  const candidate = decision.projection;
+  if (
+    candidate === undefined ||
+    candidate.schema !== projection.schema ||
+    candidate.source !== projection.source ||
+    !sameLines(candidate.lines, projection.lines) ||
+    !sameLines(candidate.required, projection.required) ||
+    candidate.digest !== projection.digest
+  ) {
+    return false;
+  }
+  if (candidate.schema !== FILES_SCHEMA) {
+    return true;
+  }
+  return filesProjectionMatches(content, candidate.lines);
 }

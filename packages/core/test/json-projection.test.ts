@@ -6,6 +6,8 @@ import { test } from "node:test";
 import {
   Engine,
   FILES_EVIDENCE_CAP,
+  FILES_REPLACEMENT_LABEL,
+  MAX_PROJECTION_LINE_LENGTH,
   Store,
   bytes,
   defaults,
@@ -14,6 +16,7 @@ import {
   projectJsonToolResult,
   requiredEvidence,
   sha256,
+  verifyFilesReplacement,
   verifyProjection,
   type Config,
   type JsonProjection,
@@ -25,6 +28,7 @@ interface GenerateSpec {
     | "matches"
     | "matches_realistic"
     | "files"
+    | "files_basename"
     | "files_varied"
     | "files_empty"
     | "plain_text";
@@ -118,15 +122,17 @@ function generatedContent(entry: FixtureCase): string {
     }
     return lines.join("\n");
   }
+  if (spec.kind === "files_basename") {
+    const files: string[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      files.push(`synthetic-shared-basename-${"x".repeat(250)}-row-${String(index % 20).padStart(2, "0")}.txt`);
+    }
+    return JSON.stringify({ files, total_count: files.length });
+  }
   if (spec.kind === "files_varied") {
     const files = [
-      "alpha/first/one.txt",
-      "beta/second/two.txt",
-      "alpha/first/one.txt",
-      "gamma/third/three.txt",
-      "",
-      "beta/second/two.txt",
-      "delta/four/four.txt",
+      "alpha/first/one.txt", "beta/second/two.txt", "alpha/first/one.txt",
+      "gamma/third/three.txt", "", "beta/second/two.txt", "delta/four/four.txt",
     ];
     return JSON.stringify({ files, total_count: files.length });
   }
@@ -221,6 +227,33 @@ function decodeFilesProjection(source: string): { prefix: string; suffixes: stri
   return { prefix, suffixes };
 }
 
+function escapedFilesContent(paths: string[]): string {
+  const escape = (value: string): string =>
+    [...value]
+      .map((character) => `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`)
+      .join("");
+  return `{"files":[${paths.map((path) => `"${escape(path)}"`).join(",")}],"total_count":${paths.length}}`;
+}
+
+function decodeEngineReplacement(
+  rendered: string,
+  itemId: string,
+): { lines: string[]; prefix: string; suffixes: string[] } {
+  const rows = rendered.split("\n");
+  assert.equal(rows[0], `[hidden:${itemId}]`);
+  assert.equal(
+    rows[rows.length - 1],
+    `The remaining result is preserved. Restore it with unhide_context(${itemId}).`,
+  );
+  const label = `${FILES_REPLACEMENT_LABEL}: `;
+  const lines = rows.slice(1, -1).map((row) => {
+    assert.ok(row.startsWith(label), `unlabeled replacement line: ${row}`);
+    return row.slice(label.length);
+  });
+  const { prefix, suffixes } = decodeFilesProjection(lines.join("\n"));
+  return { lines, prefix, suffixes };
+}
+
 test("shared synthetic JSON projection vectors", () => {
   for (const entry of fixture.cases) {
     const content = contentFor(entry);
@@ -242,7 +275,11 @@ test("shared synthetic JSON projection vectors", () => {
     );
     assert.ok(
       projection.lines.every(
-        (line) => length(line) <= Math.min(config.max_excerpt_line_length, 240),
+        (line) =>
+          length(line) <=
+          (projection.schema === "search_files_files_v2"
+            ? MAX_PROJECTION_LINE_LENGTH
+            : Math.min(config.max_excerpt_line_length, 240)),
       ),
       entry.id,
     );
@@ -273,10 +310,10 @@ test("shared synthetic JSON projection vectors", () => {
         `${entry.id}:evidence`,
       );
       assert.ok(projection.required.includes(projection.lines[0]), `${entry.id}:header-required`);
+      assert.deepEqual(projection.required, projection.lines, `${entry.id}:all-lines-required`);
       if (entry.id === "files_success") {
-        const chunked = projection.lines.filter((line) => line.startsWith("p;suffix+"));
         const packed = projection.lines.filter((line) => line.startsWith("p;suffixes=["));
-        assert.ok(chunked.length > 0 && packed.length > 0, "long and short suffixes are packed and chunked");
+        assert.ok(packed.length > 0, "suffixes stay readable in packed JSON array lines");
       }
       if (entry.id === "files_varied") {
         assert.equal(prefix, "", "empty value disables prefix splitting");
@@ -307,7 +344,9 @@ test("shared synthetic JSON projection vectors", () => {
       assert.ok(!projection.required.some((line) => line.includes("total_count = synthetic note")));
     }
     assert.ok(projection.required.every((line) => projection.lines.includes(line)), entry.id);
-    assert.equal(new Set(projection.required).size, projection.required.length, entry.id);
+    if (projection.schema !== "search_files_files_v2") {
+      assert.equal(new Set(projection.required).size, projection.required.length, entry.id);
+    }
   }
 });
 
@@ -389,12 +428,126 @@ test("files v2 engine uses the prefix+suffix label and rejects lost verbatim kee
       result.plan!.replacement_text.includes("Projected JSON (prefix+suffix; restore with unhide_context):"),
       "files v2 label",
     );
-    const conflict = await engine.hide(scope, record, { keep_lines: ["synthetic/fixtures/"] });
+    const conflict = await engine.hide(
+      { adapter_id: "hermes", host_profile: "test", session_id: "json-files-v2-conflict" },
+      { ...record, call_id: "call_files_v2_conflict" },
+      { keep_lines: ["row-000"] },
+    );
     assert.equal(conflict.ok, false);
     assert.equal(conflict.error, "keep_lines_conflict");
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("files v2 replacement text preserves every reconstructed path", async () => {
+  const sharedPrefix = `shared-${"x".repeat(700)}-item-`;
+  const basenames = Array.from(
+    { length: 40 },
+    (_, index) => `${sharedPrefix}${String(index).padStart(2, "0")}.txt`,
+  );
+  const chunkedPath = `${sharedPrefix}${"y".repeat(2500)}.txt`;
+  const duplicatePaths = Array.from(
+    { length: 6 },
+    (_, index) => `duplicate-${"z".repeat(80)}-${String(index).padStart(2, "0")}.txt`,
+  );
+  const mixedPaths = [
+    ...Array.from({ length: 40 }, (_, index) => `basename-${"q".repeat(60)}-${index}.txt`),
+    ...Array.from({ length: 6 }, (_, index) => `synthetic/fixtures/row-${index}.txt`),
+  ];
+  const variants = [
+    {
+      id: "non-evidence-and-chunk-split",
+      paths: [...basenames, chunkedPath],
+      content: JSON.stringify({
+        files: [...basenames, chunkedPath],
+        total_count: basenames.length + 1,
+      }),
+    },
+    {
+      id: "duplicates-and-blank",
+      paths: ["", ...duplicatePaths, ...duplicatePaths, ""],
+      content: escapedFilesContent(["", ...duplicatePaths, ...duplicatePaths, ""]),
+    },
+    {
+      id: "mixed-evidence-head-tail",
+      paths: mixedPaths,
+      content: escapedFilesContent(mixedPaths),
+    },
+  ];
+  for (const variant of variants) {
+    const invocation = { tool_name: "search_files", arguments: { pattern: "synthetic" } };
+    const record = {
+      call_id: `call_${variant.id}`,
+      result_position: 0,
+      content: variant.content,
+      content_sha256: sha256(variant.content),
+      invocation,
+      invocation_digest: invocationDigest(invocation),
+      status: "ok",
+      host_handle: { index: 1 },
+    };
+    const scope = { adapter_id: "hermes", host_profile: "test", session_id: variant.id };
+    const directory = mkdtempSync(join(tmpdir(), "navigation-json-replacement-"));
+    const store = new Store(makeDriver(join(directory, "state.db")));
+    try {
+      const engine = new Engine(store, config);
+      const result = await engine.hide(scope, record);
+      assert.equal(result.ok, true, `${variant.id}: ${result.error}`);
+      const rendered = result.plan!.replacement_text;
+      const itemId = result.plan!.item_id;
+      const projection = projectJsonToolResult(variant.content, "search_files", config).projection!;
+      assert.equal(projection.schema, "search_files_files_v2", variant.id);
+      const { lines, prefix, suffixes } = decodeEngineReplacement(rendered, itemId);
+      assert.deepEqual(lines, projection.lines, `${variant.id}: projection lines`);
+      assert.deepEqual(
+        suffixes.map((suffix) => prefix + suffix),
+        variant.paths,
+        `${variant.id}: files list`,
+      );
+      assert.equal(verifyFilesReplacement(variant.content, itemId, projection, rendered), true, variant.id);
+      assert.ok(bytes(rendered) < bytes(variant.content), `${variant.id}: compression`);
+      if (variant.id === "non-evidence-and-chunk-split") {
+        assert.ok(
+          lines.some((line) => line.startsWith("p;suffix+")),
+          `${variant.id}: long suffix is chunked`,
+        );
+      }
+
+      const wrap = (projectionLines: string[]): string =>
+        `[hidden:${itemId}]\n` +
+        projectionLines.map((line) => `${FILES_REPLACEMENT_LABEL}: ${line}`).join("\n") +
+        `\nThe remaining result is preserved. Restore it with unhide_context(${itemId}).`;
+      assert.equal(
+        verifyFilesReplacement(variant.content, itemId, projection, wrap(lines.slice(0, -1))),
+        false,
+        `${variant.id}: dropped line`,
+      );
+      assert.equal(
+        verifyFilesReplacement(
+          variant.content,
+          itemId,
+          projection,
+          wrap([lines[1], lines[0], ...lines.slice(2)]),
+        ),
+        false,
+        `${variant.id}: reordered lines`,
+      );
+      assert.equal(
+        verifyFilesReplacement(
+          variant.content,
+          itemId,
+          projection,
+          wrap([...lines.slice(0, -1), `${lines[lines.length - 1]}X`]),
+        ),
+        false,
+        `${variant.id}: altered line`,
+      );
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   }
 });
 test("plain text fallback preserves legacy engine behavior", async () => {

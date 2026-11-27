@@ -3,8 +3,11 @@ import { evaluateCompaction, type Choice } from "./compaction.ts";
 import {
   FILES_EVIDENCE_CAP,
   FILES_EXCERPT_BYTES,
+  FILES_REPLACEMENT_LABEL,
   FILES_SCHEMA,
+  MAX_PROJECTION_LINE_LENGTH,
   projectJsonToolResult,
+  verifyFilesReplacement,
   verifyProjection,
   type JsonProjection,
   type ProjectionDecision,
@@ -158,7 +161,11 @@ export class Engine {
       return { ok: false, error: "invocation_conflict" };
     const projected = projection?.schema === FILES_SCHEMA;
     const selectorConfig = projected
-      ? { ...this.config, max_evidence_excerpts: FILES_EVIDENCE_CAP }
+      ? {
+          ...this.config,
+          max_evidence_excerpts: FILES_EVIDENCE_CAP,
+          max_excerpt_line_length: MAX_PROJECTION_LINE_LENGTH,
+        }
       : this.config;
     const selectorBytes = projected ? FILES_EXCERPT_BYTES : 3072;
     const baseline = selectRule(source, keepLines, selectorConfig, projection?.required, selectorBytes);
@@ -205,12 +212,18 @@ export class Engine {
         projection?.required,
         projection
           ? projection.schema === FILES_SCHEMA
-            ? "Projected JSON (prefix+suffix; restore with unhide_context)"
+            ? FILES_REPLACEMENT_LABEL
             : "Projected JSON excerpt"
           : "Original excerpt",
       );
       if (evaluated.error || !evaluated.choice || evaluated.rendered === undefined) {
         return { ok: false, error: evaluated.error ?? "verification_failed" };
+      }
+      if (
+        projection !== undefined &&
+        !verifyFilesReplacement(record.content, itemIdentity, projection, evaluated.rendered)
+      ) {
+        return { ok: false, error: "verification_failed" };
       }
       const item = this.newItem(
         itemIdentity,

@@ -247,12 +247,29 @@ export function selectRule(
   if (!eligible.length) {
     return;
   }
-  const lineIndex = new Map(lines.map((line, index) => [line, index]));
-  const selected = requiredOverride === undefined
-    ? evidenceIndexes(lines)
-    : requiredOverride.map((line) => lineIndex.get(line) ?? -1);
+  const remaining = new Map<string, number[]>();
+  for (const [index, line] of lines.entries()) {
+    const queue = remaining.get(line);
+    if (queue) {
+      queue.push(index);
+    } else {
+      remaining.set(line, [index]);
+    }
+  }
+  const selected: number[] = [];
+  if (requiredOverride === undefined) {
+    selected.push(...evidenceIndexes(lines));
+  } else {
+    for (const line of requiredOverride) {
+      const queue = remaining.get(line);
+      const index = queue?.shift();
+      if (index === undefined) {
+        return;
+      }
+      selected.push(index);
+    }
+  }
   if (
-    selected.some((index) => index < 0) ||
     selected.length > config.max_evidence_excerpts ||
     selected.some((index) => length(lines[index]) > config.max_excerpt_line_length)
   ) {

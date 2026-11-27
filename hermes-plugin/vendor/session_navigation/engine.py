@@ -6,7 +6,7 @@ import copy
 from dataclasses import replace
 from typing import Any
 
-from session_navigation.json_projection import FILES_SCHEMA, MAX_PROJECTION_BYTES, MAX_PROJECTION_EVIDENCE_LINES, JsonProjection, ProjectionDecision, project_json_tool_result, verify_projection
+from session_navigation.json_projection import FILES_SCHEMA, MAX_PROJECTION_BYTES, MAX_PROJECTION_EVIDENCE_LINES, MAX_PROJECTION_LINE_LENGTH, JsonProjection, ProjectionDecision, project_json_tool_result, verify_projection, verify_projection_render
 from session_navigation.model import (
     ContextItem,
     EngineConfig,
@@ -158,7 +158,7 @@ class SessionNavigationEngine:
             head_excerpts=self.config.head_excerpts,
             tail_excerpts=self.config.tail_excerpts,
             max_evidence=MAX_PROJECTION_EVIDENCE_LINES if projection and projection.schema == FILES_SCHEMA else self.config.max_evidence_excerpts,
-            max_line_length=self.config.max_excerpt_line_length,
+            max_line_length=MAX_PROJECTION_LINE_LENGTH if projection and projection.schema == FILES_SCHEMA else self.config.max_excerpt_line_length,
             max_bytes=MAX_PROJECTION_BYTES if projection and projection.schema == FILES_SCHEMA else MAX_EXCERPT_BYTES,
         )
         baseline = selector.select(rule_source, keep_lines=tuple(keep_lines), required_override=tuple(projection.required) if projection else None) if keep_lines or projection else selector.select(rule_source)
@@ -225,6 +225,11 @@ class SessionNavigationEngine:
                 self.store.release(scope, item_id, token)
                 return MutationResult(ok=False, error=err)
             if rendered is None:
+                self.store.release(scope, item_id, token)
+                return MutationResult(ok=False, error="verification_failed")
+            if projection is not None and not verify_projection_render(
+                rendered, record.content, record.invocation.get("tool_name"), projection, self.config
+            ):
                 self.store.release(scope, item_id, token)
                 return MutationResult(ok=False, error="verification_failed")
 
