@@ -499,25 +499,54 @@ def verify_projection_render(
     config: EngineConfig | None = None,
 ) -> bool:
     """Verify the actual model-facing replacement, not just the projection."""
-    if projection.schema != FILES_SCHEMA or not verify_projection(content, tool_name, projection, config):
+    if not verify_projection(content, tool_name, projection, config):
         return False
     if not isinstance(rendered, str) or not rendered.startswith("[hidden:"):
         return False
     restore_marker = "The remaining result is preserved. Restore it with unhide_context("
     if restore_marker not in rendered:
         return False
-    label = "Projected JSON (prefix+suffix; restore with unhide_context): "
-    body = rendered.split("\n", 1)[1] if "\n" in rendered else ""
-    body = body.split(restore_marker, 1)[0].rstrip("\n")
-    rows = body.split("\n")
-    if len(rows) != len(projection.lines):
-        return False
-    for row, expected in zip(rows, projection.lines):
-        if not row.startswith(label) or row[len(label):] != expected:
+    if projection.schema == FILES_SCHEMA:
+        label = "Projected JSON (prefix+suffix; restore with unhide_context): "
+        body = rendered.split("\n", 1)[1] if "\n" in rendered else ""
+        body = body.split(restore_marker, 1)[0].rstrip("\n")
+        rows = body.split("\n")
+        if len(rows) != len(projection.lines):
             return False
-    try:
-        original = json.loads(content)
-    except (ValueError, TypeError):
-        return False
-    decoded = "\n".join(row[len(label):] for row in rows)
-    return reconstruct_files_projection(decoded) == original.get("files")
+        for row, expected in zip(rows, projection.lines):
+            if not row.startswith(label) or row[len(label):] != expected:
+                return False
+        try:
+            original = json.loads(content)
+        except (ValueError, TypeError):
+            return False
+        decoded = "\n".join(row[len(label):] for row in rows)
+        return reconstruct_files_projection(decoded) == original.get("files")
+    if projection.schema == MATCHES_SCHEMA:
+        # The matches projection is an excerpt of the lossless projected text:
+        # every shown row must be a verbatim projection line in source order and
+        # every required evidence line must survive into the replacement. This
+        # is stricter than the files check above, never a bypass: tampered,
+        # reordered, injected or evidence-dropping replacements are rejected.
+        label = "Projected JSON excerpt: "
+        body = rendered.split("\n", 1)[1] if "\n" in rendered else ""
+        body = body.split(restore_marker, 1)[0].rstrip("\n")
+        rows = body.split("\n") if body else []
+        if not rows:
+            return False
+        shown: list[str] = []
+        cursor = 0
+        for row in rows:
+            if not row.startswith(label):
+                return False
+            line = row[len(label):]
+            try:
+                position = projection.lines.index(line, cursor)
+            except ValueError:
+                return False
+            cursor = position + 1
+            shown.append(line)
+        if any(line not in shown for line in projection.required):
+            return False
+        return True
+    return False

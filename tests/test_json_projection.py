@@ -259,3 +259,89 @@ def test_summarizer_path_does_not_claim_projection():
         engine._apply(Scope("hermes", "test", "sess-json-summary"), _record(raw, case["tool_name"]), summarizer=RefusingSummarizer())
     )
     assert result.ok is False
+
+
+def _large_matches_content() -> str:
+    lines = []
+    for index in range(40):
+        if index < 8:
+            prefix = f"synthetic/fixtures/row-{index:03d}.txt evidence=stable "
+        else:
+            prefix = "synthetic filler "
+        lines.append((prefix + "alpha beta gamma " * 8)[:100])
+    data = {
+        "matches_format": "Synthetic format: path:line:text",
+        "matches_text": "\n".join(lines),
+        "total_count": len(lines),
+        "total_count_is_lower_bound": False,
+        "truncated": False,
+        "_hint": "Synthetic hint for the large matches projection.",
+    }
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+@pytest.mark.parametrize(
+    ("case_id", "raw"),
+    [
+        ("matches_success", _content(_case("matches_success"))),
+        ("matches_large", _large_matches_content()),
+    ],
+)
+def test_matches_projection_hides_verifies_and_restores(case_id: str, raw: str):
+    decision = project_json_tool_result(raw, "search_files")
+    projection = decision.projection
+    assert decision.refusal is None
+    assert projection is not None and projection.schema == "search_files_matches_v1"
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", f"sess-{case_id}-projection")
+    result = engine.compact_sync(scope, _record(raw, "search_files", f"call_{case_id}"))
+    assert result.ok is True, result.error
+    assert result.item is not None and result.plan is not None
+    rendered = result.plan.replacement_text
+    assert "Projected JSON excerpt:" in rendered
+    assert "unhide_context(" in rendered
+    assert len(rendered.encode("utf-8")) < len(raw.encode("utf-8"))
+    assert verify_projection_render(rendered, raw, "search_files", projection)
+    assert all(line in rendered for line in projection.required)
+    assert result.item.original == raw
+    restored = engine.restore(scope, result.item.item_id)
+    assert restored.ok is True
+    assert restored.item is not None and restored.item.original == raw
+
+
+def test_matches_render_verification_fails_closed_on_tampering():
+    raw = _content(_case("matches_success"))
+    projection = project_json_tool_result(raw, "search_files").projection
+    assert projection is not None
+    engine = SessionNavigationEngine()
+    result = engine.compact_sync(
+        Scope("hermes", "test", "sess-matches-tamper"), _record(raw, "search_files", "call_tamper")
+    )
+    assert result.ok is True, result.error
+    rendered = result.plan.replacement_text
+    marker = "The remaining result is preserved. Restore it with unhide_context("
+    head, body_and_tail = rendered.split("\n", 1)
+    body, tail = body_and_tail.split(marker, 1)
+    rows = body.rstrip("\n").split("\n")
+    assert len(rows) >= 2
+
+    def wrap(rows):
+        return head + "\n" + "\n".join(rows) + "\n" + marker + tail
+
+    assert verify_projection_render(wrap(rows), raw, "search_files", projection)
+    label = "Projected JSON excerpt: "
+    required_rows = [row for row in rows if row[len(label):] in projection.required]
+    assert required_rows
+    assert not verify_projection_render(
+        wrap([row for row in rows if row != required_rows[0]]), raw, "search_files", projection
+    )
+    reordered = list(rows)
+    reordered[0], reordered[-1] = reordered[-1], reordered[0]
+    assert not verify_projection_render(wrap(reordered), raw, "search_files", projection)
+    assert not verify_projection_render(
+        wrap(rows + [label + "projected injected evidence"]), raw, "search_files", projection
+    )
+    assert not verify_projection_render(
+        wrap(["Original excerpt:" + row[len(label):] for row in rows]),
+        raw, "search_files", projection,
+    )
