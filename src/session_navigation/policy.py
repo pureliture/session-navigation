@@ -129,6 +129,23 @@ _EXIT_CLAIM = re.compile(
 )
 
 
+def contains_sensitive_pattern(text: str) -> bool:
+    """Return True when text contains a credential-like token pattern."""
+    return bool(_SENSITIVE_PATTERN.search(text))
+def evidence_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Return merged code-point ranges matching required-evidence patterns."""
+    spans: list[tuple[int, int]] = []
+    for pattern in (_STRONG_EVIDENCE_PATTERN, _PATH_EVIDENCE_PATTERN):
+        spans.extend(match.span() for match in pattern.finditer(text))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
 def is_protected_error(text: str) -> bool:
     """Return True if text or its decoded envelope matches any unresolved error pattern."""
     decoded = selectable_text(text)
@@ -142,6 +159,29 @@ def is_business_state_critical(text: str) -> bool:
     targets = (text, decoded) if decoded != text else (text,)
     return any(pattern.search(target) for target in targets for pattern in _BUSINESS_STATE_PATTERNS)
 
+def check_parsed_json_refusal(content: str) -> str | None:
+    """Return protected_error when decoded JSON string values carry protected facts."""
+    stripped = content.lstrip()
+    if not stripped or stripped[0] not in '{["':
+        return None
+    try:
+        parsed = json.loads(content)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    stack = [parsed]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            for line in selectable_text(value).splitlines():
+                if is_protected_error(line) or is_business_state_critical(line):
+                    return "protected_error"
+        elif isinstance(value, dict):
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+    return None
+
+
 def check_refusal_reason(original: str, min_chars: int = 800) -> str | None:
     """Evaluate whether original content must be rejected from compaction."""
     if len(original) < min_chars:
@@ -151,7 +191,6 @@ def check_refusal_reason(original: str, min_chars: int = 800) -> str | None:
     if is_business_state_critical(original):
         return "protected_error"
     return None
-
 
 def refusal_reason(record: ToolResultRecord, config: EngineConfig | None = None) -> str | None:
     """Evaluate whether a tool result record must be rejected from compaction."""
@@ -231,6 +270,32 @@ def required_evidence_lines(original: str) -> tuple[str, ...]:
     lines = selectable_text(original).splitlines()
     return tuple(lines[i] for i in required_evidence_indexes(lines))
 
+def parsed_string_evidence_lines(value: str) -> tuple[str, ...]:
+    """Return verbatim lines of a parsed value that existing policy requires.
+
+    The same required-evidence and protected-error/business-state rules used for
+    ordinary tool output are applied to every parsed string value, including
+    values nested inside objects and arrays. JSON-envelope strings are checked
+    in both their raw and decoded forms so a nested envelope cannot hide the
+    protected line.
+    """
+    if not isinstance(value, str):
+        return ()
+    lines: list[str] = []
+    for candidate in dict.fromkeys((value, selectable_text(value))):
+        required = set(required_evidence_lines(candidate))
+        candidate_lines = candidate.splitlines() or ([candidate] if candidate else [])
+        matched = [
+            line for line in candidate_lines
+            if line in required or is_protected_error(line) or is_business_state_critical(line)
+        ]
+        if not matched and (is_protected_error(candidate) or is_business_state_critical(candidate)):
+            matched = candidate_lines
+        for line in matched:
+            if line not in lines:
+                lines.append(line)
+    return tuple(lines)
+
 
 def excerpts_are_exact(original: str, lines: tuple[str, ...] | list[str]) -> bool:
     """Verify that excerpt lines exist verbatim in the decoded original text."""
@@ -258,19 +323,32 @@ class RuleSpanSelector:
         tail_excerpts: int = TAIL_EXCERPTS,
         max_evidence: int = MAX_EVIDENCE_EXCERPTS,
         max_line_length: int = MAX_EXCERPT_LINE,
+        max_bytes: int = MAX_EXCERPT_BYTES,
     ) -> None:
         self.head_excerpts = head_excerpts
         self.tail_excerpts = tail_excerpts
         self.max_evidence = max_evidence
         self.max_line_length = max_line_length
+        self.max_bytes = max_bytes
 
-    def select(self, original: str, *, keep_lines: tuple[str, ...] = ()) -> SpanChoice | None:
+    def select(self, original: str, *, keep_lines: tuple[str, ...] = (), required_override: tuple[str, ...] | list[str] | None = None) -> SpanChoice | None:
         lines = original.splitlines()
         eligible = [index for index, line in enumerate(lines) if 0 < len(line) <= self.max_line_length]
         if not eligible:
             return None
 
-        selected = _required_evidence_indexes(lines)
+        if required_override is not None:
+            by_line: dict[str, list[int]] = {}
+            for index, line in enumerate(lines):
+                by_line.setdefault(line, []).append(index)
+            selected = []
+            for line in required_override:
+                candidates = by_line.get(line)
+                if not candidates:
+                    return None
+                selected.append(candidates.pop(0))
+        else:
+            selected = _required_evidence_indexes(lines)
         if len(selected) > self.max_evidence or any(len(lines[index]) > self.max_line_length for index in selected):
             return None
 
@@ -285,18 +363,17 @@ class RuleSpanSelector:
             if any(part in line for part in keep_lines) and index not in selected:
                 selected.append(index)
         size = sum(len(lines[index].encode("utf-8")) + 1 for index in selected)
-        if size > MAX_EXCERPT_BYTES:
+        if size > self.max_bytes:
             return None
         extra = 0
         for index in eligible:
             if index in selected or not _HIGH_SIGNAL_PATTERN.search(lines[index]):
                 continue
             cost = len(lines[index].encode("utf-8")) + 1
-            if extra + cost <= HIGH_SIGNAL_BYTES and size + cost <= MAX_EXCERPT_BYTES:
+            if extra + cost <= HIGH_SIGNAL_BYTES and size + cost <= self.max_bytes:
                 selected.append(index)
                 extra += cost
                 size += cost
-
         ordered = tuple(lines[index] for index in sorted(selected))
         if not ordered or not excerpts_are_exact(original, ordered):
             return None
@@ -311,9 +388,10 @@ def render_compaction(
     context: dict[str, str] | None = None,
     facts: dict[str, Any] | None = None,
     options_omitted: bool = False,
+    excerpt_label: str = "Original excerpt",
 ) -> str:
     """Render compacted representation with [hidden:{item_id}] envelope."""
-    excerpts = "\n".join(f"Original excerpt: {line}" for line in lines)
+    excerpts = "\n".join(f"{excerpt_label}: {line}" for line in lines)
     if summary_text is not None:
         return (
             f"[hidden:{item_id}]\n"

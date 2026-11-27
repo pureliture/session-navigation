@@ -229,7 +229,7 @@ def test_error_enum_covers_emitted_codes():
         re.compile(r'"error":\s*"([a-z_]+)"'),
         re.compile(r"'error':\s*'([a-z_]+)'"),
         re.compile(r'error="([a-z_]+)"'),
-        re.compile(r"return \"([a-z_]+)\""),
+        re.compile(r'MutationResult\(ok=False,\s*error="([a-z_]+)"'),
     ]
     for base in ("src", "adapters"):
         for path in (root / base).rglob("*.py"):
