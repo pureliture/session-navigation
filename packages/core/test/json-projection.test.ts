@@ -576,3 +576,143 @@ test("plain text fallback preserves legacy engine behavior", async () => {
     }
   }
 });
+
+function largeMatchesContent(): string {
+  const lines: string[] = [];
+  for (let index = 0; index < 40; index += 1) {
+    const prefix = index < 8
+      ? `synthetic/fixtures/row-${String(index).padStart(3, "0")}.txt evidence=stable `
+      : "synthetic filler ";
+    lines.push((prefix + "alpha beta gamma ".repeat(8)).slice(0, 100));
+  }
+  return JSON.stringify({
+    matches_format: "Synthetic format: path:line:text",
+    matches_text: lines.join("\n"),
+    total_count: lines.length,
+    total_count_is_lower_bound: false,
+    truncated: false,
+    _hint: "Synthetic hint for the large matches projection.",
+  });
+}
+
+test("matches replacement verification is strict about order, evidence and provenance", async () => {
+  const fixtureEntry = fixture.cases.find((entry) => entry.id === "matches_success")!;
+  const variants = [
+    { id: "matches_success", content: contentFor(fixtureEntry) },
+    { id: "matches_large", content: largeMatchesContent() },
+  ];
+  const label = "Projected JSON excerpt: ";
+  const restoreMarker = "The remaining result is preserved. Restore it with unhide_context(";
+  for (const variant of variants) {
+    const projection = projectJsonToolResult(variant.content, "search_files", config).projection!;
+    assert.equal(projection.schema, "search_files_matches_v1", variant.id);
+    const bogus =
+      `[hidden:call-bogus]\nOriginal excerpt: injected row\n` +
+      `The remaining result is preserved. Restore it with unhide_context(call-bogus).`;
+    assert.equal(verifyFilesReplacement(variant.content, "call-bogus", projection, bogus, config), false, `${variant.id}: bogus`);
+
+    const scope = { adapter_id: "hermes", host_profile: "test", session_id: `json-matches-${variant.id}` };
+    const invocation = { tool_name: "search_files", arguments: { pattern: "synthetic" } };
+    const record = {
+      call_id: `call_${variant.id}`, result_position: 0, content: variant.content,
+      content_sha256: sha256(variant.content), invocation,
+      invocation_digest: invocationDigest(invocation), status: "ok", host_handle: { index: 1 },
+    };
+    const directory = mkdtempSync(join(tmpdir(), "navigation-json-matches-"));
+    const store = new Store(makeDriver(join(directory, "state.db")));
+    try {
+      const engine = new Engine(store, config);
+      const result = await engine.hide(scope, record);
+      assert.equal(result.ok, true, `${variant.id}: ${result.error}`);
+      const rendered = result.plan!.replacement_text;
+      const itemId = result.plan!.item_id;
+      assert.ok(rendered.includes(label), `${variant.id}: label`);
+      assert.ok(rendered.includes(restoreMarker), `${variant.id}: restore marker`);
+      assert.ok(bytes(rendered) < bytes(variant.content), `${variant.id}: compression`);
+      assert.equal(verifyFilesReplacement(variant.content, itemId, projection, rendered, config), true, variant.id);
+      assert.ok(projection.required.every((line) => rendered.includes(line)), `${variant.id}: required evidence`);
+      assert.equal(store.get(scope, itemId)!.original, variant.content, `${variant.id}: original`);
+      const restored = engine.unhide(scope, itemId);
+      assert.equal(restored.ok, true, `${variant.id}: restore`);
+      assert.equal(restored.item!.original, variant.content, `${variant.id}: restored original`);
+
+      const newline = rendered.indexOf("\n");
+      const head = rendered.slice(0, newline);
+      const rest = rendered.slice(newline + 1);
+      const markerAt = rest.indexOf(restoreMarker);
+      const rows = rest.slice(0, markerAt).replace(/\n+$/, "").split("\n");
+      const tail = rest.slice(markerAt);
+      const wrap = (nextRows: string[]): string => `${head}\n${nextRows.join("\n")}\n${tail}`;
+      assert.equal(verifyFilesReplacement(variant.content, itemId, projection, wrap(rows), config), true, `${variant.id}: roundtrip`);
+      const requiredRows = rows.filter((row) => projection.required.includes(row.slice(label.length)));
+      assert.ok(requiredRows.length > 0, `${variant.id}: required rows`);
+      assert.equal(
+        verifyFilesReplacement(
+          variant.content, itemId, projection,
+          wrap(rows.filter((row) => row !== requiredRows[0])), config,
+        ),
+        false,
+        `${variant.id}: dropped required evidence`,
+      );
+      const reordered = [...rows];
+      [reordered[0], reordered[reordered.length - 1]] = [reordered[reordered.length - 1], reordered[0]];
+      assert.equal(
+        verifyFilesReplacement(variant.content, itemId, projection, wrap(reordered), config),
+        false,
+        `${variant.id}: reordered rows`,
+      );
+      assert.equal(
+        verifyFilesReplacement(
+          variant.content, itemId, projection,
+          wrap([...rows, `${label}projected injected evidence`]), config,
+        ),
+        false,
+        `${variant.id}: injected row`,
+      );
+      assert.equal(
+        verifyFilesReplacement(
+          variant.content, itemId, projection,
+          wrap(rows.map((row) => `Original excerpt: ${row.slice(label.length)}`)), config,
+        ),
+        false,
+        `${variant.id}: wrong label`,
+      );
+      assert.equal(
+        verifyFilesReplacement(variant.content, itemId, projection, wrap(rows.slice(1)), config),
+        false,
+        `${variant.id}: dropped first required row`,
+      );
+      const optionalRow = rows.find((row) => !projection.required.includes(row.slice(label.length)));
+      if (optionalRow !== undefined) {
+        assert.equal(
+          verifyFilesReplacement(
+            variant.content, itemId, projection,
+            wrap(rows.filter((row) => row !== optionalRow)), config,
+          ),
+          true,
+          `${variant.id}: partial excerpt stays valid`,
+        );
+      }
+      assert.equal(
+        verifyFilesReplacement(`${variant.content} `, itemId, projection, rendered, config),
+        false,
+        `${variant.id}: altered source`,
+      );
+      assert.equal(
+        verifyFilesReplacement(
+          variant.content, itemId, { ...projection, digest: "0".repeat(64) }, rendered, config,
+        ),
+        false,
+        `${variant.id}: altered digest`,
+      );
+      assert.equal(
+        verifyFilesReplacement(variant.content, itemId, projection, `Hidden:${head.slice(8)}\n${rest}`, config),
+        false,
+        `${variant.id}: wrong hidden marker`,
+      );
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});

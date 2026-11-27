@@ -882,17 +882,64 @@ function decodeFilesReplacement(rendered: string, itemId: string): string[] | un
   return lines;
 }
 
+const MATCHES_REPLACEMENT_LABEL = "Projected JSON excerpt: ";
+const RESTORE_MARKER = "The remaining result is preserved. Restore it with unhide_context(";
+
+// Mirrors Python d094845: a matches excerpt may omit lines, but every shown
+// row must be a verbatim projection line in source order with all required evidence.
+function decodeMatchesReplacement(rendered: string, projection: JsonProjection): string[] | undefined {
+  if (!rendered.startsWith("[hidden:") || !rendered.includes(RESTORE_MARKER)) {
+    return undefined;
+  }
+  const newline = rendered.indexOf("\n");
+  const body = (newline < 0 ? "" : rendered.slice(newline + 1))
+    .split(RESTORE_MARKER, 1)[0]
+    .replace(/\n+$/, "");
+  if (body === "") {
+    return undefined;
+  }
+  const shown: string[] = [];
+  let cursor = 0;
+  for (const row of body.split("\n")) {
+    if (!row.startsWith(MATCHES_REPLACEMENT_LABEL)) {
+      return undefined;
+    }
+    const line = row.slice(MATCHES_REPLACEMENT_LABEL.length);
+    const position = projection.lines.indexOf(line, cursor);
+    if (position < 0) {
+      return undefined;
+    }
+    cursor = position + 1;
+    shown.push(line);
+  }
+  if (projection.required.some((line) => !shown.includes(line))) {
+    return undefined;
+  }
+  return shown;
+}
+
 export function verifyFilesReplacement(
   content: string,
   itemId: string,
   projection: JsonProjection,
   rendered: string,
+  config: Config = defaults,
+  toolName: unknown = "search_files",
 ): boolean {
-  if (projection.schema !== FILES_SCHEMA) {
-    return true;
+  if (typeof rendered !== "string") {
+    return false;
   }
-  const lines = decodeFilesReplacement(rendered, itemId);
-  return lines !== undefined && sameLines(lines, projection.lines) && filesProjectionMatches(content, lines);
+  if (projection.schema === FILES_SCHEMA) {
+    const lines = decodeFilesReplacement(rendered, itemId);
+    return lines !== undefined && sameLines(lines, projection.lines) && filesProjectionMatches(content, lines);
+  }
+  if (projection.schema !== MATCHES_SCHEMA) {
+    return false;
+  }
+  if (!verifyProjection(content, toolName, projection, config)) {
+    return false;
+  }
+  return decodeMatchesReplacement(rendered, projection) !== undefined;
 }
 export function verifyProjection(
   content: string,

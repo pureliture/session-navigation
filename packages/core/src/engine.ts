@@ -270,7 +270,7 @@ export class Engine {
       }
       if (
         projection !== undefined &&
-        !verifyFilesReplacement(record.content, itemIdentity, projection, evaluated.rendered)
+        !verifyFilesReplacement(record.content, itemIdentity, projection, evaluated.rendered, this.config)
       ) {
         return { ok: false, error: "verification_failed" };
       }
