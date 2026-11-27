@@ -702,6 +702,135 @@ test("Hermes fork with no summary child and empty child shell both stay on the p
   insMsg.run("shell-parent", "user", "shell parent prompt", 0);
   const shelled = loadTimeline(home, "hermes:default:shell-parent:unknown");
   expect(shelled.rows.map((r) => r.summary_line)).toEqual(["shell parent prompt"]);
+
+  // A live parent with a single live non-summary child (no end_reason='compression') also stays on parent.
+  insSess.run("single-fork-parent", "{}", null, 100);
+  insSess.run("single-fork-child", "{}", "single-fork-parent", 200);
+  insMsg.run("single-fork-parent", "user", "live parent prompt", 0);
+  insMsg.run("single-fork-child", "user", "non-rotation fork prompt", 0);
+  const singleFork = loadTimeline(home, "hermes:default:single-fork-parent:unknown");
+  expect(singleFork.rows.map((r) => r.summary_line)).toEqual(["live parent prompt"]);
+  expect(singleFork.history.effectiveScope ?? "hermes:default:single-fork-parent:unknown").toBe(
+    "hermes:default:single-fork-parent:unknown",
+  );
+});
+
+test("Hermes rotation ignores dead-end or compressed subagents and rejects ambiguous sibling branches fail-closed", () => {
+  const { resolveHermesEffectiveScope } = require("./hermesHistory.ts") as typeof import("./hermesHistory.ts");
+  const home = tempHome("paseo-hermes-c769-");
+  const db = hermesDb(home);
+  db.exec(`
+    DROP TABLE messages;
+    DROP TABLE sessions;
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'local',
+      created_source TEXT,
+      model_config TEXT,
+      parent_session_id TEXT,
+      started_at REAL,
+      ended_at REAL,
+      end_reason TEXT
+    );
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_call_id TEXT,
+      tool_calls TEXT,
+      tool_name TEXT,
+      codex_message_items TEXT,
+      api_content TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      compacted INTEGER NOT NULL DEFAULT 0,
+      _compressed_summary INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  const insSess = db.prepare(
+    "INSERT INTO sessions (id, source, created_source, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  );
+  const insMsg = db.prepare(
+    "INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)",
+  );
+
+  // 1. c769 pattern: root compressed -> 1 active local child (summary=1) + subagent sibling,
+  // and active local child has a dead-end ended subagent grandchild (even if newer/sole child).
+  insSess.run("c769-root", "local", "acp", "{}", null, 100, 200, "compression");
+  insSess.run("c769-sub-early", "subagent", "subagent", "{}", "c769-root", 150, 160, "agent_close");
+  insSess.run("c769-active-child", "local", "acp", "{}", "c769-root", 200, null, null);
+  insSess.run("c769-sub-grandchild", "subagent", "subagent", "{}", "c769-active-child", 250, 260, "agent_close");
+  // Even a compressed subagent newer than c769-active-child must be ignored.
+  insSess.run("c769-sub-compressed", "subagent", "subagent", "{}", "c769-root", 300, 310, "agent_close");
+
+  insMsg.run("c769-root", "user", "root old", 1);
+  insMsg.run("c769-sub-early", "user", "early subagent", 0);
+  insMsg.run("c769-active-child", "user", "[CONTEXT COMPACTION] active child", 1);
+  insMsg.run("c769-active-child", "assistant", "fresh reply", 0);
+  insMsg.run("c769-sub-grandchild", "user", "stale dead-end grandchild", 0);
+  insMsg.run("c769-sub-compressed", "user", "[CONTEXT COMPACTION] compressed subagent", 1);
+
+  const rootScope = "hermes:default:c769-root:unknown";
+  const tlC769 = loadTimeline(home, rootScope);
+  expect(tlC769.history.effectiveScope).toBe("hermes:default:c769-active-child:unknown");
+  expect(resolveHermesEffectiveScope(home, rootScope)).toBe("hermes:default:c769-active-child:unknown");
+  expect(tlC769.rows.map((r) => r.summary_line)).toEqual([
+    "[CONTEXT COMPACTION] active child",
+    "fresh reply",
+  ]);
+
+  // 2. Two OPEN compressed sibling children: ambiguous -> fail closed on parent instead of picking by latest started_at.
+  insSess.run("ambig-rot-parent", "local", "acp", "{}", null, 100, 200, "compression");
+  insSess.run("ambig-rot-older", "local", "acp", "{}", "ambig-rot-parent", 210, null, null);
+  insSess.run("ambig-rot-newer", "local", "acp", "{}", "ambig-rot-parent", 250, null, null);
+  insMsg.run("ambig-rot-parent", "user", "ambig parent prompt", 0);
+  insMsg.run("ambig-rot-older", "user", "[CONTEXT COMPACTION] older", 1);
+  insMsg.run("ambig-rot-newer", "user", "[CONTEXT COMPACTION] newer", 1);
+  const ambigScope = "hermes:default:ambig-rot-parent:unknown";
+  const tlAmbig = loadTimeline(home, ambigScope);
+  expect(tlAmbig.history.effectiveScope).toBe(ambigScope);
+  expect(resolveHermesEffectiveScope(home, ambigScope)).toBe(ambigScope);
+  expect(tlAmbig.rows.map((r) => r.summary_line)).toEqual(["ambig parent prompt"]);
+
+  // 3. One ENDED summary sibling vs one OPEN summary sibling: unambiguously picks the OPEN sibling even if older started_at.
+  insSess.run("open-vs-ended-parent", "local", "acp", "{}", null, 100, 200, "compression");
+  insSess.run("open-branch", "local", "acp", "{}", "open-vs-ended-parent", 210, null, null);
+  insSess.run("ended-branch", "local", "acp", "{}", "open-vs-ended-parent", 260, 300, "acp_disconnect");
+  insMsg.run("open-vs-ended-parent", "user", "parent base", 0);
+  insMsg.run("open-branch", "user", "[CONTEXT COMPACTION] open branch", 1);
+  insMsg.run("ended-branch", "user", "[CONTEXT COMPACTION] ended branch", 1);
+  expect(resolveHermesEffectiveScope(home, "hermes:default:open-vs-ended-parent:unknown")).toBe(
+    "hermes:default:open-branch:unknown",
+  );
+
+  // 4. Empty intermediate shell -> summary grandchild reaches grandchild; empty shell -> non-summary fork stays on live parent.
+  insSess.run("shell-rot-parent", "local", "acp", "{}", null, 100, 200, "acp_disconnect");
+  insSess.run("shell-rot-mid", "local", "acp", "{}", "shell-rot-parent", 200, 210, "acp_disconnect");
+  insSess.run("shell-rot-grand", "local", "acp", "{}", "shell-rot-mid", 220, null, null);
+  insMsg.run("shell-rot-parent", "user", "origin live", 0);
+  insMsg.run("shell-rot-grand", "user", "[CONTEXT COMPACTION] grand summary", 1);
+  expect(resolveHermesEffectiveScope(home, "hermes:default:shell-rot-parent:unknown")).toBe(
+    "hermes:default:shell-rot-grand:unknown",
+  );
+
+  insSess.run("shell-fork-parent", "local", "acp", "{}", null, 100, 200, "acp_disconnect");
+  insSess.run("shell-fork-mid", "local", "acp", "{}", "shell-fork-parent", 200, 210, "acp_disconnect");
+  insSess.run("shell-fork-grand", "local", "acp", "{}", "shell-fork-mid", 220, null, null);
+  insMsg.run("shell-fork-parent", "user", "stay on origin", 0);
+  insMsg.run("shell-fork-grand", "user", "grand fork without summary", 0);
+  expect(resolveHermesEffectiveScope(home, "hermes:default:shell-fork-parent:unknown")).toBe(
+    "hermes:default:shell-fork-parent:unknown",
+  );
+
+  // 5. Explicit parent end_reason='compression' with sole non-subagent child (even without _compressed_summary=1) follows child.
+  insSess.run("comp-parent", "tui", "tui", "{}", null, 100, 200, "compression");
+  insSess.run("comp-child", "tui", "tui", "{}", "comp-parent", 201, null, null);
+  insMsg.run("comp-parent", "user", "old tui turn", 0);
+  insMsg.run("comp-child", "user", "new tui turn", 0);
+  expect(resolveHermesEffectiveScope(home, "hermes:default:comp-parent:unknown")).toBe(
+    "hermes:default:comp-child:unknown",
+  );
 });
 
 test("Hermes rotation child with null/empty model_config does not inherit the parent usage anchor", () => {

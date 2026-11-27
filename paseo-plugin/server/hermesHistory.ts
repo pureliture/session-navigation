@@ -670,30 +670,123 @@ export function hasHermesSession(home: string, profile: string, sessionId: strin
   );
 }
 
+type HermesRotationSchema = {
+  hasParentSessionId: boolean;
+  hasStartedAt: boolean;
+  hasCompressedSummary: boolean;
+  hasSource: boolean;
+  hasCreatedSource: boolean;
+  hasEndReason: boolean;
+  hasEndedAt: boolean;
+};
+
+type HermesChildRow = {
+  id: string;
+  source: string | null;
+  created_source: string | null;
+  ended_at: number | null;
+};
+
+type HermesParentMeta = {
+  source: string | null;
+  end_reason: string | null;
+  ended_at: number | null;
+};
+
+function readHermesRotationSchema(db: DatabaseSync): HermesRotationSchema {
+  const sessionCols = tableColumns(db, "sessions");
+  const messageCols = tableColumns(db, "messages");
+  return {
+    hasParentSessionId: sessionCols.has("parent_session_id"),
+    hasStartedAt: sessionCols.has("started_at"),
+    hasCompressedSummary: messageCols.has("_compressed_summary"),
+    hasSource: sessionCols.has("source"),
+    hasCreatedSource: sessionCols.has("created_source"),
+    hasEndReason: sessionCols.has("end_reason"),
+    hasEndedAt: sessionCols.has("ended_at"),
+  };
+}
+
+function isHermesSubagentSession(row: { source?: string | null; created_source?: string | null }): boolean {
+  return row.source === "subagent" || row.created_source === "subagent";
+}
+
 function resolveRotationTargetSessionId(
   database: DatabaseSync,
   sessionId: string,
-  hasParentSessionId: boolean,
-  hasStartedAt: boolean,
-  hasCompressedSummary: boolean,
+  schema: HermesRotationSchema,
 ): string {
-  if (!hasParentSessionId) return sessionId;
+  if (!schema.hasParentSessionId) return sessionId;
   let targetSessionId = sessionId;
   const visited = new Set<string>([targetSessionId]);
   const path = [targetSessionId];
+
+  const parentSelectCols = [
+    schema.hasSource ? "source" : "NULL AS source",
+    schema.hasEndReason ? "end_reason" : "NULL AS end_reason",
+    schema.hasEndedAt ? "ended_at" : "NULL AS ended_at",
+  ].join(", ");
+  const parentStmt = database.prepare(`SELECT ${parentSelectCols} FROM sessions WHERE id = ? LIMIT 1`);
+
+  const childSelectCols = [
+    "id",
+    schema.hasSource ? "source" : "NULL AS source",
+    schema.hasCreatedSource ? "created_source" : "NULL AS created_source",
+    schema.hasEndedAt ? "ended_at" : "NULL AS ended_at",
+  ].join(", ");
+  const childOrderBy = schema.hasStartedAt ? "started_at DESC, rowid DESC" : "rowid DESC";
   const childStmt = database.prepare(
-    hasStartedAt
-      ? "SELECT id FROM sessions WHERE parent_session_id = ? ORDER BY started_at DESC, rowid DESC"
-      : "SELECT id FROM sessions WHERE parent_session_id = ? ORDER BY rowid DESC",
+    `SELECT ${childSelectCols} FROM sessions WHERE parent_session_id = ? ORDER BY ${childOrderBy}`,
   );
   const liveStmt = database.prepare(
     "SELECT 1 FROM messages WHERE session_id = ? AND active = 1 LIMIT 1",
   );
-  const summaryStmt = hasCompressedSummary
+  const summaryStmt = schema.hasCompressedSummary
     ? database.prepare(
         "SELECT 1 FROM messages WHERE session_id = ? AND active = 1 AND _compressed_summary = 1 LIMIT 1",
       )
     : null;
+
+  const readParentMeta = (id: string): HermesParentMeta => {
+    try {
+      const row = parentStmt.get(id) as
+        | { source?: unknown; end_reason?: unknown; ended_at?: unknown }
+        | undefined;
+      return {
+        source: typeof row?.source === "string" ? row.source : null,
+        end_reason: typeof row?.end_reason === "string" ? row.end_reason : null,
+        ended_at: typeof row?.ended_at === "number" ? row.ended_at : null,
+      };
+    } catch {
+      return { source: null, end_reason: null, ended_at: null };
+    }
+  };
+
+  const readEligibleChildren = (parentId: string, seen: ReadonlySet<string>): HermesChildRow[] => {
+    const parentMeta = readParentMeta(parentId);
+    const filterSubagents =
+      (schema.hasSource || schema.hasCreatedSource) && parentMeta.source !== "subagent";
+    let raw: Array<{ id?: unknown; source?: unknown; created_source?: unknown; ended_at?: unknown }>;
+    try {
+      raw = childStmt.all(parentId) as typeof raw;
+    } catch {
+      return [];
+    }
+    const out: HermesChildRow[] = [];
+    for (const row of raw) {
+      if (typeof row.id !== "string" || !row.id || seen.has(row.id)) continue;
+      const candidate: HermesChildRow = {
+        id: row.id,
+        source: typeof row.source === "string" ? row.source : null,
+        created_source: typeof row.created_source === "string" ? row.created_source : null,
+        ended_at: typeof row.ended_at === "number" ? row.ended_at : null,
+      };
+      if (filterSubagents && isHermesSubagentSession(candidate)) continue;
+      out.push(candidate);
+    }
+    return out;
+  };
+
   const hasLiveMessages = (id: string): boolean => {
     try {
       return Boolean(liveStmt.get(id));
@@ -701,6 +794,7 @@ function resolveRotationTargetSessionId(
       return false;
     }
   };
+
   const hasRotationSummary = (id: string): boolean => {
     if (!summaryStmt) return false;
     try {
@@ -709,28 +803,98 @@ function resolveRotationTargetSessionId(
       return false;
     }
   };
+
+  const findRotationDescendant = (
+    startId: string,
+    baseVisited: ReadonlySet<string>,
+    requireOpen: boolean,
+  ): boolean => {
+    const branchVisited = new Set(baseVisited);
+    const queue: Array<{ id: string; depth: number }> = [{ id: startId, depth: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current.depth >= 32) continue;
+      const kids = readEligibleChildren(current.id, branchVisited);
+      for (const kid of kids) {
+        if (branchVisited.has(kid.id)) continue;
+        branchVisited.add(kid.id);
+        const live = hasLiveMessages(kid.id);
+        const summary = hasRotationSummary(kid.id);
+        if (live && summary) {
+          if (!requireOpen || kid.ended_at === null) {
+            return true;
+          }
+        }
+        queue.push({ id: kid.id, depth: current.depth + 1 });
+      }
+    }
+    return false;
+  };
+
+  let ancestorHasLive = false;
   for (let hop = 0; hop < 32; hop++) {
-    let children: Array<{ id?: unknown }>;
-    try {
-      children = childStmt.all(targetSessionId) as Array<{ id?: unknown }>;
-    } catch {
-      break;
-    }
-    const fresh = children.filter(
-      (row) => typeof row.id === "string" && row.id.length > 0 && !visited.has(row.id),
-    ) as Array<{ id: string }>;
-    if (fresh.length === 0) break;
+    const currentMeta = readParentMeta(targetSessionId);
+    ancestorHasLive = ancestorHasLive || hasLiveMessages(targetSessionId);
+    const candidates = readEligibleChildren(targetSessionId, visited);
+    if (candidates.length === 0) break;
+
+    const summaryCandidates = candidates.filter(
+      (row) => hasLiveMessages(row.id) && hasRotationSummary(row.id),
+    );
     let next: string | undefined;
-    if (fresh.length === 1) {
-      next = fresh[0].id;
-    } else {
-      next = fresh.find((row) => hasLiveMessages(row.id) && hasRotationSummary(row.id))?.id;
+
+    if (summaryCandidates.length === 1) {
+      next = summaryCandidates[0].id;
+    } else if (summaryCandidates.length > 1) {
+      // Ambiguity safety: never guess among competing sibling rotations purely by started_at.
+      if (schema.hasEndedAt) {
+        const openChains = summaryCandidates.filter(
+          (row) => row.ended_at === null || findRotationDescendant(row.id, visited, true),
+        );
+        if (openChains.length === 1) {
+          next = openChains[0].id;
+        } else if (openChains.length === 0) {
+          const continuing = summaryCandidates.filter((row) =>
+            findRotationDescendant(row.id, visited, false),
+          );
+          if (continuing.length === 1) {
+            next = continuing[0].id;
+          }
+        }
+      } else {
+        const continuing = summaryCandidates.filter((row) =>
+          findRotationDescendant(row.id, visited, false),
+        );
+        if (continuing.length === 1) {
+          next = continuing[0].id;
+        }
+      }
+    } else if (candidates.length === 1) {
+      const only = candidates[0];
+      const onlyHasLive = hasLiveMessages(only.id);
+      const explicitCompression =
+        schema.hasEndReason && currentMeta.end_reason === "compression";
+      // Without a compression summary on the child, only follow a sole child when:
+      // 1) it is an empty intermediate shell (post-loop walkback protects live ancestors), OR
+      // 2) no ancestor had live messages (bootstrapped rotated session), OR
+      // 3) legacy schema lacks _compressed_summary, OR
+      // 4) the parent explicitly closed with end_reason='compression'.
+      if (
+        !onlyHasLive ||
+        !ancestorHasLive ||
+        !schema.hasCompressedSummary ||
+        explicitCompression
+      ) {
+        next = only.id;
+      }
     }
+
     if (!next) break;
     visited.add(next);
     path.push(next);
     targetSessionId = next;
   }
+
   if (!hasLiveMessages(targetSessionId)) {
     for (let i = path.length - 1; i >= 0; i--) {
       if (hasLiveMessages(path[i])) {
@@ -765,11 +929,8 @@ export function resolveHermesEffectiveScope(home: string, scope: string): string
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(dbPath, { readOnly: true });
-      const sessionCols = tableColumns(db, "sessions");
-      const hasParentSessionId = sessionCols.has("parent_session_id");
-      const hasStartedAt = sessionCols.has("started_at");
-      const messageCols = tableColumns(db, "messages");
-      const hasCompressedSummary = messageCols.has("_compressed_summary");
+      const rotationSchema = readHermesRotationSchema(db);
+      const hasParentSessionId = rotationSchema.hasParentSessionId;
 
       let hasSession = false;
       try {
@@ -800,9 +961,7 @@ export function resolveHermesEffectiveScope(home: string, scope: string): string
       const targetSessionId = resolveRotationTargetSessionId(
         db,
         sessionId,
-        hasParentSessionId,
-        hasStartedAt,
-        hasCompressedSummary,
+        rotationSchema,
       );
       return targetSessionId === sessionId
         ? scope
@@ -889,11 +1048,9 @@ export function loadHermesTimelineIndex(
     let matchedInThisDb = false;
     try {
       db = new DatabaseSync(dbPath, { readOnly: true });
-      const sessionCols = tableColumns(db, "sessions");
-      const hasParentSessionId = sessionCols.has("parent_session_id");
-      const hasStartedAt = sessionCols.has("started_at");
-      const messageCols = tableColumns(db, "messages");
-      const hasCompressedSummary = messageCols.has("_compressed_summary");
+      const rotationSchema = readHermesRotationSchema(db);
+      const hasParentSessionId = rotationSchema.hasParentSessionId;
+      const hasCompressedSummary = rotationSchema.hasCompressedSummary;
 
       let sessionRow: { id?: string; model_config?: string | null } | undefined;
       try {
@@ -928,9 +1085,7 @@ export function loadHermesTimelineIndex(
       const targetSessionId = resolveRotationTargetSessionId(
         db,
         sessionId,
-        hasParentSessionId,
-        hasStartedAt,
-        hasCompressedSummary,
+        rotationSchema,
       );
       if (targetSessionId !== sessionId) {
         try {
