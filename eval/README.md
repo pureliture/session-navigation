@@ -51,7 +51,7 @@ executing or relabeling the frozen cells. Archival `v4_assemble.py` stays unchan
 기존 실행 원본은 프라이빗 `session-navigation-evidence` 저장소의
 `eval/results/` submodule에 고정되어 있습니다. 아래의 기존 결과 분석·감사 명령과
 원본 링크에는 해당 저장소의 읽기 권한이 필요합니다. 권한이 있으면 저장소 루트에서
-`git submodule update --init eval/results`를 실행하세요. 공개 저장소를 일반 clone하여
+`git submodule update --init --checkout eval/results`를 실행하세요. 공개 저장소를 일반 clone하여
 제품을 설치하거나 테스트할 때는 submodule 초기화가 필요하지 않습니다.
 
 새 평가 결과는 submodule의 기존 증거와 섞이지 않도록 예시의 `--output`을

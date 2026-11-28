@@ -73,9 +73,10 @@ directly from `~/.hermes/.../state.db` in read-only mode (`adapter_targets` and 
 timeline back up remote or unmapped sessions).
 Manage requires explicit tool-call IDs; it never chooses cleanup targets automatically.
 
-The npm package includes its worker and installs the pinned `yaml` runtime
-dependency; neither a sibling workspace package nor Python is needed. A source
-checkout needs its dependencies installed before loading the plugin.
+The plugin ships its embedded Node worker with the shared engine and YAML parser
+bundled inside `server/worker-source.ts`, so no preparation command, runtime
+package download, sibling workspace package, or Python installation is required
+to load it from Git or npm.
 
 The panel itself does not require an account or separate API key. Session-model
 summarization may send the selected original tool output to the model provider
