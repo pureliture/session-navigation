@@ -29,7 +29,8 @@ from session_navigation.model import (
 )
 from session_navigation.transport import Summarizer
 from session_navigation.pending_summary import settle_summary
-from session_navigation.policy import is_destructive_command, refusal_reason, required_evidence_lines
+from session_navigation.json_protection import refusal_reason_for_record
+from session_navigation.policy import is_destructive_command, required_evidence_lines
 
 
 def compact(
@@ -503,7 +504,7 @@ def middleware_step(
             (entry.call_id, entry.result_position, entry.content_sha256, entry.host_handle, record)
         )
         if (entry.call_id in unique_calls and result_counts[entry.call_id] == 1 and
-                refusal_reason(record, engine.config) is None and
+                refusal_reason_for_record(record, engine.config) is None and
                 not is_destructive_command(entry.tool_name, invocation.get("arguments"))):
             targets.append((record, omitted))
     if publish_targets:

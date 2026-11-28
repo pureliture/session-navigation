@@ -14,7 +14,7 @@ import {
   selectRule,
   selectableText,
   evaluateCompaction,
-  refusalReason,
+  refusalReasonForRecord,
   invocationDigest,
   isDestructive,
   type Item,
@@ -1826,7 +1826,7 @@ export class PaseoService {
         matchedTarget?.options_omitted ??
           ("options_omitted" in record ? record.options_omitted : undefined),
       );
-      const refusal = refusalReason(record, this.engine.config);
+      const refusal = refusalReasonForRecord(record, this.engine.config);
       if (
         refusal &&
         ![

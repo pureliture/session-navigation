@@ -27,14 +27,13 @@ import {
   type ScopeLike,
 } from "./model.ts";
 import {
-  checkParsedJsonRefusal,
   isDestructive,
   normalizeKeepLines,
-  refusalReason,
   requiredEvidence,
   selectRule,
   selectableText,
 } from "./policy.ts";
+import { refusalReasonForRecord } from "./json-protection.ts";
 import { validateSummary, summarySource, summaryWithRetry } from "./summary.ts";
 import { Store } from "./store.ts";
 export type Summarizer = (
@@ -173,10 +172,7 @@ export class Engine {
     context?: Json,
     evidence?: string[],
   ): Promise<Result> {
-    let refused = refusalReason(record, this.config);
-    if (options.parsed_protection && !refused) {
-      refused = checkParsedJsonRefusal(record.content);
-    }
+    let refused = refusalReasonForRecord(record, this.config);
     if (projection !== undefined && refused === "not_long") {
       refused = undefined;
     }

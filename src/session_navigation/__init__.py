@@ -30,6 +30,7 @@ from session_navigation.policy import (
     validate_evidence_retention,
     verified_facts,
 )
+from session_navigation.json_protection import refusal_reason_for_record
 from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.store import MemoryContextStore
 from session_navigation.summary import (
@@ -78,6 +79,7 @@ __all__ = [
     "is_protected_error",
     "prepare_result_source",
     "refusal_reason",
+    "refusal_reason_for_record",
     "render_compaction",
     "required_evidence_indexes",
     "required_evidence_lines",

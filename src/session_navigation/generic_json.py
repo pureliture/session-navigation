@@ -24,6 +24,34 @@ MAX_EVIDENCE_LINES = 64
 MAX_EVIDENCE_LINE_CHARS = 240
 MAX_EVIDENCE_BYTES = 8192
 _UNSAFE_CODEPOINTS = frozenset({0x2028, 0x2029})
+@dataclass
+class JsonProtectionBudget:
+    bytes: int = 0
+    nodes: int = 0
+    depth: int = 0
+
+
+@dataclass(frozen=True)
+class BoundedJsonParse:
+    value: Any
+
+
+def parse_json_for_protection(
+    content: str, budget: JsonProtectionBudget
+) -> tuple[BoundedJsonParse | None, str | None]:
+    """Strict parse under a budget shared across nested JSON layers."""
+    size = _utf8_size(content)
+    if budget.bytes + size > MAX_JSON_BYTES:
+        return None, "input_too_large"
+    refusal, parsed = _parse_strict(content)
+    if refusal is not None or parsed is None:
+        return None, refusal or "verification_failed"
+    if budget.nodes + parsed.nodes > MAX_NODES or budget.depth + parsed.depth > MAX_DEPTH:
+        return None, "input_too_large"
+    budget.bytes += size
+    budget.nodes += parsed.nodes
+    budget.depth += parsed.depth
+    return BoundedJsonParse(parsed.value), None
 
 
 @dataclass(frozen=True)

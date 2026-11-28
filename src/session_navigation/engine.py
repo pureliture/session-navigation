@@ -20,12 +20,11 @@ from session_navigation.model import (
     ToolResultRecord,
     _item_id,
 )
+from session_navigation.json_protection import refusal_reason_for_record
 from session_navigation.policy import (
     MAX_EXCERPT_BYTES,
     RuleSpanSelector,
-    check_parsed_json_refusal,
     excerpts_are_exact,
-    refusal_reason,
     render_compaction,
     required_evidence_lines,
     verified_facts,
@@ -138,9 +137,7 @@ class SessionNavigationEngine:
                 )
             }
         rule_source = projection.source if projection else selectable_text(record.content)
-        refusal = refusal_reason(record, self.config)
-        if summarizer is not None:
-            refusal = refusal or check_parsed_json_refusal(record.content)
+        refusal = refusal_reason_for_record(record, self.config)
         if projection is not None and refusal == "not_long":
             refusal = None
 
