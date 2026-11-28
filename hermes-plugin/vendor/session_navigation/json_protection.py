@@ -1,6 +1,7 @@
 """Shared bounded JSON protection decision for every compaction path."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from session_navigation.generic_json import (
@@ -13,7 +14,7 @@ from session_navigation.policy import protected_pattern_refusal, refusal_reason
 
 
 def _is_json_like(content: str) -> bool:
-    stripped = content.lstrip()
+    stripped = re.sub(r"^[\s\ufeff]+", "", content)
     return bool(stripped) and stripped[0] in '{["'
 
 

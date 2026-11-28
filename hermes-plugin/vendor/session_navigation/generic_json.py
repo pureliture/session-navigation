@@ -20,6 +20,7 @@ MAX_JSON_BYTES = 64 * 1024
 MAX_DEPTH = 256
 MAX_NODES = 4096
 MAX_STRING_CHARS = 8192
+MAX_PROTECTION_STRING_CHARS = MAX_JSON_BYTES
 MAX_EVIDENCE_LINES = 64
 MAX_EVIDENCE_LINE_CHARS = 240
 MAX_EVIDENCE_BYTES = 8192
@@ -43,7 +44,7 @@ def parse_json_for_protection(
     size = _utf8_size(content)
     if budget.bytes + size > MAX_JSON_BYTES:
         return None, "input_too_large"
-    refusal, parsed = _parse_strict(content)
+    refusal, parsed = _parse_strict(content, MAX_PROTECTION_STRING_CHARS)
     if refusal is not None or parsed is None:
         return None, refusal or "verification_failed"
     if budget.nodes + parsed.nodes > MAX_NODES or budget.depth + parsed.depth > MAX_DEPTH:
@@ -114,7 +115,9 @@ _CLOSE_OBJECT = 2
 _CLOSE_ARRAY = 3
 
 
-def _canonical(value: Any) -> tuple[str, int, int]:
+def _canonical(
+    value: Any, max_string_chars: int = MAX_STRING_CHARS
+) -> tuple[str, int, int]:
     """Return canonical form, node count and maximum container depth."""
     out: list[str] = []
     stack: list[tuple[int, Any, int]] = [(_VALUE, value, 0)]
@@ -142,7 +145,7 @@ def _canonical(value: Any) -> tuple[str, int, int]:
         elif type(payload) is bool:
             out.append("true" if payload else "false")
         elif isinstance(payload, str):
-            if len(payload) > MAX_STRING_CHARS or _has_unsafe_unicode(payload):
+            if len(payload) > max_string_chars or _has_unsafe_unicode(payload):
                 raise ValueError("unsafe JSON string")
             out.append(_encoded_string(payload))
         elif isinstance(payload, dict):
@@ -155,7 +158,7 @@ def _canonical(value: Any) -> tuple[str, int, int]:
             pairs = sorted(payload.items(), key=lambda item: item[0])
             for index in range(len(pairs) - 1, -1, -1):
                 key, item = pairs[index]
-                if len(key) > MAX_STRING_CHARS or _has_unsafe_unicode(key):
+                if len(key) > max_string_chars or _has_unsafe_unicode(key):
                     raise ValueError("unsafe JSON key")
                 stack.append((_VALUE, item, level))
                 stack.append((_TEXT, _encoded_string(key) + ":", 0))
@@ -191,7 +194,9 @@ class _ParsedJson:
     depth: int
 
 
-def _parse_strict(content: str) -> tuple[str | None, _ParsedJson | None]:
+def _parse_strict(
+    content: str, max_string_chars: int = MAX_STRING_CHARS
+) -> tuple[str | None, _ParsedJson | None]:
     """Parse once under the limits used by ``inspect_generic_json``."""
     if not isinstance(content, str):
         return "verification_failed", None
@@ -207,7 +212,7 @@ def _parse_strict(content: str) -> tuple[str | None, _ParsedJson | None]:
             parse_int=_raw_number,
             parse_float=_raw_number,
         )
-        canonical, nodes, depth = _canonical(value)
+        canonical, nodes, depth = _canonical(value, max_string_chars)
     except (ValueError, TypeError, RecursionError):
         return "verification_failed", None
     return None, _ParsedJson(value, canonical, nodes, depth)

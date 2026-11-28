@@ -15,6 +15,7 @@ import {
 import { makeDriver } from "./runtime.ts";
 
 const pad = (count: number): string => "routine synthetic line ".repeat(count);
+const longPad = pad(500);
 const summary = "Synthetic compact note retained.";
 
 function recordFor(content: string, callId = "call-protection"): RecordInput {
@@ -55,6 +56,10 @@ const nestedEscaped = JSON.stringify({
   outer: '{"payload":"\\u0045RROR: unresolved charge"}',
 });
 const literalBackslash = JSON.stringify({ padding: pad(40), outer: "\\u0045RROR: unresolved charge" });
+const longNestedEscaped = JSON.stringify({
+  padding: longPad,
+  outer: '{"payload":"\\u0045RROR: unresolved charge"}',
+});
 const duplicateKeys = `{"padding":"${pad(40)}","v":"routine","v":"\\u0045RROR: unresolved charge"}`;
 const deep = `[${"[".repeat(300)}"${pad(40)}\\u0045RROR: unresolved charge"${"}".repeat(300)}]`;
 
@@ -82,6 +87,25 @@ test("valid nested JSON with escaped error is protected", async () => {
     assert.equal(result.error, "protected_error");
     assert.equal(calls.count, 0);
   });
+});
+
+test("long padded nested JSON with escaped error is protected", async () => {
+  assert.equal(refusalReasonForRecord(recordFor(longNestedEscaped)), "protected_error");
+  await withEngine("long-nested", async (engine, record, calls) => {
+    const result = await engine.summarize(scopeFor("long-nested"), recordFor(longNestedEscaped, record.call_id), async () => {
+      calls.count += 1;
+      return { summary };
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.error === "protected_error" || result.error === "verification_failed");
+    assert.equal(calls.count, 0);
+  });
+});
+
+test("JSON-like prefix whitespace stays fail closed", () => {
+  for (const prefix of ["\ufeff", "\x1c", "\x1f", "\x85"]) {
+    assert.equal(refusalReasonForRecord(recordFor(prefix + longNestedEscaped)), "verification_failed");
+  }
 });
 
 test("literal backslash-u text is ordinary text and is never re-unescaped", () => {

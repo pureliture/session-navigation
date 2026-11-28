@@ -7,7 +7,7 @@ import { defaults, type Config, type RecordInput } from "./model.ts";
 import { protectedPatternRefusal, refusalReason } from "./policy.ts";
 
 function isJsonLike(content: string): boolean {
-  const stripped = content.trimStart();
+  const stripped = content.replace(/^[\s\x1c-\x1f\x85\ufeff]+/u, "");
   return stripped.length > 0 && (stripped[0] === "{" || stripped[0] === "[" || stripped[0] === '"');
 }
 

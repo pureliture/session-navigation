@@ -18,9 +18,13 @@ from session_navigation.model import (
 from session_navigation.sqlite_store import SQLiteContextStore
 
 PAD = "routine synthetic line " * 40
+LONG_PAD = "routine synthetic line " * 500
 DOC_EXAMPLE = json.dumps({"padding": PAD, "doc": "ERROR: example in handling documentation"})
 NESTED_ESCAPED = json.dumps(
     {"padding": PAD, "outer": '{"payload":"\\u0045RROR: unresolved charge"}'}
+)
+LONG_NESTED_ESCAPED = json.dumps(
+    {"padding": LONG_PAD, "outer": '{"payload":"\\u0045RROR: unresolved charge"}'}
 )
 LITERAL_BACKSLASH = json.dumps({"padding": PAD, "outer": "\\u0045RROR: unresolved charge"})
 DUPLICATE_KEYS = (
@@ -85,6 +89,14 @@ class JsonProtectionTest(unittest.TestCase):
 
     def test_over_depth_json_keeps_original(self) -> None:
         self.assert_protected(DEEP)
+
+    def test_long_padded_json_still_detects_escaped_error(self) -> None:
+        self.assert_protected(LONG_NESTED_ESCAPED)
+
+    def test_json_like_prefix_whitespace_is_fail_closed(self) -> None:
+        for prefix in ("\ufeff", "\x1c", "\x1f", "\x85"):
+            with self.subTest(prefix=repr(prefix)):
+                self.assert_protected(prefix + LONG_NESTED_ESCAPED)
 
     def test_literal_backslash_u_is_ordinary_text(self) -> None:
         self.assertIsNone(refusal_reason_for_record(make_record(LITERAL_BACKSLASH)))

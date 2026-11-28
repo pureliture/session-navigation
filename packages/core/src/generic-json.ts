@@ -5,6 +5,7 @@ const MAX_JSON_BYTES = 64 * 1024;
 const MAX_DEPTH = 256;
 const MAX_NODES = 4096;
 const MAX_STRING_CHARS = 8192;
+const MAX_PROTECTION_STRING_CHARS = MAX_JSON_BYTES;
 export const MAX_EVIDENCE_LINES = 64;
 export const MAX_EVIDENCE_LINE_CHARS = 240;
 export const MAX_EVIDENCE_BYTES = 8192;
@@ -27,7 +28,7 @@ export function parseJsonForProtection(
   if (hasUnsafeUnicode(content)) return { refusal: "verification_failed" };
   try {
     const parsed = new StrictJsonParser(content).parse();
-    const { nodes, depth } = canonical(parsed);
+    const { nodes, depth } = canonical(parsed, MAX_PROTECTION_STRING_CHARS);
     if (budget.nodes + nodes > MAX_NODES || budget.depth + depth > MAX_DEPTH) {
       return { refusal: "input_too_large" };
     }
@@ -331,7 +332,9 @@ function compareKeys(left: string, right: string): number {
   return a.length - b.length;
 }
 
-function canonical(value: ParsedValue): { form: string; nodes: number; depth: number } {
+function canonical(
+  value: ParsedValue, maxStringChars: number = MAX_STRING_CHARS
+): { form: string; nodes: number; depth: number } {
   const out: string[] = [];
   const stack: Frame[] = [{ tag: "value", value, level: 0 }];
   let nodes = 0;
@@ -361,7 +364,7 @@ function canonical(value: ParsedValue): { form: string; nodes: number; depth: nu
         );
         for (let index = entries.length - 1; index >= 0; index--) {
           const [key, item] = entries[index];
-          if (length(key) > MAX_STRING_CHARS || hasUnsafeUnicode(key)) {
+          if (length(key) > maxStringChars || hasUnsafeUnicode(key)) {
             throw new Error("unsafe JSON key");
           }
           stack.push({ tag: "value", value: item, level: inner });
@@ -389,7 +392,7 @@ function canonical(value: ParsedValue): { form: string; nodes: number; depth: nu
         break;
       }
       case "string":
-        if (length(current.value) > MAX_STRING_CHARS || hasUnsafeUnicode(current.value)) {
+        if (length(current.value) > maxStringChars || hasUnsafeUnicode(current.value)) {
           throw new Error("unsafe JSON string");
         }
         out.push(JSON.stringify(current.value));
