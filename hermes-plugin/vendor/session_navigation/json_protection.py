@@ -15,7 +15,14 @@ from session_navigation.policy import protected_pattern_refusal, refusal_reason
 
 def _is_json_like(content: str) -> bool:
     stripped = re.sub(r"^[\s\ufeff]+", "", content)
-    return bool(stripped) and stripped[0] in '{["'
+    if not stripped:
+        return False
+    if stripped[0] in '{"':
+        return True
+    if stripped[0] == "[":
+        head = stripped[1:].lstrip(" \t\r\n")
+        return not head or head[0] in '"{[-0123456789tfn'
+    return False
 
 
 def _walk(value: Any, budget: JsonProtectionBudget) -> str | None:

@@ -31,6 +31,10 @@ DUPLICATE_KEYS = (
     '{"padding":"' + PAD + '","v":"routine","v":"\\u0045RROR: unresolved charge"}'
 )
 DEEP = "[" * 300 + '"' + PAD + '\\u0045RROR: unresolved charge"' + "]" * 300
+READ_ENVELOPE = "[~/fixture.txt#267D]\n" + "\n".join(
+    f"{index}:Output row {index - 1} details" for index in range(1, 101)
+)
+TOP_LEVEL_ARRAY = json.dumps(["ERROR: synthetic protected array row", LONG_PAD])
 
 
 class DummySummarizer:
@@ -100,6 +104,26 @@ class JsonProtectionTest(unittest.TestCase):
 
     def test_literal_backslash_u_is_ordinary_text(self) -> None:
         self.assertIsNone(refusal_reason_for_record(make_record(LITERAL_BACKSLASH)))
+
+    def test_top_level_array_error_is_protected(self) -> None:
+        self.assert_protected(TOP_LEVEL_ARRAY)
+
+    def test_read_file_envelope_is_not_treated_as_json(self) -> None:
+        self.assertIsNone(refusal_reason_for_record(make_record(READ_ENVELOPE)))
+
+    def test_read_file_envelope_hides_without_protection_refusal(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="json-protection-hide-") as directory:
+            store = SQLiteContextStore(db_path=str(Path(directory) / "state.db"))
+            engine = SessionNavigationEngine(store=store)
+            scope = Scope(adapter_id="omp", host_profile="synthetic", session_id="read-envelope")
+            try:
+                result = asyncio.run(engine.compact(scope, make_record(READ_ENVELOPE)))
+                self.assertTrue(result.ok, result.error)
+                self.assertIsNotNone(result.item)
+                assert result.item is not None
+                self.assertIn("Original excerpt", result.item.compacted)
+            finally:
+                store.close()
 
 
 if __name__ == "__main__":

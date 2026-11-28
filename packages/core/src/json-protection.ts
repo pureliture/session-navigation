@@ -8,7 +8,13 @@ import { protectedPatternRefusal, refusalReason } from "./policy.ts";
 
 function isJsonLike(content: string): boolean {
   const stripped = content.replace(/^[\s\x1c-\x1f\x85\ufeff]+/u, "");
-  return stripped.length > 0 && (stripped[0] === "{" || stripped[0] === "[" || stripped[0] === '"');
+  if (!stripped) return false;
+  if (stripped[0] === "{" || stripped[0] === '"') return true;
+  if (stripped[0] === "[") {
+    const head = stripped.slice(1).replace(/^[\t\n\r ]+/, "");
+    return head.length === 0 || /["{\[\-0-9tfn]/.test(head[0]);
+  }
+  return false;
 }
 
 function walk(value: ParsedValue, budget: JsonProtectionBudget): string | undefined {

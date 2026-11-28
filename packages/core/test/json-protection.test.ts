@@ -62,6 +62,8 @@ const longNestedEscaped = JSON.stringify({
 });
 const duplicateKeys = `{"padding":"${pad(40)}","v":"routine","v":"\\u0045RROR: unresolved charge"}`;
 const deep = `[${"[".repeat(300)}"${pad(40)}\\u0045RROR: unresolved charge"${"}".repeat(300)}]`;
+const readEnvelope = `[~/fixture.txt#267D]\n${Array.from({ length: 100 }, (_, index) => `${index + 1}:Output row ${index} details`).join("\n")}`;
+const topLevelArray = JSON.stringify(["ERROR: synthetic protected array row", longPad]);
 
 test("protected expression in a document example stays in the original", async () => {
   assert.equal(refusalReasonForRecord(recordFor(docExample)), "protected_error");
@@ -126,4 +128,18 @@ test("duplicate keys and over-depth JSON keep the original", async () => {
       assert.equal(calls.count, 0);
     });
   }
+});
+
+test("top-level array with protected error stays in the original", () => {
+  assert.equal(refusalReasonForRecord(recordFor(topLevelArray)), "protected_error");
+});
+
+test("read-file envelope is not treated as JSON and can hide", async () => {
+  assert.equal(refusalReasonForRecord(recordFor(readEnvelope)), undefined);
+  await withEngine("read-envelope", async (engine, record, calls) => {
+    const result = await engine.hide(scopeFor("read-envelope"), recordFor(readEnvelope, record.call_id));
+    assert.equal(result.ok, true, result.error ?? "hide failed");
+    assert.ok(result.item?.compacted.includes("Original excerpt"));
+    assert.equal(calls.count, 0);
+  });
 });
