@@ -43,7 +43,7 @@ def chrome(port, profile):
         pass
     os.makedirs(profile, exist_ok=True)
     subprocess.Popen([CHROME, '--headless=new', '--disable-gpu', '--no-first-run',
-                      '--no-default-browser-check', f'--remote-debugging-port={port}',
+                      '--no-default-browser-check', '--use-mock-keychain', f'--remote-debugging-port={port}',
                       f'--user-data-dir={profile}', '--window-size=1400,1000', 'about:blank'],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     for _ in range(100):
