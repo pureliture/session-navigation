@@ -1357,12 +1357,14 @@ export function SessionNavPanel({
         flexShrink: 0,
       },
       iconBtn: {
-        paddingHorizontal: layout.compact ? 5 : 6,
-        paddingVertical: layout.compact ? 2 : 4,
+        width: layout.compact ? 30 : 32,
+        height: layout.compact ? 30 : 32,
         borderRadius: 4,
         borderWidth: 1,
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface1,
+        alignItems: "center" as const,
+        justifyContent: "center" as const,
       },
       iconBtnActive: {
         borderColor: theme.colors.accent,
@@ -1375,21 +1377,6 @@ export function SessionNavPanel({
       },
       iconBtnTextActive: {
         color: theme.colors.accent,
-      },
-      jumpBtn: {
-        minWidth: layout.compact ? 30 : 32,
-        height: layout.compact ? 30 : 32,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.accent,
-        backgroundColor: theme.colors.accent + "18",
-        alignItems: "center" as const,
-        justifyContent: "center" as const,
-      },
-      jumpBtnText: {
-        color: theme.colors.accent,
-        fontSize: layout.compact ? 13 : 14,
-        fontWeight: "700" as const,
       },
       searchBar: {
         paddingHorizontal: pad,
@@ -1935,10 +1922,10 @@ export function SessionNavPanel({
             accessibilityRole="button"
             accessibilityLabel="Jump to latest row"
             accessibilityHint="Moves to the newest row and resumes automatic following"
-            style={styles.jumpBtn}
+            style={styles.iconBtn}
             onPress={jumpToLatest}
           >
-            <Text style={styles.jumpBtnText}>↓</Text>
+            <Text style={styles.iconBtnText}>↓</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
