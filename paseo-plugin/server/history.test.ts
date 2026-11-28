@@ -12,7 +12,7 @@ import {
   type Item,
 } from "../../packages/core/src/index.ts";
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
-import { fileChangeToken, hasHermesSession, resolveHermesEffectiveScope, resolveHermesScope } from "./hermesHistory.ts";
+import { applyHermesOverlay, fileChangeToken, hasHermesSession, resolveHermesEffectiveScope, resolveHermesScope } from "./hermesHistory.ts";
 import { loadTimeline } from "./history.ts";
 import { HistoryTooLargeError, MAX_HISTORY_ROWS } from "./historyLimits.ts";
 import { PaseoService } from "./service.ts";
@@ -1133,4 +1133,13 @@ test("Hermes cross-profile DB fallback never fabricates requested-profile rotate
   const matched = resolveHermesScope(home, "hermes:other:s-only-other:unknown");
   expect(matched.profileMismatch).toBe(false);
   expect(matched.effectiveScope).toBe("hermes:other:c-only-other:unknown");
+});
+test("Hermes overlay tolerates stored items with a null tool_call_id", () => {
+  const item = {
+    tool_call_id: null,
+    result_position: 0,
+    visibility: "visible",
+    version: 1,
+  } as unknown as Item;
+  expect(() => applyHermesOverlay({ slots: [] } as never, [item], [])).not.toThrow();
 });
