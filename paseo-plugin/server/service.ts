@@ -39,6 +39,7 @@ import {
   loadHermesRecordById,
   loadHermesTimelineIndex,
   resolveHermesEffectiveScope,
+  resolveHermesScope,
   searchHermesIndex,
   type HermesOverlaidSlot,
   type HermesTimelineIndex,
@@ -652,45 +653,56 @@ export class PaseoService {
               choices: ["abort_request", "send_original"],
             };
           } else if (method === "fork") {
-            const effective = this.effectiveScope(scope);
-            const destination =
-              typeof input.dst_scope_key === "string"
-                ? this.resolveScope(input.dst_scope_key)
-                : "";
-            const denied = this.gate(destination, "hide");
-            if (denied) {
-              reply = denied;
-            } else if (
-              this.store
-                .items(effective)
-                .some((item) => item.compaction_source === "summarize_pending")
-            ) {
-              const deniedSummary = this.gate(destination, "summarize");
-              reply =
-                deniedSummary ??
-                ({ ok: true, counts: this.store.fork(effective, destination) } as Reply);
+            const destinationRaw =
+              typeof input.dst_scope_key === "string" ? input.dst_scope_key : "";
+            const destination = destinationRaw
+              ? this.resolveScope(destinationRaw)
+              : "";
+            const mismatch =
+              this.hermesProfileMismatchReply(scope) ??
+              (destination ? this.hermesProfileMismatchReply(destination) : undefined);
+            if (mismatch) {
+              reply = mismatch;
             } else {
-              reply = {
-                ok: true,
-                counts: this.store.fork(effective, destination),
-              };
+              const effective = this.effectiveScope(scope);
+              const denied = this.gate(destination, "hide");
+              if (denied) {
+                reply = denied;
+              } else if (
+                this.store
+                  .items(effective)
+                  .some((item) => item.compaction_source === "summarize_pending")
+              ) {
+                const deniedSummary = this.gate(destination, "summarize");
+                reply =
+                  deniedSummary ??
+                  ({ ok: true, counts: this.store.fork(effective, destination) } as Reply);
+              } else {
+                reply = {
+                  ok: true,
+                  counts: this.store.fork(effective, destination),
+                };
+              }
             }
           } else if (method === "hide" || method === "unhide") {
-            reply = await this.mutate(
-              this.effectiveScope(scope),
-              input.item_id,
-              method,
-              input.mode ?? "hide",
-              input.expected_version,
-            );
+            const mismatch = this.hermesProfileMismatchReply(scope);
+            reply = mismatch
+              ? mismatch
+              : await this.mutate(
+                  this.effectiveScope(scope),
+                  input.item_id,
+                  method,
+                  input.mode ?? "hide",
+                  input.expected_version,
+                );
           } else if (method === "hideBatch" || method === "unhideBatch") {
             reply = await this.batch(
-              this.effectiveScope(scope),
+              scope,
               input,
               method === "hideBatch" ? "hide" : "unhide",
             );
           } else if (method === "manage") {
-            reply = await this.manage(this.effectiveScope(scope), input);
+            reply = await this.manage(scope, input);
           } else {
             reply = { ok: false, error: "unknown_method" };
           }
@@ -737,6 +749,13 @@ export class PaseoService {
   private effectiveScope(scope: string): string {
     if (!scope.startsWith("hermes:")) return scope;
     return resolveHermesEffectiveScope(this.home, scope);
+  }
+
+  private hermesProfileMismatchReply(scope: string): Reply | undefined {
+    if (!scope.startsWith("hermes:")) return undefined;
+    const resolved = resolveHermesScope(this.home, scope);
+    if (!resolved.profileMismatch) return undefined;
+    return { ok: false, error: "profile_mismatch" };
   }
 
   private failure(error: unknown): Reply {
@@ -995,9 +1014,20 @@ export class PaseoService {
       recordsCapped?: boolean;
       readError?: string;
       context?: { used_tokens: number; max_tokens: number | null; source: string };
+      profileMismatch?: boolean;
+      dbProfile?: string;
     },
   ): Reply {
-    const capabilities = this.capabilities(effectiveScope);
+    const capabilities = options.profileMismatch
+      ? {
+          display: true,
+          hide: false,
+          summarize: false,
+          unhide: false,
+          state: "adapter_not_detected" as const,
+          hint: `Session belongs to Hermes profile "${options.dbProfile ?? "unknown"}"; switch profile scope before mutating.`,
+        }
+      : this.capabilities(effectiveScope);
     const pausedAdapter = effectiveScope.startsWith("hermes:")
       ? "hermes"
       : effectiveScope.startsWith("omp:")
@@ -1151,22 +1181,23 @@ export class PaseoService {
     } else if (adapter === "hermes") {
       const hermesRes = loadHermesTimelineIndex(this.home, scope);
       if (hermesRes.readError) {
-        return this.listLegacyOrEmpty(
-          scope,
+        const items = this.store.items(scope);
+        const units = new Map(
+          this.store.listUnits(scope).map((unit) => [String(unit.unit_id), unit]),
+        );
+        return this.listEmptySlotsWithStoreFallback(
           requestedScope ?? scope,
+          scope,
+          items,
+          units,
+          { tokens: new Map() },
           query,
-          paging,
+          hasQuery,
+          hasLimit ? paging! : undefined,
           {
-            rows: [],
-            records: new Map(),
-            history: {
-              messages: [],
-              boundaries: [],
-              injected: [],
-              chunkStart: 0,
-              readError: hermesRes.readError,
-              readErrorDb: hermesRes.readErrorDb,
-            },
+            readError: hermesRes.readError,
+            profileMismatch: hermesRes.profileMismatch,
+            dbProfile: hermesRes.dbProfile,
           },
           diagOut,
         );
@@ -1325,8 +1356,9 @@ export class PaseoService {
         paging,
         {
           recordsCapped: index.recordsCapped,
+          profileMismatch: index.profileMismatch,
+          dbProfile: index.dbProfile,
         },
-        diagOut,
       );
     }
 
@@ -1384,6 +1416,8 @@ export class PaseoService {
       {
         recordsCapped: index.recordsCapped,
         context: measured.context,
+        profileMismatch: index.profileMismatch,
+        dbProfile: index.dbProfile,
       },
     );
   }
@@ -1400,7 +1434,7 @@ export class PaseoService {
     query: string,
     hasQuery: boolean,
     paging: { limit?: number; before_index?: number } | undefined,
-    options: { recordsCapped?: boolean; readError?: string },
+    options: { recordsCapped?: boolean; readError?: string; profileMismatch?: boolean; dbProfile?: string },
     diagOut?: { row_count?: number; hydrated_count?: number; page_size?: number },
   ): Reply {
     const stored = new Map(items.map((item) => [item.item_id, item]));
@@ -1498,6 +1532,8 @@ export class PaseoService {
         recordsCapped: options.recordsCapped,
         readError: options.readError,
         context: measured.context,
+        profileMismatch: options.profileMismatch,
+        dbProfile: options.dbProfile,
       },
     );
   }
@@ -1943,6 +1979,11 @@ export class PaseoService {
         failed: 0,
         items: [],
       };
+    const mismatch = this.hermesProfileMismatchReply(scope);
+    if (mismatch) {
+      return { ...mismatch, applied: 0, failed: input.items.length, items: [] };
+    }
+    scope = this.effectiveScope(scope);
     if (command === "hide") {
       const denied = this.gate(
         scope,
@@ -2011,16 +2052,25 @@ export class PaseoService {
         failed: 0,
         items: [],
       };
+    const mismatch = this.hermesProfileMismatchReply(scope);
+    if (mismatch)
+      return {
+        ...mismatch,
+        applied: 0,
+        failed: input.tool_call_ids.length,
+        items: [],
+      };
+    scope = this.effectiveScope(scope);
     const mode = input.action === "summarize" ? "summarize" : "hide";
-    const denied = this.gate(scope, mode);
-    if (denied)
+    if (this.gate(scope, mode)) {
+      const denied = this.gate(scope, mode)!;
       return {
         ...denied,
         applied: 0,
         failed: input.tool_call_ids.length,
         items: [],
       };
-
+    }
     let cachedSlots: Array<{ item_id: string; tool_call_id: string; manageable: boolean }> | undefined;
     let timelineOversized = false;
     const timelineSlotRows = (): Array<{

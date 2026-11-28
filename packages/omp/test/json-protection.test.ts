@@ -56,3 +56,59 @@ test("sequence_verified auto cannot compact protected nested JSON", async () => 
   const first = items[0];
   expect(first && typeof first === "object" && "error" in first ? first.error : null).toBe("protected_error");
 });
+
+test("OMP summarize and sequence manage allow read envelopes while blocking abnormal-whitespace JSON arrays", async () => {
+  const adapter = service();
+  const readEnvTilde = `[~/fixture.txt#267D]\n${Array.from({ length: 80 }, (_, i) => `${i + 1}:Routine output row ${i}`).join("\n")}`;
+  const readEnvRel = `[fixture.txt#267D]\n${Array.from({ length: 80 }, (_, i) => `${i + 1}:Routine output row ${i}`).join("\n")}`;
+  const badArray = `[\f"${pad(45)}", "\\u0045RROR: unresolved synthetic failure"]`;
+  const spoofEnvJson = `[fixture.txt#267D]\n{"padding":"${pad(45)}","doc":"\\u0045RROR: unresolved synthetic failure"}`;
+  const p1 = await adapter.handle("prepare", {
+    session_id: "env-session",
+    snapshot_id: "snap-1",
+    records: [
+      { call_id: "c-tilde", tool_name: "read", arguments: { path: "~/fixture.txt" }, result_position: 0, content: readEnvTilde },
+      { call_id: "c-rel", tool_name: "read", arguments: { path: "fixture.txt" }, result_position: 0, content: readEnvRel },
+    ],
+  });
+  expect(p1.ok).toBe(true);
+  const p2 = await adapter.handle("prepare", {
+    session_id: "env-session",
+    snapshot_id: "snap-1",
+    append: true,
+    records: [
+      { call_id: "c-bad-arr", tool_name: "read", arguments: { path: "bad.json" }, result_position: 0, content: badArray },
+      { call_id: "c-spoof-env", tool_name: "read", arguments: { path: "spoof.json" }, result_position: 0, content: spoofEnvJson },
+    ],
+  });
+  expect(p2.ok).toBe(true);
+  expect(p2.candidate_ids).toEqual(["c-rel", "c-tilde"]);
+
+  const sumDirect = await adapter.handle("manage", {
+    session_id: "env-session",
+    snapshot_id: "snap-1",
+    tool_call_ids: ["c-tilde"],
+    action: "summarize",
+    summaries: { "c-tilde": "Routine output rows summarized." },
+  });
+  expect(sumDirect.ok).toBe(true);
+
+  const seqMixed = await adapter.handle("manage", {
+    session_id: "env-session",
+    snapshot_id: "snap-1",
+    tool_call_ids: ["c-rel", "c-bad-arr", "c-spoof-env"],
+    action: "summarize",
+    summaries: {
+      "c-rel": "Routine output rows summarized.",
+      "c-bad-arr": "Attempted summary of malformed array.",
+      "c-spoof-env": "Attempted summary of spoofed envelope JSON.",
+    },
+    sequence_verified: true,
+  });
+  expect(seqMixed.ok).toBe(false);
+  const items = Array.isArray(seqMixed.items) ? (seqMixed.items as Array<Record<string, unknown>>) : [];
+  expect(items).toHaveLength(3);
+  expect(items[0]).toMatchObject({ tool_call_id: "c-rel", ok: true });
+  expect(items[1]).toMatchObject({ tool_call_id: "c-bad-arr", ok: false, error: "verification_failed" });
+  expect(items[2]).toMatchObject({ tool_call_id: "c-spoof-env", ok: false, error: "protected_error" });
+});

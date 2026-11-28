@@ -765,3 +765,54 @@ test("shared long-evidence boundary vectors refuse in TS", () => {
     assert.equal(decision.projection, undefined, id);
   }
 });
+
+test("projection parity: files forged digest/trailing injection rejected and empty matches fields emitted", () => {
+  const filesPayload = JSON.stringify({
+    files: ["synthetic/fixtures/a.txt", "synthetic/fixtures/b.txt"],
+    total_count: 2,
+  });
+  const filesDecision = projectJsonToolResult(filesPayload, "search_files", config);
+  assert.ok(filesDecision.projection);
+  const filesProj = filesDecision.projection!;
+  const itemId = "item_files_parity";
+  const validRendered = [
+    `[hidden:${itemId}]`,
+    ...filesProj.lines.map((line) => `${FILES_REPLACEMENT_LABEL}: ${line}`),
+    `The remaining result is preserved. Restore it with unhide_context(${itemId}).`,
+  ].join("\n");
+  assert.equal(verifyFilesReplacement(filesPayload, itemId, filesProj, validRendered, config), true);
+  assert.equal(
+    verifyFilesReplacement(
+      filesPayload,
+      itemId,
+      { ...filesProj, digest: "0".repeat(64) },
+      validRendered,
+      config,
+    ),
+    false,
+  );
+  assert.equal(
+    verifyFilesReplacement(filesPayload, itemId, filesProj, `${validRendered}\nINJECTED`, config),
+    false,
+  );
+  assert.equal(
+    verifyFilesReplacement(filesPayload, itemId, filesProj, `${validRendered} extra`, config),
+    false,
+  );
+  assert.equal(
+    verifyFilesReplacement(filesPayload, itemId, filesProj, validRendered, config, "read_file"),
+    false,
+  );
+
+  const emptyMatches = JSON.stringify({
+    matches_format: "",
+    matches_text: "synthetic/a.txt:1:alpha\nsynthetic/b.txt:2:beta",
+    total_count: 2,
+    total_count_is_lower_bound: false,
+    truncated: false,
+    _hint: "",
+  });
+  const matchesProj = projectJsonToolResult(emptyMatches, "search_files", config).projection!;
+  assert.ok(matchesProj.lines.includes('projected search_files_matches_v1 matches_format+0: ""'));
+  assert.ok(matchesProj.lines.includes('projected search_files_matches_v1 _hint+0: ""'));
+});

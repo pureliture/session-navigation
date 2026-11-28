@@ -49,10 +49,20 @@ export interface HermesOverlaidSlot {
   codex_sub_index?: number;
 }
 
+export interface HermesScopeResolution {
+  requestedScope: string;
+  effectiveScope: string;
+  dbPath: string | null;
+  dbProfile: string | null;
+  profileMismatch: boolean;
+}
+
 export interface HermesTimelineIndex {
   requestedScope: string;
   effectiveScope: string;
   dbPath: string;
+  dbProfile: string;
+  profileMismatch: boolean;
   snapshot: string;
   apiMode: string;
   usedTokens?: number;
@@ -66,6 +76,8 @@ export interface HermesTimelineIndexResult {
   index: HermesTimelineIndex | null;
   readError?: string;
   readErrorDb?: string;
+  profileMismatch?: boolean;
+  dbProfile?: string;
 }
 
 const HERMES_FIELDS: Record<string, readonly string[]> = {
@@ -551,23 +563,35 @@ export function hermesFilterInvocation(
   };
 }
 
-function candidateHermesDbs(home: string, profile: string): string[] {
-  const candidates: string[] = [];
-  const add = (p: string) => {
-    if (existsSync(p) && !candidates.includes(p)) candidates.push(p);
+type HermesDbCandidate = {
+  dbPath: string;
+  dbProfile: string;
+};
+
+function candidateHermesDbEntries(home: string, profile: string): HermesDbCandidate[] {
+  const requested = !profile ? "default" : profile;
+  const candidates: HermesDbCandidate[] = [];
+  const add = (dbPath: string, dbProfile: string) => {
+    if (existsSync(dbPath) && !candidates.some((c) => c.dbPath === dbPath)) {
+      candidates.push({ dbPath, dbProfile });
+    }
   };
-  if (!profile || profile === "default") {
-    add(join(home, ".hermes", "state.db"));
-  } else if (!/[\\/:]/.test(profile) && profile !== "..") {
-    add(join(home, ".hermes", "profiles", profile, "state.db"));
+  if (requested === "default") {
+    add(join(home, ".hermes", "state.db"), "default");
+    add(join(home, ".hermes", "profiles", "default", "state.db"), "default");
+  } else if (!/[\\/:]/.test(requested) && requested !== "..") {
+    add(join(home, ".hermes", "profiles", requested, "state.db"), requested);
   }
-  add(join(home, ".hermes", "state.db"));
+  add(join(home, ".hermes", "state.db"), "default");
   const profilesDir = join(home, ".hermes", "profiles");
   if (existsSync(profilesDir)) {
     try {
-      for (const entry of readdirSync(profilesDir, { withFileTypes: true })) {
+      const entries = readdirSync(profilesDir, { withFileTypes: true }).sort((a, b) =>
+        unicodeCompare(a.name, b.name),
+      );
+      for (const entry of entries) {
         if (entry.isDirectory()) {
-          add(join(profilesDir, entry.name, "state.db"));
+          add(join(profilesDir, entry.name, "state.db"), entry.name || "default");
         }
       }
     } catch {
@@ -597,7 +621,7 @@ export function hasHermesSessionsBatch(
   for (const req of requests) {
     if (!req.sessionId || /[\\/:]/.test(req.sessionId)) continue;
     const key = `${req.profile}\0${req.sessionId}`;
-    for (const dbPath of candidateHermesDbs(home, req.profile)) {
+    for (const { dbPath } of candidateHermesDbEntries(home, req.profile)) {
       const list = pendingByDb.get(dbPath) ?? [];
       list.push({ key, sessionId: req.sessionId });
       pendingByDb.set(dbPath, list);
@@ -906,29 +930,60 @@ function resolveRotationTargetSessionId(
   return targetSessionId;
 }
 
-export function resolveHermesEffectiveScope(home: string, scope: string): string {
+export function resolveHermesScope(home: string, scope: string): HermesScopeResolution {
   const parts = scope.split(":");
-  if (parts[0] !== "hermes") return scope;
-  const profile = parts[1] ?? "default";
+  if (parts[0] !== "hermes") {
+    return {
+      requestedScope: scope,
+      effectiveScope: scope,
+      dbPath: null,
+      dbProfile: null,
+      profileMismatch: false,
+    };
+  }
+  const requestedProfile = !parts[1] ? "default" : parts[1];
   const sessionId = parts[2] ?? "";
-  if (!sessionId) return scope;
+  const branch = parts[3] ?? "unknown";
+  if (!sessionId) {
+    return {
+      requestedScope: scope,
+      effectiveScope: scope,
+      dbPath: null,
+      dbProfile: null,
+      profileMismatch: false,
+    };
+  }
 
-  const candidates = candidateHermesDbs(home, profile);
-  if (candidates.length === 0) return scope;
+  const candidates = candidateHermesDbEntries(home, requestedProfile);
+  if (candidates.length === 0) {
+    return {
+      requestedScope: scope,
+      effectiveScope: scope,
+      dbPath: null,
+      dbProfile: null,
+      profileMismatch: false,
+    };
+  }
 
   const cacheKey = `${resolve(home)}\0${scope}`;
   const cached = hermesIndexCache.get(cacheKey);
   if (cached) {
-    const dbSnapshot = candidateDbOnlySnapshotKey(candidates);
+    const dbSnapshot = candidateDbOnlySnapshotKey(candidates.map((c) => c.dbPath));
     if (cached.snapshot === dbSnapshot) {
-      return cached.effectiveScope;
+      return {
+        requestedScope: scope,
+        effectiveScope: cached.effectiveScope,
+        dbPath: cached.dbPath,
+        dbProfile: cached.dbProfile,
+        profileMismatch: cached.profileMismatch,
+      };
     }
   }
 
-  for (const dbPath of candidates) {
+  for (const candidate of candidates) {
     let db: DatabaseSync | undefined;
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
+      db = new DatabaseSync(candidate.dbPath, { readOnly: true });
       const rotationSchema = readHermesRotationSchema(db);
       const hasParentSessionId = rotationSchema.hasParentSessionId;
 
@@ -963,9 +1018,19 @@ export function resolveHermesEffectiveScope(home: string, scope: string): string
         sessionId,
         rotationSchema,
       );
-      return targetSessionId === sessionId
-        ? scope
-        : `hermes:${profile}:${targetSessionId}:unknown`;
+      const profileMismatch = candidate.dbProfile !== requestedProfile;
+      const effectiveScope = profileMismatch
+        ? `hermes:${candidate.dbProfile}:${targetSessionId}:${targetSessionId === sessionId ? branch : "unknown"}`
+        : targetSessionId === sessionId
+          ? scope
+          : `hermes:${requestedProfile}:${targetSessionId}:unknown`;
+      return {
+        requestedScope: scope,
+        effectiveScope,
+        dbPath: candidate.dbPath,
+        dbProfile: candidate.dbProfile,
+        profileMismatch,
+      };
     } catch {
       // Ignore unreadable/busy DBs and try next candidate.
     } finally {
@@ -976,7 +1041,17 @@ export function resolveHermesEffectiveScope(home: string, scope: string): string
       }
     }
   }
-  return scope;
+  return {
+    requestedScope: scope,
+    effectiveScope: scope,
+    dbPath: null,
+    dbProfile: null,
+    profileMismatch: false,
+  };
+}
+
+export function resolveHermesEffectiveScope(home: string, scope: string): string {
+  return resolveHermesScope(home, scope).effectiveScope;
 }
 
 type HermesActiveSlotRow = {
@@ -1026,12 +1101,14 @@ export function loadHermesTimelineIndex(
 ): HermesTimelineIndexResult {
   const parts = scope.split(":");
   if (parts[0] !== "hermes") return { index: null };
-  const profile = parts[1] ?? "default";
+  const profile = !parts[1] ? "default" : parts[1];
   const sessionId = parts[2] ?? "";
+  const branch = parts[3] ?? "unknown";
   if (!sessionId) return { index: null };
 
-  const candidates = candidateHermesDbs(home, profile);
-  if (candidates.length === 0) return { index: null };
+  const candidateEntries = candidateHermesDbEntries(home, profile);
+  if (candidateEntries.length === 0) return { index: null };
+  const candidates = candidateEntries.map((c) => c.dbPath);
 
   const cacheKey = `${resolve(home)}\0${scope}`;
   const snapshot = candidateDbOnlySnapshotKey(candidates);
@@ -1042,8 +1119,16 @@ export function loadHermesTimelineIndex(
     return { index: cached };
   }
 
-  let matchedReadError: { dbPath: string; error: string } | null = null;
-  for (const dbPath of candidates) {
+  let matchedReadError: {
+    dbPath: string;
+    dbProfile: string;
+    profileMismatch: boolean;
+    error: string;
+  } | null = null;
+  for (const candidateEntry of candidateEntries) {
+    const dbPath = candidateEntry.dbPath;
+    const dbProfile = candidateEntry.dbProfile;
+    const profileMismatch = dbProfile !== profile;
     let db: DatabaseSync | undefined;
     let matchedInThisDb = false;
     try {
@@ -1100,8 +1185,9 @@ export function loadHermesTimelineIndex(
         }
       }
 
-      const effectiveScope =
-        targetSessionId === sessionId
+      const effectiveScope = profileMismatch
+        ? `hermes:${dbProfile}:${targetSessionId}:${targetSessionId === sessionId ? branch : "unknown"}`
+        : targetSessionId === sessionId
           ? scope
           : `hermes:${profile}:${targetSessionId}:unknown`;
 
@@ -1341,7 +1427,7 @@ export function loadHermesTimelineIndex(
                   computed_item_id: rowIdStr,
                   ...(rolePos ? { msg_role_pos: rolePos } : {}),
                   result_position: 0,
-                  manageable: isUncompacted,
+                  manageable: isUncompacted && !profileMismatch,
                   source: "display_only",
                   summary_line: summaryLine(displayText),
                   bytes_size: bytes(displayText),
@@ -1443,7 +1529,7 @@ export function loadHermesTimelineIndex(
                           computed_item_id: rowIdStr,
                           ...(rolePos ? { msg_role_pos: rolePos } : {}),
                           result_position: 0,
-                          manageable: isUncompacted,
+                          manageable: isUncompacted && !profileMismatch,
                           source: "display_only",
                           summary_line: summaryLine(text),
                           bytes_size: bytes(text),
@@ -1482,7 +1568,7 @@ export function loadHermesTimelineIndex(
                         computed_item_id: rowIdStr,
                         ...(rolePos ? { msg_role_pos: rolePos } : {}),
                         result_position: 0,
-                        manageable: isUncompacted,
+                        manageable: isUncompacted && !profileMismatch,
                         source: "display_only",
                         summary_line: summaryLine(text),
                         bytes_size: bytes(text),
@@ -1523,7 +1609,7 @@ export function loadHermesTimelineIndex(
                       computed_item_id: rowIdStr,
                       ...(rolePos ? { msg_role_pos: rolePos } : {}),
                       result_position: 0,
-                      manageable: isUncompacted,
+                      manageable: isUncompacted && !profileMismatch,
                       source: "display_only",
                       summary_line: summaryLine(text),
                       bytes_size: bytes(text),
@@ -1594,7 +1680,7 @@ export function loadHermesTimelineIndex(
       let recordCount = 0;
       let recordsCapped = false;
       const recordedCallIds = new Set<string>();
-      for (let i = toolCandidates.length - 1; i >= 0; i--) {
+      for (let i = profileMismatch ? -1 : toolCandidates.length - 1; i >= 0; i--) {
         const candidate = toolCandidates[i];
         if (
           duplicate.has(candidate.callId) ||
@@ -1629,6 +1715,8 @@ export function loadHermesTimelineIndex(
         requestedScope: scope,
         effectiveScope,
         dbPath,
+        dbProfile,
+        profileMismatch,
         snapshot,
         apiMode,
         usedTokens,
@@ -1644,6 +1732,8 @@ export function loadHermesTimelineIndex(
       if (matchedInThisDb && !matchedReadError) {
         matchedReadError = {
           dbPath,
+          dbProfile,
+          profileMismatch,
           error: err instanceof Error ? err.message : String(err),
         };
       }
@@ -1662,6 +1752,8 @@ export function loadHermesTimelineIndex(
       index: null,
       readError: matchedReadError.error,
       readErrorDb: matchedReadError.dbPath,
+      profileMismatch: matchedReadError.profileMismatch,
+      dbProfile: matchedReadError.dbProfile,
     };
   }
   return { index: null };
@@ -1720,7 +1812,7 @@ export function applyHermesOverlay(
         tool_call_id: slot.tool_call_id,
         tool_name: slot.tool_name,
         kind: "tool",
-        manageable: Boolean(storedItem || slot.manageable),
+        manageable: !index.profileMismatch && Boolean(storedItem || slot.manageable),
         source: slot.source,
         summary_line: slot.summary_line,
         bytes_size: slot.bytes_size,
@@ -2076,7 +2168,7 @@ export function loadHermesTimeline(
   const sessionId = parts[2] ?? "";
   if (!sessionId) return null;
 
-  const candidates = candidateHermesDbs(home, profile);
+  const candidates = candidateHermesDbEntries(home, profile).map((c) => c.dbPath);
   if (candidates.length === 0) return null;
 
   const cacheKey = `${resolve(home)}\0${scope}`;

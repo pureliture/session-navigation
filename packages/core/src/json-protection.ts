@@ -6,15 +6,19 @@ import {
 import { defaults, type Config, type RecordInput } from "./model.ts";
 import { protectedPatternRefusal, refusalReason } from "./policy.ts";
 
-function isJsonLike(content: string): boolean {
-  const stripped = content.replace(/^[\s\x1c-\x1f\x85\ufeff]+/u, "");
+const LEADING_JSON_WS = /^[\s\x00-\x1f\x7f-\x9f\u200b-\u200f\u2060\ufeff]+/u;
+const READ_ENVELOPE_HEADER =
+  /^\[(?:[^\[\]"{}\x00-\x1f\x7f-\x9f]{1,512}#[0-9A-Fa-f]{4}|Skill file: [^\[\]"{}\x00-\x1f\x7f-\x9f]{1,512})\]\r?\n/u;
+
+function stripReadEnvelopeBody(content: string): string {
+  const match = READ_ENVELOPE_HEADER.exec(content);
+  return match ? content.slice(match[0].length) : content;
+}
+
+export function isJsonLike(content: string): boolean {
+  const stripped = stripReadEnvelopeBody(content).replace(LEADING_JSON_WS, "");
   if (!stripped) return false;
-  if (stripped[0] === "{" || stripped[0] === '"') return true;
-  if (stripped[0] === "[") {
-    const head = stripped.slice(1).replace(/^[\t\n\r ]+/, "");
-    return head.length === 0 || /["{\[\-0-9tfn]/.test(head[0]);
-  }
-  return false;
+  return stripped[0] === "{" || stripped[0] === "[" || stripped[0] === '"';
 }
 
 function walk(value: ParsedValue, budget: JsonProtectionBudget): string | undefined {
@@ -22,10 +26,10 @@ function walk(value: ParsedValue, budget: JsonProtectionBudget): string | undefi
     case "string": {
       const direct = protectedPatternRefusal(value.value);
       if (direct) return direct;
-      // Only a string that is itself valid JSON is decoded again. A literal
-      // backslash-u sequence is ordinary text and is never re-unescaped.
+      // Only a string that is itself valid JSON (or an envelope header over a
+      // JSON body) is decoded again. Ordinary literal backslash-u text is kept as-is.
       if (!isJsonLike(value.value)) return undefined;
-      const nested = parseJsonForProtection(value.value, budget);
+      const nested = parseJsonForProtection(stripReadEnvelopeBody(value.value), budget);
       return nested.refusal ?? (nested.value ? walk(nested.value, budget) : undefined);
     }
     case "object": {
@@ -55,7 +59,7 @@ function walk(value: ParsedValue, budget: JsonProtectionBudget): string | undefi
 export function jsonProtectionRefusal(content: string): string | undefined {
   if (!isJsonLike(content)) return undefined;
   const budget: JsonProtectionBudget = { bytes: 0, nodes: 0, depth: 0 };
-  const parsed = parseJsonForProtection(content, budget);
+  const parsed = parseJsonForProtection(stripReadEnvelopeBody(content), budget);
   return parsed.refusal ?? (parsed.value ? walk(parsed.value, budget) : undefined);
 }
 

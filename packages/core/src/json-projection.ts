@@ -333,6 +333,10 @@ function appendChunks(
   maxLine: number,
 ): boolean {
   const characters = [...value];
+  if (characters.length === 0) {
+    out.push(`projected ${schema} ${field}+0: ""`);
+    return true;
+  }
   const wholePrefix = `projected ${schema} ${field}+0: `;
   if (requiredEvidence(value).length > 0 && length(wholePrefix) + length(encoded(value)) > maxLine) {
     return false;
@@ -883,24 +887,29 @@ function decodeFilesReplacement(rendered: string, itemId: string): string[] | un
 }
 
 const MATCHES_REPLACEMENT_LABEL = "Projected JSON excerpt: ";
-const RESTORE_MARKER = "The remaining result is preserved. Restore it with unhide_context(";
 
 // Mirrors Python d094845: a matches excerpt may omit lines, but every shown
 // row must be a verbatim projection line in source order with all required evidence.
-function decodeMatchesReplacement(rendered: string, projection: JsonProjection): string[] | undefined {
-  if (!rendered.startsWith("[hidden:") || !rendered.includes(RESTORE_MARKER)) {
+function decodeMatchesReplacement(
+  rendered: string,
+  itemId: string,
+  projection: JsonProjection,
+): string[] | undefined {
+  if (rendered.includes("\r") || rendered.endsWith("\n")) {
     return undefined;
   }
-  const newline = rendered.indexOf("\n");
-  const body = (newline < 0 ? "" : rendered.slice(newline + 1))
-    .split(RESTORE_MARKER, 1)[0]
-    .replace(/\n+$/, "");
-  if (body === "") {
+  const rows = rendered.split("\n");
+  const restore = `The remaining result is preserved. Restore it with unhide_context(${itemId}).`;
+  if (
+    rows.length < 3 ||
+    rows[0] !== `[hidden:${itemId}]` ||
+    rows[rows.length - 1] !== restore
+  ) {
     return undefined;
   }
   const shown: string[] = [];
   let cursor = 0;
-  for (const row of body.split("\n")) {
+  for (const row of rows.slice(1, -1)) {
     if (!row.startsWith(MATCHES_REPLACEMENT_LABEL)) {
       return undefined;
     }
@@ -926,7 +935,10 @@ export function verifyFilesReplacement(
   config: Config = defaults,
   toolName: unknown = "search_files",
 ): boolean {
-  if (typeof rendered !== "string") {
+  if (typeof rendered !== "string" || rendered.includes("\r") || rendered.endsWith("\n")) {
+    return false;
+  }
+  if (!verifyProjection(content, toolName, projection, config)) {
     return false;
   }
   if (projection.schema === FILES_SCHEMA) {
@@ -936,10 +948,7 @@ export function verifyFilesReplacement(
   if (projection.schema !== MATCHES_SCHEMA) {
     return false;
   }
-  if (!verifyProjection(content, toolName, projection, config)) {
-    return false;
-  }
-  return decodeMatchesReplacement(rendered, projection) !== undefined;
+  return decodeMatchesReplacement(rendered, itemId, projection) !== undefined;
 }
 export function verifyProjection(
   content: string,

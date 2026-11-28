@@ -107,8 +107,9 @@ async def cdp_click_point(cdp, x, y):
 
 async def prepare(cdp, url, title, workspace=None, server=None):
     await cdp.call('Page.navigate', url=url)
-    await asyncio.sleep(3)
-    await click(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>e.textContent.trim()==='연결')")
+    connect_expr = "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>/연결|Connect/i.test(e.textContent.trim()))"
+    await wait_for(cdp, f"!!({connect_expr})", 8)
+    await click(cdp, connect_expr)
     await asyncio.sleep(2)
     if workspace:
         parsed = urlsplit(url)
@@ -128,16 +129,17 @@ async def prepare(cdp, url, title, workspace=None, server=None):
         raise RuntimeError(f'session leaf or tab not found: {title}')
     if await wait_for(cdp, f'!!({tab})', 3):
         await click(cdp, tab)
-    await click(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>/사이드 패널 열기|Open (right )?sidebar|Open side panel/i.test((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')))")
-    await asyncio.sleep(1)
-    await click(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>{let r=e.getBoundingClientRect();return r.x>1000&&r.y<80&&/새 탭|New tab/i.test((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+e.textContent)})")
-    await asyncio.sleep(.5)
-    leaf = "Array.from(document.querySelectorAll('*')).filter(e=>e.children.length===0&&e.textContent.trim()==='Session navigation'&&e.getBoundingClientRect().x>1200&&e.getBoundingClientRect().y>90).at(-1)"
-    if not await wait_for(cdp, f'!!({leaf})', 5):
-        raise RuntimeError('Session navigation menu entry not found')
-    await click(cdp, leaf)
-    if not await wait_for(cdp, f"!!document.querySelector('[aria-label=\"Refresh outline\"]') && !({leaf})", 10):
-        raise RuntimeError('outline header missing or new-tab menu remains open')
+    if not await cdp.js("!!document.querySelector('[aria-label=\"Refresh outline\"]')"):
+        await click_visible(cdp, '사이드 패널 열기|Open (right )?sidebar|Open side panel')
+        await asyncio.sleep(.8)
+        await click(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>{let r=e.getBoundingClientRect();return r.x>900&&r.y<80&&/새 탭|New tab/i.test((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+e.textContent)})")
+        await asyncio.sleep(.6)
+        leaf = "Array.from(document.querySelectorAll('*')).filter(e=>e.children.length===0&&/^(Session navigation|세션 탐색)$/i.test(e.textContent.trim())&&e.getBoundingClientRect().width>0).at(-1)"
+        if not await wait_for(cdp, f'!!({leaf})', 5):
+            raise RuntimeError('Session navigation menu entry not found')
+        await click(cdp, leaf)
+        if not await wait_for(cdp, "!!document.querySelector('[aria-label=\"Refresh outline\"]')", 10):
+            raise RuntimeError('outline header missing or new-tab menu remains open')
     if not await wait_for(cdp, f'!!({SCROLLER})', 20):
         raise RuntimeError('outline scroller not found; session/panel navigation incomplete')
 
@@ -291,33 +293,111 @@ async def prepend(cdp):
     return {'pass': passed, 'samples': samples, 'referenceScrollHeights': [6783, 12156, 16303]}
 
 
+SCROLL_PROBE_INSTALL = """((scroller, panel) => {
+  const state = { writes: [], hiddenWrites: [], loading: false, mutations: 0, refreshClicks: 0 };
+  const origTo = Element.prototype.scrollTo;
+  const origBy = Element.prototype.scrollBy;
+  const topDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+  const isTarget = (el) => {
+    if (!(el instanceof Element)) return false;
+    if (el === scroller) return true;
+    if (!/(auto|scroll)/.test(getComputedStyle(el).overflowY)) return false;
+    if (panel && panel instanceof Element && panel.isConnected && panel.contains(el)) return true;
+    return !!el.querySelector('[aria-label="User prompt"], [aria-label="Agent response"], [aria-label^="Tool group:"]');
+  };
+  const isHidden = (el) => {
+    if (!(el instanceof Element) || !el.isConnected) return true;
+    const r = el.getBoundingClientRect();
+    return r.width <= 0 || r.height <= 0 || el.clientHeight <= 0;
+  };
+  const rec = (el, kind, before, target, after) => {
+    if (!isTarget(el)) return;
+    const entry = {
+      kind,
+      beforeTop: Math.round(before),
+      targetTop: target === null || target === undefined ? null : Math.round(Number(target)),
+      afterTop: Math.round(after),
+      delta: Math.round(after - before),
+      hidden: isHidden(el),
+    };
+    state.writes.push(entry);
+    if (entry.hidden) state.hiddenWrites.push(entry);
+  };
+  Element.prototype.scrollTo = function (...args) {
+    const b = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    const t = typeof args[0] === 'object' && args[0] !== null ? args[0].top : args[1];
+    const r = origTo.apply(this, args);
+    const a = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    rec(this, 'scrollTo', b, t, a);
+    return r;
+  };
+  Element.prototype.scrollBy = function (...args) {
+    const b = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    const dy = typeof args[0] === 'object' && args[0] !== null ? args[0].top : args[1];
+    const r = origBy.apply(this, args);
+    const a = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    rec(this, 'scrollBy', b, b + (Number(dy) || 0), a);
+    return r;
+  };
+  if (topDesc && topDesc.get && topDesc.set) {
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      configurable: true,
+      enumerable: topDesc.enumerable,
+      get: topDesc.get,
+      set: function (v) {
+        const b = topDesc.get.call(this);
+        topDesc.set.call(this, v);
+        const a = topDesc.get.call(this);
+        rec(this, 'scrollTop', b, v, a);
+      },
+    });
+  }
+  state.restore = () => {
+    Element.prototype.scrollTo = origTo;
+    Element.prototype.scrollBy = origBy;
+    if (topDesc) Object.defineProperty(Element.prototype, 'scrollTop', topDesc);
+  };
+  state.scrollTopHooked = !!(topDesc && topDesc.set);
+  return state;
+})"""
+
+
 async def collapse(cdp):
-    before = await metrics(cdp)
     await cdp.js(f"""(()=>{{let s={SCROLLER};s.scrollTop=Math.min(1446,Math.max(100,(s.scrollHeight-s.clientHeight)/2));s.dispatchEvent(new Event('scroll',{{bubbles:true}}))}})()""")
     await asyncio.sleep(1)
     before = await metrics(cdp)
     await cdp.js(f"""(()=>{{let s={SCROLLER},a=s;for(let i=0;i<6;i++){{if(!a.parentElement)throw Error('missing ancestor');a=a.parentElement}};
-      window.__smoke={{calls:[],loading:false,old:a.style.display}};let original=Element.prototype.scrollTo;window.__smoke.restore=()=>Element.prototype.scrollTo=original;
-      Element.prototype.scrollTo=function(...args){{window.__smoke.calls.push({{args,tag:this.tagName}});return original.apply(this,args)}};
-      window.__smoke.observer=new MutationObserver(()=>{{if(Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…'))window.__smoke.loading=true}});
-      window.__smoke.observer.observe(document.body,{{subtree:true,childList:true,characterData:true}});a.style.display='none';s.dispatchEvent(new Event('scroll',{{bubbles:true}}));window.__smoke.ancestor=a;window.__smoke.scroller=s}})()""")
+      const probe=({SCROLL_PROBE_INSTALL})(s,a);
+      let st=document.getElementById('smoke-hide-css');if(!st){{st=document.createElement('style');st.id='smoke-hide-css';st.textContent='[data-smoke-hide="1"] {{ display: none !important; }}';document.head.appendChild(st)}}
+      window.__smoke={{probe,ancestor:a,scroller:s}};
+      window.__smoke.observer=new MutationObserver(()=>{{if(Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…'))probe.loading=true}});
+      window.__smoke.observer.observe(document.body,{{subtree:true,childList:true,characterData:true}});
+      a.setAttribute('data-smoke-hide','1');s.dispatchEvent(new Event('scroll',{{bubbles:true}}))}})()""")
     after = None
-    observed = {"calls": [], "loading": False}
+    observed = {"hiddenWrites": [], "writes": [], "loading": False, "scrollTopHooked": False}
     try:
         await asyncio.sleep(.5)
-        await cdp.js("window.__smoke.ancestor.style.display=window.__smoke.old;window.__smoke.scroller.dispatchEvent(new Event('scroll',{bubbles:true}))")
+        await cdp.js("(()=>{const x=window.__smoke;x.ancestor.removeAttribute('data-smoke-hide');document.getElementById('smoke-hide-css')?.remove();x.scroller.dispatchEvent(new Event('scroll',{bubbles:true}))})()")
         await asyncio.sleep(3)
         after = await metrics(cdp)
-        observed = await cdp.js("(()=>{let x=window.__smoke;return{calls:x.calls,loading:x.loading||Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…')}})()")
+        observed = await cdp.js("(()=>{let x=window.__smoke,p=x.probe;return{scrollTopHooked:!!p.scrollTopHooked,hiddenWrites:p.hiddenWrites.slice(-10),hiddenWriteCount:p.hiddenWrites.length,hiddenAbsDelta:p.hiddenWrites.reduce((acc,w)=>acc+Math.abs(w.delta||0),0),totalWrites:p.writes.length,loading:p.loading||Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…')}})()")
     finally:
-        # Always detach the observer and restore scrollTo, even when the
-        # scenario above throws: a leaked monkeypatch would corrupt later
-        # scenarios running in the same page.
         try:
-            await cdp.js("(()=>{let x=window.__smoke||{};try{x.observer&&x.observer.disconnect()}catch(e){}try{x.restore&&x.restore()}catch(e){}})()")
+            await cdp.js("(()=>{let x=window.__smoke||{};try{x.observer&&x.observer.disconnect()}catch(e){}try{x.probe&&x.probe.restore&&x.probe.restore()}catch(e){}try{x.ancestor&&x.ancestor.removeAttribute('data-smoke-hide')}catch(e){}document.getElementById('smoke-hide-css')?.remove()})()")
         except Exception:
             pass
-    return {'pass': bool(after and abs(after['top']-before['top']) <= 50 and not observed['loading'] and not observed['calls']), 'before': before, 'after': after, **observed}
+    passed = bool(
+        before
+        and after
+        and before['top'] > 50
+        and after['top'] > 50
+        and abs(after['top'] - before['top']) <= 50
+        and observed.get('scrollTopHooked')
+        and observed.get('hiddenWriteCount') == 0
+        and observed.get('hiddenAbsDelta') == 0
+        and not observed['loading']
+    )
+    return {'pass': passed, 'before': before, 'after': after, **observed}
 async def scroller_box(cdp):
     return await cdp.js(f"""(()=>{{const s={SCROLLER};if(!s)return null;const r=s.getBoundingClientRect();return {{x:r.left+r.width/2,y:r.top+r.height/2,w:Math.round(r.width),h:Math.round(r.height),top:s.scrollTop,sh:s.scrollHeight,ch:s.clientHeight}}}})()""")
 
@@ -337,17 +417,117 @@ async def click_visible(cdp, pattern):
 
 
 async def switch_agent(cdp, args, agent, workspace, title):
-    """Switch to another real agent session using the app's own navigation path."""
+    """Switch to another real agent session via in-app UI (chooser or sidebar) when available, measuring real scroll."""
     started = time.monotonic()
-    await prepare(cdp, args.url, title, workspace, args.server_id)
-    ready = await cdp.js(f'!!({SCROLLER})')
-    await asyncio.sleep(1)
-    header = await cdp.js(f"({PANEL})?.innerText||''")
-    outline = (await outline_state(cdp, 'b', '우선 커밋하고 PR생성해줘')
-               if agent == args.omp_agent else await outline_state(cdp, 'a', ''))
-    return {'title': title, 'agentId': agent, 'elapsedSeconds': round(time.monotonic() - started, 2),
-            'scrollerReady': bool(ready), 'header': (header or '')[:120], 'outline': outline,
-            'metrics': await metrics(cdp)}
+    short = title[:30]
+    await cdp.js(f"""(()=>{{const p={PANEL},s={SCROLLER};
+      if(window.__switchProbe&&window.__switchProbe.restore)window.__switchProbe.restore();
+      window.__switchProbe=({SCROLL_PROBE_INSTALL})(s,p);return true}})()""")
+    switched_method = None
+    used_page_navigate = False
+    try:
+        chooser_box = await cdp.js(
+            "(()=>{const el=document.querySelector('[aria-label=\"Choose navigator agent\"]');"
+            "if(!el)return null;const r=el.getBoundingClientRect();"
+            "return r.width>0&&r.height>0?{x:r.left+r.width/2,y:r.top+r.height/2}:null})()"
+        )
+        if chooser_box:
+            await cdp_click_point(cdp, chooser_box['x'], chooser_box['y'])
+            await asyncio.sleep(.3)
+            opt_expr = (
+                "(()=>{const t=" + json.dumps(short) + ";"
+                "const el=Array.from(document.querySelectorAll('[aria-label^=\"Navigate \"]')).find(e=>"
+                "((e.getAttribute('aria-label')||'')+' '+(e.textContent||'')).includes(t)&&"
+                "e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0);"
+                "if(!el)return null;const r=el.getBoundingClientRect();"
+                "return {x:r.left+r.width/2,y:r.top+r.height/2,label:el.getAttribute('aria-label')||''}})()"
+            )
+            opt = await cdp.js(opt_expr)
+            if opt:
+                await cdp_click_point(cdp, opt['x'], opt['y'])
+                switched_method = 'in_app_chooser'
+            else:
+                # Close chooser popover if target resides in a different workspace.
+                await cdp.call('Input.dispatchKeyEvent', type='keyDown', key='Escape', code='Escape')
+                await cdp.call('Input.dispatchKeyEvent', type='keyUp', key='Escape', code='Escape')
+        if not switched_method:
+            for _ in range(2):
+                sidebar_expr = (
+                    "(()=>{const p=" + PANEL + ",t=" + json.dumps(short) + ";"
+                    "const leaf=Array.from(document.querySelectorAll('*')).find(e=>"
+                    "e.children.length===0&&(e.textContent||'').includes(t)&&!(p&&p.contains(e))&&"
+                    "e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0);"
+                    "if(!leaf)return null;let cur=leaf;for(let i=0;i<4&&cur.parentElement;i++){"
+                    "if(cur.matches?.('a,button,[role=button]'))break;cur=cur.parentElement}"
+                    "const r=cur.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()"
+                )
+                sb = await cdp.js(sidebar_expr)
+                if sb:
+                    await cdp_click_point(cdp, sb['x'], sb['y'])
+                    switched_method = 'in_app_sidebar'
+                    break
+                await cdp.js("(()=>{const p=" + PANEL + ";for(const b of document.querySelectorAll('a,button,[role=button]')){if(p&&p.contains(b))continue;const r=b.getBoundingClientRect();if(r.x>=0&&r.x<280&&r.width>40&&r.height>18)b.click()}})()")
+                await asyncio.sleep(.4)
+        if not switched_method:
+            used_page_navigate = True
+            switched_method = 'full_page_navigate_fallback'
+            await prepare(cdp, args.url, title, workspace, args.server_id)
+
+        title_prefix = (title or '')[:15]
+        await wait_for(
+            cdp,
+            f"(()=>{{const p={PANEL},s={SCROLLER};return !!s&&!!p&&((p.innerText||'').includes({json.dumps(title_prefix)}))}})()",
+            10,
+        )
+        await asyncio.sleep(.8)
+        ready = await cdp.js(f'!!({SCROLLER})')
+        header = await cdp.js(f"({PANEL})?.innerText||''")
+        is_omp = (agent == args.omp_agent)
+        outline = (await outline_state(cdp, 'b', '우선 커밋하고 PR생성해줘')
+                   if is_omp else await outline_state(cdp, 'a', ''))
+        other_needle = CALL if is_omp else '우선 커밋하고 PR생성해줘'
+        other_contaminated = await cdp.js(
+            f"(()=>{{const s={SCROLLER};if(!s)return false;return (s.textContent||'').includes({json.dumps(other_needle)})}})()"
+        )
+        m = await metrics(cdp)
+        probe_info = await cdp.js(
+            "(()=>{const p=window.__switchProbe||{};return{scrollTopHooked:!!p.scrollTopHooked,writeCount:(p.writes||[]).length,writes:(p.writes||[]).slice(-5)}})()"
+        )
+    finally:
+        try:
+            await cdp.js("(()=>{if(window.__switchProbe&&window.__switchProbe.restore)window.__switchProbe.restore();window.__switchProbe=null})()")
+        except Exception:
+            pass
+    dist_bottom = (m['sh'] - m['ch'] - m['top']) if m else None
+    scrollable = bool(m and m['sh'] > m['ch'] + 20)
+    header_matches = bool((title or '')[:15] and (title or '')[:15] in (header or ''))
+    step_ok = bool(
+        ready
+        and not used_page_navigate
+        and header_matches
+        and not other_contaminated
+        and outline.get('totalVisible', 0) >= 1
+        and (not is_omp or outline.get('mounted', 0) >= 1)
+        and dist_bottom is not None
+        and 0 <= dist_bottom <= 80
+        and (not scrollable or m['top'] > 0)
+        and (not scrollable or probe_info.get('writeCount', 0) >= 1)
+    )
+    return {
+        'title': title,
+        'agentId': agent,
+        'method': switched_method,
+        'usedPageNavigate': used_page_navigate,
+        'elapsedSeconds': round(time.monotonic() - started, 2),
+        'scrollerReady': bool(ready),
+        'headerMatches': header_matches,
+        'header': (header or '')[:120],
+        'outline': outline,
+        'metrics': m,
+        'distFromBottom': dist_bottom,
+        'scrollProbe': probe_info,
+        'stepPass': step_ok,
+    }
 
 
 async def desktop_ui(cdp, args):
@@ -363,34 +543,50 @@ async def desktop_ui(cdp, args):
     up = await metrics(cdp)
     await asyncio.sleep(1.0)
     stable = await metrics(cdp)
-    user_ok = bool(initial and up and stable and up['top'] < initial['top'] - 50
-                   and abs(up['top'] - stable['top']) <= 30)
+    user_ok = bool(
+        initial
+        and up
+        and stable
+        and initial['top'] > 0
+        and up['top'] < initial['top'] - 50
+        and (up['sh'] - up['ch'] - up['top']) > 50
+        and abs(up['top'] - stable['top']) <= 30
+    )
     result['userScroll'] = {'pass': user_ok, 'initial': initial, 'afterWheel': up, 'stable': stable}
 
     setup = await cdp.js(f"""(()=>{{const a={PANEL},s={SCROLLER};if(!a||!s)return false;
-      window.__uiSmoke={{panel:a,old:a.style.display,scroller:s,refreshClicks:0,mutations:0,scrollCalls:[]}};
+      const probe=({SCROLL_PROBE_INSTALL})(s,a);
+      let st=document.getElementById('smoke-hide-css');if(!st){{st=document.createElement('style');st.id='smoke-hide-css';st.textContent='[data-smoke-hide="1"] {{ display: none !important; }}';document.head.appendChild(st)}}
+      window.__uiSmoke={{panel:a,scroller:s,probe}};
       const btn=document.querySelector('[aria-label="Refresh outline"]');
-      btn.addEventListener('click',()=>window.__uiSmoke.refreshClicks++,{{once:true}});
-      const orig=Element.prototype.scrollTo;window.__uiSmoke.restore=()=>{{Element.prototype.scrollTo=orig}};
-      Element.prototype.scrollTo=function(...args){{window.__uiSmoke.scrollCalls.push(args);return orig.apply(this,args)}};
-      window.__uiSmoke.observer=new MutationObserver(()=>{{window.__uiSmoke.mutations++}});
+      if(btn)btn.addEventListener('click',()=>probe.refreshClicks++,{{once:true}});
+      window.__uiSmoke.observer=new MutationObserver(()=>{{probe.mutations++}});
       window.__uiSmoke.observer.observe(s,{{subtree:true,childList:true,characterData:true}});
-      a.style.display='none';s.dispatchEvent(new Event('scroll',{{bubbles:true}}));return true}})()""")
+      a.setAttribute('data-smoke-hide','1');s.dispatchEvent(new Event('scroll',{{bubbles:true}}));return true}})()""")
     try:
         if not setup:
             raise RuntimeError('could not hide outline panel for stale mutation check')
         await asyncio.sleep(.4)
-        # Stale mutation: refresh + expand a group while the panel is hidden.
-        await cdp.js("(()=>{const x=window.__uiSmoke;document.querySelector('[aria-label=\"Refresh outline\"]')?.click();const g=x.scroller.querySelector('[aria-label=\"Expand group\"]');if(g)(" + CLICK + ")(g);return x.refreshClicks})()")
+        # Dispatch click without synthetic scrollIntoView while panel is display:none.
+        await cdp.js("(()=>{const x=window.__uiSmoke;document.querySelector('[aria-label=\"Refresh outline\"]')?.click();const g=x.scroller.querySelector('[aria-label=\"Expand group\"]');if(g){for(const t of ['pointerdown','mousedown','mouseup','click'])g.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}))};return x.probe.refreshClicks})()")
         await asyncio.sleep(1.0)
-        await cdp.js("(()=>{const x=window.__uiSmoke;x.panel.style.display=x.old||'';x.scroller.dispatchEvent(new Event('scroll',{bubbles:true}));return true})()")
+        await cdp.js("(()=>{const x=window.__uiSmoke;x.panel.removeAttribute('data-smoke-hide');document.getElementById('smoke-hide-css')?.remove();const cur=(" + SCROLLER + ")||x.scroller;cur.dispatchEvent(new Event('scroll',{bubbles:true}));return true})()")
         await asyncio.sleep(1.5)
         after = await metrics(cdp)
     finally:
-        observed = await cdp.js("(()=>{const x=window.__uiSmoke||{};try{x.observer&&x.observer.disconnect()}catch(e){}try{x.restore&&x.restore()}catch(e){}try{if(x.panel)x.panel.style.display=x.old||''}catch(e){}return{refreshClicks:x.refreshClicks||0,mutations:x.mutations||0,scrollCalls:(x.scrollCalls||[]).slice(-5),loading:Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…')}})()")
-    stale_ok = bool(observed['refreshClicks'] >= 1 and observed['mutations'] >= 1
-                    and after and stable and abs(after['top'] - stable['top']) <= 80
-                    and not observed['loading'] and not observed['scrollCalls'])
+        observed = await cdp.js("(()=>{const x=window.__uiSmoke||{},p=x.probe||{};try{x.observer&&x.observer.disconnect()}catch(e){}try{p.restore&&p.restore()}catch(e){}try{x.panel&&x.panel.removeAttribute('data-smoke-hide')}catch(e){}document.getElementById('smoke-hide-css')?.remove();return{scrollTopHooked:!!p.scrollTopHooked,refreshClicks:p.refreshClicks||0,mutations:p.mutations||0,hiddenWriteCount:(p.hiddenWrites||[]).length,hiddenAbsDelta:(p.hiddenWrites||[]).reduce((acc,w)=>acc+Math.abs(w.delta||0),0),hiddenWrites:(p.hiddenWrites||[]).slice(-5),totalWrites:(p.writes||[]).length,loading:Array.from(document.querySelectorAll('*')).some(e=>e.children.length===0&&e.textContent.trim()==='Loading older items…')}})()")
+    stale_ok = bool(
+        observed['scrollTopHooked']
+        and observed['refreshClicks'] >= 1
+        and observed['mutations'] >= 1
+        and observed['hiddenWriteCount'] == 0
+        and observed['hiddenAbsDelta'] == 0
+        and after
+        and stable
+        and after['top'] > 0
+        and abs(after['top'] - stable['top']) <= 80
+        and not observed['loading']
+    )
     result['staleMutation'] = {'pass': stale_ok, 'before': stable, 'after': after, **observed}
 
     switches = []
@@ -401,18 +597,29 @@ async def desktop_ui(cdp, args):
     ):
         switches.append(await switch_agent(cdp, args, agent, workspace, title))
     final = switches[-1]
-    title_match = bool((args.omp_title or '')[:15] and (args.omp_title or '')[:15] in final['header'])
-    final_bottom = (final['metrics']['sh'] - final['metrics']['ch'] - final['metrics']['top']
-                    if final['metrics'] else None)
-    rapid_ok = bool(all(s['scrollerReady'] and s['outline']['totalVisible'] >= 1 for s in switches)
-                    and final['outline']['visible'] >= 1 and title_match
-                    and final_bottom is not None and 0 <= final_bottom <= 80)
-    result['rapidSwitch'] = {'pass': rapid_ok, 'method': 'real UI agent navigation via workspace/session selection',
-                             'switches': switches, 'titleMatch': title_match,
-                             'distFromBottom': final_bottom}
+    title_match = bool(final['headerMatches'])
+    final_bottom = final['distFromBottom']
+    distinct_agents = [s['agentId'] for s in switches]
+    rapid_ok = bool(
+        all(s['stepPass'] for s in switches)
+        and len(distinct_agents) == 3
+        and distinct_agents[0] != distinct_agents[1]
+        and distinct_agents[1] != distinct_agents[2]
+        and final['outline']['visible'] >= 1
+        and title_match
+        and final_bottom is not None
+        and 0 <= final_bottom <= 80
+    )
+    result['rapidSwitch'] = {
+        'pass': rapid_ok,
+        'methods': [s['method'] for s in switches],
+        'anyPageNavigate': any(s['usedPageNavigate'] for s in switches),
+        'switches': switches,
+        'titleMatch': title_match,
+        'distFromBottom': final_bottom,
+    }
     result['pass'] = user_ok and stale_ok and rapid_ok
     return result
-
 
 async def mobile_outline(cdp, args):
     """Open the real mobile drawer path: sidebar toggle -> new tab -> Session navigation."""
@@ -421,7 +628,7 @@ async def mobile_outline(cdp, args):
     await cdp.call('Emulation.setDeviceMetricsOverride', width=390, height=844, deviceScaleFactor=2, mobile=True)
     await cdp.call('Page.navigate', url=base)
     await asyncio.sleep(3)
-    await click(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>e.textContent.trim()==='연결')")
+    await click(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>/연결|Connect/i.test(e.textContent.trim()))")
     await asyncio.sleep(2)
     await cdp.call('Page.navigate', url=f"{base}h/{args.server_id}/workspace/{args.hermes_workspace}")
     await asyncio.sleep(5)

@@ -27,7 +27,7 @@ MAX_JSON_BYTES = 64 * 1024
 MAX_FIELD_CHARS = 8192
 MAX_LIST_ITEMS = 128
 MAX_PROJECTION_LINES = 512
-MAX_PROJECTION_EVIDENCE_LINES = 640
+MAX_PROJECTION_EVIDENCE_LINES = MAX_LIST_ITEMS + MAX_PROJECTION_LINES
 MAX_PROJECTION_BYTES = 32 * 1024
 MIN_LINE_BUDGET = 96
 MAX_PROJECTION_LINE_LENGTH = 1024
@@ -503,16 +503,23 @@ def verify_projection_render(
     """Verify the actual model-facing replacement, not just the projection."""
     if not verify_projection(content, tool_name, projection, config):
         return False
-    if not isinstance(rendered, str) or not rendered.startswith("[hidden:"):
+    if not isinstance(rendered, str) or "\r" in rendered or rendered.endswith("\n"):
         return False
-    restore_marker = "The remaining result is preserved. Restore it with unhide_context("
-    if restore_marker not in rendered:
+    rendered_lines = rendered.split("\n")
+    if len(rendered_lines) < 3:
+        return False
+    first_line = rendered_lines[0]
+    if not (first_line.startswith("[hidden:") and first_line.endswith("]") and len(first_line) > len("[hidden:]")):
+        return False
+    item_id = first_line[len("[hidden:"):-1]
+    expected_restore = f"The remaining result is preserved. Restore it with unhide_context({item_id})."
+    if rendered_lines[-1] != expected_restore:
+        return False
+    rows = rendered_lines[1:-1]
+    if not rows:
         return False
     if projection.schema == FILES_SCHEMA:
         label = "Projected JSON (prefix+suffix; restore with unhide_context): "
-        body = rendered.split("\n", 1)[1] if "\n" in rendered else ""
-        body = body.split(restore_marker, 1)[0].rstrip("\n")
-        rows = body.split("\n")
         if len(rows) != len(projection.lines):
             return False
         for row, expected in zip(rows, projection.lines):
@@ -531,11 +538,6 @@ def verify_projection_render(
         # is stricter than the files check above, never a bypass: tampered,
         # reordered, injected or evidence-dropping replacements are rejected.
         label = "Projected JSON excerpt: "
-        body = rendered.split("\n", 1)[1] if "\n" in rendered else ""
-        body = body.split(restore_marker, 1)[0].rstrip("\n")
-        rows = body.split("\n") if body else []
-        if not rows:
-            return False
         shown: list[str] = []
         cursor = 0
         for row in rows:

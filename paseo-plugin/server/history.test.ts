@@ -12,7 +12,7 @@ import {
   type Item,
 } from "../../packages/core/src/index.ts";
 import { BunDriver } from "../../packages/core/src/drivers/bun.ts";
-import { fileChangeToken, hasHermesSession } from "./hermesHistory.ts";
+import { fileChangeToken, hasHermesSession, resolveHermesEffectiveScope, resolveHermesScope } from "./hermesHistory.ts";
 import { loadTimeline } from "./history.ts";
 import { HistoryTooLargeError, MAX_HISTORY_ROWS } from "./historyLimits.ts";
 import { PaseoService } from "./service.ts";
@@ -1073,4 +1073,64 @@ test("OMP custom reminder lines account injected length without crashing", () =>
   const timeline = loadTimeline(home, scope);
   expect(timeline.history.injected).toEqual([[1, 13]]);
   expect(timeline.history.messages).toHaveLength(2);
+});
+
+test("Hermes cross-profile DB fallback never fabricates requested-profile rotated scope while matching profile rotates normally", () => {
+  const home = tempHome("paseo-hermes-cross-prof-");
+
+  const otherDir = join(home, ".hermes/profiles/other");
+  mkdirSync(otherDir, { recursive: true });
+  const otherDb = new DatabaseSync(join(otherDir, "state.db"));
+  cleanup.push(() => {
+    try {
+      otherDb.close();
+    } catch {}
+  });
+  otherDb.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'local',
+      created_source TEXT,
+      model_config TEXT,
+      parent_session_id TEXT,
+      started_at REAL,
+      ended_at REAL,
+      end_reason TEXT
+    );
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_call_id TEXT,
+      tool_calls TEXT,
+      tool_name TEXT,
+      codex_message_items TEXT,
+      api_content TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      compacted INTEGER NOT NULL DEFAULT 0,
+      _compressed_summary INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  const insOtherSess = otherDb.prepare(
+    "INSERT INTO sessions (id, source, created_source, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, 'local', 'acp', '{}', ?, ?, ?, ?)",
+  );
+  insOtherSess.run("s-only-other", null, 100, 200, "compression");
+  insOtherSess.run("c-only-other", "s-only-other", 201, null, null);
+  otherDb
+    .prepare("INSERT INTO messages (session_id, role, content, _compressed_summary) VALUES (?, ?, ?, ?)")
+    .run("c-only-other", "user", "[CONTEXT COMPACTION] other profile rotated child", 1);
+
+  const mismatched = resolveHermesScope(home, "hermes:work:s-only-other:unknown");
+  expect(mismatched.profileMismatch).toBe(true);
+  expect(mismatched.dbProfile).toBe("other");
+  expect(mismatched.effectiveScope).toBe("hermes:other:c-only-other:unknown");
+  expect(resolveHermesEffectiveScope(home, "hermes:work:s-only-other:unknown")).toBe(
+    "hermes:other:c-only-other:unknown",
+  );
+
+  // Matching profile ("other") rotates cleanly without mismatch.
+  const matched = resolveHermesScope(home, "hermes:other:s-only-other:unknown");
+  expect(matched.profileMismatch).toBe(false);
+  expect(matched.effectiveScope).toBe("hermes:other:c-only-other:unknown");
 });

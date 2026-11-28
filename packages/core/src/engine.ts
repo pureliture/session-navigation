@@ -33,7 +33,7 @@ import {
   selectRule,
   selectableText,
 } from "./policy.ts";
-import { refusalReasonForRecord } from "./json-protection.ts";
+import { isJsonLike, refusalReasonForRecord } from "./json-protection.ts";
 import { validateSummary, summarySource, summaryWithRetry } from "./summary.ts";
 import { Store } from "./store.ts";
 export type Summarizer = (
@@ -43,11 +43,6 @@ export type Summarizer = (
   feedback?: string,
   context?: Json,
 ) => Promise<unknown>;
-
-function isJsonLike(content: string): boolean {
-  const stripped = content.trimStart();
-  return stripped.length > 0 && (stripped.startsWith("{") || stripped.startsWith("[") || stripped.startsWith("\""));
-}
 
 function jsonStructureContext(decision: GenericJsonDecision): Json {
   return {
@@ -99,7 +94,7 @@ export class Engine {
     const summarizePath = !!options.summarizer && options.allow_fallback === false;
     let jsonContext: Json | undefined;
     let jsonEvidence: string[] | undefined;
-    if (summarizePath && isJsonLike(record.content)) {
+    if (summarizePath && record.invocation.tool_name === "search_files" && isJsonLike(record.content)) {
       const inspection = inspectGenericJsonWithEvidence(record.content);
       if (!inspection.decision.ok) {
         return { ok: false, error: inspection.decision.refusal ?? "verification_failed" };

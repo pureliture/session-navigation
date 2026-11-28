@@ -384,7 +384,13 @@ async def state(cdp: CDP):
       const rows = Array.from(s.querySelectorAll('[aria-label="User prompt"], [aria-label="Agent response"], [aria-label^="Select "]'));
       const rect = s.getBoundingClientRect(), pr = p ? p.getBoundingClientRect() : null;
       const visible = e => {{ const r = e.getBoundingClientRect(); return r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && (!pr || (r.bottom>pr.top && r.top<pr.bottom)); }};
+      const alphaRows = rows.filter(e => (e.textContent||'').includes('Alpha'));
+      const bravoRows = rows.filter(e => (e.textContent||'').includes('Bravo'));
       const hits = rows.filter(e => /Alpha|Bravo/.test(e.textContent||''));
+      let marker = null;
+      if (bravoRows.length > 0 && alphaRows.length === 0) marker = 'Bravo';
+      else if (alphaRows.length > 0 && bravoRows.length === 0) marker = 'Alpha';
+      else if (alphaRows.length > 0 && bravoRows.length > 0) marker = 'mixed';
       return {{
         scroller: true, panel: !!p,
         panelVisible: !!pr && pr.width > 0 && pr.height > 0,
@@ -392,22 +398,108 @@ async def state(cdp: CDP):
         distFromBottom: Math.round(s.scrollHeight - s.clientHeight - s.scrollTop),
         rect: {{w: Math.round(rect.width), h: Math.round(rect.height)}},
         totalMounted: rows.length, totalVisible: rows.filter(visible).length,
+        alphaMounted: alphaRows.length, alphaVisible: alphaRows.filter(visible).length,
+        bravoMounted: bravoRows.length, bravoVisible: bravoRows.filter(visible).length,
         matchMounted: hits.length, matchVisible: hits.filter(visible).length,
-        marker: (s.textContent||'').includes('Bravo') ? 'Bravo' : (s.textContent||'').includes('Alpha') ? 'Alpha' : null,
+        marker,
         sample: hits.slice(-2).map(e => (e.textContent||'').trim().slice(0,70)),
       }};
     }})()""")
 
 
 PROBE_JS = """(() => {
-  const x = { scrollCalls: [], mutations: 0, outlineMutations: 0, loading: false, clicks: [], snapshots: [] };
-  window.__rapid = x;
-  const orig = Element.prototype.scrollTo;
-  x.restoreScrollTo = () => { Element.prototype.scrollTo = orig; };
-  Element.prototype.scrollTo = function (...args) {
-    x.scrollCalls.push({ t: Math.round(performance.now()), args: JSON.stringify(args).slice(0, 160) });
-    return orig.apply(this, args);
+  const x = {
+    scrollCalls: [],
+    scrollerWrites: [],
+    scrollEvents: [],
+    transitions: [],
+    mutations: 0,
+    outlineMutations: 0,
+    loading: false,
+    switchingSeen: false,
+    clicks: [],
+    snapshots: [],
   };
+  window.__rapid = x;
+  const isOutlineScroller = (el) => {
+    if (!(el instanceof Element)) return false;
+    if (window.__stale && window.__stale.scroller === el) return true;
+    const st = getComputedStyle(el);
+    if (!/(auto|scroll)/.test(st.overflowY)) return false;
+    const p = (%s);
+    if (p && (p === el || p.contains(el))) return true;
+    return !!el.querySelector('[aria-label="User prompt"], [aria-label="Agent response"], [aria-label^="Tool group:"]');
+  };
+  const isPanelHidden = (el) => {
+    if (!(el instanceof Element) || !el.isConnected) return true;
+    const r = el.getBoundingClientRect();
+    return r.width <= 0 || r.height <= 0 || el.clientHeight <= 0;
+  };
+  const recordScrollerWrite = (el, kind, beforeTop, targetTop, afterTop) => {
+    const entry = {
+      t: Math.round(performance.now()),
+      kind,
+      beforeTop: Math.round(beforeTop),
+      targetTop: targetTop === null || targetTop === undefined ? null : Math.round(Number(targetTop)),
+      afterTop: Math.round(afterTop),
+      delta: Math.round(afterTop - beforeTop),
+      sh: Math.round(el.scrollHeight || 0),
+      ch: Math.round(el.clientHeight || 0),
+      hidden: isPanelHidden(el),
+    };
+    x.scrollCalls.push(entry);
+    if (isOutlineScroller(el)) x.scrollerWrites.push(entry);
+  };
+  const origScrollTo = Element.prototype.scrollTo;
+  const origScrollBy = Element.prototype.scrollBy;
+  const topDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+  x.restoreScrollTo = () => {
+    Element.prototype.scrollTo = origScrollTo;
+    Element.prototype.scrollBy = origScrollBy;
+    if (topDesc) Object.defineProperty(Element.prototype, 'scrollTop', topDesc);
+  };
+  Element.prototype.scrollTo = function (...args) {
+    const before = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    const target = typeof args[0] === 'object' && args[0] !== null ? args[0].top : args[1];
+    const ret = origScrollTo.apply(this, args);
+    const after = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    recordScrollerWrite(this, 'scrollTo', before, target, after);
+    return ret;
+  };
+  Element.prototype.scrollBy = function (...args) {
+    const before = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    const dy = typeof args[0] === 'object' && args[0] !== null ? args[0].top : args[1];
+    const ret = origScrollBy.apply(this, args);
+    const after = topDesc && topDesc.get ? topDesc.get.call(this) : 0;
+    recordScrollerWrite(this, 'scrollBy', before, before + (Number(dy) || 0), after);
+    return ret;
+  };
+  if (topDesc && topDesc.get && topDesc.set) {
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      configurable: true,
+      enumerable: topDesc.enumerable,
+      get: topDesc.get,
+      set: function (v) {
+        const before = topDesc.get.call(this);
+        topDesc.set.call(this, v);
+        const after = topDesc.get.call(this);
+        recordScrollerWrite(this, 'scrollTop', before, v, after);
+      },
+    });
+  }
+  x.scrollListener = e => {
+    const t = e.target;
+    if (t instanceof Element && isOutlineScroller(t)) {
+      x.scrollEvents.push({
+        t: Math.round(performance.now()),
+        top: Math.round(t.scrollTop),
+        sh: Math.round(t.scrollHeight),
+        ch: Math.round(t.clientHeight),
+        hidden: isPanelHidden(t),
+      });
+    }
+  };
+  document.addEventListener('scroll', x.scrollListener, true);
   x.observer = new MutationObserver(records => {
     for (const rec of records) {
       x.mutations++;
@@ -419,9 +511,12 @@ PROBE_JS = """(() => {
         x.outlineMutations++;
       }
     }
-    if (Array.from(document.querySelectorAll('*')).some(e => e.children.length === 0 && /Loading older items|Loading sessions/.test(e.textContent || ''))) x.loading = true;
+    const leaves = Array.from(document.querySelectorAll('*')).filter(e => e.children.length === 0);
+    if (leaves.some(e => /Loading older items|Loading sessions/.test(e.textContent || ''))) x.loading = true;
+    if (leaves.some(e => /Switching session|Loading outline/.test(e.textContent || ''))) x.switchingSeen = true;
+    const hdr = document.querySelector('[aria-label="Choose navigator agent"]')?.textContent?.trim() || '';
+    if (hdr && x.transitions[x.transitions.length - 1] !== hdr) x.transitions.push(hdr);
   });
-  // 패널 노드 자체가 교체될 수 있으므로 document.body 전체를 관찰한다.
   x.observer.observe(document.body, { subtree: true, childList: true, characterData: true });
   x.listener = e => {
     const t = e.target;
@@ -430,16 +525,23 @@ PROBE_JS = """(() => {
       label: t.getAttribute('aria-label') || (t.textContent || '').trim().slice(0, 60) });
   };
   document.addEventListener('click', x.listener, true);
-  return { installed: true, clickBase: x.clicks.length, panelFound: !!(%s) };
-})()""" % PANEL
+  return { installed: true, scrollTopHooked: !!(topDesc && topDesc.set), clickBase: x.clicks.length, panelFound: !!(%s) };
+})()""" % (PANEL, PANEL)
 
 
 async def probe(cdp: CDP):
     return await cdp.js("""(() => { const x = window.__rapid || {};
-      return { scrollCalls: x.scrollCalls || [], mutations: x.mutations || 0,
-               outlineMutations: x.outlineMutations || 0,
-               loading: !!x.loading || Array.from(document.querySelectorAll('*')).some(e => e.children.length === 0 && /Loading older items|Loading sessions/.test(e.textContent || '')),
-               clicks: x.clicks || [] }; })()""")
+      return {
+        scrollCalls: x.scrollCalls || [],
+        scrollerWrites: x.scrollerWrites || [],
+        scrollEvents: x.scrollEvents || [],
+        transitions: x.transitions || [],
+        mutations: x.mutations || 0,
+        outlineMutations: x.outlineMutations || 0,
+        loading: !!x.loading || Array.from(document.querySelectorAll('*')).some(e => e.children.length === 0 && /Loading older items|Loading sessions/.test(e.textContent || '')),
+        switchingSeen: !!x.switchingSeen,
+        clicks: x.clicks || [],
+      }; })()""")
 
 
 async def detach_probe(cdp: CDP):
@@ -447,8 +549,8 @@ async def detach_probe(cdp: CDP):
       try { x.observer && x.observer.disconnect(); } catch (e) {}
       try { x.restoreScrollTo && x.restoreScrollTo(); } catch (e) {}
       try { document.removeEventListener('click', x.listener, true); } catch (e) {}
+      try { document.removeEventListener('scroll', x.scrollListener, true); } catch (e) {}
       return true; })()""")
-
 
 async def setup(cdp: CDP, server_id: str, report: dict):
     await cdp.call("Page.navigate", url=BASE_URL)
@@ -502,32 +604,6 @@ async def rapid_sequence(cdp: CDP, marks: list):
     return {"totalMs": total_ms, "clicks": marks}
 
 
-async def full_navigation_baseline(cdp: CDP, server_id: str):
-    """기존 14초 full-navigation 방식(Page.navigate + 고정 슬립)을 같은 sandbox에서 실측."""
-    t0 = time.perf_counter()
-    nav0 = cdp.nav_count
-    await cdp.call("Page.navigate", url=BASE_URL)
-    await asyncio.sleep(3)
-    await cdp.js(f"({CLICK_JS})(Array.from(document.querySelectorAll('button,[role=button]')).find(e=>/연결|Connect/i.test(e.textContent.trim())))")
-    await asyncio.sleep(2)
-    await cdp.call("Page.navigate", url=f"{BASE_URL}h/{server_id}/workspace/{WORKSPACE_ID}")
-    await asyncio.sleep(4)
-    selected = await select_session(cdp, TITLE_A)
-    await asyncio.sleep(2)
-    if not await cdp.js("!!document.querySelector('[aria-label=\"Refresh outline\"]')"):
-        await click_box(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>/사이드 패널 열기|Open (right )?sidebar|Open side panel/i.test((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')))")
-        await asyncio.sleep(1)
-        await click_box(cdp, "Array.from(document.querySelectorAll('button,[role=button]')).find(e=>{let r=e.getBoundingClientRect();return r.x>900&&r.y<80&&/새 탭|New tab/i.test((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+e.textContent)})")
-        await asyncio.sleep(0.5)
-        await click_box(cdp, "Array.from(document.querySelectorAll('*')).filter(e=>e.children.length===0&&e.textContent.trim()==='Session navigation').at(-1)")
-    ready = await wait_for(cdp, f"!!({FIND_SCROLLER})", 10)
-    return {
-        "elapsedMs": round((time.perf_counter() - t0) * 1000, 2),
-        "pageNavigateDelta": cdp.nav_count - nav0,
-        "selectedA": selected.get("found", False),
-        "scrollerReady": bool(ready),
-        "path": "Page.navigate(home) → Connect → Page.navigate(workspace) → session leaf click → sidebar/new-tab/Session navigation",
-    }
 async def run_suite(cdp: CDP, server_id: str, report: dict):
     with urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version", timeout=2) as r:
         ws_url = json.load(r)["webSocketDebuggerUrl"]
@@ -568,41 +644,81 @@ async def run_suite(cdp: CDP, server_id: str, report: dict):
                     "preserved": bool(up and stable and abs(up["top"] - stable["top"]) <= 40),
                 }
 
-                # 2) 프로브 설치 + 사용자 스크롤 후 하단 복귀 규칙 확인
+                # 2) 프로브 설치 + 사용자 스크롤 후 하단 복귀 규칙 및 실제 스크롤 이동 계측 확인
                 installed = await cdp.js(PROBE_JS)
                 report["probeInstall"] = installed
+                writes_before_b = len((await probe(cdp))["scrollerWrites"])
                 await click_box(cdp, CHOOSER)
                 await click_box(cdp, NAV_B)
-                await wait_for(cdp, f"((({FIND_SCROLLER})?.textContent)||'').includes('Bravo')", 6)
+                await wait_for(cdp, f"(() => {{ const s = {FIND_SCROLLER}; return s && (s.textContent||'').includes('Bravo') && !(s.textContent||'').includes('Alpha'); }})()", 6)
                 await asyncio.sleep(0.5)
                 switched_b = await state(cdp)
+                header_b = await cdp.js("document.querySelector('[aria-label=\"Choose navigator agent\"]')?.textContent?.trim() || ''")
+                writes_after_b = len((await probe(cdp))["scrollerWrites"])
                 await click_box(cdp, CHOOSER)
                 await click_box(cdp, NAV_A)
-                await wait_for(cdp, f"((({FIND_SCROLLER})?.textContent)||'').includes('Alpha')", 6)
+                await wait_for(cdp, f"(() => {{ const s = {FIND_SCROLLER}; return s && (s.textContent||'').includes('Alpha') && !(s.textContent||'').includes('Bravo'); }})()", 6)
                 await asyncio.sleep(0.5)
                 switched_a = await state(cdp)
+                header_a = await cdp.js("document.querySelector('[aria-label=\"Choose navigator agent\"]')?.textContent?.trim() || ''")
+                writes_after_a = len((await probe(cdp))["scrollerWrites"])
                 report["switchAfterUserScroll"] = {
                     "before": stable, "toB": switched_b, "backToA": switched_a,
-                    "bLandedBottom": bool(switched_b and switched_b["marker"] == "Bravo" and switched_b["distFromBottom"] <= 60),
-                    "aLandedBottom": bool(switched_a and switched_a["marker"] == "Alpha" and switched_a["distFromBottom"] <= 60),
+                    "headerB": header_b, "headerA": header_a,
+                    "bScrollerWrites": writes_after_b - writes_before_b,
+                    "aScrollerWrites": writes_after_a - writes_after_b,
+                    "bLandedBottom": bool(
+                        switched_b
+                        and switched_b["marker"] == "Bravo"
+                        and switched_b["alphaMounted"] == 0
+                        and TITLE_B in header_b
+                        and switched_b["top"] > 0
+                        and switched_b["distFromBottom"] <= 60
+                        and (writes_after_b - writes_before_b) >= 1
+                    ),
+                    "aLandedBottom": bool(
+                        switched_a
+                        and switched_a["marker"] == "Alpha"
+                        and switched_a["bravoMounted"] == 0
+                        and TITLE_A in header_a
+                        and switched_a["top"] > 0
+                        and switched_a["distFromBottom"] <= 60
+                        and (writes_after_a - writes_after_b) >= 1
+                    ),
                 }
 
-                # 3) A→B→A→B: chooser 클릭만 연속 전송, 중간 응답 대기/슬립 없음
+                # 3) A→B→A→B: chooser 클릭만 연속 전송, 전환 경유 및 최종 상태·실제 스크롤 계측 검증
                 rapid_base = await cdp.js("window.__rapid.clicks.length")
+                rapid_write_base = len((await probe(cdp))["scrollerWrites"])
+                rapid_trans_base = len((await probe(cdp))["transitions"])
                 nav_before = cdp.nav_count
+                rapid_t0 = time.perf_counter()
                 rapid = await rapid_sequence(cdp, [])
                 nav_after = cdp.nav_count
                 report["rapid"] = {**rapid, "pageNavigateDelta": nav_after - nav_before}
                 settle_start = time.perf_counter()
-                final = await wait_for(cdp, f"((({FIND_SCROLLER})?.textContent)||'').includes('Bravo')", 8)
+                final = await wait_for(
+                    cdp,
+                    f"(() => {{ const s = {FIND_SCROLLER}; const h = document.querySelector('[aria-label=\"Choose navigator agent\"]')?.textContent || ''; return s && h.includes({json.dumps(TITLE_B)}) && (s.textContent||'').includes('Bravo') && !(s.textContent||'').includes('Alpha'); }})()",
+                    8,
+                )
                 settle_ms = round((time.perf_counter() - settle_start) * 1000, 2)
+                end_to_end_ms = round((time.perf_counter() - rapid_t0) * 1000, 2)
                 await asyncio.sleep(0.8)
                 final_state = await state(cdp)
                 after_probe = await probe(cdp)
                 header = await cdp.js("document.querySelector('[aria-label=\"Choose navigator agent\"]')?.textContent?.trim() || ''")
+                rapid_writes = after_probe["scrollerWrites"][rapid_write_base:]
+                rapid_transitions = after_probe["transitions"][rapid_trans_base:]
                 report["final"] = {
-                    "settleMs": settle_ms, "markerSeen": bool(final), "state": final_state,
-                    "pinnedHeader": header, "probe": after_probe,
+                    "settleMs": settle_ms,
+                    "endToEndMs": end_to_end_ms,
+                    "markerSeen": bool(final),
+                    "state": final_state,
+                    "pinnedHeader": header,
+                    "rapidScrollerWrites": len(rapid_writes),
+                    "rapidTransitions": rapid_transitions,
+                    "probe": after_probe,
                     "urlChanged": await cdp.js("location.href !== window.__rapidStartUrl"),
                     "url": await cdp.js("location.href"),
                 }
@@ -616,46 +732,84 @@ async def run_suite(cdp: CDP, server_id: str, report: dict):
                 targets = [c for c in rapid_clicks if c["label"] in (TITLE_A, TITLE_B)]
                 tms = [c["t"] for c in targets]
                 report["final"]["clickSpanMs"] = (tms[-1] - tms[0]) if len(tms) >= 2 else None
+                report["final"]["targetClickSequence"] = [c["label"] for c in targets]
 
-                # 4) stale mutation: 패널 숨김 상태에서 세션 전환/refresh/그룹 확장 → scrollTo 0, loading 없음
-                scroll_base = len(after_probe["scrollCalls"])
-                await cdp.js(f"""(() => {{ const p = {PANEL}, s = {FIND_SCROLLER};
-                  if (!p || !s) throw new Error('panel/scroller missing for stale test');
-                  window.__stale = {{panel: p, scroller: s, old: p.style.display}};
-                  p.style.display = 'none'; s.dispatchEvent(new Event('scroll', {{bubbles:true}})); return true; }})()""")
+                # 4) stale mutation: 패널 숨김 상태에서 세션 전환/refresh/그룹 확장 → 실제 scroller 이동 0, 복원 후 하단 정합성 검증
+                stale_write_base = len(after_probe["scrollerWrites"])
+                await cdp.js(f"""(() => {{
+                  const s = {FIND_SCROLLER};
+                  const chooser = document.querySelector('[aria-label="Choose navigator agent"]');
+                  if (!chooser || !s) throw new Error('chooser/scroller missing for stale test');
+                  let screen = chooser.parentElement;
+                  while (screen && !screen.contains(s)) screen = screen.parentElement;
+                  if (!screen) throw new Error('panel screen root missing for stale test');
+                  let style = document.getElementById('smoke-stale-css');
+                  if (!style) {{
+                    style = document.createElement('style');
+                    style.id = 'smoke-stale-css';
+                    style.textContent = '[data-smoke-stale-screen="1"] > :last-child {{ display: none !important; }}';
+                    document.head.appendChild(style);
+                  }}
+                  screen.setAttribute('data-smoke-stale-screen', '1');
+                  window.__stale = {{screen, scroller: s}};
+                  s.dispatchEvent(new Event('scroll', {{bubbles:true}}));
+                  return true;
+                }})()""")
                 stale_click = await click_box(cdp, CHOOSER)
                 stale_nav = await click_box(cdp, NAV_A) if stale_click else None
-                await cdp.js("(() => { const b = document.querySelector('[aria-label=\"Refresh outline\"]'); b && b.click(); const g = window.__stale.scroller.querySelector('[aria-label=\"Expand group\"]'); g && g.click(); })()")
+                await cdp.js("(() => { const b = document.querySelector('[aria-label=\"Refresh outline\"]'); b && b.click(); const s = window.__stale && window.__stale.scroller; const g = s && s.querySelector('[aria-label=\"Expand group\"]'); g && g.click(); })()")
                 await asyncio.sleep(1.0)
                 stale_probe = await probe(cdp)
-                await cdp.js("(() => { const x = window.__stale; x.panel.style.display = x.old || ''; x.scroller.dispatchEvent(new Event('scroll', {bubbles:true})); })()")
-                await wait_for(cdp, f"((({FIND_SCROLLER})?.textContent)||'').includes('Alpha')", 6)
+                hidden_writes = stale_probe["scrollerWrites"][stale_write_base:]
+                hidden_abs_delta = sum(abs(w.get("delta", 0)) for w in hidden_writes)
+                await cdp.js("""(() => {
+                  const x = window.__stale || {};
+                  if (x.screen) x.screen.removeAttribute('data-smoke-stale-screen');
+                  const style = document.getElementById('smoke-stale-css');
+                  if (style) style.remove();
+                  const cur = (%s);
+                  if (cur) cur.dispatchEvent(new Event('scroll', {bubbles:true}));
+                })()""" % FIND_SCROLLER)
+                await wait_for(cdp, f"(() => {{ const s = {FIND_SCROLLER}; return s && (s.textContent||'').includes('Alpha') && !(s.textContent||'').includes('Bravo'); }})()", 6)
                 await asyncio.sleep(0.8)
                 restored = await state(cdp)
+                restored_probe = await probe(cdp)
+                restored_writes = restored_probe["scrollerWrites"][len(stale_probe["scrollerWrites"]):]
                 await detach_probe(cdp)
                 report["stale"] = {
-                    "clicks": [stale_click, stale_nav], "probe": stale_probe, "restored": restored,
-                    "scrollCalls": len(stale_probe["scrollCalls"]) - scroll_base,
+                    "clicks": [stale_click, stale_nav],
+                    "probe": stale_probe,
+                    "restored": restored,
+                    "hiddenScrollerWrites": len(hidden_writes),
+                    "hiddenAbsDelta": hidden_abs_delta,
+                    "restoredScrollerWrites": len(restored_writes),
                     "loading": stale_probe["loading"],
                     "mutations": stale_probe["mutations"],
                     "outlineMutations": stale_probe["outlineMutations"],
-                    "landedBottom": bool(restored and restored["distFromBottom"] <= 60 and restored["top"] > 0),
-                    "markerAlpha": bool(restored and restored["marker"] == "Alpha"),
+                    "landedBottom": bool(
+                        restored
+                        and restored["distFromBottom"] <= 60
+                        and restored["top"] > 0
+                        and len(restored_writes) >= 1
+                    ),
+                    "markerAlpha": bool(
+                        restored
+                        and restored["marker"] == "Alpha"
+                        and restored["bravoMounted"] == 0
+                    ),
                 }
                 await cdp.shot(RESULTS / "03-stale-restored-a.png")
 
-                # 5) 14초 full-navigation과의 차이: 같은 URL, Page.navigate 없이 전환 완료
+                # 5) 전환 방식 및 계측 요약 (sleep이 포함된 cold reload와 직접 배수 비교하지 않음)
                 report["comparison"] = {
                     "method": "실제 UI chooser → Navigate <title> 포인터 클릭 (Page.navigate 없음)",
-                    "rapidSwitchMs": rapid.get("totalMs"),
+                    "clickDispatchMs": rapid.get("totalMs"),
+                    "settleMs": settle_ms,
+                    "endToEndSwitchMs": end_to_end_ms,
                     "pageNavigateDelta": report["rapid"].get("pageNavigateDelta"),
                     "urlUnchanged": not report["final"]["urlChanged"],
+                    "note": "고정 sleep이 포함된 전체 페이지 리로드 경로와는 조건이 다르므로 수치 배수 비교를 수행하지 않음.",
                 }
-                baseline = await full_navigation_baseline(cdp, server_id)
-                report["baselineFullNavigation"] = baseline
-                report["comparison"]["legacyFullNavigationMsMeasured"] = baseline["elapsedMs"]
-                report["comparison"]["speedupFactor"] = round(baseline["elapsedMs"] / max(rapid.get("totalMs") or 1, 1), 1)
-                await cdp.shot(RESULTS / "04-baseline-a.png")
         finally:
             await browser.call("Target.disposeBrowserContext", browserContextId=ctx)
 
@@ -686,31 +840,32 @@ def verdict(report: dict) -> dict:
     setup = report.get("setup", {})
     state_ = f.get("state", {})
     nav_delta = report.get("comparison", {}).get("pageNavigateDelta")
-    span = report["final"].get("clickSpanMs")
+    span = f.get("clickSpanMs")
     checks = {
         "outlineReady": bool(setup.get("outline_ready")),
-        "finalMarkerBravo": state_.get("marker") == "Bravo",
+        "scrollProbeHooked": bool(report.get("probeInstall", {}).get("scrollTopHooked")),
+        "finalMarkerBravo": state_.get("marker") == "Bravo" and state_.get("alphaMounted") == 0,
         "finalPinnedBravo": TITLE_B in f.get("pinnedHeader", "") and TITLE_A not in f.get("pinnedHeader", ""),
-        "mountedAtLeastOne": state_.get("matchMounted", 0) >= 1,
-        "visibleAtLeastOne": state_.get("matchVisible", 0) >= 1 and state_.get("panelVisible", False),
+        "mountedAtLeastOne": state_.get("bravoMounted", 0) >= 1,
+        "visibleAtLeastOne": state_.get("bravoVisible", 0) >= 1 and state_.get("panelVisible", False),
         "finalBottom": bool(state_.get("distFromBottom", 10 ** 6) <= 60 and state_.get("top", 0) > 0),
+        "rapidTargetSequenceExact": f.get("targetClickSequence") == [TITLE_B, TITLE_A, TITLE_B],
+        "rapidScrollerMoved": f.get("rapidScrollerWrites", 0) >= 1,
         "urlUnchanged": bool(report.get("comparison", {}).get("urlUnchanged")),
         "noNavigateInRapid": nav_delta == 0 and "error" not in report.get("rapid", {}),
-        "baselineUsesNavigation": report.get("baselineFullNavigation", {}).get("pageNavigateDelta", 0) >= 1,
-        "baselineSlowerThanRapid": report.get("baselineFullNavigation", {}).get("elapsedMs", 0)
-                                   > (report.get("rapid", {}).get("totalMs") or 10 ** 6),
         "rapidClickSpanUnder1s": span is not None and 0 < span < 1000,
         "userScrollPreserved": bool(st.get("upMoved") and st.get("preserved")),
-        "switchAfterUserScrollBottom": bool(report.get("switchAfterUserScroll", {}).get("bLandedBottom")
-                                            and report.get("switchAfterUserScroll", {}).get("aLandedBottom")),
-        "staleScrollToZero": s.get("scrollCalls") == 0,
+        "switchAfterUserScrollBottom": bool(
+            report.get("switchAfterUserScroll", {}).get("bLandedBottom")
+            and report.get("switchAfterUserScroll", {}).get("aLandedBottom")
+        ),
+        "staleHiddenScrollerWritesZero": s.get("hiddenScrollerWrites") == 0 and s.get("hiddenAbsDelta") == 0,
         "staleNoLoading": not s.get("loading", True),
         "staleMutationOccurred": s.get("outlineMutations", 0) >= 1 or s.get("mutations", 0) >= 1,
         "staleRestoreMarkerAlpha": bool(s.get("markerAlpha")),
         "staleRestoreBottom": bool(s.get("landedBottom")),
     }
     return {"checks": checks, "pass": all(checks.values())}
-
 
 def main():
     if ROOT.exists():

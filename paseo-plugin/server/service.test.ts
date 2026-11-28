@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { acquireHermesToggleLock, inspectHermesPluginInstall, inspectHermesToggle, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
 import {
   Store,
@@ -3242,4 +3243,148 @@ test("dangling toggle symlinks are rejected and non-string YAML keys outside the
   const patched = patchHermesConfigYaml(yaml, true);
   expect(patched).toContain("session-navigation");
   expect(patched).toContain("8080");
+});
+
+test("Hermes profile mismatch refuses mutations fail-closed while preserving matching multi-profile rotation and read fallback", async () => {
+  const { home, store, service, register } = fixture([], false);
+
+  const workScope = "hermes:work:rot-parent:unknown";
+  const otherParentScope = "hermes:other:rot-parent:unknown";
+  const otherChildScope = "hermes:other:rot-child:unknown";
+  register(workScope);
+  register("hermes:work:rot-child:unknown");
+  register(otherParentScope);
+  register(otherChildScope);
+
+  const otherDir = join(home, ".hermes/profiles/other");
+  mkdirSync(otherDir, { recursive: true });
+  const otherDb = new DatabaseSync(join(otherDir, "state.db"));
+  const longToolOut = Array.from({ length: 45 }, (_, i) => `row ${i}: synthetic output`).join("\n");
+  try {
+    otherDb.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'local',
+        created_source TEXT,
+        model_config TEXT,
+        parent_session_id TEXT,
+        started_at REAL,
+        ended_at REAL,
+        end_reason TEXT
+      );
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        _compressed_summary INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    otherDb
+      .prepare(
+        "INSERT INTO sessions (id, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, '{}', ?, ?, ?, ?)",
+      )
+      .run("rot-parent", null, 100, 200, "compression");
+    otherDb
+      .prepare(
+        "INSERT INTO sessions (id, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, '{}', ?, ?, ?, ?)",
+      )
+      .run("rot-child", "rot-parent", 201, null, null);
+    const ins = otherDb.prepare(
+      "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, _compressed_summary) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    ins.run("rot-child", "user", "[CONTEXT COMPACTION] summary", null, null, null, 1);
+    ins.run(
+      "rot-child",
+      "assistant",
+      "",
+      null,
+      JSON.stringify([
+        { id: "call_other_1", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } },
+      ]),
+      null,
+      0,
+    );
+    ins.run("rot-child", "tool", longToolOut, "call_other_1", null, "read_file", 0);
+  } finally {
+    otherDb.close();
+  }
+
+  // 1. Mismatched profile ("work" requested, session only in "other"):
+  //    Read fallback still works, rows are read-only, and every mutation fails closed with profile_mismatch.
+  const mismatchList = ListResultSchema.parse(
+    await service.handle("list", { scope_key: workScope }),
+  );
+  expect(mismatchList.ok).toBe(true);
+  expect(mismatchList.server_timeline).toBe(true);
+  expect(mismatchList.capabilities?.hide).toBe(false);
+  expect(mismatchList.capabilities?.summarize).toBe(false);
+  expect(mismatchList.items.every((r) => !r.manageable)).toBe(true);
+
+  expect(
+    (await service.handle("hide", { scope_key: workScope, item_id: "call_other_1" })).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (await service.handle("unhide", { scope_key: workScope, item_id: "call_other_1" })).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("hideBatch", {
+        scope_key: workScope,
+        items: [{ item_id: "call_other_1" }],
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("unhideBatch", {
+        scope_key: workScope,
+        items: [{ item_id: "call_other_1" }],
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("manage", {
+        scope_key: workScope,
+        tool_call_ids: ["call_other_1"],
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("fork", {
+        scope_key: workScope,
+        dst_scope_key: "hermes:work:fork-dst:unknown",
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+
+  // Nothing written under ghost scope hermes:work:rot-child:unknown or hermes:other:rot-child:unknown.
+  expect(store.items("hermes:work:rot-child:unknown")).toHaveLength(0);
+  expect(store.items(otherChildScope)).toHaveLength(0);
+
+  // 2. Matching profile ("other" requested, session in "other" rotated rot-parent -> rot-child):
+  //    Rotates to hermes:other:rot-child:unknown and mutates cleanly.
+  const matchedList = ListResultSchema.parse(
+    await service.handle("list", { scope_key: otherParentScope }),
+  );
+  expect(matchedList.ok).toBe(true);
+  const toolRow = matchedList.items.find((r) => r.tool_call_id === "call_other_1");
+  expect(toolRow?.manageable).toBe(true);
+
+  const manageOk = await service.handle("manage", {
+    scope_key: otherParentScope,
+    tool_call_ids: ["call_other_1"],
+  });
+  expect(manageOk.ok).toBe(true);
+  expect(store.items(otherChildScope)).toHaveLength(1);
+  expect(store.items("hermes:work:rot-child:unknown")).toHaveLength(0);
 });

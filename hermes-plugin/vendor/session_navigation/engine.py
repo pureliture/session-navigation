@@ -20,7 +20,7 @@ from session_navigation.model import (
     ToolResultRecord,
     _item_id,
 )
-from session_navigation.json_protection import refusal_reason_for_record
+from session_navigation.json_protection import is_json_like, refusal_reason_for_record
 from session_navigation.policy import (
     MAX_EXCERPT_BYTES,
     RuleSpanSelector,
@@ -33,11 +33,6 @@ from session_navigation.policy import (
 from session_navigation.sqlite_store import SQLiteContextStore
 from session_navigation.summary import selectable_text, validate_summary_text, summary_source, summary_feedback
 from session_navigation.transport import Summarizer
-
-
-def _is_json_like(content: str) -> bool:
-    stripped = content.lstrip()
-    return bool(stripped) and stripped[0] in "{[\""
 
 
 def _run_sync(coro):
@@ -117,7 +112,8 @@ class SessionNavigationEngine:
         if (
             record.invocation.get("tool_name") == "search_files"
             and summarizer is not None
-            and _is_json_like(record.content)
+            and not allow_fallback
+            and is_json_like(record.content)
         ):
             decision, evidence = inspect_generic_json_with_evidence(record.content)
             if not decision.ok:

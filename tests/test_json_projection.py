@@ -436,3 +436,42 @@ def test_long_non_evidence_line_still_chunks_in_order() -> None:
     assert verify_projection_render(result.plan.replacement_text, raw, case["tool_name"], projection)
     assert result.item is not None and result.item.original == raw
     assert engine.restore(scope, result.item.item_id).ok is True
+
+
+def test_projection_render_rejects_trailing_injection_and_forged_digest_and_keeps_empty_fields() -> None:
+    files_payload = json.dumps(
+        {"files": ["synthetic/fixtures/a.txt", "synthetic/fixtures/b.txt"], "total_count": 2},
+        separators=(",", ":"),
+    )
+    files_proj = project_json_tool_result(files_payload, "search_files").projection
+    assert files_proj is not None
+    item_id = "item_files_parity"
+    label = "Projected JSON (prefix+suffix; restore with unhide_context): "
+    valid_rendered = "\n".join(
+        [
+            f"[hidden:{item_id}]",
+            *(f"{label}{line}" for line in files_proj.lines),
+            f"The remaining result is preserved. Restore it with unhide_context({item_id}).",
+        ]
+    )
+    assert verify_projection_render(valid_rendered, files_payload, "search_files", files_proj) is True
+    assert verify_projection_render(valid_rendered + "\nINJECTED", files_payload, "search_files", files_proj) is False
+    assert verify_projection_render(valid_rendered + " extra", files_payload, "search_files", files_proj) is False
+    mismatched_id = valid_rendered.replace(f"unhide_context({item_id})", "unhide_context(other_id)")
+    assert verify_projection_render(mismatched_id, files_payload, "search_files", files_proj) is False
+
+    empty_matches = json.dumps(
+        {
+            "matches_format": "",
+            "matches_text": "synthetic/a.txt:1:alpha\nsynthetic/b.txt:2:beta",
+            "total_count": 2,
+            "total_count_is_lower_bound": False,
+            "truncated": False,
+            "_hint": "",
+        },
+        separators=(",", ":"),
+    )
+    matches_proj = project_json_tool_result(empty_matches, "search_files").projection
+    assert matches_proj is not None
+    assert 'projected search_files_matches_v1 matches_format+0: ""' in matches_proj.lines
+    assert 'projected search_files_matches_v1 _hint+0: ""' in matches_proj.lines
