@@ -82,6 +82,28 @@ def _content(case: dict) -> str:
                 "truncated": False,
                 "_hint": "Synthetic hint for the realistic projection.",
             }
+        elif kind == "matches_boundary":
+            def _fill(unit: str, width: int) -> str:
+                text = (unit * (width // len(unit) + 1))[:width]
+                return text if text.endswith(" ") else text[:-1] + " "
+
+            token = {
+                "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+                "path": "synthetic/fixtures/invoice-2026-11-28.txt",
+                "protected_error": "ERROR: unresolved synthetic failure remains protected",
+                "none": "",
+            }[spec["evidence"]]
+            prefix = _fill(spec.get("prefix_unit", "alpha beta gamma "), spec.get("prefix_chars", 184))
+            suffix = " " + _fill(spec.get("suffix_unit", "delta epsilon zeta "), spec.get("suffix_chars", 400) - 1)
+            lines = [prefix + token + suffix, "synthetic tail row after boundary"]
+            data = {
+                "matches_format": "Synthetic format: path:line:text",
+                "matches_text": "\n".join(lines),
+                "total_count": len(lines),
+                "total_count_is_lower_bound": False,
+                "truncated": False,
+                "_hint": "Synthetic hint for the long-evidence boundary.",
+            }
         elif kind == "files_basename":
             files = []
             for index in range(40):
@@ -345,3 +367,72 @@ def test_matches_render_verification_fails_closed_on_tampering():
         wrap(["Original excerpt:" + row[len(label):] for row in rows]),
         raw, "search_files", projection,
     )
+
+
+LONG_EVIDENCE_CASE_IDS = (
+    "matches_long_uuid_boundary",
+    "matches_long_path_boundary",
+    "matches_long_unicode_boundary",
+    "matches_long_escape_boundary",
+    "matches_long_protected_error",
+)
+
+
+@pytest.mark.parametrize("case_id", LONG_EVIDENCE_CASE_IDS)
+def test_long_evidence_boundary_refuses_and_keeps_original(case_id: str) -> None:
+    case = _case(case_id)
+    raw = _content(case)
+    decision = project_json_tool_result(raw, case["tool_name"])
+    assert decision.refusal == case["expected"]["refusal"]
+    assert decision.projection is None
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", f"sess-boundary-{case_id}")
+    record = _record(raw, case["tool_name"], f"call_{case_id}")
+    result = engine.compact_sync(scope, record)
+    assert result.ok is False
+    assert result.error == case["expected"]["refusal"]
+    assert result.item is None and result.plan is None
+    assert engine.store.visible_content(scope, record.call_id, raw) == raw
+
+
+@pytest.mark.parametrize("case_id", LONG_EVIDENCE_CASE_IDS)
+def test_vendored_projection_refuses_long_evidence_boundary(case_id: str) -> None:
+    import importlib.util
+    import sys
+
+    vendor = Path(__file__).resolve().parents[1] / "hermes-plugin/vendor/session_navigation/json_projection.py"
+    spec = importlib.util.spec_from_file_location("vendor_json_projection", vendor)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    case = _case(case_id)
+    raw = _content(case)
+    decision = module.project_json_tool_result(raw, case["tool_name"])
+    assert decision.refusal == case["expected"]["refusal"]
+    assert decision.projection is None
+
+
+def test_long_non_evidence_line_still_chunks_in_order() -> None:
+    case = _case("matches_long_non_evidence_chunks")
+    raw = _content(case)
+    decision = project_json_tool_result(raw, case["tool_name"])
+    projection = decision.projection
+    assert decision.refusal is None
+    assert projection is not None and projection.schema == "search_files_matches_v1"
+    chunks = [line for line in projection.lines if line.startswith("projected search_files_matches_v1 matches_text[")]
+    by_line: dict[str, list[int]] = {}
+    for line in chunks:
+        index = line.split("matches_text[", 1)[1].split("]", 1)[0]
+        offset = int(line.split("+", 1)[1].split(":", 1)[0])
+        by_line.setdefault(index, []).append(offset)
+    assert by_line["0"][0] == 0
+    assert by_line["0"] == sorted(by_line["0"])
+    assert by_line["1"] == [0]
+    engine = SessionNavigationEngine()
+    scope = Scope("hermes", "test", "sess-boundary-control")
+    result = engine.compact_sync(scope, _record(raw, case["tool_name"], "call_boundary_control"))
+    assert result.ok is True, result.error
+    assert verify_projection_render(result.plan.replacement_text, raw, case["tool_name"], projection)
+    assert result.item is not None and result.item.original == raw
+    assert engine.restore(scope, result.item.item_id).ok is True

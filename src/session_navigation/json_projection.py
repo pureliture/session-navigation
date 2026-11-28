@@ -111,6 +111,8 @@ def _append_chunks(
         out.append(f"projected {schema} {field}+0: \"\"")
         return True
     whole_prefix = f"projected {schema} {field}+0: "
+    if required_evidence_lines(value) and len(whole_prefix) + len(_encoded(value)) > max_line:
+        return False
     if len(whole_prefix) + len(_encoded(value)) <= max_line:
         out.append(whole_prefix + _encoded(value))
         return True

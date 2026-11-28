@@ -195,5 +195,51 @@
       "total_count": 1,
       "expected": { "schema": "search_files_files_v2", "refusal": null }
     }
+    ,
+    {
+      "id": "matches_long_uuid_boundary",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "uuid" },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_path_boundary",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "path" },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_unicode_boundary",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches_boundary",
+        "evidence": "uuid",
+        "prefix_unit": "가나다 ",
+        "suffix_unit": "다나가 "
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_escape_boundary",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches_boundary",
+        "evidence": "uuid",
+        "prefix_unit": "quote\" slash\\ tab\t alpha "
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_protected_error",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "protected_error" },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "matches_long_non_evidence_chunks",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "none" },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    }
   ]
 }

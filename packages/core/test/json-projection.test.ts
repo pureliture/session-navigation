@@ -24,6 +24,7 @@ import {
 import { makeDriver } from "./runtime.ts";
 interface GenerateSpec {
   kind:
+    | "matches_boundary"
     | "repeat"
     | "matches"
     | "matches_realistic"
@@ -32,6 +33,11 @@ interface GenerateSpec {
     | "files_varied"
     | "files_empty"
     | "plain_text";
+  evidence?: string;
+  prefix_unit?: string;
+  suffix_unit?: string;
+  prefix_chars?: number;
+  suffix_chars?: number;
   prefix?: string;
   char?: string;
   count?: number;
@@ -111,6 +117,32 @@ function generatedContent(entry: FixtureCase): string {
       total_count_is_lower_bound: false,
       truncated: false,
       _hint: "Synthetic hint for the realistic projection.",
+    });
+  }
+  if (spec.kind === "matches_boundary") {
+    const fill = (unit: string, width: number): string => {
+      const chars = [...unit];
+      const repeated = Array.from({ length: Math.floor(width / chars.length) + 1 }, () => unit).join("");
+      const clipped = [...repeated].slice(0, width).join("");
+      return clipped.endsWith(" ") ? clipped : [...clipped].slice(0, -1).join("") + " ";
+    };
+    const tokens: Record<string, string> = {
+      uuid: "01234567-89ab-cdef-0123-456789abcdef",
+      path: "synthetic/fixtures/invoice-2026-11-28.txt",
+      protected_error: "ERROR: unresolved synthetic failure remains protected",
+      none: "",
+    };
+    const token = tokens[spec.evidence ?? "uuid"];
+    const prefix = fill(spec.prefix_unit ?? "alpha beta gamma ", spec.prefix_chars ?? 184);
+    const suffix = " " + fill(spec.suffix_unit ?? "delta epsilon zeta ", (spec.suffix_chars ?? 400) - 1);
+    const lines = [prefix + token + suffix, "synthetic tail row after boundary"];
+    return JSON.stringify({
+      matches_format: "Synthetic format: path:line:text",
+      matches_text: lines.join("\n"),
+      total_count: lines.length,
+      total_count_is_lower_bound: false,
+      truncated: false,
+      _hint: "Synthetic hint for the long-evidence boundary.",
     });
   }
   if (spec.kind === "plain_text") {
@@ -714,5 +746,22 @@ test("matches replacement verification is strict about order, evidence and prove
       store.close();
       rmSync(directory, { recursive: true, force: true });
     }
+  }
+});
+
+
+test("shared long-evidence boundary vectors refuse in TS", () => {
+  const ids = [
+    "matches_long_uuid_boundary",
+    "matches_long_path_boundary",
+    "matches_long_unicode_boundary",
+    "matches_long_escape_boundary",
+    "matches_long_protected_error",
+  ];
+  for (const id of ids) {
+    const entry = fixture.cases.find((candidate) => candidate.id === id)!;
+    const decision = projectJsonToolResult(generatedContent(entry), entry.tool_name, config);
+    assert.equal(decision.refusal, entry.expected.refusal, id);
+    assert.equal(decision.projection, undefined, id);
   }
 });
