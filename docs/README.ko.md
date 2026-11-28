@@ -44,10 +44,10 @@ Paseo의 우측 Explorer 패널, OMP(oh-my-pi) 확장, Hermes 플러그인에서
 
 ## Demo
 
-OMP와 DeepSeek Flash를 사용해 작은 API를 검토하는 Paseo 세션입니다.
-대화 옆에 outline을 표시하며 원본 메시지와 도구 결과를 보존합니다.
+현재 네 버튼 헤더와 채팅 메시지·도구 그룹을 보여주는 합성 Paseo 세션입니다.
+실제 대화 데이터는 포함하지 않습니다.
 
-![Session navigator outline beside the chat](media/01-outline-hero.png)
+![채팅과 도구 그룹 옆에 표시된 Session Navigator 아웃라인](media/01-outline-hero.png)
 
 **대화 위치로 이동:** outline의 행을 선택하면 첫 프롬프트를 포함한 해당 메시지로 이동합니다.
 [MP4 보기](media/outline-jump.mp4).
@@ -71,10 +71,10 @@ https://github.com/user-attachments/assets/2150dbbb-d2a3-433e-8b30-c31101646183
 
 ![Hidden tool group with its saved-context indicator](media/03-hide-applied.png)
 
-**읽기 전용 Preview:** 전송할 대체문과 원본 입력·출력을 확인합니다.
+**읽기 전용 Preview:** 컨텍스트에 남는 내용과 보존된 원문을 확인합니다.
 [원본 출력 상세](media/06-preview-output.png).
 
-![Preview of the model-facing replacement and preserved original](media/04-preview-original.png)
+![숨긴 합성 메시지와 보존된 원문, Unhide 컨트롤이 보이는 Preview](media/04-preview-original.png)
 
 **표시 중인 세션이 없는 경우:** 세션을 열면 outline이 보이는 대화를 따라갑니다.
 

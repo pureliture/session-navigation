@@ -40,7 +40,7 @@ Install from a source checkout. This does not imply that a release is available 
 
 ## Demo
 
-A Paseo session reviewing a small API with OMP and DeepSeek Flash. The outline stays beside the chat, and original messages and tool results are preserved.
+A synthetic Paseo session showing matching chat messages and tool groups beside the current four-button outline header. The sample contains no real conversation data.
 
 ![Session navigator outline beside the chat](docs/media/01-outline-hero.png)
 
@@ -63,9 +63,9 @@ https://github.com/user-attachments/assets/2150dbbb-d2a3-433e-8b30-c31101646183
 
 ![Hidden tool group with its saved-context indicator](docs/media/03-hide-applied.png)
 
-**Read-only Preview:** inspect the outgoing replacement and original input and output. [Original output detail](docs/media/06-preview-output.png).
+**Read-only Preview:** inspect what stays in context and the preserved original content. [Original tool-output detail](docs/media/06-preview-output.png).
 
-![Preview of the model-facing replacement and preserved original](docs/media/04-preview-original.png)
+![Preview of a hidden synthetic message, its preserved original, and the Unhide control](docs/media/04-preview-original.png)
 
 **No session in view:** open a session and the outline follows the visible chat.
 

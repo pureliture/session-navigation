@@ -27,13 +27,13 @@ Replace the placeholder with the final reviewed SHA and verify public HTTP 200 /
 - `https://raw.githubusercontent.com/pureliture/session-navigation/<FILL_AFTER_MERGE>/docs/media/01-outline-hero.png`
 - `https://raw.githubusercontent.com/pureliture/session-navigation/<FILL_AFTER_MERGE>/docs/media/04-preview-original.png`
 
-The existing images use synthetic sample data but show an older header. Capture and review current images before submission. `paseo-plugin.json` keeps `"media": []` intentionally; image URLs belong in the submission/review PR.
+The images were refreshed from an isolated Paseo 0.18.1 sandbox using synthetic workspaces, actor IDs, and messages. The first shows the current four-button header beside the matching chat and outline; the second shows a hidden message, its original preview, and the Unhide control. `paseo-plugin.json` keeps `"media": []` intentionally; image URLs belong in the submission/review PR.
 
 ## Distribution, runtime and data access
 
 - Runtime manifest ID remains `paseo-plugin` to preserve installed state; it is independent of the requested registry ID.
 - `server/worker-source.ts` embeds the Node worker, engine and YAML parser. Runtime npm dependencies are zero; `yaml` is a development dependency only. No `build` step, sibling workspace package, runtime download or Python installation is needed.
-- Verified with Paseo `0.18.1` in an isolated daemon on `127.0.0.1:17890`: Git subdirectory installation from a snapshot containing the release-prep edits reached `status: "running"` with no private-submodule credential prompt (`.gitmodules` uses `update = none`). Tests: plugin `313 pass / 0 fail`, Node lifecycle `17 pass / 0 fail`, OMP `86 pass / 1 skip / 0 fail`; `tsc --noEmit` clean and generated worker unchanged.
+- Verified with Paseo `0.18.1` in isolated daemons: Git subdirectory installation reached `status: "running"` without a private-submodule credential prompt (`.gitmodules` uses `update = none`); the final candidate list RPC rendered the matching synthetic session and outline. A Hide/Unhide round trip moved versions 13 → 14 → 15 and restored the original bytes and SHA-256 exactly. Current candidate tests: plugin `314 pass / 0 fail`, Node lifecycle `17 pass / 0 fail`; the worker was regenerated from the candidate source.
 - Reads local session history; writes originals, replacements and hide state to the local SQLite state file (`SESSION_NAVIGATION_STATE_PATH` or XDG data home). Hide is reversible, not secret erasure; Summarize may send the selected original to the configured host model provider.
 - No telemetry, credential-file read, runtime package installation or cross-machine sync. Active-tab following uses guarded Paseo UI internals and fails closed on unsupported versions.
 
@@ -52,7 +52,7 @@ The existing images use synthetic sample data but show an older header. Capture 
 
 ## Blockers before submission
 
-1. Capture current UI images, merge and push the release candidate to `origin/main`, then replace the SHA placeholder and re-check image URLs.
+1. Current UI images are captured and committed locally. After the release candidate is merged and pushed to `origin/main`, replace the SHA placeholder and re-check image URLs.
 2. No external `getpaseo/plugins` issue or PR has been opened.
 3. npm publication remains optional and unauthenticated (`npm whoami` was previously 401); no publish was attempted.
 
