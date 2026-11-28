@@ -11,7 +11,7 @@ import {
   length,
   normalizeKeepLines,
   pairUnitId,
-  refusalReason,
+  refusalReasonForRecord,
   renderCompaction,
   requiredEvidence,
   selectableText,
@@ -113,7 +113,7 @@ function getStaticRecordMeta(record: RecordInput): StaticRecordMeta {
       record.invocation.tool_name,
       record.invocation.arguments,
     ),
-    staticRefusal: refusalReason(record),
+    staticRefusal: refusalReasonForRecord(record),
   };
   staticRecordMetaCache.set(record, computed);
   return computed;
@@ -497,7 +497,7 @@ export class OmpService {
       return "already_hidden";
     if (isDestructive(record.invocation.tool_name, record.invocation.arguments))
       return "destructive_command";
-    return refusalReason(record);
+    return refusalReasonForRecord(record);
   }
 
   private cleanupErrorWithMaps(
@@ -651,7 +651,7 @@ export class OmpService {
         record,
         keepLines === undefined ? {} : { keep_lines: keepLines as Json },
       );
-      if (!res.ok && res.error === "verification_failed" && !refusalReason(record, this.engine.config)) {
+      if (!res.ok && res.error === "verification_failed" && !refusalReasonForRecord(record, this.engine.config)) {
         return this.explicitManageFallback(scope, record, undefined, keepLines, expectedVersion);
       }
       return res;
@@ -717,7 +717,7 @@ export class OmpService {
         error: failureReason === "verification_failed" ? "verification_failed" : "summarizer_unavailable",
       };
     }
-    const refused = refusalReason(record, this.engine.config);
+    const refused = refusalReasonForRecord(record, this.engine.config);
     if (refused) return { ok: false, error: refused };
     const trimmed = summaryText.trim();
     if (length(trimmed) > 1800 || hasSummaryInjection(trimmed)) {

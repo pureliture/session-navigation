@@ -79,7 +79,8 @@ from .session import SessionTranscriptStore, _extract_invocations, _extract_invo
 from .usage import UsageTracker, estimate_tokens
 from session_navigation.model import Scope, ToolResultRecord, compute_invocation_digest, _item_id
 from session_navigation.db import DBError, DBFullError
-from session_navigation.policy import refusal_reason, is_destructive_command
+from session_navigation.json_protection import refusal_reason_for_record
+from session_navigation.policy import is_destructive_command
 from session_navigation.reminders import BoundaryReminders
 from .allowlist import AdapterRejected, filter_invocation
 from session_navigation.engine import SessionNavigationEngine
@@ -451,7 +452,7 @@ def _apply_hide_for_manage(state: PluginState, scope: Scope, entry: Any, keep_li
         diagnostics["keep_lines_ignored"] = list(result.keep_lines_ignored)
     if result.keep_lines_normalized:
         diagnostics["keep_lines_normalized"] = list(result.keep_lines_normalized)
-    if not result.ok and result.error == "verification_failed" and refusal_reason(record, state.engine.config) is None:
+    if not result.ok and result.error == "verification_failed" and refusal_reason_for_record(record, state.engine.config) is None:
         from session_navigation.model import ContextItem
         from session_navigation.policy import (
             MAX_EXCERPT_BYTES, MAX_EXCERPT_LINE, normalize_keep_lines,
@@ -541,7 +542,7 @@ def _apply_sequence_summary_for_manage(
         result_position=entry.result_position,
         status="ok",
     )
-    refused = refusal_reason(record_check, state.engine.config)
+    refused = refusal_reason_for_record(record_check, state.engine.config)
     if refused is not None:
         return False, refused, None
     item_id = _item_id(
@@ -620,7 +621,7 @@ def _cleanup_error(state: PluginState, scope: Scope, entry: Any) -> str | None:
             return "destructive_command"
     except Exception:
         return "destructive_check_failed"
-    return refusal_reason(record, state.engine.config)
+    return refusal_reason_for_record(record, state.engine.config)
 
 
 def make_manage_handler(state: PluginState) -> Callable[..., str]:

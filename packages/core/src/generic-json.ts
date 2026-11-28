@@ -8,6 +8,37 @@ const MAX_STRING_CHARS = 8192;
 export const MAX_EVIDENCE_LINES = 64;
 export const MAX_EVIDENCE_LINE_CHARS = 240;
 export const MAX_EVIDENCE_BYTES = 8192;
+export interface JsonProtectionBudget {
+  bytes: number;
+  nodes: number;
+  depth: number;
+}
+
+/**
+ * Strict parse under a budget shared across nested JSON layers. Success
+ * mutates the budget; failure leaves it untouched and fails closed.
+ */
+export function parseJsonForProtection(
+  content: string,
+  budget: JsonProtectionBudget,
+): { value?: ParsedValue; refusal?: string } {
+  const size = bytes(content);
+  if (budget.bytes + size > MAX_JSON_BYTES) return { refusal: "input_too_large" };
+  if (hasUnsafeUnicode(content)) return { refusal: "verification_failed" };
+  try {
+    const parsed = new StrictJsonParser(content).parse();
+    const { nodes, depth } = canonical(parsed);
+    if (budget.nodes + nodes > MAX_NODES || budget.depth + depth > MAX_DEPTH) {
+      return { refusal: "input_too_large" };
+    }
+    budget.bytes += size;
+    budget.nodes += nodes;
+    budget.depth += depth;
+    return { value: parsed };
+  } catch {
+    return { refusal: "verification_failed" };
+  }
+}
 
 export type GenericJsonKind = "object" | "array" | "scalar";
 
@@ -20,7 +51,7 @@ export interface GenericJsonDecision {
   digest: string;
 }
 
-type ParsedValue =
+export type ParsedValue =
   | { kind: "object"; members: Map<string, ParsedValue> }
   | { kind: "array"; items: ParsedValue[] }
   | { kind: "string"; value: string }
