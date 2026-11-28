@@ -142,6 +142,26 @@ async def prepare(cdp, url, title, workspace=None, server=None):
         raise RuntimeError('outline scroller not found; session/panel navigation incomplete')
 
 
+
+def resolve_agent_title(args, agent):
+    """Resolve an agent title from CLI args or the sandbox agent list."""
+    attr = "omp_title" if agent == args.omp_agent else "hermes_title"
+    title = getattr(args, attr)
+    if title:
+        return title
+    cmd = ["paseo", "ls", "--all", "--global", "--json"]
+    if args.paseo_host:
+        cmd += ["--host", args.paseo_host]
+    env = os.environ.copy()
+    if args.paseo_home:
+        env["PASEO_HOME"] = args.paseo_home
+    agents = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=15, env=env).stdout)
+    title = next((a["name"] for a in agents if a["id"] == agent), None)
+    if not title:
+        raise RuntimeError(f"agent title unavailable for {agent}; provide --hermes-title/--omp-title or --paseo-host")
+    setattr(args, attr, title)
+    return title
+
 async def metrics(cdp):
     return await cdp.js(f"""(()=>{{let s={SCROLLER};if(!s)return null;let g=s.querySelector('[aria-label^="Tool group:"]');return {{top:s.scrollTop,sh:s.scrollHeight,ch:s.clientHeight,firstGroup:g?.getAttribute('aria-label')||null,firstGroupText:g?.textContent?.trim()||null}}}})()""")
 async def outline_state(cdp, scenario, needle):
@@ -448,6 +468,10 @@ async def run(args):
             await cdp.call('Page.enable')
             if args.is_sandbox:
                 await cdp.call('Emulation.setDeviceMetricsOverride', width=1400, height=1000, deviceScaleFactor=1, mobile=False)
+            if args.hermes_agent:
+                args.hermes_title = resolve_agent_title(args, args.hermes_agent)
+            if args.omp_agent:
+                args.omp_title = resolve_agent_title(args, args.omp_agent)
             for scenario in scenarios:
                 started = time.monotonic()
                 try:
@@ -467,15 +491,7 @@ async def run(args):
                         print(json.dumps({scenario: result}, ensure_ascii=False), flush=True)
                         continue
                     agent = args.omp_agent if scenario == 'b' else args.hermes_agent
-                    title = args.omp_title if scenario == 'b' else args.hermes_title
-                    if not title:
-                        cmd = ['paseo', 'ls', '--all', '--global', '--json']
-                        if args.paseo_host: cmd += ['--host', args.paseo_host]
-                        env = os.environ.copy()
-                        if args.paseo_home: env['PASEO_HOME'] = args.paseo_home
-                        agents = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=15, env=env).stdout)
-                        title = next((a['name'] for a in agents if a['id'] == agent), None)
-                    if not title: raise RuntimeError(f'agent title unavailable for {agent}; provide --hermes-title/--omp-title or --paseo-host')
+                    title = resolve_agent_title(args, agent)
                     workspace = args.omp_workspace if scenario == 'b' else args.hermes_workspace
                     await prepare(cdp, args.url, title, workspace, args.server_id)
                     result = await (navigation(cdp, scenario, args.paseo_home) if scenario in ('a', 'b') else prepend(cdp) if scenario == 'c' else desktop_ui(cdp, args) if scenario == 'ui' else collapse(cdp))
