@@ -1357,8 +1357,8 @@ export function SessionNavPanel({
         flexShrink: 0,
       },
       iconBtn: {
-        width: layout.compact ? 30 : 32,
-        height: layout.compact ? 30 : 32,
+        width: layout.compact ? 24 : 26,
+        height: layout.compact ? 24 : 26,
         borderRadius: 4,
         borderWidth: 1,
         borderColor: theme.colors.border,
