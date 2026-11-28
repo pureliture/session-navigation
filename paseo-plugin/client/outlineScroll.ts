@@ -94,6 +94,18 @@ export class OutlineAutoScroller {
     this.programmaticScrollUntil = now + OUTLINE_PROGRAMMATIC_SCROLL_GUARD_MS;
   }
 
+  /** Explicit user request to follow the newest row again. */
+  resumeFollowing(): void {
+    this.userScrolledUp = false;
+    this.stickToBottom = true;
+    this.settledAt = null;
+    this.lastScrollTop = 0;
+    this.programmaticScrollUntil = 0;
+    this.wasSearching = false;
+    this.savedPreSearch = null;
+    this.pendingRestoreScrollTop = null;
+  }
+
   isUserScrolledUp(): boolean {
     return this.userScrolledUp;
   }
@@ -450,6 +462,31 @@ export class OutlineScrollDriver {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Explicit "jump to latest row" action: move to the newest row for the
+   * current session and resume automatic following. Does not touch refresh,
+   * search, selection or preview state.
+   */
+  jumpToLatest(
+    list: OutlineScrollListHandle | null | undefined,
+    state: OutlineScrollStateSnapshot,
+    now?: number,
+  ): boolean {
+    this.latestList = list;
+    if (!state.mounted || !state.sessionKey) return false;
+    this.cancelPendingAsync();
+    this.pendingExpand = null;
+    this.pendingPrepend = null;
+    this.pendingDrawer = null;
+    this.suppressNextBottomPin = null;
+    this.hiddenRestore = null;
+    this.scroller.resumeFollowing();
+    this.pendingBottomSessionKey = state.hasSearchQuery ? null : state.sessionKey;
+    const live = this.hasLiveLayout(list);
+    if (live) this.scrollToBottom(list, now);
+    return live;
   }
 
   prepareDrawerToggle(list: OutlineScrollListHandle | null | undefined, willOpen: boolean): void {

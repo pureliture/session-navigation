@@ -480,4 +480,51 @@ describe("OutlineAutoScroller", () => {
     expect(domB.scrollTop).toBe(9000);
     fresh.dispose();
   });
+
+  test("jumpToLatest resumes following after upward scroll and pins later rows", () => {
+    const driver = new OutlineScrollDriver(1500);
+    const dom = { scrollTop: 1200, scrollHeight: 4500, clientHeight: 600 };
+    const list = {
+      getScrollableNode: () => dom,
+      scrollToOffset: ({ offset }: { offset: number }) => { dom.scrollTop = offset; },
+      scrollToEnd: () => { dom.scrollTop = Math.max(0, dom.scrollHeight - dom.clientHeight); },
+    };
+    const state = { sessionKey: "sess-jump", mounted: true, rowCount: 120, isLoading: false, hasSearchQuery: false };
+    driver.syncSession("sess-jump", true);
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 600 } } }, state, 1000);
+    driver.handleWheel({ nativeEvent: { deltaY: -10 } });
+    driver.handleScrollEvent({ nativeEvent: { contentOffset: { y: 1200 }, contentSize: { height: 4500 }, layoutMeasurement: { height: 600 } } }, 1200);
+    expect(driver.scroller.isUserScrolledUp()).toBe(true);
+    expect(driver.jumpToLatest(list, state, 2000)).toBe(true);
+    expect(dom.scrollTop).toBe(3900);
+    expect(driver.scroller.isUserScrolledUp()).toBe(false);
+    expect(driver.scroller.isStuckToBottom()).toBe(true);
+    dom.scrollHeight = 5100;
+    driver.handleContentSizeChange(list, 5100, state, 3000);
+    expect(dom.scrollTop).toBe(4500);
+  });
+
+  test("jumpToLatest works at row 0 without upward intent and is safe while hidden or searching", () => {
+    const driver = new OutlineScrollDriver(1500);
+    const dom = { scrollTop: 0, scrollHeight: 0, clientHeight: 600 };
+    const list = {
+      getScrollableNode: () => dom,
+      scrollToOffset: ({ offset }: { offset: number }) => { dom.scrollTop = offset; },
+      scrollToEnd: () => { dom.scrollTop = Math.max(0, dom.scrollHeight - dom.clientHeight); },
+    };
+    const state = { sessionKey: "sess-zero", mounted: true, rowCount: 120, isLoading: false, hasSearchQuery: false };
+    driver.syncSession("sess-zero", true);
+    driver.handleLayout(list, { nativeEvent: { layout: { height: 600 } } }, state, 1000);
+    expect(driver.scroller.isUserScrolledUp()).toBe(false);
+    dom.scrollHeight = 4500;
+    expect(driver.jumpToLatest(list, state, 2000)).toBe(true);
+    expect(dom.scrollTop).toBe(3900);
+    expect(driver.jumpToLatest(list, { ...state, mounted: false }, 2100)).toBe(false);
+    expect(driver.jumpToLatest(list, { ...state, hasSearchQuery: true }, 2200)).toBe(true);
+    expect(dom.scrollTop).toBe(3900);
+    const other = { ...state, sessionKey: "sess-other" };
+    dom.scrollHeight = 5100;
+    driver.maybeSync(list, other, { contentHeight: 5100, now: 2300 });
+    expect(dom.scrollTop).toBe(4500);
+  });
 });
