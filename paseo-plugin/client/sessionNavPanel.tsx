@@ -1271,6 +1271,10 @@ export function SessionNavPanel({
     hasSearchQuery: Boolean(query),
   };
 
+  const jumpToLatest = () => {
+    scrollDriverRef.current?.jumpToLatest(listRef.current, scrollState, Date.now());
+  };
+
   const toggleGroupExpanded = (groupId: string, currentlyExpanded: boolean) => {
     scrollDriverRef.current?.prepareGroupExpand(listRef.current, currentlyExpanded);
     setExpandedGroups((prev) => ({ ...prev, [groupId]: !currentlyExpanded }));
@@ -1300,7 +1304,6 @@ export function SessionNavPanel({
     setPreviewOpen(false);
     setExpandedGroups({});
     setPendingGroupId(null);
-    scrollDriverRef.current?.resetTransient();
   }, [sessionViewKey]);
 
   useEffect(() => () => {
@@ -1372,6 +1375,21 @@ export function SessionNavPanel({
       },
       iconBtnTextActive: {
         color: theme.colors.accent,
+      },
+      jumpBtn: {
+        minWidth: layout.compact ? 30 : 32,
+        height: layout.compact ? 30 : 32,
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: theme.colors.accent,
+        backgroundColor: theme.colors.accent + "18",
+        alignItems: "center" as const,
+        justifyContent: "center" as const,
+      },
+      jumpBtnText: {
+        color: theme.colors.accent,
+        fontSize: layout.compact ? 13 : 14,
+        fontWeight: "700" as const,
       },
       searchBar: {
         paddingHorizontal: pad,
@@ -1913,6 +1931,15 @@ export function SessionNavPanel({
             </Text>
           </Pressable>
           {settingsButton}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Jump to latest row"
+            accessibilityHint="Moves to the newest row and resumes automatic following"
+            style={styles.jumpBtn}
+            onPress={jumpToLatest}
+          >
+            <Text style={styles.jumpBtnText}>↓</Text>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Refresh outline"

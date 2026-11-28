@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, symlinkSync, truncateSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { acquireHermesToggleLock, inspectHermesPluginInstall, inspectHermesToggle, patchHermesConfigYaml, readHermesPluginEnabled } from "./adapterToggles.ts";
 import {
   Store,
@@ -2993,6 +2994,109 @@ test("parent-scope Hermes summarize resolves the rotation-effective child scope"
   expect(store.items(parentScope)).toHaveLength(0);
 });
 
+test("parent-scope Hermes mutations target active rotation child (never dead-end subagent) and stay on parent when ambiguous", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { home, store, service, register } = fixture([], false);
+  const rootScope = "hermes:default:m-root:unknown";
+  const activeScope = "hermes:default:m-active:unknown";
+  const deadEndScope = "hermes:default:m-deadend:unknown";
+  register(rootScope);
+  register(activeScope);
+  register(deadEndScope);
+
+  mkdirSync(join(home, ".hermes"), { recursive: true });
+  const hdb = new DatabaseSync(join(home, ".hermes/state.db"));
+  try {
+    hdb.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'local',
+        created_source TEXT,
+        model_config TEXT,
+        parent_session_id TEXT,
+        started_at REAL,
+        ended_at REAL,
+        end_reason TEXT
+      );
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        _compressed_summary INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const insSess = hdb.prepare(
+      "INSERT INTO sessions (id, source, created_source, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    const insMsg = hdb.prepare(
+      "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, _compressed_summary) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    const toolCall = (id: string, path: string) =>
+      JSON.stringify([{ id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path }) } }]);
+
+    insSess.run("m-root", "local", "acp", "{}", null, 100, 200, "compression");
+    insSess.run("m-active", "local", "acp", "{}", "m-root", 200, null, null);
+    insSess.run("m-deadend", "subagent", "subagent", "{}", "m-active", 220, 250, "agent_close");
+
+    insMsg.run("m-active", "user", "[CONTEXT COMPACTION] active", null, null, null, 1);
+    insMsg.run("m-active", "assistant", "", null, toolCall("call_act", "act.txt"), null, 0);
+    insMsg.run("m-active", "tool", "active output", "call_act", null, "read_file", 0);
+    insMsg.run("m-deadend", "user", "deadend subagent", null, null, null, 0);
+    insMsg.run("m-deadend", "assistant", "", null, toolCall("call_dead", "dead.txt"), null, 0);
+    insMsg.run("m-deadend", "tool", "deadend output", "call_dead", null, "read_file", 0);
+
+    // Ambiguous double-open sibling pair keeps list + hide strictly on parent m-ambig.
+    insSess.run("m-ambig", "local", "acp", "{}", null, 100, 200, "compression");
+    insSess.run("m-ambig-a", "local", "acp", "{}", "m-ambig", 210, null, null);
+    insSess.run("m-ambig-b", "local", "acp", "{}", "m-ambig", 250, null, null);
+    insMsg.run("m-ambig", "assistant", "", null, toolCall("call_p", "p.txt"), null, 0);
+    insMsg.run("m-ambig", "tool", "parent output", "call_p", null, "read_file", 0);
+    insMsg.run("m-ambig-a", "user", "[CONTEXT COMPACTION] a", null, null, null, 1);
+    insMsg.run("m-ambig-b", "user", "[CONTEXT COMPACTION] b", null, null, null, 1);
+  } finally {
+    hdb.close();
+  }
+
+  const listed = await service.handle("list", { scope_key: rootScope });
+  expect(listed.ok).toBe(true);
+  const activeTool = listed.items.find((row: Row) => row.tool_call_id === "call_act");
+  expect(activeTool).toBeDefined();
+  expect(listed.items.some((row: Row) => row.tool_call_id === "call_dead")).toBe(false);
+
+  const hidden = await service.handle("hide", {
+    scope_key: rootScope,
+    item_id: activeTool.item_id,
+    mode: "hide",
+  });
+  expect(hidden.ok).toBe(true);
+  expect(store.get(activeScope, activeTool.item_id)?.visibility).toBe("hidden");
+  expect(store.items(deadEndScope)).toHaveLength(0);
+
+  const ambigScope = "hermes:default:m-ambig:unknown";
+  register(ambigScope);
+  register("hermes:default:m-ambig-a:unknown");
+  register("hermes:default:m-ambig-b:unknown");
+  const ambigListed = await service.handle("list", { scope_key: ambigScope });
+  const parentTool = ambigListed.items.find((row: Row) => row.tool_call_id === "call_p");
+  expect(parentTool).toBeDefined();
+  const ambigHidden = await service.handle("hide", {
+    scope_key: ambigScope,
+    item_id: parentTool.item_id,
+    mode: "hide",
+  });
+  expect(ambigHidden.ok).toBe(true);
+  expect(store.get(ambigScope, parentTool.item_id)?.visibility).toBe("hidden");
+  expect(store.items("hermes:default:m-ambig-b:unknown")).toHaveLength(0);
+});
+
 test("manage on tool items succeeds without loading an oversized history; unknown ids stay bounded", async () => {
   const big = fixture(toolMessages());
   const stored = (await big.call("list")).items.find((item: Row) => item.tool_call_id === "c1");
@@ -3139,4 +3243,148 @@ test("dangling toggle symlinks are rejected and non-string YAML keys outside the
   const patched = patchHermesConfigYaml(yaml, true);
   expect(patched).toContain("session-navigation");
   expect(patched).toContain("8080");
+});
+
+test("Hermes profile mismatch refuses mutations fail-closed while preserving matching multi-profile rotation and read fallback", async () => {
+  const { home, store, service, register } = fixture([], false);
+
+  const workScope = "hermes:work:rot-parent:unknown";
+  const otherParentScope = "hermes:other:rot-parent:unknown";
+  const otherChildScope = "hermes:other:rot-child:unknown";
+  register(workScope);
+  register("hermes:work:rot-child:unknown");
+  register(otherParentScope);
+  register(otherChildScope);
+
+  const otherDir = join(home, ".hermes/profiles/other");
+  mkdirSync(otherDir, { recursive: true });
+  const otherDb = new DatabaseSync(join(otherDir, "state.db"));
+  const longToolOut = Array.from({ length: 45 }, (_, i) => `row ${i}: synthetic output`).join("\n");
+  try {
+    otherDb.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'local',
+        created_source TEXT,
+        model_config TEXT,
+        parent_session_id TEXT,
+        started_at REAL,
+        ended_at REAL,
+        end_reason TEXT
+      );
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_call_id TEXT,
+        tool_calls TEXT,
+        tool_name TEXT,
+        codex_message_items TEXT,
+        api_content TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        compacted INTEGER NOT NULL DEFAULT 0,
+        _compressed_summary INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    otherDb
+      .prepare(
+        "INSERT INTO sessions (id, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, '{}', ?, ?, ?, ?)",
+      )
+      .run("rot-parent", null, 100, 200, "compression");
+    otherDb
+      .prepare(
+        "INSERT INTO sessions (id, model_config, parent_session_id, started_at, ended_at, end_reason) VALUES (?, '{}', ?, ?, ?, ?)",
+      )
+      .run("rot-child", "rot-parent", 201, null, null);
+    const ins = otherDb.prepare(
+      "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, tool_name, _compressed_summary) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    ins.run("rot-child", "user", "[CONTEXT COMPACTION] summary", null, null, null, 1);
+    ins.run(
+      "rot-child",
+      "assistant",
+      "",
+      null,
+      JSON.stringify([
+        { id: "call_other_1", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } },
+      ]),
+      null,
+      0,
+    );
+    ins.run("rot-child", "tool", longToolOut, "call_other_1", null, "read_file", 0);
+  } finally {
+    otherDb.close();
+  }
+
+  // 1. Mismatched profile ("work" requested, session only in "other"):
+  //    Read fallback still works, rows are read-only, and every mutation fails closed with profile_mismatch.
+  const mismatchList = ListResultSchema.parse(
+    await service.handle("list", { scope_key: workScope }),
+  );
+  expect(mismatchList.ok).toBe(true);
+  expect(mismatchList.server_timeline).toBe(true);
+  expect(mismatchList.capabilities?.hide).toBe(false);
+  expect(mismatchList.capabilities?.summarize).toBe(false);
+  expect(mismatchList.items.every((r) => !r.manageable)).toBe(true);
+
+  expect(
+    (await service.handle("hide", { scope_key: workScope, item_id: "call_other_1" })).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (await service.handle("unhide", { scope_key: workScope, item_id: "call_other_1" })).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("hideBatch", {
+        scope_key: workScope,
+        items: [{ item_id: "call_other_1" }],
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("unhideBatch", {
+        scope_key: workScope,
+        items: [{ item_id: "call_other_1" }],
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("manage", {
+        scope_key: workScope,
+        tool_call_ids: ["call_other_1"],
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+  expect(
+    (
+      await service.handle("fork", {
+        scope_key: workScope,
+        dst_scope_key: "hermes:work:fork-dst:unknown",
+      })
+    ).error,
+  ).toBe("profile_mismatch");
+
+  // Nothing written under ghost scope hermes:work:rot-child:unknown or hermes:other:rot-child:unknown.
+  expect(store.items("hermes:work:rot-child:unknown")).toHaveLength(0);
+  expect(store.items(otherChildScope)).toHaveLength(0);
+
+  // 2. Matching profile ("other" requested, session in "other" rotated rot-parent -> rot-child):
+  //    Rotates to hermes:other:rot-child:unknown and mutates cleanly.
+  const matchedList = ListResultSchema.parse(
+    await service.handle("list", { scope_key: otherParentScope }),
+  );
+  expect(matchedList.ok).toBe(true);
+  const toolRow = matchedList.items.find((r) => r.tool_call_id === "call_other_1");
+  expect(toolRow?.manageable).toBe(true);
+
+  const manageOk = await service.handle("manage", {
+    scope_key: otherParentScope,
+    tool_call_ids: ["call_other_1"],
+  });
+  expect(manageOk.ok).toBe(true);
+  expect(store.items(otherChildScope)).toHaveLength(1);
+  expect(store.items("hermes:work:rot-child:unknown")).toHaveLength(0);
 });

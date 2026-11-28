@@ -94,6 +94,18 @@ export class OutlineAutoScroller {
     this.programmaticScrollUntil = now + OUTLINE_PROGRAMMATIC_SCROLL_GUARD_MS;
   }
 
+  /** Explicit user request to follow the newest row again. */
+  resumeFollowing(): void {
+    this.userScrolledUp = false;
+    this.stickToBottom = true;
+    this.settledAt = null;
+    this.lastScrollTop = 0;
+    this.programmaticScrollUntil = 0;
+    this.wasSearching = false;
+    this.savedPreSearch = null;
+    this.pendingRestoreScrollTop = null;
+  }
+
   isUserScrolledUp(): boolean {
     return this.userScrolledUp;
   }
@@ -262,6 +274,8 @@ export class OutlineScrollDriver {
   private settleTimerId: ReturnType<typeof setTimeout> | null = null;
   private rafId: number | null = null;
   private suppressNextBottomPin: { rowCount: number; sessionKey: string } | null = null;
+  private collapsed = false;
+  private pendingBottomSessionKey: string | null = null;
 
   constructor(settleWindowMs = OUTLINE_SETTLE_WINDOW_MS) {
     this.scroller = new OutlineAutoScroller(settleWindowMs);
@@ -286,11 +300,16 @@ export class OutlineScrollDriver {
     this.pendingPrepend = null;
     this.pendingDrawer = null;
     this.suppressNextBottomPin = null;
+    this.collapsed = false;
+    this.pendingBottomSessionKey = null;
   }
 
   syncSession(sessionKey: string, mounted: boolean): boolean {
     const reset = this.scroller.syncSession(sessionKey, mounted);
     this.currentSessionKey = mounted ? sessionKey : "";
+    if (!mounted) {
+      this.pendingBottomSessionKey = null;
+    }
     if (reset) {
       this.cancelPendingAsync();
       this.metrics = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
@@ -298,6 +317,7 @@ export class OutlineScrollDriver {
       this.pendingPrepend = null;
       this.pendingDrawer = null;
       this.suppressNextBottomPin = null;
+      this.pendingBottomSessionKey = mounted && sessionKey ? sessionKey : null;
     }
     return reset;
   }
@@ -309,6 +329,7 @@ export class OutlineScrollDriver {
     this.pendingPrepend = null;
     this.pendingDrawer = null;
     this.suppressNextBottomPin = null;
+    this.pendingBottomSessionKey = null;
   }
 
   private domScrollable(list: OutlineScrollListHandle | null | undefined): any {
@@ -401,11 +422,18 @@ export class OutlineScrollDriver {
   /**
    * Called when layout collapses (display:none retention) or revives. On
    * collapse, remember the last live scrollTop; on revive with a zeroed DOM
-   * scrollTop, restore it instead of letting prepend/bottom-pin logic jump.
+   * scrollTop for the same session, restore it instead of letting bottom-pin
+   * or prepend logic jump. Returns true iff a same-session position was restored.
    */
-  handleVisibility(list: OutlineScrollListHandle | null | undefined, collapsed: boolean, sessionKey: string, now?: number): void {
+  handleVisibility(
+    list: OutlineScrollListHandle | null | undefined,
+    collapsed: boolean,
+    sessionKey: string,
+    now?: number,
+  ): boolean {
     this.latestList = list;
     if (collapsed) {
+      this.collapsed = true;
       const m = this.readMetrics(list);
       const top = m.scrollTop > 0 ? m.scrollTop : this.metrics.scrollTop;
       const sh = m.scrollHeight > 0 ? m.scrollHeight : this.metrics.scrollHeight;
@@ -415,21 +443,50 @@ export class OutlineScrollDriver {
       }
       this.metrics.scrollHeight = 0;
       this.metrics.clientHeight = 0;
-      return;
+      return false;
     }
+    this.collapsed = false;
     const snap = this.hiddenRestore;
     this.hiddenRestore = null;
-    if (!snap || snap.sessionKey !== sessionKey) return;
+    if (!snap || snap.sessionKey !== sessionKey) return false;
     const m = this.readMetrics(list);
-    if (m.scrollHeight <= 0 || m.clientHeight <= 0) return;
+    if (m.scrollHeight <= 0 || m.clientHeight <= 0) return false;
     if (m.scrollTop <= 2 && snap.scrollTop > 2) {
       this.pendingPrepend = null;
       this.pendingExpand = null;
       this.pendingDrawer = null;
+      this.pendingBottomSessionKey = null;
       this.suppressNextBottomPin = { rowCount: Number.MAX_SAFE_INTEGER, sessionKey };
       this.scroller.recordScroll({ scrollTop: snap.scrollTop, scrollHeight: m.scrollHeight, clientHeight: m.clientHeight, now });
       this.scrollToOffset(list, snap.scrollTop, now);
+      return true;
     }
+    return false;
+  }
+
+  /**
+   * Explicit "jump to latest row" action: move to the newest row for the
+   * current session and resume automatic following. Does not touch refresh,
+   * search, selection or preview state.
+   */
+  jumpToLatest(
+    list: OutlineScrollListHandle | null | undefined,
+    state: OutlineScrollStateSnapshot,
+    now?: number,
+  ): boolean {
+    this.latestList = list;
+    if (!state.mounted || !state.sessionKey) return false;
+    this.cancelPendingAsync();
+    this.pendingExpand = null;
+    this.pendingPrepend = null;
+    this.pendingDrawer = null;
+    this.suppressNextBottomPin = null;
+    this.hiddenRestore = null;
+    this.scroller.resumeFollowing();
+    this.pendingBottomSessionKey = state.hasSearchQuery ? null : state.sessionKey;
+    const live = this.hasLiveLayout(list);
+    if (live) this.scrollToBottom(list, now);
+    return live;
   }
 
   prepareDrawerToggle(list: OutlineScrollListHandle | null | undefined, willOpen: boolean): void {
@@ -453,11 +510,15 @@ export class OutlineScrollDriver {
 
   handleWheel(ev: any): void {
     const dy = Number(ev?.nativeEvent?.deltaY ?? ev?.deltaY ?? 0);
-    if (Number.isFinite(dy)) this.scroller.recordWheel(dy);
+    if (Number.isFinite(dy)) {
+      this.scroller.recordWheel(dy);
+      if (dy < 0) this.pendingBottomSessionKey = null;
+    }
   }
 
   handleDragStart(): void {
     this.scroller.recordDragStart();
+    this.pendingBottomSessionKey = null;
   }
 
   handleScrollEvent(ev: any, now?: number): void {
@@ -476,6 +537,9 @@ export class OutlineScrollDriver {
     if (typeof ch === "number") this.metrics.clientHeight = ch;
     if (typeof top === "number" && typeof sh === "number" && typeof ch === "number") {
       this.scroller.recordScroll({ scrollTop: top, scrollHeight: sh, clientHeight: ch, now });
+      if (this.scroller.isUserScrolledUp() || !this.scroller.isStuckToBottom()) {
+        this.pendingBottomSessionKey = null;
+      }
     }
   }
 
@@ -491,6 +555,25 @@ export class OutlineScrollDriver {
     opts?: { contentHeight?: number; now?: number; scheduleFrame?: (cb: () => void) => void },
   ): void {
     this.latestList = list;
+    const dom = this.domScrollable(list);
+    const zeroDomLayout =
+      dom !== null &&
+      typeof dom.clientHeight === "number" &&
+      typeof dom.scrollHeight === "number" &&
+      (dom.clientHeight <= 0 || dom.scrollHeight <= 0);
+    if (this.collapsed || zeroDomLayout) {
+      this.syncSession(state.sessionKey, state.mounted);
+      if (
+        state.mounted &&
+        state.sessionKey &&
+        !state.hasSearchQuery &&
+        !this.scroller.isUserScrolledUp() &&
+        this.scroller.isStuckToBottom()
+      ) {
+        this.pendingBottomSessionKey = state.sessionKey;
+      }
+      return;
+    }
     this.currentSessionKey = state.mounted ? state.sessionKey : "";
     const shouldBottom = this.scroller.shouldScrollToLatest({
       sessionKey: state.sessionKey,
@@ -506,6 +589,7 @@ export class OutlineScrollDriver {
     const restoreTop = this.scroller.consumePendingRestoreScrollTop();
     if (restoreTop !== null) {
       this.suppressNextBottomPin = null;
+      this.pendingBottomSessionKey = null;
       this.cancelPendingAsync();
       const capturedKey = this.currentSessionKey;
       try {
@@ -539,6 +623,7 @@ export class OutlineScrollDriver {
         m.scrollHeight > prependSnap.prevScrollHeight
       ) {
         this.pendingPrepend = null;
+        this.pendingBottomSessionKey = null;
         const delta = m.scrollHeight - prependSnap.prevScrollHeight;
         this.scroller.noteObservedSize(state.rowCount, m.scrollHeight);
         this.suppressNextBottomPin = { rowCount: state.rowCount, sessionKey: state.sessionKey };
@@ -554,11 +639,21 @@ export class OutlineScrollDriver {
         return;
       }
     }
-    if (!shouldBottom) return;
+    const needsPendingBottom =
+      this.pendingBottomSessionKey === state.sessionKey &&
+      state.mounted &&
+      state.rowCount > 0 &&
+      !state.hasSearchQuery &&
+      !this.scroller.isUserScrolledUp() &&
+      this.scroller.isStuckToBottom();
+    if (!shouldBottom && !needsPendingBottom) return;
     this.cancelPendingAsync();
     const capturedKey = this.currentSessionKey;
     try {
       if (!this.scrollToBottom(list, opts?.now)) return;
+      if (!state.isLoading && this.pendingBottomSessionKey === state.sessionKey) {
+        this.pendingBottomSessionKey = null;
+      }
       const runBottomFrame = () => {
         if (capturedKey !== this.currentSessionKey) return;
         if (!this.scroller.isUserScrolledUp()) {
@@ -608,11 +703,11 @@ export class OutlineScrollDriver {
         this.handleVisibility(list, true, state.sessionKey, now);
         return;
       }
-      const wasCollapsed = this.metrics.clientHeight <= 0;
+      const wasCollapsed = this.collapsed;
       this.metrics.clientHeight = layoutH;
       if (wasCollapsed) {
-        this.handleVisibility(list, false, state.sessionKey, now);
-        return;
+        const restored = this.handleVisibility(list, false, state.sessionKey, now);
+        if (restored) return;
       }
     }
     const drawerSnap = this.pendingDrawer;

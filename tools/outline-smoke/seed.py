@@ -320,7 +320,8 @@ def stop_sandbox_hermes(fakehome: Path) -> None:
         except OSError:
             pass
 
-def health_ok(url: str = "http://127.0.0.1:17680/api/health") -> bool:
+def health_ok(url: str | None = None) -> bool:
+    url = url or f"http://{LISTEN_ADDR}/api/health"
     try:
         with urllib.request.urlopen(url, timeout=1.5) as resp:
             if resp.status != 200:
@@ -499,7 +500,7 @@ def stage_hermes_profile(fakehome: Path) -> tuple[Path, dict[str, object]]:
     return dst_db, session_meta
 
 
-def write_sandbox_config(paseo_home: Path, fakehome: Path) -> Path:
+def write_sandbox_config(paseo_home: Path, fakehome: Path, listen_addr: str = LISTEN_ADDR) -> Path:
     paseo_home.mkdir(parents=True, exist_ok=True)
     plugin_dir = repo_root() / "paseo-plugin"
     if not (plugin_dir / "paseo-plugin.json").is_file():
@@ -510,7 +511,7 @@ def write_sandbox_config(paseo_home: Path, fakehome: Path) -> Path:
     config = {
         "version": 1,
         "daemon": {
-            "listen": LISTEN_ADDR,
+            "listen": listen_addr,
             "cors": {
                 "allowedOrigins": ["https://app.paseo.sh"],
             },
@@ -811,9 +812,9 @@ def build_daemon_env(fakehome: Path, paseo_home: Path) -> dict[str, str]:
     return env
 
 
-def ensure_daemon_running(fakehome: Path, paseo_home: Path) -> dict[str, str]:
+def ensure_daemon_running(fakehome: Path, paseo_home: Path, health_url: str | None = None) -> dict[str, str]:
     env = build_daemon_env(fakehome, paseo_home)
-    if read_pid_lock(paseo_home) is not None and health_ok():
+    if read_pid_lock(paseo_home) is not None and health_ok(health_url):
         return env
 
     stop_sandbox_daemon(paseo_home)
@@ -846,12 +847,12 @@ def ensure_daemon_running(fakehome: Path, paseo_home: Path) -> dict[str, str]:
             seen_registry = True
         if "Server listening" in combined:
             seen_listening = True
-        if seen_registry and seen_listening and health_ok():
+        if seen_registry and seen_listening and health_ok(health_url):
             return env
         time.sleep(0.25)
 
     raise RuntimeError(
-        f"Timed out waiting for sandbox daemon (registry={seen_registry}, listening={seen_listening}, health={health_ok()})"
+        f"Timed out waiting for sandbox daemon (registry={seen_registry}, listening={seen_listening}, health={health_ok(health_url)})"
     )
 
 
@@ -982,10 +983,18 @@ def reset_sandbox_targets(fakehome: Path, paseo_home: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="Sandbox root directory")
+    parser.add_argument("--listen-addr", default=LISTEN_ADDR, help="Loopback listen address for the isolated daemon")
+    parser.add_argument("--web-ui-url", help="Web UI URL to print (defaults to http://<listen-addr>/)")
     parser.add_argument("--reset", action="store_true", help="Reset sandbox state before seeding")
     args = parser.parse_args()
-
     root = Path(args.root).resolve()
+
+    if ":" not in args.listen_addr:
+        parser.error("--listen-addr must be host:port")
+    host, _, port = args.listen_addr.rpartition(":")
+    if host not in ("127.0.0.1", "localhost", "::1") or not port.isdigit():
+        parser.error("--listen-addr must stay on loopback (127.0.0.1/localhost/::1) with a numeric port")
+    web_ui_url = args.web_ui_url or f"http://{args.listen_addr}/"
     fakehome = root / "fakehome"
     paseo_home = root / "home"
 
@@ -996,21 +1005,21 @@ def main() -> int:
     write_synthetic_model_configs(fakehome)
     omp_jsonl = stage_omp_session(fakehome)
     hermes_db, hermes_meta = stage_hermes_profile(fakehome)
-    write_sandbox_config(paseo_home, fakehome)
+    write_sandbox_config(paseo_home, fakehome, args.listen_addr)
     write_agent_records(paseo_home, omp_jsonl, hermes_meta)
 
-    env = ensure_daemon_running(fakehome, paseo_home)
+    env = ensure_daemon_running(fakehome, paseo_home, f"{web_ui_url.rstrip('/')}/api/health")
     verify_agent_ls(env, paseo_home)
     gate = verify_service_client_gate(env)
 
     db_bytes = hermes_db.stat().st_size
     server_id = read_server_id(paseo_home)
     workspace_url = (
-        f"{WEB_UI_URL.rstrip('/')}/h/{server_id}/workspace/{HERMES_WORKSPACE_ID}"
+        f"{web_ui_url.rstrip('/')}/h/{server_id}/workspace/{HERMES_WORKSPACE_ID}"
         if server_id
-        else WEB_UI_URL
+        else web_ui_url
     )
-    print(f"PASEO_WEB_UI_URL={WEB_UI_URL}")
+    print(f"PASEO_WEB_UI_URL={web_ui_url}")
     if server_id:
         print(f"PASEO_WORKSPACE_URL={workspace_url}")
         print(f"PASEO_SERVER_ID={server_id}")
@@ -1018,7 +1027,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "url": WEB_UI_URL,
+                "url": web_ui_url,
                 "workspace_url": workspace_url,
                 "server_id": server_id,
                 "agents": [OMP_AGENT_ID, HERMES_AGENT_ID],

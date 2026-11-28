@@ -97,6 +97,37 @@ function textExitFacts(original: string): { exit_code: number | null } {
   const codes = new Set([...original.matchAll(exitClaim)].map((match) => pythonInteger(match[1])));
   return { exit_code: codes.size === 1 ? [...codes][0] : null };
 }
+
+const sensitivePattern = pythonize(sensitive);
+const refusalPatterns = [...errors, ...business.map(pythonize)];
+
+export function containsSensitivePattern(text: string): boolean {
+  return sensitivePattern.test(text);
+}
+
+/** Protected patterns on already-decoded text; no further JSON unescaping. */
+export function protectedPatternRefusal(text: string): string | undefined {
+  return splitLines(text).some((line) =>
+    refusalPatterns.some((pattern) => pattern.test(line)),
+  )
+    ? "protected_error"
+    : undefined;
+}
+
+export function checkRefusalReason(
+  text: string,
+  minChars = defaults.min_chars,
+): string | undefined {
+  if (length(text) < minChars) {
+    return "not_long";
+  }
+  const decoded = selectableText(text);
+  const targets = decoded !== text ? [text, decoded] : [text];
+  if (refusalPatterns.some((pattern) => targets.some((target) => pattern.test(target)))) {
+    return "protected_error";
+  }
+  return undefined;
+}
 export function refusalReason(record: RecordInput, config: Config = defaults): string | undefined {
   if (record.status === "error") {
     return "protected_error";
@@ -114,18 +145,7 @@ export function refusalReason(record: RecordInput, config: Config = defaults): s
   if (pythonize(sensitive).test(invocation)) {
     return "sensitive_invocation";
   }
-  if (length(record.content) < config.min_chars) {
-    return "not_long";
-  }
-  const decoded = selectableText(record.content);
-  const targets = decoded !== record.content ? [record.content, decoded] : [record.content];
-  if (
-    [...errors, ...business.map(pythonize)].some((pattern) =>
-      targets.some((target) => pattern.test(target)),
-    )
-  ) {
-    return "protected_error";
-  }
+  return checkRefusalReason(record.content, config.min_chars);
 }
 export const evidenceIndexes = (lines: string[]): number[] => {
   const signal = pythonize(strong);
@@ -136,6 +156,68 @@ export const requiredEvidence = (content: string): string[] => {
   const lines = splitLines(selectableText(content));
   return evidenceIndexes(lines).map((index) => lines[index]);
 };
+
+/**
+ * Policy-salient lines from a decoded scalar string. A JSON value can hide an
+ * error, business state or required-evidence line behind escapes; extracting
+ * the decoded line lets schema-agnostic evidence retain that fact without
+ * claiming preservation of the surrounding schema.
+ */
+export function parsedStringEvidenceLines(text: string): string[] {
+  if (typeof text !== "string") return [];
+  const decoded = selectableText(text);
+  const targets = decoded !== text ? [text, decoded] : [text];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const target of targets) {
+    const required = new Set(requiredEvidence(target));
+    const lines = splitLines(target);
+    let matched = lines.filter(
+      (line) => required.has(line) || refusalPatterns.some((pattern) => pattern.test(line)),
+    );
+    if (!matched.length && refusalPatterns.some((pattern) => pattern.test(target))) {
+      matched = lines;
+    }
+    for (const line of matched) {
+      if (seen.has(line)) continue;
+      seen.add(line);
+      result.push(line);
+    }
+  }
+  return result;
+}
+
+export const parsedStringProtectedLines = parsedStringEvidenceLines;
+
+// Code-point spans of the patterns that make a line required evidence. Chunk
+// boundaries must not cut through one of these spans.
+export function evidenceSpans(text: string): [number, number][] {
+  const indices = [0];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const width = (text.codePointAt(cursor) ?? 0) > 0xffff ? 2 : 1;
+    cursor += width;
+    indices[cursor] = indices[cursor - width] + 1;
+  }
+  const spans: [number, number][] = [];
+  for (const pattern of [pythonize(strong), pythonize(pathEvidence)]) {
+    const global = new RegExp(pattern.source, [...new Set(pattern.flags + "g")].join(""));
+    for (const match of text.matchAll(global)) {
+      spans.push([indices[match.index], indices[match.index + match[0].length]]);
+    }
+  }
+  spans.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const merged: [number, number][] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && span[0] <= last[1]) {
+      last[1] = Math.max(last[1], span[1]);
+    } else {
+      merged.push(span);
+    }
+  }
+  return merged;
+}
 export function normalizeKeepLines(
   original: string,
   entries: Json[],
@@ -196,6 +278,8 @@ export function selectRule(
   original: string,
   keepLines: string[] = [],
   config: Config = defaults,
+  requiredOverride?: string[],
+  maxExcerptBytes = 3072,
 ): string[] | undefined {
   const lines = splitLines(original);
   const eligible = lines.flatMap((line, index) =>
@@ -204,7 +288,28 @@ export function selectRule(
   if (!eligible.length) {
     return;
   }
-  const selected = evidenceIndexes(lines);
+  const remaining = new Map<string, number[]>();
+  for (const [index, line] of lines.entries()) {
+    const queue = remaining.get(line);
+    if (queue) {
+      queue.push(index);
+    } else {
+      remaining.set(line, [index]);
+    }
+  }
+  const selected: number[] = [];
+  if (requiredOverride === undefined) {
+    selected.push(...evidenceIndexes(lines));
+  } else {
+    for (const line of requiredOverride) {
+      const queue = remaining.get(line);
+      const index = queue?.shift();
+      if (index === undefined) {
+        return;
+      }
+      selected.push(index);
+    }
+  }
   if (
     selected.length > config.max_evidence_excerpts ||
     selected.some((index) => length(lines[index]) > config.max_excerpt_line_length)
@@ -226,7 +331,7 @@ export function selectRule(
   });
   let excerptBytes = selected.reduce((sum, index) => sum + bytes(lines[index]) + 1, 0);
   let extraBytes = 0;
-  if (excerptBytes > 3072) {
+  if (excerptBytes > maxExcerptBytes) {
     return;
   }
   const highSignalPattern = pythonize(highSignal);
@@ -235,7 +340,7 @@ export function selectRule(
       continue;
     }
     const lineBytes = bytes(lines[index]) + 1;
-    if (extraBytes + lineBytes <= 768 && excerptBytes + lineBytes <= 3072) {
+    if (extraBytes + lineBytes <= 768 && excerptBytes + lineBytes <= maxExcerptBytes) {
       selected.push(index);
       extraBytes += lineBytes;
       excerptBytes += lineBytes;
@@ -255,8 +360,9 @@ export function renderCompaction(
     exit_code: number | null;
   } = { exit_code: null },
   omitted = false,
+  excerptLabel = "Original excerpt",
 ): string {
-  const excerpts = lines.map((line) => `Original excerpt: ${line}`).join("\n");
+  const excerpts = lines.map((line) => `${excerptLabel}: ${line}`).join("\n");
   if (summary) {
     return (
       `[hidden:${id}]\n` +

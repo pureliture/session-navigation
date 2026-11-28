@@ -41,6 +41,12 @@ Publication and registry/catalog approval are separate steps; see
   trailing cleanup reminder and forced tool choice, while unclear, failed,
   timed-out, or malformed classification leaves only the advisory note and
   preserves host-specified tool choices.
+- Verify `search_files` matches projections in the rendered Hide replacement:
+  shown rows must be verbatim projection lines in source order and every
+  required evidence line must survive. Previously the matches path was
+  computed but always rejected by the files-only render verifier; the strict
+  check restores safe, restorable hiding without relaxing caps or refusing
+  fewer protected errors.
 - Send the whole original tool result to Summarize, including facts beyond
   character 12,000. Enforce a **32,768-byte UTF-8 source cap** and return
   `input_too_large` rather than silently truncating the source.

@@ -251,6 +251,7 @@ def validate_summary_text(
     required_evidence: tuple[str, ...] | list[str],
     *,
     invocation: dict[str, Any] | None = None,
+    evidence_source: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Validate bounded exact claims against factual evidence."""
     if not isinstance(summary, dict) or set(summary) != {"summary"}:
@@ -258,9 +259,14 @@ def validate_summary_text(
     text = summary["summary"]
     if not isinstance(text, str) or not text.strip() or len(text) > 1600:
         return None
-    if any(line not in selectable_text(original).splitlines() for line in required_evidence):
+    evidence = tuple(evidence_source) if evidence_source is not None else ()
+    if evidence:
+        if any(line not in evidence for line in required_evidence):
+            return None
+    elif any(line not in selectable_text(original).splitlines() for line in required_evidence):
         return None
-    if not _covers_critical_facts(original, text):
+    effective_original = original + ("\n" + "\n".join(evidence) if evidence else "")
+    if not _covers_critical_facts(effective_original, text):
         return None
 
     try:
@@ -276,6 +282,8 @@ def validate_summary_text(
         return str(value)
 
     factual_source = original + "\n" + value_text(decoded_source) if isinstance(decoded_source, dict) else original
+    if evidence:
+        factual_source += "\n" + "\n".join(evidence)
     if not _covers_critical_facts(factual_source, text):
         return None
 

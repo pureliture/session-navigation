@@ -1,0 +1,245 @@
+{
+  "version": 4,
+  "note": "Fully synthetic JSON projection vectors. No production content or identifiers.",
+  "serialization": { "ensure_ascii": false, "separators": [",", ":"] },
+  "cases": [
+    {
+      "id": "files_success",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 40, "evidence_count": 40, "path_chars": 320, "padding_chars": 320 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_basename",
+      "tool_name": "search_files",
+      "generate": { "kind": "files_basename" },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_realistic_shape",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 22, "evidence_count": 22, "path_chars": 128 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "evidence_budget",
+      "tool_name": "search_files",
+      "generate": { "kind": "files", "file_count": 25, "evidence_count": 25, "path_chars": 96 },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_varied",
+      "tool_name": "search_files",
+      "generate": { "kind": "files_varied" },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "files_unicode_escape",
+      "tool_name": "search_files",
+      "data": {
+        "files": ["synthetic/가나다/😀.txt", "synthetic/tab\tvalue.txt", "synthetic/quote\"value.txt", "synthetic/backslash\\value.txt"],
+        "total_count": 4
+      },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "matches_success",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches",
+        "line_count": 24,
+        "line_chars": 180,
+        "special_line": 7,
+        "special_text": "배송 상태 확인 synthetic/middle/evidence.txt status=ok"
+      },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    },
+    {
+      "id": "matches_realistic_shape",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches_realistic",
+        "line_count": 32,
+        "evidence_count": 26,
+        "long_count": 6,
+        "line_chars": 180,
+        "long_chars": 361
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "plain_text_success",
+      "tool_name": "search_files",
+      "generate": { "kind": "plain_text", "line_count": 24, "line_chars": 160 },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "plain_text_large",
+      "tool_name": "search_files",
+      "generate": { "kind": "plain_text", "line_count": 900, "line_chars": 160 },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "unknown_shape",
+      "tool_name": "search_files",
+      "data": { "unrecognized": "Synthetic payload that must not be projected." },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "wrong_tool",
+      "tool_name": "read_file",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "Synthetic text long enough to satisfy the rule selector in the raw path.",
+        "total_count": 1,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": null, "refusal": null }
+    },
+    {
+      "id": "duplicate_key",
+      "tool_name": "search_files",
+      "raw": "{\"files\":[\"synthetic/a.txt\"],\"total_count\":1,\"total_count\":2}",
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "malformed_json",
+      "tool_name": "search_files",
+      "raw": "{\"files\":[\"synthetic/a.txt\"],",
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "metadata_substring",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "total_count = synthetic note without evidence.",
+        "total_count": 1,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    },
+    {
+      "id": "protected_error",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "Synthetic match line one.\nERROR: unresolved synthetic failure remains protected.",
+        "total_count": 2,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "protected_business_state",
+      "tool_name": "search_files",
+      "data": { "files": ["synthetic/주문/배송 지연 미확인.txt"], "total_count": 1 },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "sensitive_value",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic format",
+        "matches_text": "Synthetic line with api_key=synthetic-secret-value.",
+        "total_count": 1,
+        "total_count_is_lower_bound": false,
+        "truncated": false
+      },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "nested_value",
+      "tool_name": "search_files",
+      "data": { "files": [{ "path": "synthetic/a.txt" }], "total_count": 1 },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "empty_value",
+      "tool_name": "search_files",
+      "generate": { "kind": "files_empty" },
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    },
+    {
+      "id": "oversized_value",
+      "tool_name": "search_files",
+      "generate": { "kind": "repeat", "prefix": "synthetic/", "char": "가", "count": 9000 },
+      "total_count": 1,
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "lone_surrogate",
+      "tool_name": "search_files",
+      "raw": "{\"files\":[\"synthetic/\\ud800.txt\"],\"total_count\":1}",
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "escapes_unicode",
+      "tool_name": "search_files",
+      "data": {
+        "matches_format": "Synthetic\tformat \"quoted\" \\ backslash",
+        "matches_text": "Synthetic escape line 가나다 😀 with \u001b[31mANSI\u001b[0m and tab\ttoken.",
+        "total_count": 1,
+        "total_count_is_lower_bound": true,
+        "truncated": true
+      },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    },
+    {
+      "id": "split_evidence_boundary",
+      "tool_name": "search_files",
+      "generate": { "kind": "repeat", "prefix": "synthetic/evidence-", "char": "가", "count": 300 },
+      "total_count": 1,
+      "expected": { "schema": "search_files_files_v2", "refusal": null }
+    }
+    ,
+    {
+      "id": "matches_long_uuid_boundary",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "uuid" },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_path_boundary",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "path" },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_unicode_boundary",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches_boundary",
+        "evidence": "uuid",
+        "prefix_unit": "가나다 ",
+        "suffix_unit": "다나가 "
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_escape_boundary",
+      "tool_name": "search_files",
+      "generate": {
+        "kind": "matches_boundary",
+        "evidence": "uuid",
+        "prefix_unit": "quote\" slash\\ tab\t alpha "
+      },
+      "expected": { "schema": null, "refusal": "verification_failed" }
+    },
+    {
+      "id": "matches_long_protected_error",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "protected_error" },
+      "expected": { "schema": null, "refusal": "protected_error" }
+    },
+    {
+      "id": "matches_long_non_evidence_chunks",
+      "tool_name": "search_files",
+      "generate": { "kind": "matches_boundary", "evidence": "none" },
+      "expected": { "schema": "search_files_matches_v1", "refusal": null }
+    }
+  ]
+}

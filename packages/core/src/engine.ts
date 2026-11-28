@@ -1,6 +1,20 @@
+import { inspectGenericJsonWithEvidence, type GenericJsonDecision } from "./generic-json.ts";
 import { EngineError } from "./driver.ts";
 import { evaluateCompaction, type Choice } from "./compaction.ts";
 import {
+  FILES_EVIDENCE_CAP,
+  FILES_EXCERPT_BYTES,
+  FILES_REPLACEMENT_LABEL,
+  FILES_SCHEMA,
+  MAX_PROJECTION_LINE_LENGTH,
+  projectJsonToolResult,
+  verifyFilesReplacement,
+  verifyProjection,
+  type JsonProjection,
+  type ProjectionDecision,
+} from "./json-projection.ts";
+import {
+  canonical,
   defaults,
   itemId,
   scopeKey,
@@ -15,11 +29,11 @@ import {
 import {
   isDestructive,
   normalizeKeepLines,
-  refusalReason,
   requiredEvidence,
   selectRule,
   selectableText,
 } from "./policy.ts";
+import { isJsonLike, refusalReasonForRecord } from "./json-protection.ts";
 import { validateSummary, summarySource, summaryWithRetry } from "./summary.ts";
 import { Store } from "./store.ts";
 export type Summarizer = (
@@ -27,13 +41,26 @@ export type Summarizer = (
   evidence: string[],
   invocation: Json,
   feedback?: string,
+  context?: Json,
 ) => Promise<unknown>;
+
+function jsonStructureContext(decision: GenericJsonDecision): Json {
+  return {
+    verified_json: canonical({
+      depth: decision.depth,
+      digest: decision.digest,
+      kind: decision.kind,
+      nodes: decision.nodes,
+    }),
+  };
+}
 
 export interface HideOptions {
   keep_lines?: Json;
   options_omitted?: boolean;
   summarizer?: Summarizer;
   allow_fallback?: boolean;
+  parsed_protection?: boolean;
 }
 
 export class Engine {
@@ -64,16 +91,56 @@ export class Engine {
     if (options.keep_lines !== undefined && !Array.isArray(options.keep_lines)) {
       return { ok: false, error: "invalid_keep_lines" };
     }
-    const retention = normalizeKeepLines(
-      selectableText(record.content),
-      (options.keep_lines ?? []) as Json[],
-    );
+    const summarizePath = !!options.summarizer && options.allow_fallback === false;
+    let jsonContext: Json | undefined;
+    let jsonEvidence: string[] | undefined;
+    if (summarizePath && record.invocation.tool_name === "search_files" && isJsonLike(record.content)) {
+      const inspection = inspectGenericJsonWithEvidence(record.content);
+      if (!inspection.decision.ok) {
+        return { ok: false, error: inspection.decision.refusal ?? "verification_failed" };
+      }
+      jsonContext = jsonStructureContext(inspection.decision);
+      if (inspection.evidence.length) {
+        jsonEvidence = inspection.evidence;
+      }
+    }
+    const decision: ProjectionDecision = options.summarizer
+      ? {}
+      : projectJsonToolResult(record.content, record.invocation.tool_name, this.config);
+    if (decision.refusal) {
+      return { ok: false, error: decision.refusal };
+    }
+    const projection = decision.projection;
+    if (
+      projection !== undefined &&
+      !verifyProjection(record.content, record.invocation.tool_name, projection, this.config)
+    ) {
+      return { ok: false, error: "verification_failed" };
+    }
+    const source = projection?.source ?? selectableText(record.content);
+    const entries = (options.keep_lines ?? []) as Json[];
+    const retention = normalizeKeepLines(source, entries);
     const diagnostics = {
       keep_lines_ignored: retention.ignored,
       keep_lines_normalized: retention.normalized,
     };
+    if (projection !== undefined) {
+      const originalSource = selectableText(record.content);
+      const acceptedOriginal = new Set(normalizeKeepLines(originalSource, entries).accepted);
+      if (
+        entries.some(
+          (entry) =>
+            typeof entry === "string" &&
+            acceptedOriginal.has(entry) &&
+            originalSource.includes(entry) &&
+            !source.includes(entry),
+        )
+      ) {
+        return { ok: false, error: "keep_lines_conflict", ...diagnostics };
+      }
+    }
     try {
-      return { ...(await this.apply(scope, record, retention.accepted, options)), ...diagnostics };
+      return { ...(await this.apply(scope, record, retention.accepted, options, projection, jsonContext, jsonEvidence)), ...diagnostics };
     } catch (error) {
       if (error instanceof EngineError) {
         return { ok: false, error: error.code, ...diagnostics };
@@ -88,7 +155,7 @@ export class Engine {
     summarizer: Summarizer,
     options_omitted = false,
   ): Promise<Result> {
-    return this.hide(scope, record, { summarizer, allow_fallback: false, options_omitted });
+    return this.hide(scope, record, { summarizer, allow_fallback: false, options_omitted, parsed_protection: true });
   }
 
   private async apply(
@@ -96,11 +163,19 @@ export class Engine {
     record: RecordInput,
     keepLines: string[],
     options: HideOptions,
+    projection?: JsonProjection,
+    context?: Json,
+    evidence?: string[],
   ): Promise<Result> {
-    const refused = refusalReason(record, this.config);
+    let refused = refusalReasonForRecord(record, this.config);
+    if (projection !== undefined && refused === "not_long") {
+      refused = undefined;
+    }
+
     if (refused) {
       return { ok: false, error: refused };
     }
+    const source = projection?.source ?? selectableText(record.content);
     const itemIdentity = itemId(
       scope,
       record.call_id,
@@ -115,9 +190,18 @@ export class Engine {
     }
     if (existing && existing.invocation_digest !== record.invocation_digest)
       return { ok: false, error: "invocation_conflict" };
-    const baseline = selectRule(selectableText(record.content), keepLines, this.config);
+    const projected = projection?.schema === FILES_SCHEMA;
+    const selectorConfig = projected
+      ? {
+          ...this.config,
+          max_evidence_excerpts: FILES_EVIDENCE_CAP,
+          max_excerpt_line_length: MAX_PROJECTION_LINE_LENGTH,
+        }
+      : this.config;
+    const selectorBytes = projected ? FILES_EXCERPT_BYTES : 3072;
+    const baseline = selectRule(source, keepLines, selectorConfig, projection?.required, selectorBytes);
     if (!baseline && (!options.summarizer || options.allow_fallback !== false)) {
-      return { ok: false, error: keepLines.length && selectRule(selectableText(record.content), [], this.config)
+      return { ok: false, error: keepLines.length && selectRule(source, [], selectorConfig, projection?.required, selectorBytes)
         ? "keep_lines_too_broad" : "verification_failed" };
     }
     const reservationKey = `${scopeKey(scope)}\0${itemIdentity}`;
@@ -130,12 +214,20 @@ export class Engine {
     this.pending.add(reservationKey);
     try {
       let summary: unknown;
+      const requiredLines = evidence ?? requiredEvidence(record.content);
+      const summarizerContext = (feedback?: string): Json | undefined => {
+        if (context === undefined) return undefined;
+        if (feedback === undefined) return context;
+        return typeof context === "object" && context !== null && !Array.isArray(context)
+          ? { ...context, validation_feedback: feedback }
+          : { validation_feedback: feedback };
+      };
       if (options.summarizer) {
         try {
           summary =
-            (await summaryWithRetry(summarySource(record.content), requiredEvidence(record.content),
-              feedback => options.summarizer!(record.content, requiredEvidence(record.content), record.invocation, feedback),
-              record.invocation)) ?? null;
+            (await summaryWithRetry(summarySource(record.content), requiredLines,
+              feedback => options.summarizer!(record.content, requiredLines, record.invocation, feedback, summarizerContext(feedback)),
+              record.invocation, evidence)) ?? null;
         } catch (error) {
           if (options.allow_fallback === false) {
             return {
@@ -149,15 +241,29 @@ export class Engine {
       const evaluated = evaluateCompaction(
         record.content,
         itemIdentity,
-        selectableText(record.content),
+        source,
         baseline ?? [],
         summary,
         record.invocation,
         options.options_omitted,
         options.allow_fallback !== false,
+        evidence ?? projection?.required,
+        projection?.required,
+        projection
+          ? projection.schema === FILES_SCHEMA
+            ? FILES_REPLACEMENT_LABEL
+            : "Projected JSON excerpt"
+          : "Original excerpt",
+        evidence,
       );
       if (evaluated.error || !evaluated.choice || evaluated.rendered === undefined) {
         return { ok: false, error: evaluated.error ?? "verification_failed" };
+      }
+      if (
+        projection !== undefined &&
+        !verifyFilesReplacement(record.content, itemIdentity, projection, evaluated.rendered, this.config)
+      ) {
+        return { ok: false, error: "verification_failed" };
       }
       const item = this.newItem(
         itemIdentity,
