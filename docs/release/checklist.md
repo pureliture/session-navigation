@@ -97,9 +97,10 @@ original restoration. A package that merely installs is not UI acceptance.
 
 ## 4. Submit Paseo listing — manual form required
 
-- [ ] Fill image SHA placeholders in [the submission draft](paseo-submission.md).
-  Compare existing screenshots to the current interface; re-capture with sample
-  data if needed. Public URLs must return HTTP 200 and image content types.
+- [x] Replace the outdated hero and preview images with current UI captures from
+  an isolated synthetic session; verify the hidden preview and Unhide control.
+- [ ] Fill image SHA placeholders in [the submission draft](paseo-submission.md)
+  after merge. Public URLs must return HTTP 200 and image content types.
 - [ ] Open the official form so the submission label triggers intake:
 
 ```sh

@@ -1,71 +1,59 @@
-# Paseo registry submission draft
+# Paseo registry submission draft — Git source
 
-**Draft only. Nothing has been submitted or published.**
+**Draft only.** Nothing has been pushed, published to npm, or submitted to `getpaseo/plugins`.
 
-Use the [official submission form](https://github.com/getpaseo/plugins/issues/new?template=submit-plugin.yml)
-so the issue receives the `submission` label. The form supplies Source and
-Categories; include the remaining notes in the issue or review PR. Reference:
-[publishing guide](https://paseo.sh/docs/plugins/publishing).
+Submit through the official template so the issue receives the `submission` label:
+`https://github.com/getpaseo/plugins/issues/new?template=submit-plugin.yml`
+Reference: `https://paseo.sh/docs/plugins/publishing`.
+
+> Submitting the form opens an automated review request (`submissions/<issue>.json`). Actual catalog listing (`paseo plugin add pureliture/session-navigation`) happens only after a `getpaseo/plugins` maintainer completes review under `REVIEW.md` and merges the PR.
 
 ## Form fields
 
-- **Title:** Session navigation
-- **Source:** `npm:@tkdgur1756/session-navigation-paseo@0.1.0`
-  (publish this exact public package first).
-- **Categories:** Sidebar (primary), Utils.
-- **Requested registry ID:** `pureliture/session-navigation`.
-  Please use slug `session-navigation`, not the npm suffix or internal plugin ID.
-- **One-sentence description:** Browse, hide, summarize and restore session
-  context from Paseo Explorer.
-- **Repository:** https://github.com/pureliture/session-navigation
-- **Repository directory:** `paseo-plugin/`
-- **Version:** 0.1.0
-- **Overview:** shipped `OVERVIEW.md`.
-- **Maintainer:** pureliture.
-
-## Identity and runtime
-
-The runtime manifest ID remains `paseo-plugin` to preserve existing installed
-state. It is independent of the requested registry ID and npm package name.
-The package includes MIT LICENSE, its icon, runtime TypeScript sources and
-the generated embedded Node worker. Its pinned runtime dependency `yaml` is
-installed with the npm package; Paseo-provided libraries are development
-dependencies. No preparation command, runtime package download, Python, or
-unpublished workspace package is needed.
-
-Requirements: Paseo >=0.15.3 (verified 0.15.3), Node >=22.13 on the daemon,
-and top-level `pluginsEnabled: true` in daemon configuration followed by restart.
-OMP sessions need the matching OMP package with Bun >=1.4.4; Hermes sessions
-need the Hermes plugin with Hermes >=0.20.1. Other providers may be display-only.
+- **Title:** `Session navigation`
+- **Source:** `https://github.com/pureliture/session-navigation/tree/<FILL_AFTER_MERGE>/paseo-plugin`
+  - Replace `<FILL_AFTER_MERGE>` with the final 40-character public `origin/main` SHA after the release candidate is merged and pushed.
+  - Git subdirectory source needs no npm publication. The public repository must expose the pinned commit.
+- **Categories (first is primary):** `Workspaces`, `Utils`. The plugin registers workspace/agent Explorer panels, a `/nav` command, command-center entry and settings screen; it does not register sidebar header/footer items.
+- **Requested registry ID:** `pureliture/session-navigation` (override the directory-derived default `paseo-plugin` slug).
+- **One-sentence description:** `Browse, hide, summarize and restore session context from Paseo Explorer (Node >=22.13; no Python required).`
+- **Repository / directory:** `https://github.com/pureliture/session-navigation`, `paseo-plugin/`
+- **Version:** `0.1.0`. **Overview:** shipped `paseo-plugin/OVERVIEW.md`. **Maintainer:** `pureliture`.
 
 ## Interface images
 
-Existing repository images for the reviewer to compare with the release UI:
+Replace the placeholder with the final reviewed SHA and verify public HTTP 200 / `image/png` before submitting:
 
 - `https://raw.githubusercontent.com/pureliture/session-navigation/<FILL_AFTER_MERGE>/docs/media/01-outline-hero.png`
 - `https://raw.githubusercontent.com/pureliture/session-navigation/<FILL_AFTER_MERGE>/docs/media/04-preview-original.png`
 
-Replace the placeholder with the reviewed 40-character SHA and verify public
-HTTP 200/image content types. Re-capture with sample data if the images no
-longer match the release. The icon alone is insufficient. The manifest's
-`media: []` is intentional: the publishing guide also accepts public image
-URLs in the submission/review PR, so no mutable URL is baked into the package.
+The images were refreshed from an isolated Paseo 0.18.1 sandbox using synthetic workspaces, actor IDs, and messages. The first shows the current four-button header beside the matching chat and outline; the second shows a hidden message, its original preview, and the Unhide control. `paseo-plugin.json` keeps `"media": []` intentionally; image URLs belong in the submission/review PR.
 
-## Data access and limitations
+## Distribution, runtime and data access
 
-The plugin reads local session history and writes originals, replacements
-and hide state to the local SQLite state file documented in the overview.
-It changes only outgoing request copies through compatible host adapters;
-it neither deletes host history nor securely erases secrets. The selected
-original may be sent to the active host model/provider for Summarize.
-Local storage does not imply all content remains local.
+- Runtime manifest ID remains `paseo-plugin` to preserve installed state; it is independent of the requested registry ID.
+- `server/worker-source.ts` embeds the Node worker, engine and YAML parser. Runtime npm dependencies are zero; `yaml` is a development dependency only. No `build` step, sibling workspace package, runtime download or Python installation is needed.
+- Verified with Paseo `0.18.1` in isolated daemons: Git subdirectory installation reached `status: "running"` without a private-submodule credential prompt (`.gitmodules` uses `update = none`); the final candidate list RPC rendered the matching synthetic session and outline. A Hide/Unhide round trip moved versions 13 → 14 → 15 and restored the original bytes and SHA-256 exactly. Current candidate tests: plugin `314 pass / 0 fail`, Node lifecycle `17 pass / 0 fail`; the worker was regenerated from the candidate source.
+- Reads local session history; writes originals, replacements and hide state to the local SQLite state file (`SESSION_NAVIGATION_STATE_PATH` or XDG data home). Hide is reversible, not secret erasure; Summarize may send the selected original to the configured host model provider.
+- No telemetry, credential-file read, runtime package installation or cross-machine sync. Active-tab following uses guarded Paseo UI internals and fails closed on unsupported versions.
 
-No telemetry, credential-file access, automatic package installation or
-cross-machine state sync is added. The outline follows main sessions only;
-subagent child rows, inline outlines and Open tab actions are not displayed.
-Active-tab following uses guarded Paseo UI internals on supported versions.
+## Reviewer comment (paste after form submission)
 
-After approval, verify `paseo plugin add pureliture/session-navigation` and
-a `running` status. Until then, the direct public npm source is the supported
-release channel. Registry approval and npm publication have not been performed
-as part of this preparation.
+```markdown
+### Submission notes for reviewer
+
+- Requested registry ID: `pureliture/session-navigation` (override directory-derived slug).
+- Categories: `Workspaces` (primary), `Utils`.
+- Git source: `paseo-plugin/` at the final pinned `origin/main` SHA; no npm publication required.
+- Node `>=22.13`, zero runtime npm dependencies, no Python; embedded worker is in `server/worker-source.ts`.
+- Screenshots use synthetic sample data and are pinned to the final SHA (see URLs above).
+- Local SQLite state only; reversible hide/summarize; no telemetry or credential-file access.
+```
+
+## Blockers before submission
+
+1. Current UI images are captured and committed locally. After the release candidate is merged and pushed to `origin/main`, replace the SHA placeholder and re-check image URLs.
+2. No external `getpaseo/plugins` issue or PR has been opened.
+3. npm publication remains optional and unauthenticated (`npm whoami` was previously 401); no publish was attempted.
+
+After the final SHA is known, replace `<FILL_AFTER_MERGE>` in Source, both image URLs and the reviewer comment, then verify each image URL with `curl -sSI`.

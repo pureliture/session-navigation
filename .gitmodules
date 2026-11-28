@@ -1,3 +1,4 @@
 [submodule "eval/results"]
 	path = eval/results
 	url = https://github.com/pureliture/session-navigation-evidence.git
+	update = none

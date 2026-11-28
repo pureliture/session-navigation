@@ -1766,7 +1766,7 @@ export function applyHermesOverlay(
 ): HermesOverlaidSlot[] {
   const storedByCallPos = new Map<string, Item>();
   for (const item of storedItems) {
-    const cid = item.tool_call_id.trim();
+    const cid = (item.tool_call_id ?? "").trim();
     const posKey = `${cid}\0${item.result_position}`;
     if (!storedByCallPos.has(posKey)) {
       storedByCallPos.set(posKey, item);

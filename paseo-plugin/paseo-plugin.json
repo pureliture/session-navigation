@@ -1,7 +1,7 @@
 {
   "id": "paseo-plugin",
   "name": "Session navigation",
-  "description": "Browse, hide, summarize and restore session context from Explorer. Requires Node >=22.13; no Python required.",
+  "description": "Browse, hide, summarize and restore session context from Paseo Explorer (Node >=22.13; no Python required).",
   "engines": { "node": ">=22.13" },
   "icon": "assets/icon.png",
   "media": [],
