@@ -19,7 +19,7 @@ https://bun.sh/docs/runtime/sqlite 를 참조하세요.
 After npm publication:
 
 ```sh
-omp plugin install @tkdgur1756/session-navigation-omp@0.1.0
+omp plugin install @tkdgur1756/session-navigation-omp@0.1.1
 ```
 
 This release preparation does not claim npm publication has occurred.
@@ -46,7 +46,7 @@ into OMP's plugin dependency directory, then restart OMP:
 ```sh
 mkdir -p "$HOME/.omp/plugins"
 cd "$HOME/.omp/plugins"
-bun add /absolute/path/to/tkdgur1756-session-navigation-omp-0.1.0.tgz
+bun add /absolute/path/to/tkdgur1756-session-navigation-omp-0.1.1.tgz
 omp plugin list
 ```
 

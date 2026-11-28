@@ -147,3 +147,67 @@ test("OMP tool hide/unhide roundtrip via worker RPC", async () => {
   expect(listed.details.ok).toBe(true);
   await events.session_shutdown();
 });
+
+test("OMP overlay handles legacy and kitty raw navigation keys", async () => {
+  await seedDb();
+  const { commands, events } = makePi();
+  type OverlayComponent = {
+    render(width: number): string[];
+    handleInput(data: string): Promise<void>;
+  };
+  type OverlayFactory = (
+    tui: { requestRender(): void },
+    theme: unknown,
+    keybindings: unknown,
+    done: () => void,
+  ) => Promise<OverlayComponent>;
+  let factory: OverlayFactory | null = null;
+  const ctx = {
+    mode: "tui",
+    ui: {
+      custom: async (f: OverlayFactory) => {
+        factory = f;
+        return undefined;
+      },
+      notify: () => {},
+      select: async () => "abort_request",
+    },
+    abort: () => {},
+    sessionManager: { getSessionId: () => "s3" },
+  };
+  // Test harness mock boundary: makePi exposes loosely typed command handlers.
+  const command = commands["session-navigation"] as unknown as {
+    handler(args: string, context: typeof ctx): Promise<void>;
+  };
+  await command.handler("", ctx);
+  const selectedCall = (rendered: string) =>
+    rendered.split("\n").find((line: string) => line.startsWith("> "))?.match(/\b(c[0-9]+)\b/)?.[1];
+  if (!factory) throw new Error("overlay factory not registered");
+  const overlayFactory = factory;
+  const component = await overlayFactory({ requestRender: () => {} }, {}, {}, () => {});
+  const initial = selectedCall(component.render(100).join("\n"));
+  expect(initial).toBeTruthy();
+  await component.handleInput("\x1b[B");
+  const moved = selectedCall(component.render(100).join("\n"));
+  expect(moved).not.toBe(initial);
+  for (const sequence of ["\x1b[A", "\x1bOA", "\x1b[1;2A", "\x1b[574;2u"]) {
+    await component.handleInput(sequence);
+    expect(selectedCall(component.render(100).join("\n"))).toBe(initial);
+    await component.handleInput("\x1b[B");
+    expect(selectedCall(component.render(100).join("\n"))).toBe(moved);
+  }
+  for (const sequence of ["\x1b[B", "\x1bOB", "\x1b[1;2B", "\x1b[575;2u"]) {
+    await component.handleInput("\x1b[A");
+    await component.handleInput(sequence);
+    expect(selectedCall(component.render(100).join("\n"))).toBe(moved);
+  }
+  for (const sequence of ["\x1b", "\x1b[27;2u"]) {
+    let doneCalled = false;
+    const escapeComponent = await factory({ requestRender: () => {} }, {}, {}, () => {
+      doneCalled = true;
+    });
+    await escapeComponent.handleInput(sequence);
+    expect(doneCalled).toBe(true);
+  }
+  await events.session_shutdown();
+});

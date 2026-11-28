@@ -9,6 +9,17 @@ interface OverlayActions {
   manageChosen(params: Record<string, unknown>, ctx: ExtensionContext): Promise<Reply>;
 }
 
+const RAW_KEY_PATTERNS = {
+  escape: [/^\x1b$/, /^\x1b\[(?:27(?:;\d+)*)?u$/],
+  up: [/^\x1b\[(?:1(?:;\d+)*)?A$/, /^\x1bOA$/, /^\x1b\[574(?:;\d+)*u$/],
+  down: [/^\x1b\[(?:1(?:;\d+)*)?B$/, /^\x1bOB$/, /^\x1b\[575(?:;\d+)*u$/],
+} as const;
+
+function isRawKey(data: string, kind: keyof typeof RAW_KEY_PATTERNS): boolean {
+  const value = String(data ?? "");
+  return RAW_KEY_PATTERNS[kind].some((pattern) => pattern.test(value));
+}
+
 export function registerOverlay(
   pi: ExtensionAPI,
   { sessionId, getCandidate, rpc, manageChosen }: OverlayActions,
@@ -218,16 +229,16 @@ export function registerOverlay(
                 } catch {
                   /* ignore */
                 }
-                if (matchesKeyFn && matchesKeyFn(data, "escape")) {
+                if ((matchesKeyFn && matchesKeyFn(data, "escape")) || isRawKey(data, "escape")) {
                   done(undefined);
                   return;
                 }
-                if (matchesKeyFn && matchesKeyFn(data, "up")) {
+                if ((matchesKeyFn && matchesKeyFn(data, "up")) || isRawKey(data, "up")) {
                   selected = Math.max(0, selected - 1);
                   tui?.requestRender?.();
                   return;
                 }
-                if (matchesKeyFn && matchesKeyFn(data, "down")) {
+                if ((matchesKeyFn && matchesKeyFn(data, "down")) || isRawKey(data, "down")) {
                   selected = Math.min(Math.max(0, rows.length - 1), selected + 1);
                   tui?.requestRender?.();
                   return;

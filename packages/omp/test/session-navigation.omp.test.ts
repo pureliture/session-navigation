@@ -43,7 +43,7 @@ test("packed OMP package projects original, hidden and restored outgoing request
     return stdout;
   }
   await command([process.execPath, "pm", "pack", "--destination", dir], packageDirectory);
-  const tarball = join(dir, "tkdgur1756-session-navigation-omp-0.1.0.tgz");
+  const tarball = join(dir, "tkdgur1756-session-navigation-omp-0.1.1.tgz");
   expect(existsSync(tarball)).toBe(true);
   await command([process.execPath, "add", "--ignore-scripts", tarball], pluginsDirectory);
   const installed = join(pluginsDirectory, "node_modules/@tkdgur1756/session-navigation-omp");
